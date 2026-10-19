@@ -1,0 +1,24 @@
+name: installer-kit
+on:
+  push:
+    paths: ["installer-kit/**", ".github/workflows/installer-kit.yml"]
+  pull_request:
+    paths: ["installer-kit/**", ".github/workflows/installer-kit.yml"]
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: installer-kit
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer-kit/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
