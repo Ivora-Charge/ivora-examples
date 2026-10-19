@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/Ivora-Charge/ivora-examples/security/advisories/new
+    about: Report vulnerabilities privately. Never in a public issue.
+  - name: Ivora developer portal
+    url: https://ivoracharge.co/developers/guides
+    about: Questions about the Ivora API itself.
