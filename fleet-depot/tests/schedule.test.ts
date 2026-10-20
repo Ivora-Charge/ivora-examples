@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeSchedule, toChargingProfile } from "@/lib/schedule";
+import { computeSchedule, toProfileInput } from "@/lib/schedule";
 import {
   costCents,
   energyNeededKwh,
@@ -85,19 +85,36 @@ describe("computeSchedule", () => {
     expect(s.periods).toEqual([{ startPeriod: 0, limit: 0 }]);
     expect(s.feasible).toBe(true);
   });
-  it("builds a W-based absolute profile", () => {
+  it("builds an Ivora session profile in W, absolute from now", () => {
     const s = computeSchedule({
-      need: { kind: "kwh", kwh: 40 },
+      need: { kind: "kwh", kwh: 20 },
       now,
       departure: dep(10),
       maxKw: 11,
     });
-    const p = toChargingProfile(s, {
-      profileId: 7,
-      startSchedule: now,
-      durationSeconds: s.availableSeconds,
+    const p = toProfileInput(s, { transactionId: 31, startAt: now });
+    expect(p).toMatchObject({
+      purpose: "session",
+      unit: "W",
+      transaction_id: 31,
+      kind: "absolute",
+      start_at: now.toISOString(),
+      duration_seconds: 36000,
     });
-    expect(p.chargingSchedule.chargingRateUnit).toBe("W");
-    expect(p.chargingProfileKind).toBe("Absolute");
+    // 20 kWh over 10 h is 2 kW for the whole window.
+    expect(p.periods).toEqual([{ start_offset_seconds: 0, limit: 2000 }]);
+  });
+  it("caps the schedule at the API maximum of 7 days, with integer W limits", () => {
+    const s = computeSchedule({
+      need: { kind: "kwh", kwh: 11 },
+      now,
+      departure: dep(24 * 10),
+      maxKw: 11,
+      allowedKw: 11,
+    });
+    const p = toProfileInput(s, { transactionId: 1, startAt: now });
+    expect(p.duration_seconds).toBe(604800);
+    expect(p.periods[0].limit).toBeGreaterThan(0);
+    expect(p.periods.every((x) => Number.isInteger(x.limit))).toBe(true);
   });
 });

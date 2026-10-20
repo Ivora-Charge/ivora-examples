@@ -48,13 +48,47 @@ select {
   margin: 2px;
 }
 .bar {
+  display: inline-block;
+  vertical-align: middle;
   background: #dde1e6;
   border-radius: 4px;
   height: 8px;
   width: 120px;
 }
-.bar > div {
+.bar > span {
+  display: block;
   background: #2b7de9;
   height: 8px;
   border-radius: 4px;
+}
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.panel {
+  background: #fff;
+  padding: 12px;
+  margin: 12px 0;
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.panel h3 {
+  width: 100%;
+  margin: 0;
+}
+.panel textarea {
+  width: 100%;
+}
+.login {
+  display: flex;
+  flex-direction: column;
+  max-width: 320px;
+  gap: 8px;
+}
+a {
+  color: #1a5fb4;
 }

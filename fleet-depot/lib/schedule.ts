@@ -72,29 +72,31 @@ export function computeSchedule(i: ScheduleInput): ScheduleResult {
   };
 }
 
-/** Charging profile body for a connector (OCPP 1.6 SetChargingProfile shape, limits in W). */
-export function toChargingProfile(
+/** API limits on a profile schedule (seconds). */
+const MAX_DURATION_SECONDS = 604800;
+
+/**
+ * Ivora charging profile body (POST .../stations/{id}/charging-profiles) for one
+ * running transaction: purpose "session", limits in W, absolute from `startAt`.
+ */
+export function toProfileInput(
   s: ScheduleResult,
-  opts: {
-    profileId: number;
-    transactionId?: number;
-    startSchedule: Date;
-    durationSeconds: number;
-  },
+  opts: { transactionId: number; startAt: Date; stackLevel?: number },
 ) {
+  const duration = Math.min(
+    Math.max(1, s.availableSeconds),
+    MAX_DURATION_SECONDS,
+  );
   return {
-    chargingProfileId: opts.profileId,
-    stackLevel: 1,
-    chargingProfilePurpose: opts.transactionId
-      ? "TxProfile"
-      : "TxDefaultProfile",
-    chargingProfileKind: "Absolute",
-    ...(opts.transactionId ? { transactionId: opts.transactionId } : {}),
-    chargingSchedule: {
-      duration: opts.durationSeconds,
-      startSchedule: opts.startSchedule.toISOString(),
-      chargingRateUnit: "W",
-      chargingSchedulePeriod: s.periods,
-    },
+    purpose: "session" as const,
+    unit: "W" as const,
+    transaction_id: opts.transactionId,
+    stack_level: opts.stackLevel ?? 1,
+    kind: "absolute" as const,
+    start_at: opts.startAt.toISOString(),
+    duration_seconds: duration,
+    periods: s.periods
+      .filter((p) => p.startPeriod < duration)
+      .map((p) => ({ start_offset_seconds: p.startPeriod, limit: p.limit })),
   };
 }

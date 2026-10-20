@@ -1,3 +1,4 @@
+import "server-only";
 import { config } from "./config";
 import type {
   DepotEvent,
@@ -14,6 +15,8 @@ export interface Docs {
   sessions: Session;
   transactions: Transaction;
   events: DepotEvent & { id: string };
+  /** Webhook event IDs already received (deduplication). */
+  webhookEvents: { id: string; at: string };
 }
 export type Kind = keyof Docs;
 
@@ -22,6 +25,8 @@ export interface Store {
   list<K extends Kind>(kind: K): Promise<Docs[K][]>;
   put<K extends Kind>(kind: K, id: string, doc: Docs[K]): Promise<void>;
   remove(kind: Kind, id: string): Promise<void>;
+  /** Insert only if absent; false when the ID was already stored. */
+  claim<K extends Kind>(kind: K, id: string, doc: Docs[K]): Promise<boolean>;
   clear(): Promise<void>;
 }
 
@@ -40,6 +45,11 @@ export class MemoryStore implements Store {
   }
   async remove(kind: Kind, id: string) {
     this.t(kind).delete(id);
+  }
+  async claim<K extends Kind>(kind: K, id: string, doc: Docs[K]) {
+    if (this.t(kind).has(id)) return false;
+    this.t(kind).set(id, structuredClone(doc));
+    return true;
   }
   async clear() {
     this.data.clear();
@@ -71,6 +81,14 @@ export class SqliteStore implements Store {
   async remove(kind: Kind, id: string) {
     this.db.prepare("DELETE FROM docs WHERE kind = ? AND id = ?").run(kind, id);
   }
+  async claim<K extends Kind>(kind: K, id: string, doc: Docs[K]) {
+    const r = this.db
+      .prepare(
+        "INSERT INTO docs (kind, id, data) VALUES (?, ?, ?) ON CONFLICT (kind, id) DO NOTHING",
+      )
+      .run(kind, id, JSON.stringify(doc));
+    return Number(r.changes) === 1;
+  }
   async clear() {
     this.db.exec("DELETE FROM docs");
   }
@@ -101,6 +119,14 @@ export class PgStore implements Store {
       kind,
       id,
     ]);
+  }
+  async claim<K extends Kind>(kind: K, id: string, doc: Docs[K]) {
+    await this.ready;
+    const r = await this.pool.query(
+      "INSERT INTO docs (kind, id, data) VALUES ($1, $2, $3) ON CONFLICT (kind, id) DO NOTHING",
+      [kind, id, JSON.stringify(doc)],
+    );
+    return r.rowCount === 1;
   }
   async clear() {
     await this.ready;

@@ -110,7 +110,14 @@ export async function advanceDemo(depot: Depot, minutes: number) {
         t < depart &&
         !(await hasTxSince(depot, v.id, arrive))
       ) {
-        await startSession(depot, v, "DEMO-ST-1", idx + 1, 2_000_000);
+        await startSession(depot, {
+          vehicleId: v.id,
+          stationId: 1,
+          stationName: "DEMO-ST-1",
+          connectorId: 100 + idx,
+          connectorNumber: idx + 1,
+          meterStartWh: 2_000_000,
+        });
       } else if (active && t >= depart) {
         await endSession(depot, active.id);
       }

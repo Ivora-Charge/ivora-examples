@@ -10,7 +10,7 @@ export interface RfidParseResult {
 }
 
 // OCPP 1.6 idTag is CiString20.
-const TAG = /^[A-Za-z0-9_-]{1,20}$/;
+export const TAG = /^[A-Za-z0-9_-]{1,20}$/;
 
 function splitLine(line: string): string[] {
   const cells: string[] = [];
@@ -62,4 +62,21 @@ export function parseRfidCsv(text: string): RfidParseResult {
     rows.push({ idTag, driverName, ...(email ? { email } : {}) });
   });
   return { rows, errors };
+}
+
+const cell = (v: string) =>
+  /[",\r\n]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+
+/**
+ * CSV body for POST .../tokens/import: a header row, then one row per card. Names
+ * and emails stay in this app; Ivora gets the card value and our reference only.
+ */
+export function toIvoraImportCsv(
+  rows: { idTag: string; externalReference: string }[],
+): string {
+  return [
+    // No type column: new cards default to ISO14443 and existing ones keep theirs.
+    "id_token,external_reference",
+    ...rows.map((r) => `${cell(r.idTag)},${cell(r.externalReference)}`),
+  ].join("\n");
 }
