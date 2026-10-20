@@ -6,7 +6,7 @@ import { verifyWebhookSignature } from "@/lib/webhook";
 /**
  * Ivora charger events (station.connected, station.booted,
  * station.disconnected). Verify the signature over the raw body before
- * parsing, acknowledge each event ID once, and treat the event as a nudge:
+ * parsing, acknowledge each signed event id once, and treat the event as a nudge:
  * the wizard still reads the current state from the API.
  */
 export async function POST(req: Request) {
@@ -40,7 +40,9 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ error: "malformed_event" }, { status: 400 });
   }
-  const id = req.headers.get("ivora-event-id") ?? event.id;
+  // Deduplicate by the id inside the signed body: headers aren't covered by
+  // the signature, so a replayed body could carry a fresh header value.
+  const id = event.id;
   if (typeof id !== "string" || !id || typeof event.type !== "string")
     return NextResponse.json({ error: "malformed_event" }, { status: 400 });
   if (String(event.tenant_id) !== process.env.IVORA_TENANT_ID)

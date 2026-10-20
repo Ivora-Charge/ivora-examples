@@ -134,16 +134,18 @@ describe("webhook route", () => {
     expect(db().chargers.get(charger.id)?.state).toBe("waiting");
   });
 
-  it("prefers the Ivora-Event-Id header for deduplication", async () => {
-    await deliver(
-      { id: "d1", type: "webhook.test", tenant_id: 42 },
-      { "Ivora-Event-Id": "e1" },
+  it("deduplicates by the signed body id, ignoring the unsigned header", async () => {
+    const event = { id: "evt_a", type: "webhook.test", tenant_id: 42 };
+    const first = await deliver(event, { "Ivora-Event-Id": "h1" });
+    expect(await first.json()).toEqual({ received: true });
+    const replay = await deliver(event, { "Ivora-Event-Id": "h2" });
+    expect(await replay.json()).toMatchObject({ duplicate: true });
+    // A different body id is new even when the header repeats.
+    const other = await deliver(
+      { ...event, id: "evt_b" },
+      { "Ivora-Event-Id": "h1" },
     );
-    const res = await deliver(
-      { id: "d2", type: "webhook.test", tenant_id: 42 },
-      { "Ivora-Event-Id": "e1" },
-    );
-    expect(await res.json()).toMatchObject({ duplicate: true });
+    expect(await other.json()).toEqual({ received: true });
   });
 
   it("rejects bad signatures, other tenants and a missing secret", async () => {

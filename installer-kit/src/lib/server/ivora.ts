@@ -43,7 +43,7 @@ type Operation = z.infer<typeof operationSchema>;
 const transactionSchema = z.object({
   id: z.number(),
   connector_id: z.number().nullable().optional(),
-  active: z.boolean(),
+  active: z.boolean().nullable(),
   started_at: nullableString,
   ended_at: nullableString,
   energy_kwh: z.union([z.string(), z.number()]).nullable().optional(),
@@ -240,7 +240,9 @@ function chargerStatus(op: Operation) {
 function toTransaction(t: z.infer<typeof transactionSchema>) {
   return {
     transactionId: String(t.id),
-    active: t.active,
+    // The API may report null while a transaction's state is unknown; fall
+    // back to whether it has ended.
+    active: t.active ?? !t.ended_at,
     startedAt: t.started_at ?? null,
     endedAt: t.ended_at ?? null,
     energyWh:
