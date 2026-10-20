@@ -18,7 +18,10 @@ export type Answer =
 
 export interface StationProfile {
   id: string;
-  tx: number;
+  purpose: string;
+  station: number;
+  /** Undefined for a baseline (tx_default) profile. */
+  tx?: number;
   stack: number;
   startAt: number;
   periods: { start_offset_seconds: number; limit: number }[];
@@ -59,7 +62,14 @@ export function fakeStation(opts: {
   function install(p: StationProfile) {
     if (opts.protocol === "ocpp1.6")
       for (const x of profiles)
-        if (x !== p && x.tx === p.tx && x.stack === p.stack && x.installed) {
+        if (
+          x !== p &&
+          x.purpose === p.purpose &&
+          x.station === p.station &&
+          x.tx === p.tx &&
+          x.stack === p.stack &&
+          x.installed
+        ) {
           x.installed = false;
           x.state = "replaced";
         }
@@ -82,8 +92,11 @@ export function fakeStation(opts: {
   function setProfile(c: Call, a: Answer): Reply {
     catchUp();
     const body = JSON.parse(c.body!);
+    const station = Number(c.url.match(/\/stations\/(\d+)\//)?.[1]);
     const live = profiles.filter(
       (x) =>
+        x.purpose === body.purpose &&
+        x.station === station &&
         x.tx === body.transaction_id &&
         x.stack === body.stack_level &&
         (x.state === "pending" || x.state === "accepted"),
@@ -100,9 +113,11 @@ export function fakeStation(opts: {
       };
     const p: StationProfile = {
       id: `chp_${++n}`,
+      purpose: body.purpose,
+      station,
       tx: body.transaction_id,
       stack: body.stack_level,
-      startAt: Date.parse(body.start_at),
+      startAt: Date.parse(body.start_at ?? "1970-01-01T00:00:00Z"),
       periods: body.periods,
       state: "pending",
       installed: false,
@@ -207,6 +222,19 @@ export function fakeStation(opts: {
       else if (p.state === "pending") p.state = "accepted";
       return m;
     },
+    /**
+     * What a new transaction on this station may draw before its own session profile
+     * is in force: the installed tx_default profile of the highest stack level.
+     */
+    baselineW(station: number): number | undefined {
+      const base = profiles.filter(
+        (p) =>
+          p.purpose === "tx_default" && p.station === station && p.installed,
+      );
+      if (base.length === 0) return undefined;
+      return base.reduce((a, b) => (b.stack >= a.stack ? b : a)).periods[0]
+        .limit;
+    },
     /** The session ended: the charger drops its session profiles. */
     endTx(tx: number) {
       for (const p of profiles)
@@ -221,9 +249,9 @@ export function fakeStation(opts: {
      * with the highest stack level (the latest at equal levels). Undefined when it
      * applies none (the charger's own default).
      */
-    limitW(tx: number, at: number): number | undefined {
+    limitW(tx: number, at: number, station = 12): number | undefined {
       const mine = profiles.filter((p) => p.tx === tx && p.installed);
-      if (mine.length === 0) return undefined;
+      if (mine.length === 0) return this.baselineW(station);
       const top = mine.reduce((a, b) => (b.stack >= a.stack ? b : a));
       const offset = (at - top.startAt) / 1000;
       let limit = top.periods[0].limit;

@@ -79,6 +79,7 @@ async function startFromTransaction(d: Depot, tx: TransactionDetail) {
     connectorId: tx.connector_id,
     connectorNumber: tx.connector_number ?? conn?.number ?? undefined,
     connectorKw: conn?.max_power_w ? conn.max_power_w / 1000 : undefined,
+    connectorCount: station?.connectors.length,
     transactionId: tx.id,
     meterStartWh: tx.meter_start_wh ?? 0,
     startedAt: tx.started_at ?? undefined,
@@ -136,6 +137,19 @@ async function onProfileAnswer(
   );
   const charger =
     typeof x.charger_status === "string" ? x.charger_status : null;
+  const c = s
+    ? undefined
+    : (await d.store.list("chargers")).find((y) =>
+        y.sent?.some((p) => p.profileId === profile.id),
+      );
+  if (c) {
+    applyProfileStatus(
+      c,
+      c.sent!.find((y) => y.profileId === profile.id)!,
+      type.slice("charging_profile.".length),
+    );
+    await d.store.put("chargers", c.id, c);
+  }
   if (s) {
     const p = s.sent!.find((y) => y.profileId === profile.id)!;
     applyProfileStatus(s, p, type.slice("charging_profile.".length));
@@ -148,10 +162,10 @@ async function onProfileAnswer(
   await logEvent(
     d,
     type,
-    `${s ? `session on connector ${s.connectorNumber ?? s.connectorId}` : `profile ${profile.id ?? "?"}`}${charger ? ` (${charger})` : ""}`,
+    `${s ? `session on connector ${s.connectorNumber ?? s.connectorId}` : c ? `baseline of station ${c.stationId}` : `profile ${profile.id ?? "?"}`}${charger ? ` (${charger})` : ""}`,
   );
   // An accepted lower limit may unblock raises that were waiting for it.
-  if (s) await replan(d);
+  if (s || c) await replan(d);
 }
 
 async function onTokenUpdated(d: Depot, x: Record<string, unknown>) {

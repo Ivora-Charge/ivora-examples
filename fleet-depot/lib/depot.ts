@@ -10,9 +10,10 @@ import {
 } from "./ivora";
 import { splitPower } from "./power";
 import { buildReport, type TxRecord } from "./reports";
-import { computeSchedule, toProfileInput } from "./schedule";
+import { computeSchedule, toBaselineInput, toProfileInput } from "./schedule";
 import { createStore, type Store } from "./store";
 import type {
+  Charger,
   ProfileState,
   SentProfile,
   Session,
@@ -45,6 +46,8 @@ export function getDepot(): Promise<Depot> {
         siteCapKw: config.siteCapKw,
         centsPerKwh: config.centsPerKwh,
         currency: config.currency,
+        // Live mode only: demo never sends charger commands.
+        baselineProfile: !demo && config.baselineProfile,
       },
       clock: null,
     };
@@ -150,8 +153,13 @@ export async function replan(d: Depot): Promise<void> {
   );
   const vehicleOf = (s: Session) =>
     s.vehicleId ? vehicles.get(s.vehicleId) : undefined;
+  const capW = wholeW(d.settings.siteCapKw);
+  const chargers =
+    !d.demo && d.settings.baselineProfile ? await d.store.list("chargers") : [];
+  const base = baselinePlan(capW, chargers, sessions);
   const split = splitPower(
-    d.settings.siteCapKw,
+    // Idle connectors keep their baseline in reserve, so a plug-in cannot top the cap.
+    Math.max(0, capW - base.idleW) / 1000,
     sessions.map((s) => {
       const v = vehicleOf(s);
       return {
@@ -179,12 +187,12 @@ export async function replan(d: Depot): Promise<void> {
   // What the other sessions may draw right now: a profile is never sent above
   // the cap minus that, so a session that just plugged in only gets what is free
   // while a decrease elsewhere is still on its way.
-  const capW = wholeW(d.settings.siteCapKw);
+  const floorOf = (o: Session) => base.heldW(o.stationId);
+  const reserved = (o: Session) => reservedW(o, target(o), floorOf(o));
   const headroom = (s: Session) =>
     capW -
-    sessions
-      .filter((o) => o !== s)
-      .reduce((sum, o) => sum + reservedW(o, target(o)), 0);
+    base.idleW -
+    sessions.filter((o) => o !== s).reduce((sum, o) => sum + reserved(o), 0);
   const apply = (s: Session) =>
     applyProfile(
       d,
@@ -193,41 +201,105 @@ export async function replan(d: Depot): Promise<void> {
       at,
       Math.max(0, Math.min(target(s), headroom(s))),
     );
+  // A charger's baseline follows the same rule: lower first, raise once every lower
+  // limit is in force. Its first send counts as lowering (nothing is in force yet).
+  const baseOver = (c: Charger) => enforcedW(c.sent) > base.unitW;
+  const applyBase = (c: Charger) =>
+    applyBaseline(d, c, Math.max(0, Math.min(base.unitW, baseHeadroom(c))));
+  const baseHeadroom = (c: Charger) => {
+    const here = sessions.filter((o) => o.stationId === c.stationId);
+    const inForce = here.filter((o) => Number.isFinite(enforcedW(o.sent)));
+    const other = sessions.filter((o) => o.stationId !== c.stationId);
+    const committed =
+      other.reduce((sum, o) => sum + reserved(o), 0) +
+      inForce.reduce((sum, o) => sum + reservedW(o, target(o)), 0) +
+      here
+        .filter((o) => !inForce.includes(o))
+        .reduce((sum, o) => sum + (o.sent?.length ? maxSentW(o) : 0), 0) +
+      base.idleW -
+      base.idleOf(c);
+    const n = base.unitsOf(c) - inForce.length;
+    return n > 0 ? Math.floor((capW - committed) / n) : Infinity;
+  };
   const lower = live.filter(over);
+  const lowerBase = chargers.filter(baseOver);
   for (const s of lower) await apply(s);
+  for (const c of lowerBase) await applyBase(c);
   const waiting = lower.filter(over);
-  if (waiting.length > 0) {
-    const raises = live.filter(
-      (s) => !lower.includes(s) && needsSend(s, target(s)),
-    );
-    if (raises.length > 0)
+  const waitingBase = lowerBase.filter(baseOver);
+  if (waiting.length > 0 || waitingBase.length > 0) {
+    const raises =
+      live.filter((s) => !lower.includes(s) && needsSend(s, target(s))).length +
+      chargers.filter((c) => !lowerBase.includes(c) && needsSend(c, base.unitW))
+        .length;
+    if (raises > 0)
       await logEvent(
         d,
         "plan.deferred",
-        `${raises.length} higher limit(s) wait until the lower limit for ${waiting
-          .map((s) => describe(s, vehicleOf(s)))
-          .join(", ")} is in force; retried on the next replan`,
+        `${raises} higher limit(s) wait until the lower limit for ${[
+          ...waiting.map((s) => describe(s, vehicleOf(s))),
+          ...waitingBase.map((c) => `the baseline of station ${c.stationId}`),
+        ].join(", ")} is in force; retried on the next replan`,
       );
     return;
   }
   for (const s of live) if (!lower.includes(s)) await apply(s);
+  for (const c of chargers) if (!lowerBase.includes(c)) await applyBase(c);
 }
 
 /**
- * What a session may draw as far as the app knows, W. A session without an
- * accepted profile counts at the most it was sent, or else at its allocation.
+ * The baseline arithmetic of one replan (empty when the baseline is off). Every
+ * connector of every known charger gets an equal share of the cap, rounded down to
+ * whole watts. `idleW` is what the connectors without a session may draw, so the
+ * sessions are planned within the cap minus that: a vehicle plugging in then
+ * draws its baseline at most, and the site stays under the cap in the gap.
  */
-function reservedW(s: Session, targetW: number): number {
+function baselinePlan(capW: number, chargers: Charger[], sessions: Session[]) {
+  const at = (c: Charger) =>
+    sessions.filter((s) => s.stationId === c.stationId).length;
+  const unitsOf = (c: Charger) => Math.max(c.units, at(c));
+  const total = chargers.reduce((n, c) => n + unitsOf(c), 0);
+  const unitW = total > 0 ? Math.floor(capW / total) : capW;
+  /** What one connector of this charger may draw under its baseline, W. */
+  const held = (c: Charger) => reservedW(c, unitW);
+  const idleOf = (c: Charger) => (unitsOf(c) - at(c)) * held(c);
+  return {
+    unitW,
+    unitsOf,
+    idleOf,
+    idleW: chargers.reduce((sum, c) => sum + idleOf(c), 0),
+    /** The baseline in force (or sent) where a session starts, W; 0 when there is none. */
+    heldW: (stationId: number) => {
+      const c = chargers.find((x) => x.stationId === stationId);
+      return c ? held(c) : 0;
+    },
+  };
+}
+
+const maxSentW = (s: { sent?: SentProfile[] }) =>
+  Math.max(0, ...(s.sent ?? []).map((p) => p.w));
+
+/**
+ * What a session may draw as far as the app knows, W. A session without an
+ * accepted profile counts at the most it was sent, or else at its allocation
+ * (and at least the charger's baseline, when that is on).
+ */
+function reservedW(
+  s: { sent?: SentProfile[] },
+  targetW: number,
+  baselineW = 0,
+): number {
   const b = enforcedW(s.sent);
   if (Number.isFinite(b)) return b;
-  return s.sent?.length ? Math.max(...s.sent.map((p) => p.w)) : targetW;
+  // Until its first profile is in force a session is limited by the charger's baseline.
+  return Math.max(baselineW, s.sent?.length ? maxSentW(s) : targetW);
 }
 
 const describe = (s: Session, v?: Vehicle) =>
   v?.name ?? `card ${s.idTokenHint ?? "unknown"}`;
 
 /** True when the latest profile does not match the goal (or there is none). */
-function needsSend(s: Session, goalW: number): boolean {
+function needsSend(s: { sent?: SentProfile[] }, goalW: number): boolean {
   const latest = s.sent?.at(-1);
   if (!latest) return true;
   return latest.w > goalW || goalW - latest.w >= STEP_W;
@@ -255,7 +327,15 @@ async function simulateProfile(d: Depot, s: Session, v: Vehicle, at: Date) {
   );
 }
 
-const isV16 = (s: Session) => s.protocol?.startsWith("ocpp1.6") ?? false;
+/** What the profile helpers need: a session or a charger's baseline. */
+interface Holder {
+  stationId: number;
+  protocol?: string;
+  sent?: SentProfile[];
+  profile?: ProfileState;
+}
+
+const isV16 = (s: Holder) => s.protocol?.startsWith("ocpp1.6") ?? false;
 
 /**
  * Bring the session's profiles in line with `targetW`: its allocation, or less
@@ -356,6 +436,68 @@ async function applyProfile(
   }
 }
 
+/**
+ * Bring a charger's baseline to `targetW` per connector, the same way a session's
+ * profile is changed: a lower limit goes straight out, OCPP 2.x alternates between
+ * stack levels 1 and 2 and clears the old profile after the new one is accepted.
+ * Never throws.
+ */
+async function applyBaseline(d: Depot, c: Charger, targetW: number) {
+  const sent = (c.sent ??= []);
+  const name = `baseline of station ${c.stationId}`;
+  const save = () => d.store.put("chargers", c.id, c);
+  try {
+    for (const p of [...sent]) {
+      if (!p.profileId) await postProfile(c, p);
+      else if (!p.confirmed) await refreshProfile(c, p);
+    }
+    await save();
+    if (!needsSend(c, targetW)) {
+      const latest = sent.at(-1)!;
+      if (latest.confirmed) await retireOlder(c, latest);
+      await save();
+      return;
+    }
+    let stack = 1;
+    if (!isV16(c)) {
+      const top = topConfirmed(sent);
+      for (const p of sent.filter((x) => x !== top)) await clearProfile(c, p);
+      if (sent.some((x) => x !== top)) {
+        await save();
+        await logEvent(
+          d,
+          "charging_profile.error",
+          `${name}: waiting for the station to clear an earlier profile`,
+        );
+        return;
+      }
+      stack = top?.stack === 1 ? 2 : 1;
+    }
+    const seq = (c.seq ?? 0) + 1;
+    c.seq = seq;
+    const p: SentProfile = {
+      key: `fd-baseline-${c.stationId}-${seq}`,
+      body: toBaselineInput(targetW, stack),
+      w: targetW,
+      stack,
+      confirmed: false,
+    };
+    sent.push(p);
+    await save();
+    await postProfile(c, p);
+    if (p.confirmed) await retireOlder(c, p);
+    await save();
+    await logEvent(
+      d,
+      "charging_profile.baseline",
+      `${name}: ${(targetW / 1000).toFixed(1)} kW per connector`,
+    );
+  } catch (e) {
+    await save();
+    await logEvent(d, "charging_profile.error", `${name}: ${describeError(e)}`);
+  }
+}
+
 function topConfirmed(sent: SentProfile[]) {
   const c = sent.filter((p) => p.confirmed);
   return c.length
@@ -364,14 +506,14 @@ function topConfirmed(sent: SentProfile[]) {
 }
 
 /** Forget a profile that is no longer in force (in place: callers hold the array). */
-function drop(s: Session, p: SentProfile) {
+function drop(s: Holder, p: SentProfile) {
   const i = s.sent?.indexOf(p) ?? -1;
   if (i >= 0) s.sent!.splice(i, 1);
 }
 
 /** Update what the board shows, when `p` is the session's latest profile. */
 function show(
-  s: Session,
+  s: Holder,
   status: ProfileState["status"],
   detail?: string,
   p?: SentProfile,
@@ -383,7 +525,7 @@ function show(
 }
 
 /** POST a profile with its stored key and body, and record the answer. */
-async function postProfile(s: Session, p: SentProfile) {
+async function postProfile(s: Holder, p: SentProfile) {
   const api = ivora();
   let op: Operation;
   try {
@@ -424,7 +566,7 @@ async function postProfile(s: Session, p: SentProfile) {
 }
 
 /** Read a profile the charger has not answered yet. Failures leave it counted. */
-async function refreshProfile(s: Session, p: SentProfile) {
+async function refreshProfile(s: Holder, p: SentProfile) {
   const rec = await ivora()
     .getChargingProfile(s.stationId, p.profileId!)
     .catch(() => undefined);
@@ -432,7 +574,7 @@ async function refreshProfile(s: Session, p: SentProfile) {
 }
 
 /** Apply a profile state from the API or a webhook to our record of it. */
-export function applyProfileStatus(s: Session, p: SentProfile, status: string) {
+export function applyProfileStatus(s: Holder, p: SentProfile, status: string) {
   if (status === "accepted") {
     p.confirmed = true;
     show(s, "accepted", undefined, p);
@@ -447,7 +589,7 @@ export function applyProfileStatus(s: Session, p: SentProfile, status: string) {
 }
 
 /** Once `p` is accepted, remove the profiles it supersedes. */
-async function retireOlder(s: Session, p: SentProfile) {
+async function retireOlder(s: Holder, p: SentProfile) {
   const older = (s.sent ?? []).filter((x) => x !== p);
   if (isV16(s)) {
     // Same purpose, connector and stack level: the charger replaced them.
@@ -458,7 +600,7 @@ async function retireOlder(s: Session, p: SentProfile) {
 }
 
 /** Clear a profile by ID; it stays counted until the station confirms. */
-async function clearProfile(s: Session, p: SentProfile) {
+async function clearProfile(s: Holder, p: SentProfile) {
   if (!p.profileId) return;
   try {
     const op = await ivora().clearChargingProfile(
@@ -515,6 +657,8 @@ export interface SessionStart {
   connectorId: number;
   connectorNumber?: number;
   connectorKw?: number;
+  /** Connectors on the station, when known (the baseline covers all of them). */
+  connectorCount?: number;
   transactionId?: number;
   meterStartWh: number;
   startedAt?: string;
@@ -538,6 +682,7 @@ export async function startSession(d: Depot, x: SessionStart) {
     allocatedKw: 0,
   };
   await d.store.put("sessions", s.id, s);
+  if (!d.demo && d.settings.baselineProfile) await noteCharger(d, x);
   const v = x.vehicleId
     ? (await d.store.list("vehicles")).find((y) => y.id === x.vehicleId)
     : undefined;
@@ -548,6 +693,17 @@ export async function startSession(d: Depot, x: SessionStart) {
   );
   await replan(d);
   return s;
+}
+
+/** A charger is added the first time a session starts on it; its baseline follows in the replan. */
+async function noteCharger(d: Depot, x: SessionStart) {
+  const id = `st-${x.stationId}`;
+  const known = (await d.store.list("chargers")).find((c) => c.id === id);
+  const units = Math.max(known?.units ?? 0, x.connectorCount ?? 1);
+  const c: Charger = known ?? { id, stationId: x.stationId, units };
+  c.units = units;
+  c.protocol = x.protocol ?? c.protocol;
+  await d.store.put("chargers", id, c);
 }
 
 /** End a session. `energyWh` is the transaction total when the API reports it. */

@@ -101,6 +101,23 @@ export interface SentProfile {
   confirmed: boolean;
 }
 
+/**
+ * A charger the depot has seen (live mode, baseline on). Its baseline is a
+ * `tx_default` profile that limits a session until its own session profile is in force.
+ */
+export interface Charger {
+  /** `st-<station ID>`. */
+  id: string;
+  stationId: number;
+  protocol?: string;
+  /** Connectors the baseline applies to (it covers every connector of the station). */
+  units: number;
+  /** Baseline profiles sent for this charger, counted like a session's. */
+  sent?: SentProfile[];
+  /** Number of the last baseline profile, for its idempotency key. */
+  seq?: number;
+}
+
 export interface Transaction {
   id: string;
   vehicleId: string;
@@ -120,4 +137,6 @@ export interface Settings {
   siteCapKw: number;
   centsPerKwh: number;
   currency: string;
+  /** Live mode: keep a per-charger baseline profile (BASELINE_PROFILE). */
+  baselineProfile?: boolean;
 }
