@@ -30,6 +30,8 @@ export interface StationProfile {
   state: "pending" | "accepted" | "rejected" | "cleared" | "replaced" | "ended";
   /** The charger is applying it. */
   installed: boolean;
+  /** Why it was rejected, as GET /charging-profiles/{id} reports it. */
+  error?: { code: string; message: string };
 }
 
 interface Reply {
@@ -238,7 +240,14 @@ export function fakeStation(opts: {
     if (c.method === "GET" && del) {
       const p = profiles.find((x) => x.id === decodeURIComponent(del[1]));
       return p
-        ? { json: { id: p.id, status: p.state, stack_level: p.stack } }
+        ? {
+            json: {
+              id: p.id,
+              status: p.state,
+              stack_level: p.stack,
+              error: p.error ?? null,
+            },
+          }
         : { status: 404, json: { error: { code: "not_found", message: "" } } };
     }
     const st = path.match(/^\/stations\/(\d+)$/);

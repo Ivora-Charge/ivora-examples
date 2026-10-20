@@ -694,6 +694,74 @@ describe("baseline profile (opt-in)", () => {
     });
 
   for (const protocol of ["ocpp1.6", "ocpp2.0.1"] as const)
+    it(`a charger found offline by polling is not treated as refusing (${protocol})`, async () => {
+      // The baseline POST comes back pending; before the charger answers, the API
+      // reports the profile as rejected with station_offline, and the next replan
+      // reads it so. The charger never saw it: it is sent again, not marked refused.
+      let pending = true;
+      let goneOffline = false;
+      const stations = { 81: conns(81, 2), 82: conns(82, 1) };
+      const station = fakeStation({
+        protocol,
+        stations,
+        answer: (c) => {
+          if (
+            pending &&
+            c.url.includes("/stations/81/") &&
+            JSON.parse(c.body!).purpose === "tx_default"
+          ) {
+            pending = false;
+            goneOffline = true;
+            return "pending-later";
+          }
+          return "accept";
+        },
+        beforeRequest: () => {
+          if (!goneOffline) return;
+          goneOffline = false;
+          const p = station.profiles.find(
+            (x) => x.purpose === "tx_default" && x.state === "pending",
+          )!;
+          station.outbox.splice(
+            station.outbox.findIndex((m) => m.id === p.id),
+            1,
+          );
+          p.state = "rejected";
+          p.error = { code: "station_offline", message: "station offline" };
+        },
+      });
+      connect(station);
+      const d = depot(22, true);
+      await plug(d, station, stations, { tx: 1, station: 81, protocol });
+      station.endTx(1);
+      await endSession(d, "tx-1");
+      const polled = station.calls.filter(
+        (c) =>
+          c.method === "GET" &&
+          c.url.includes("/stations/81/charging-profiles/"),
+      );
+      expect(polled.length).toBeGreaterThan(0);
+      const [c81] = await d.store.list("chargers");
+      expect(c81.refused).toBeUndefined();
+      await plug(d, station, stations, {
+        tx: 2,
+        station: 82,
+        kwh: 100,
+        departH: 2,
+        protocol,
+      });
+      for (let i = 0; i < 5; i++) await replan(d);
+      const events = await d.store.list("events");
+      expect(events.filter((e) => e.type.endsWith("baseline_refused"))).toEqual(
+        [],
+      );
+      expect(station.baselineW(81)).toBe(7333);
+      expect(station.baselineW(82)).toBe(7333);
+      const at = d.clock!.getTime();
+      expect(station.limitW(2, at, 82)).toBe(7334);
+    });
+
+  for (const protocol of ["ocpp1.6", "ocpp2.0.1"] as const)
     it(`a new vehicle is held to what idle connectors leave free while their baseline is above its share (${protocol})`, async () => {
       // Station 91 is known and keeps 22 kW for its idle connector. A vehicle plugs
       // into a new station 92: the share drops to 11 kW, but 91 cannot be reached, so

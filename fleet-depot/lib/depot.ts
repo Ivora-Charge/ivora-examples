@@ -790,7 +790,7 @@ async function refreshProfile(s: Holder, p: SentProfile, at: Date) {
   const rec = await ivora()
     .getChargingProfile(s.stationId, p.profileId!)
     .catch(() => undefined);
-  if (rec) applyProfileStatus(s, p, rec.status, at);
+  if (rec) applyProfileStatus(s, p, rec.status, at, rec.error?.code);
 }
 
 /**
