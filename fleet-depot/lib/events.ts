@@ -4,8 +4,10 @@ import {
   applyProfileStatus,
   endSession,
   logEvent,
+  now,
   replan,
   startSession,
+  stationConnectors,
   type Depot,
 } from "./depot";
 import type { IvoraEvent } from "./webhook";
@@ -79,6 +81,7 @@ async function startFromTransaction(d: Depot, tx: TransactionDetail) {
     connectorId: tx.connector_id,
     connectorNumber: tx.connector_number ?? conn?.number ?? undefined,
     connectorKw: conn?.max_power_w ? conn.max_power_w / 1000 : undefined,
+    connectors: station && stationConnectors(station),
     transactionId: tx.id,
     meterStartWh: tx.meter_start_wh ?? 0,
     startedAt: tx.started_at ?? undefined,
@@ -136,9 +139,24 @@ async function onProfileAnswer(
   );
   const charger =
     typeof x.charger_status === "string" ? x.charger_status : null;
+  const c = s
+    ? undefined
+    : (await d.store.list("chargers")).find((y) =>
+        y.sent?.some((p) => p.profileId === profile.id),
+      );
+  if (c) {
+    applyProfileStatus(
+      c,
+      c.sent!.find((y) => y.profileId === profile.id)!,
+      type.slice("charging_profile.".length),
+      now(d),
+      profile.error?.code,
+    );
+    await d.store.put("chargers", c.id, c);
+  }
   if (s) {
     const p = s.sent!.find((y) => y.profileId === profile.id)!;
-    applyProfileStatus(s, p, type.slice("charging_profile.".length));
+    applyProfileStatus(s, p, type.slice("charging_profile.".length), now(d));
     if (type === "charging_profile.rejected" && s.profile?.key === p.key)
       s.profile.detail = profile.error?.code
         ? `${profile.error.code}: ${profile.error.message ?? ""}`
@@ -148,10 +166,10 @@ async function onProfileAnswer(
   await logEvent(
     d,
     type,
-    `${s ? `session on connector ${s.connectorNumber ?? s.connectorId}` : `profile ${profile.id ?? "?"}`}${charger ? ` (${charger})` : ""}`,
+    `${s ? `session on connector ${s.connectorNumber ?? s.connectorId}` : c ? `baseline of station ${c.stationId}` : `profile ${profile.id ?? "?"}`}${charger ? ` (${charger})` : ""}`,
   );
   // An accepted lower limit may unblock raises that were waiting for it.
-  if (s) await replan(d);
+  if (s || c) await replan(d);
 }
 
 async function onTokenUpdated(d: Depot, x: Record<string, unknown>) {

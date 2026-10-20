@@ -2,6 +2,7 @@ import "server-only";
 import { config } from "./config";
 import type {
   DepotEvent,
+  Charger,
   Driver,
   Session,
   Settings,
@@ -13,6 +14,7 @@ export interface Docs {
   vehicles: Vehicle;
   drivers: Driver;
   sessions: Session;
+  chargers: Charger;
   transactions: Transaction;
   events: DepotEvent & { id: string };
   /** Webhook event IDs already received (deduplication). */

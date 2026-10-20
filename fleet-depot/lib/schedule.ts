@@ -123,6 +123,23 @@ export function toProfileInput(
   };
 }
 
+/**
+ * Baseline profile body: purpose "tx_default" for every connector of the station,
+ * relative to the start of each transaction, no duration. A charger applies it to
+ * a new transaction until that transaction's own session profile is in force.
+ */
+export function toBaselineInput(limitW: number, stackLevel = 1) {
+  return {
+    purpose: "tx_default" as const,
+    unit: "W" as const,
+    stack_level: stackLevel,
+    kind: "relative" as const,
+    periods: [
+      { start_offset_seconds: 0, limit: Math.max(0, Math.floor(limitW)) },
+    ],
+  };
+}
+
 /** The highest limit in a profile body, W: what the session may draw at most under it. */
 export const maxLimitW = (body: { periods: { limit: number }[] }) =>
   Math.max(0, ...body.periods.map((p) => p.limit));
