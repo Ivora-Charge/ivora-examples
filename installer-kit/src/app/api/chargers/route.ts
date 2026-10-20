@@ -1,25 +1,22 @@
 import { NextResponse } from "next/server";
-import { addCharger } from "@/lib/service";
-import { fail } from "@/lib/http";
-import { ocppConnectionUrl } from "@/lib/urls";
 import { qrSvg } from "@/lib/qr";
+import { body, guarded } from "@/lib/server/route";
+import { addCharger } from "@/lib/server/service";
 
-export async function POST(req: Request) {
-  try {
-    const { siteId, name } = await req.json();
-    if (!siteId || !name) throw new Error("siteId and name are required");
-    const { charger, credentials, endpoint } = await addCharger(
-      String(siteId),
-      String(name),
-    );
-    const url = ocppConnectionUrl(endpoint, charger.id);
-    return NextResponse.json({
-      charger,
-      url,
-      password: credentials.password,
-      qr: await qrSvg(url),
-    });
-  } catch (e) {
-    return fail(e);
-  }
-}
+/**
+ * Register the station, set its password and return the connection details.
+ * This is the only response that ever contains the password.
+ */
+export const POST = guarded({ write: true }, async (req) => {
+  const result = await addCharger(await body(req));
+  return NextResponse.json(
+    {
+      ...result,
+      qr: {
+        url: await qrSvg(result.charger.connectionUrl),
+        password: result.password ? await qrSvg(result.password) : null,
+      },
+    },
+    { headers: { "Cache-Control": "no-store" } },
+  );
+});

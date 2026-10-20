@@ -1,17 +1,19 @@
 import { NextResponse } from "next/server";
-import { testCharger } from "@/lib/service";
-import { fail } from "@/lib/http";
+import { HttpError } from "@/lib/server/errors";
+import { body, guarded, type IdContext } from "@/lib/server/route";
+import { startTest, stopTest } from "@/lib/server/service";
 
-export async function POST(
-  _req: Request,
-  ctx: { params: Promise<{ id: string }> },
-) {
-  try {
-    const c = await testCharger((await ctx.params).id);
-    return c
-      ? NextResponse.json(c)
-      : NextResponse.json({ error: "not_found" }, { status: 404 });
-  } catch (e) {
-    return fail(e);
-  }
-}
+/** Remote start or stop of the commissioning test session. */
+export const POST = guarded({ write: true }, async (req, ctx: IdContext) => {
+  const id = (await ctx.params).id;
+  const { action, connector } = await body(req);
+  if (action === "start")
+    return NextResponse.json(
+      await startTest(
+        id,
+        connector === undefined ? undefined : Number(connector),
+      ),
+    );
+  if (action === "stop") return NextResponse.json(await stopTest(id));
+  throw new HttpError(400, "invalid_input", "action must be start or stop.");
+});

@@ -1,17 +1,25 @@
-import { NextResponse } from "next/server";
 import { reportPdf } from "@/lib/pdf";
-import { db } from "@/lib/store";
+import { isDemo } from "@/lib/server/config";
+import {
+  guarded,
+  pdfResponse,
+  requestOrigin,
+  type IdContext,
+} from "@/lib/server/route";
+import { chargerWithSite } from "@/lib/server/service";
+import { resolveQrBase } from "@/lib/urls";
 
-export async function GET(
-  _req: Request,
-  ctx: { params: Promise<{ id: string }> },
-) {
-  const c = db().chargers.get((await ctx.params).id);
-  const site = c && db().sites.get(c.siteId);
-  if (!c || !site)
-    return NextResponse.json({ error: "not_found" }, { status: 404 });
-  const pdf = await reportPdf({ charger: c, site });
-  return new Response(Buffer.from(pdf), {
-    headers: { "Content-Type": "application/pdf" },
+/** One-page commissioning report: charger details, test result and date. */
+export const GET = guarded({ write: false }, async (req, ctx: IdContext) => {
+  const { charger, site } = chargerWithSite((await ctx.params).id);
+  const qr = resolveQrBase({
+    demo: charger.demo || isDemo(),
+    requestOrigin: requestOrigin(req),
   });
-}
+  const pdf = await reportPdf({
+    charger,
+    site,
+    stickerBase: qr.ok ? qr.base : null,
+  });
+  return pdfResponse(pdf, `commissioning-${charger.name}.pdf`);
+});

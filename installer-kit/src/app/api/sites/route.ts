@@ -1,16 +1,17 @@
 import { NextResponse } from "next/server";
-import { createSite } from "@/lib/service";
-import { db } from "@/lib/store";
-import { fail } from "@/lib/http";
+import { body, guarded } from "@/lib/server/route";
+import { createSite, listSites, pickLocation } from "@/lib/server/service";
 
-export const GET = () => NextResponse.json([...db().sites.values()]);
+export const GET = guarded({ write: false }, async () =>
+  NextResponse.json(await listSites()),
+);
 
-export async function POST(req: Request) {
-  try {
-    const { name, address } = await req.json();
-    if (!name || !address) throw new Error("name and address are required");
-    return NextResponse.json(createSite(String(name), String(address)));
-  } catch (e) {
-    return fail(e);
-  }
-}
+/** Create a new site (and Ivora location), or pick an existing location. */
+export const POST = guarded({ write: true }, async (req) => {
+  const input = await body(req);
+  const site =
+    typeof input.locationId === "string"
+      ? await pickLocation(input.locationId)
+      : await createSite(input);
+  return NextResponse.json(site);
+});

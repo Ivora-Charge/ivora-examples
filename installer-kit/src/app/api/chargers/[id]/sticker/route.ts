@@ -1,31 +1,38 @@
-import { NextResponse } from "next/server";
 import { stickerPdf } from "@/lib/pdf";
-import { db } from "@/lib/store";
-import { assertNotIvoraDomain, qrBase, stickerUrl } from "@/lib/urls";
-import { fail } from "@/lib/http";
+import { isDemo } from "@/lib/server/config";
+import { HttpError } from "@/lib/server/errors";
+import {
+  guarded,
+  pdfResponse,
+  requestOrigin,
+  type IdContext,
+} from "@/lib/server/route";
+import { chargerWithSite } from "@/lib/server/service";
+import { resolveQrBase, stickerUrl } from "@/lib/urls";
 
-export async function GET(
-  req: Request,
-  ctx: { params: Promise<{ id: string }> },
-) {
-  try {
-    const c = db().chargers.get((await ctx.params).id);
-    const connector = Number(
-      new URL(req.url).searchParams.get("connector") ?? "1",
+/** Printable QR sticker for one connector, on the deployer's own domain. */
+export const GET = guarded({ write: false }, async (req, ctx: IdContext) => {
+  const { charger, site } = chargerWithSite((await ctx.params).id);
+  const number = Number(req.nextUrl.searchParams.get("connector") ?? "1");
+  const connector = charger.connectors.find((k) => k.number === number);
+  if (!connector?.code)
+    throw new HttpError(
+      404,
+      "not_found",
+      "That connector has not been reported by the charger yet.",
     );
-    const label = c?.boot?.connectors.find((k) => k.id === connector)?.label;
-    if (!c || !label)
-      return NextResponse.json({ error: "not_found" }, { status: 404 });
-    assertNotIvoraDomain(qrBase());
-    const pdf = await stickerPdf({
-      url: stickerUrl(c.id, connector),
-      siteName: db().sites.get(c.siteId)?.name ?? "",
-      connectorLabel: label,
-    });
-    return new Response(Buffer.from(pdf), {
-      headers: { "Content-Type": "application/pdf" },
-    });
-  } catch (e) {
-    return fail(e);
-  }
-}
+  const qr = resolveQrBase({
+    demo: charger.demo || isDemo(),
+    requestOrigin: requestOrigin(req),
+  });
+  if (!qr.ok) throw new HttpError(409, "qr_base_url_invalid", qr.reason);
+  const pdf = await stickerPdf({
+    url: stickerUrl(qr.base, connector.code),
+    code: connector.code,
+    siteName: site.name,
+    chargerName: charger.name,
+    connectorNumber: connector.number,
+    demo: qr.demo,
+  });
+  return pdfResponse(pdf, `sticker-${connector.code}.pdf`);
+});
