@@ -1,0 +1,235 @@
+import type { Call } from "./fake-api";
+import { fakeFetch } from "./fake-api";
+
+/**
+ * A station behind a fake Ivora API that keeps what the charger really applies,
+ * so tests can check the site cap against the station rather than the app's own
+ * bookkeeping. Answers can be made to fail in the ways the API documents.
+ */
+
+export type Answer =
+  | "accept" // the charger answers Accepted at once
+  | "pending" // the charger applies it, the answer comes later by webhook
+  | "pending-later" // the charger applies it only when the answer arrives
+  | "reject" // the charger answers Rejected
+  | "offline" // 409 station_offline, nothing sent
+  | "unknown-applied" // 503 outcome_unknown, but it was applied
+  | "unknown-lost"; // 503 outcome_unknown, nothing happened
+
+export interface StationProfile {
+  id: string;
+  tx: number;
+  stack: number;
+  startAt: number;
+  periods: { start_offset_seconds: number; limit: number }[];
+  state: "pending" | "accepted" | "rejected" | "cleared" | "replaced" | "ended";
+  /** The charger is applying it. */
+  installed: boolean;
+}
+
+interface Reply {
+  status?: number;
+  json?: unknown;
+}
+
+export function fakeStation(opts: {
+  protocol: "ocpp1.6" | "ocpp2.0.1";
+  answer?: (c: Call) => Answer;
+  /** Called after every request, with the profiles as they are now. */
+  onChange?: () => void;
+}) {
+  const profiles: StationProfile[] = [];
+  const replies = new Map<string, Reply>();
+  /**
+   * Charger answers the app has not heard yet. `applied`: the charger has already
+   * acted on it (it handles commands in order, so it has once a later one arrives).
+   */
+  const outbox: { id: string; accepted: boolean; applied: boolean }[] = [];
+  let n = 0;
+  const answer = (c: Call) => opts.answer?.(c) ?? "accept";
+  const unknown: Reply = {
+    status: 503,
+    json: { error: { code: "outcome_unknown", message: "?" }, request_id: "r" },
+  };
+  const offline: Reply = {
+    status: 409,
+    json: { error: { code: "station_offline", message: "offline" } },
+  };
+
+  function install(p: StationProfile) {
+    if (opts.protocol === "ocpp1.6")
+      for (const x of profiles)
+        if (x !== p && x.tx === p.tx && x.stack === p.stack && x.installed) {
+          x.installed = false;
+          x.state = "replaced";
+        }
+    p.installed = true;
+  }
+
+  /** The charger acts on earlier commands before a new one. */
+  function catchUp() {
+    for (const m of outbox) if (!m.applied) apply(m);
+  }
+
+  function apply(m: (typeof outbox)[number]) {
+    m.applied = true;
+    const p = profiles.find((x) => x.id === m.id)!;
+    if (p.state !== "pending") return;
+    p.state = m.accepted ? "accepted" : "rejected";
+    if (m.accepted) install(p);
+  }
+
+  function setProfile(c: Call, a: Answer): Reply {
+    catchUp();
+    const body = JSON.parse(c.body!);
+    const live = profiles.filter(
+      (x) =>
+        x.tx === body.transaction_id &&
+        x.stack === body.stack_level &&
+        (x.state === "pending" || x.state === "accepted"),
+    );
+    if (opts.protocol !== "ocpp1.6" && live.length > 0)
+      return {
+        status: 422,
+        json: {
+          error: {
+            code: "charging_profile_refused",
+            message: "a profile at this purpose, EVSE and stack level exists",
+          },
+        },
+      };
+    const p: StationProfile = {
+      id: `chp_${++n}`,
+      tx: body.transaction_id,
+      stack: body.stack_level,
+      startAt: Date.parse(body.start_at),
+      periods: body.periods,
+      state: "pending",
+      installed: false,
+    };
+    profiles.push(p);
+    let charger: string | null = null;
+    if (a === "accept" || a === "unknown-applied") {
+      p.state = "accepted";
+      install(p);
+      charger = "Accepted";
+    } else if (a === "reject") {
+      p.state = "rejected";
+      charger = "Rejected";
+    } else if (a === "pending") {
+      install(p);
+      outbox.push({ id: p.id, accepted: true, applied: true });
+    } else outbox.push({ id: p.id, accepted: true, applied: false });
+    return {
+      status: 202,
+      json: {
+        id: `op_${p.id}`,
+        status: "succeeded",
+        result: { profile_id: p.id, charger_status: charger },
+      },
+    };
+  }
+
+  function clearProfile(id: string): Reply {
+    catchUp();
+    const p = profiles.find((x) => x.id === id);
+    if (!p || (p.state !== "pending" && p.state !== "accepted"))
+      return {
+        status: 409,
+        json: { error: { code: "charging_profile_inactive", message: id } },
+      };
+    p.state = "cleared";
+    p.installed = false;
+    return {
+      status: 202,
+      json: { id: `op_clear_${id}`, status: "succeeded", result: {} },
+    };
+  }
+
+  const api = fakeFetch((c) => {
+    const reply = route(c);
+    opts.onChange?.();
+    return reply;
+  });
+
+  function route(c: Call): Reply {
+    const path = c.url.replace(/^https:\/\/[^/]+\/v1\/tenants\/\d+/, "");
+    const key = c.headers["idempotency-key"];
+    if (key && replies.has(key)) return replies.get(key)!;
+    if (c.method === "POST" && /\/charging-profiles$/.test(path)) {
+      const a = answer(c);
+      if (a === "offline") return offline;
+      if (a === "unknown-lost") return unknown;
+      const r = setProfile(c, a);
+      if (key && r.status !== 422) replies.set(key, r);
+      return a === "unknown-applied" ? unknown : r;
+    }
+    const del = path.match(/\/charging-profiles\/([^/]+)$/);
+    if (c.method === "DELETE" && del) {
+      const a = answer(c);
+      if (a === "offline") return offline;
+      if (a === "unknown-lost") return unknown;
+      const r = clearProfile(decodeURIComponent(del[1]));
+      if (key) replies.set(key, r);
+      return a === "unknown-applied" ? unknown : r;
+    }
+    if (c.method === "GET" && del) {
+      const p = profiles.find((x) => x.id === decodeURIComponent(del[1]));
+      return p
+        ? { json: { id: p.id, status: p.state, stack_level: p.stack } }
+        : { status: 404, json: { error: { code: "not_found", message: "" } } };
+    }
+    if (c.method === "POST" && /\/composite-schedule$/.test(path))
+      return {
+        status: 202,
+        json: {
+          id: "op_c",
+          status: "succeeded",
+          result: { schedule: { unit: "W", periods: [] } },
+        },
+      };
+    return {
+      status: 404,
+      json: { error: { code: "not_found", message: path } },
+    };
+  }
+
+  return {
+    fetch: api.fetch,
+    calls: api.calls,
+    profiles,
+    outbox,
+    /** The charger answers a pending profile (what a charging_profile.* webhook reports). */
+    deliver(i = 0) {
+      const [m] = outbox.splice(i, 1);
+      const p = profiles.find((x) => x.id === m.id)!;
+      if (!m.applied) apply(m);
+      else if (p.state === "pending") p.state = "accepted";
+      return m;
+    },
+    /** The session ended: the charger drops its session profiles. */
+    endTx(tx: number) {
+      for (const p of profiles)
+        if (p.tx === tx) {
+          p.installed = false;
+          if (p.state === "pending" || p.state === "accepted")
+            p.state = "ended";
+        }
+    },
+    /**
+     * What the charger lets this transaction draw at `at`, W: the installed profile
+     * with the highest stack level (the latest at equal levels). Undefined when it
+     * applies none (the charger's own default).
+     */
+    limitW(tx: number, at: number): number | undefined {
+      const mine = profiles.filter((p) => p.tx === tx && p.installed);
+      if (mine.length === 0) return undefined;
+      const top = mine.reduce((a, b) => (b.stack >= a.stack ? b : a));
+      const offset = (at - top.startAt) / 1000;
+      let limit = top.periods[0].limit;
+      for (const p of top.periods)
+        if (p.start_offset_seconds <= offset) limit = p.limit;
+      return limit;
+    },
+  };
+}

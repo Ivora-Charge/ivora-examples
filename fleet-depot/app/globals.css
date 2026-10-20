@@ -1,0 +1,94 @@
+body {
+  font-family: system-ui, sans-serif;
+  margin: 0;
+  background: #f6f7f9;
+  color: #1a1d21;
+}
+main {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px;
+}
+h1 {
+  margin: 0 0 4px;
+}
+h2 {
+  margin-top: 32px;
+}
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+}
+th,
+td {
+  text-align: left;
+  padding: 8px 10px;
+  border-bottom: 1px solid #e3e6ea;
+  font-size: 14px;
+}
+.banner {
+  background: #fff3cd;
+  padding: 8px 12px;
+  border-radius: 6px;
+  margin: 12px 0;
+}
+.ok {
+  color: #137333;
+}
+.warn {
+  color: #b3261e;
+}
+button,
+input,
+textarea,
+select {
+  font: inherit;
+  padding: 6px 10px;
+  margin: 2px;
+}
+.bar {
+  display: inline-block;
+  vertical-align: middle;
+  background: #dde1e6;
+  border-radius: 4px;
+  height: 8px;
+  width: 120px;
+}
+.bar > span {
+  display: block;
+  background: #2b7de9;
+  height: 8px;
+  border-radius: 4px;
+}
+.top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.panel {
+  background: #fff;
+  padding: 12px;
+  margin: 12px 0;
+  border-radius: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.panel h3 {
+  width: 100%;
+  margin: 0;
+}
+.panel textarea {
+  width: 100%;
+}
+.login {
+  display: flex;
+  flex-direction: column;
+  max-width: 320px;
+  gap: 8px;
+}
+a {
+  color: #1a5fb4;
+}
