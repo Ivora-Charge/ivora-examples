@@ -132,11 +132,12 @@ export interface Charger {
   /** The cap and connector total that share was planned for. */
   plan?: string;
   /**
-   * The charger rejected its baseline, or does not support it, under `plan`. It is
-   * not sent again until the plan changes; meanwhile the charger counts as having
-   * no baseline (its connectors are reserved at their rating).
+   * The charger rejected its baseline, or does not support it, under `plan`, at
+   * `at`. It is not sent again until the plan changes or an hour has passed;
+   * meanwhile the charger counts as having no baseline (its connectors are reserved
+   * at their rating). An offline station or a dispatch error is not a refusal.
    */
-  refused?: { plan?: string; why: string };
+  refused?: { plan?: string; why: string; at?: string };
 }
 
 export interface Transaction {

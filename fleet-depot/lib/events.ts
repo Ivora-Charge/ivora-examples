@@ -4,6 +4,7 @@ import {
   applyProfileStatus,
   endSession,
   logEvent,
+  now,
   replan,
   startSession,
   stationConnectors,
@@ -148,12 +149,14 @@ async function onProfileAnswer(
       c,
       c.sent!.find((y) => y.profileId === profile.id)!,
       type.slice("charging_profile.".length),
+      now(d),
+      profile.error?.code,
     );
     await d.store.put("chargers", c.id, c);
   }
   if (s) {
     const p = s.sent!.find((y) => y.profileId === profile.id)!;
-    applyProfileStatus(s, p, type.slice("charging_profile.".length));
+    applyProfileStatus(s, p, type.slice("charging_profile.".length), now(d));
     if (type === "charging_profile.rejected" && s.profile?.key === p.key)
       s.profile.detail = profile.error?.code
         ? `${profile.error.code}: ${profile.error.message ?? ""}`

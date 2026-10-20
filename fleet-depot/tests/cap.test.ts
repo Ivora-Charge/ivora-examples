@@ -607,6 +607,134 @@ describe("baseline profile (opt-in)", () => {
       await replan(d);
       await replan(d);
       expect(tries()).toBe(before + 1);
+      // And so does the passing of an hour, once.
+      d.clock = new Date(d.clock!.getTime() + 59 * 60_000);
+      await replan(d);
+      expect(tries()).toBe(before + 1);
+      d.clock = new Date(d.clock!.getTime() + 2 * 60_000);
+      await replan(d);
+      await replan(d);
+      expect(tries()).toBe(before + 2);
+    });
+
+  for (const protocol of ["ocpp1.6", "ocpp2.0.1"] as const)
+    it(`a baseline is not raised above a lower one still unanswered (${protocol})`, async () => {
+      // The charger applied the 2 kW baseline but its answer has not arrived. Going
+      // back up to 5 kW is a raise at the charger, though the app still counts 11 kW.
+      let answer: Answer = "accept";
+      const stations = { 71: conns(71, 2) };
+      const station = fakeStation({ protocol, stations, answer: () => answer });
+      connect(station);
+      const d = depot(22, true);
+      await plug(d, station, stations, { tx: 1, station: 71, protocol });
+      station.endTx(1);
+      await endSession(d, "tx-1");
+      expect(station.baselineW(71)).toBe(11000);
+      answer = "pending";
+      d.settings.siteCapKw = 4;
+      await replan(d);
+      expect(station.baselineW(71)).toBe(2000);
+      answer = "accept";
+      const sent = baselinePosts(station).length;
+      d.settings.siteCapKw = 10;
+      await replan(d);
+      expect(baselinePosts(station).length).toBe(sent);
+      expect(station.baselineW(71)).toBe(2000);
+      // Once the charger's answer arrives, the raise follows.
+      const m = station.deliver();
+      await handleEvent(d, evt("charging_profile.accepted", m.id));
+      expect(station.baselineW(71)).toBe(5000);
+    });
+
+  for (const protocol of ["ocpp1.6", "ocpp2.0.1"] as const)
+    it(`a charger that was offline once is not treated as refusing (${protocol})`, async () => {
+      // The API reports an offline station as a rejected operation (station_offline):
+      // the charger never saw the profile, so it is sent again once the station is back.
+      let offline = true;
+      const stations = { 81: conns(81, 2), 82: conns(82, 1) };
+      const station = fakeStation({
+        protocol,
+        stations,
+        answer: (c) =>
+          offline && c.url.includes("/stations/81/")
+            ? "offline-rejected"
+            : "accept",
+      });
+      connect(station);
+      const d = depot(22, true);
+      await plug(d, station, stations, { tx: 1, station: 81, protocol });
+      station.endTx(1);
+      await endSession(d, "tx-1");
+      expect(station.baselineW(81)).toBeUndefined();
+      const [c81] = await d.store.list("chargers");
+      expect(c81.refused).toBeUndefined();
+      offline = false;
+      await plug(d, station, stations, {
+        tx: 2,
+        station: 82,
+        kwh: 100,
+        departH: 2,
+        protocol,
+      });
+      for (let i = 0; i < 5; i++) await replan(d);
+      const events = await d.store.list("events");
+      expect(events.filter((e) => e.type.endsWith("baseline_refused"))).toEqual(
+        [],
+      );
+      // 22 kW over three connectors.
+      expect(station.baselineW(81)).toBe(7333);
+      expect(station.baselineW(82)).toBe(7333);
+      const at = d.clock!.getTime();
+      expect(station.limitW(2, at, 82)).toBe(7334);
+      expect(
+        station.limitW(2, at, 82)! +
+          station.idleW(81, 811) +
+          station.idleW(81, 812),
+      ).toBeLessThanOrEqual(22000);
+    });
+
+  for (const protocol of ["ocpp1.6", "ocpp2.0.1"] as const)
+    it(`a new vehicle is held to what idle connectors leave free while their baseline is above its share (${protocol})`, async () => {
+      // Station 91 is known and keeps 22 kW for its idle connector. A vehicle plugs
+      // into a new station 92: the share drops to 11 kW, but 91 cannot be reached, so
+      // its idle connector may still draw 22 kW and the vehicle gets nothing yet.
+      let offline = false;
+      const stations = { 91: conns(91, 1, 22000), 92: conns(92, 1, 22000) };
+      const plugged = new Map<number, { station: number; conn: number }>();
+      const station = fakeStation({
+        protocol,
+        stations,
+        answer: (c) =>
+          offline && c.url.includes("/stations/91/") ? "offline" : "accept",
+      });
+      connect(station);
+      const d = depot(22, true);
+      await plug(
+        d,
+        station,
+        { 91: stations[91] },
+        { tx: 1, station: 91, protocol },
+      );
+      station.endTx(1);
+      await endSession(d, "tx-1");
+      expect(station.baselineW(91)).toBe(22000);
+      offline = true;
+      plugged.set(2, { station: 92, conn: 921 });
+      await plug(d, station, stations, {
+        tx: 2,
+        station: 92,
+        kwh: 100,
+        departH: 2,
+        protocol,
+      });
+      const at = d.clock!.getTime();
+      expect(station.ownLimitW(2, at)).toBe(0);
+      expect(siteW(station, stations, plugged, at)).toBeLessThanOrEqual(22000);
+      offline = false;
+      await replan(d);
+      expect(station.baselineW(91)).toBe(11000);
+      expect(station.ownLimitW(2, at)).toBe(11000);
+      expect(siteW(station, stations, plugged, at)).toBeLessThanOrEqual(22000);
     });
 
   it("does not add a charger until its connectors are known, and retries the lookup", async () => {
@@ -635,6 +763,16 @@ describe("baseline profile (opt-in)", () => {
         e.detail.includes("connectors unknown"),
       ),
     ).toBe(true);
+    // A station that keeps failing is logged once an hour, not on every replan.
+    const logged = async () =>
+      (await d.store.list("events")).filter((e) =>
+        e.detail.includes("connectors unknown"),
+      ).length;
+    for (let i = 0; i < 3; i++) await replan(d);
+    expect(await logged()).toBe(1);
+    d.clock = new Date(d.clock!.getTime() + H);
+    await replan(d);
+    expect(await logged()).toBe(2);
     lookup = true;
     await replan(d);
     const [c] = await d.store.list("chargers");
@@ -670,7 +808,8 @@ describe("property: the station's limits never add up to more than the cap", () 
     ["pending", 0.1],
     ["pending-later", 0.1],
     ["reject", 0.05],
-    ["offline", 0.1],
+    ["offline", 0.05],
+    ["offline-rejected", 0.05],
     ["unknown-applied", 0.1],
     ["unknown-lost", 0.1],
   ];
@@ -679,11 +818,13 @@ describe("property: the station's limits never add up to more than the cap", () 
   for (const protocol of ["ocpp1.6", "ocpp2.0.1"] as const)
     for (const baseline of [false, true])
       it(`holds at every request over random nights (${protocol}, baseline ${baseline ? "on" : "off"})`, async () => {
-        let plugInChecks = 0;
         for (let seed = 1; seed <= 25; seed++) {
+          let plugInChecks = 0;
           const r = rng(seed * (protocol === "ocpp1.6" ? 1 : 7919));
-          const capKw = [7.4, 11, 22, 30][Math.floor(r() * 4)];
-          const capW = Math.round(capKw * 1000);
+          const CAPS = [7.4, 11, 22, 30];
+          const capKw = CAPS[Math.floor(r() * CAPS.length)];
+          let capW = Math.round(capKw * 1000);
+          let oldCapW = 0;
           // Stations with one, two and three connectors.
           const stations: Record<number, Conns> = {};
           [1, 2, 3].forEach((n, i) => {
@@ -735,15 +876,90 @@ describe("property: the station's limits never add up to more than the cap", () 
               }
             return sum;
           };
+          /**
+           * The worst case by the stations' own state, W: every plugged vehicle at its
+           * own limit or what it started under (when covered), every idle connector
+           * of a known charger at its baseline or rating, profiles not acted on yet
+           * included. `skipTx` leaves one transaction out.
+           */
+          /**
+           * A failed check. Thrown inside a request the app would take it for a
+           * network error and carry on, so it is also kept and rethrown after the step.
+           */
+          let violation: string | undefined;
+          const fail = (msg: string) => {
+            violation ??= msg;
+            throw new Error(msg);
+          };
+          const stationWorst = (skipTx?: number) => {
+            let sum = 0;
+            for (const [tx, p] of plugged)
+              if (tx !== skipTx) sum += station.worstTxW(tx, p.covered);
+            if (baseline)
+              for (const [id, cs] of Object.entries(stations)) {
+                if (!known(Number(id))) continue;
+                for (const c of cs)
+                  if (![...plugged.values()].some((p) => p.conn === c.id))
+                    sum += station.worstIdleW(Number(id), c.id);
+              }
+            return sum;
+          };
+          /**
+           * Every new limit is sized against what the rest of the site may draw at
+           * that moment, by the stations' state (not the app's records): a session
+           * profile never above the cap minus everything else, and a baseline raise
+           * only when the whole site stays within the cap with it. Resends of an
+           * earlier request (same key) were sized when first sent.
+           */
+          const seen = new Set<string>();
+          let raise: { station: number; beforeW?: number } | undefined;
+          const sized = (c: Call, when: "before" | "after") => {
+            if (c.method !== "POST" || !c.url.endsWith("/charging-profiles"))
+              return;
+            const key = c.headers["idempotency-key"];
+            if (when === "before") {
+              raise = undefined;
+              if (seen.has(key)) return;
+            } else if (seen.has(key)) return;
+            const body = JSON.parse(c.body!);
+            const w = Math.max(
+              ...body.periods.map((p: { limit: number }) => p.limit),
+            );
+            if (body.purpose === "tx_default") {
+              const sid = Number(c.url.match(/\/stations\/(\d+)\//)![1]);
+              if (when === "before")
+                raise = { station: sid, beforeW: station.worstBaselineW(sid) };
+              else {
+                seen.add(key);
+                const was = raise?.beforeW;
+                if (was !== undefined && w > was) {
+                  const sum = stationWorst();
+                  const bound = capW + beyondCapW(store, capW);
+                  if (sum > bound)
+                    fail(
+                      `seed ${seed} ${protocol}: baseline raised to ${w} W at station ${sid} with the site at ${sum} W > ${bound} W`,
+                    );
+                }
+              }
+            } else if (when === "before") {
+              const others = stationWorst(body.transaction_id);
+              if (w > Math.max(0, capW - others))
+                fail(
+                  `seed ${seed} ${protocol}: tx ${body.transaction_id} sent ${w} W with the rest of the site at ${others} W (cap ${capW} W)`,
+                );
+            } else seen.add(key);
+          };
           const check = (where: string) => {
             const sum = siteNow();
-            // Baseline off: strictly the cap. On: the cap plus decreases still on
-            // their way (a freed connector's share is only safe once they land).
-            const bound = baseline
-              ? capW + excessW(store) + beyondCapW(store, capW)
-              : capW;
+            // The cap plus decreases still on their way (after a lower cap, or a
+            // freed connector's share, which is only safe once they land). `sized`
+            // checks that nothing is raised into that excess.
+            const bound =
+              Math.max(capW, oldCapW) +
+              excessW(store) +
+              beyondCapW(store, capW);
             if (sum > bound)
-              throw new Error(
+              fail(
                 `seed ${seed} ${protocol}: ${sum} W > ${bound} W (cap ${capW} W) ${where}`,
               );
           };
@@ -752,7 +968,11 @@ describe("property: the station's limits never add up to more than the cap", () 
             stations,
             answer: pick,
             stationLookup: () => healthy || r() > 0.3,
-            onChange: () => check("during a request"),
+            beforeRequest: (c) => sized(c, "before"),
+            onChange: (c) => {
+              sized(c, "after");
+              check("during a request");
+            },
           });
           connect(station);
           let nextTx = 1;
@@ -813,12 +1033,22 @@ describe("property: the station's limits never add up to more than the cap", () 
                 Math.floor(r() * station.outbox.length),
               );
               await handleEvent(d, evt("charging_profile.accepted", m.id));
+            } else if (x < 0.8) {
+              // The operator changes the cap: every share moves, and a lower one
+              // leaves baselines above it until the decrease lands.
+              // Until the replan has split the new cap, the old allocations stand.
+              oldCapW = capW;
+              d.settings.siteCapKw = CAPS[Math.floor(r() * CAPS.length)];
+              capW = Math.round(d.settings.siteCapKw * 1000);
+              await replan(d);
+              oldCapW = 0;
             } else {
               d.clock = new Date(d.clock!.getTime() + r() * 2 * H);
               check("after time passed");
               await replan(d);
             }
             check(`after step ${step}`);
+            if (violation) throw new Error(violation);
           }
 
           // Once the station behaves, every allocation ends up in force.
@@ -829,6 +1059,7 @@ describe("property: the station's limits never add up to more than the cap", () 
           }
           for (let i = 0; i < 3; i++) await replan(d);
           check("after recovery");
+          if (violation) throw new Error(violation);
           const at = d.clock!.getTime();
           for (const s of await d.store.list("sessions")) {
             const allocW = Math.round(s.allocatedKw * 1000);
@@ -845,9 +1076,10 @@ describe("property: the station's limits never add up to more than the cap", () 
             expect(siteNow()).toBeLessThanOrEqual(
               capW + beyondCapW(store, capW),
             );
+            // The plug-in moment on a known charger was really exercised.
+            if (plugInChecks === 0)
+              throw new Error(`seed ${seed} ${protocol}: no covered plug-in`);
           }
         }
-        // The plug-in moment on a known charger was really exercised.
-        if (baseline) expect(plugInChecks).toBeGreaterThan(0);
       });
 });

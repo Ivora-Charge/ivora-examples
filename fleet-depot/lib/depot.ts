@@ -137,6 +137,14 @@ export function enforcedW(sent: SentProfile[] = []): number {
   return Math.max(top.w, ...sent.filter((p) => !p.confirmed).map((p) => p.w));
 }
 
+/** The lowest limit that may be in force under these profiles, W (Infinity when none). */
+function lowestW(sent: SentProfile[] = []): number {
+  return Math.min(
+    topConfirmed(sent)?.w ?? Infinity,
+    ...sent.filter((p) => !p.confirmed).map((p) => p.w),
+  );
+}
+
 /**
  * Recompute allocations for all active sessions and apply a charging profile for each
  * whose allocation changed. Called when a vehicle plugs in or leaves, on edits, on
@@ -232,9 +240,15 @@ export async function replan(d: Depot): Promise<void> {
   // A charger's baseline follows the same rule: lower first, raise once every lower
   // limit is in force. Its first send counts as lowering (nothing is in force yet).
   const baseOver = (c: Charger) =>
-    !heldBack(c) && enforcedW(c.sent) > (c.shareW ?? 0);
+    !heldBack(c, at) && enforcedW(c.sent) > (c.shareW ?? 0);
+  // Chosen once the profiles in flight are settled: one that turns out not to be in
+  // force can make a decrease a raise.
+  // A decrease never goes above a lower limit that may already be in force (sent,
+  // not answered yet): at the charger that would be a raise.
   const applyBase = (c: Charger) =>
-    applyBaseline(d, c, baseOver(c) ? c.shareW! : raiseW(c));
+    applyBaseline(d, c, () =>
+      baseOver(c) ? Math.min(c.shareW!, lowestW(c.sent)) : raiseW(c),
+    );
   /** The highest baseline up to the share that keeps the worst case within the cap. */
   const raiseW = (c: Charger) => {
     const cur = enforcedW(c.sent);
@@ -257,23 +271,28 @@ export async function replan(d: Depot): Promise<void> {
 
   const lowered = new Set<Session>();
   const loweredBase = new Set<Charger>();
-  for (let round = 0; round < 3; round++) {
+  for (let round = 0; ; round++) {
     const without = chargers.filter(noBaseline).length;
+    const changed = () => chargers.filter(noBaseline).length !== without;
     // Baselines first: a session lowered after them is sized against what they free.
     for (const c of chargers)
       if (baseOver(c) && (!loweredBase.has(c) || needsSend(c, c.shareW!))) {
         loweredBase.add(c);
         await applyBase(c);
+        if (changed()) break;
       }
+    // A charger that refused its baseline is reserved at its rating from now on:
+    // split again at once, so nothing more is sent under the old shares.
+    if (changed()) {
+      await allocate();
+      if (round < chargers.length) continue;
+    }
     for (const s of live)
       if (over(s) && (!lowered.has(s) || needsSend(s, target(s)))) {
         lowered.add(s);
         await apply(s);
       }
-    // A charger that refused its baseline is reserved at its rating from now on:
-    // split again, and send what that lowers, before raising anything.
-    if (chargers.filter(noBaseline).length === without) break;
-    await allocate();
+    break;
   }
   const waiting = live.filter(over);
   const waitingBase = chargers.filter(baseOver);
@@ -285,7 +304,8 @@ export async function replan(d: Depot): Promise<void> {
       : []),
     ...(waiting.length > 0 || waitingBase.length > 0
       ? chargers.filter(
-          (c) => !loweredBase.has(c) && !heldBack(c) && needsSend(c, c.shareW!),
+          (c) =>
+            !loweredBase.has(c) && !heldBack(c, at) && needsSend(c, c.shareW!),
         )
       : []),
   ];
@@ -293,7 +313,7 @@ export async function replan(d: Depot): Promise<void> {
   // raised here too once every lower limit is in force.
   if (waiting.length === 0) for (const s of live) await apply(s);
   if (waiting.length === 0 && waitingBase.length === 0)
-    for (const c of chargers) if (!heldBack(c)) await applyBase(c);
+    for (const c of chargers) if (!heldBack(c, at)) await applyBase(c);
   if (deferred.length > 0)
     await logEvent(
       d,
@@ -315,14 +335,15 @@ const sentWith = (c: Charger, extra?: Extra) =>
   extra?.charger === c ? [...(c.sent ?? []), extra.p] : c.sent;
 
 /**
- * Not sent again until the plan changes: the charger refused a baseline under the
- * current plan, and has none in force or one at or below its share. A refused
- * decrease of a baseline still in force is retried on every replan, like a
- * session's.
+ * Not sent again until the plan changes or an hour has passed: the charger refused
+ * a baseline under the current plan, and has none in force or one at or below its
+ * share. A refused decrease of a baseline still in force is retried on every
+ * replan, like a session's.
  */
-const heldBack = (c: Charger) =>
+const heldBack = (c: Charger, at: Date) =>
   c.refused !== undefined &&
   c.refused.plan === c.plan &&
+  at.getTime() - Date.parse(c.refused.at ?? "") < REFUSED_RETRY_MS &&
   (noBaseline(c) || enforcedW(c.sent) <= (c.shareW ?? 0));
 
 /** The charger has no baseline: it refused one and none is in force. */
@@ -495,7 +516,7 @@ async function applyProfile(
     // key, same body), and read the state of profiles the charger has not answered.
     for (const p of [...sent]) {
       if (!p.profileId) await postProfile(s, p);
-      else if (!p.confirmed) await refreshProfile(s, p);
+      else if (!p.confirmed) await refreshProfile(s, p, at);
     }
     await save();
 
@@ -579,41 +600,47 @@ const UNSUPPORTED = new Set([
   "charging_profile_unsupported",
 ]);
 
+/** How long a charger that refused its baseline waits before it is sent again. */
+const REFUSED_RETRY_MS = 3600_000;
+
 /**
  * Record that the charger refused its baseline under the current plan: it is not
- * sent again until the cap or the connectors change.
+ * sent again until the cap or the connectors change, or an hour has passed.
  */
-function refuse(c: Charger, why: string) {
-  c.refused = { plan: c.plan, why };
+function refuse(c: Charger, why: string, at: Date) {
+  c.refused = { plan: c.plan, why, at: at.toISOString() };
 }
 
 /**
- * Bring a charger's baseline to `targetW` per connector, the same way a session's
+ * Bring a charger's baseline to `goal()` per connector, the same way a session's
  * profile is changed: a lower limit goes straight out, OCPP 2.x alternates between
  * stack levels 1 and 2 and clears the old profile after the new one is accepted.
  * A rejection, or an answer that the charger does not support it, marks the charger
  * as refused. Never throws.
  */
-async function applyBaseline(d: Depot, c: Charger, targetW: number) {
+async function applyBaseline(d: Depot, c: Charger, goal: () => number) {
   const sent = (c.sent ??= []);
   const name = `baseline of station ${c.stationId}`;
   const save = () => d.store.put("chargers", c.id, c);
   const refused = async (why: string) => {
-    refuse(c, why);
+    refuse(c, why, now(d));
     await save();
     await logEvent(
       d,
       "charging_profile.baseline_refused",
-      `${name}: ${why}. Its connectors are reserved at their rating; sent again when the cap or the chargers change`,
+      `${name}: ${why}. Its connectors are reserved at their rating; sent again in an hour, or sooner when the cap or the chargers change`,
     );
   };
   try {
     for (const p of [...sent]) {
-      if (!p.profileId) await postProfile(c, p);
-      else if (!p.confirmed) await refreshProfile(c, p);
+      if (!p.profileId) {
+        const notSet = await postProfile(c, p);
+        if (notSet.refused) refuse(c, notSet.refused, now(d));
+      } else if (!p.confirmed) await refreshProfile(c, p, now(d));
     }
     await save();
-    if (heldBack(c)) return;
+    if (heldBack(c, now(d))) return;
+    let targetW = goal();
     if (!needsSend(c, targetW)) {
       const latest = sent.at(-1)!;
       if (latest.confirmed) await retireOlder(c, latest);
@@ -634,6 +661,9 @@ async function applyBaseline(d: Depot, c: Charger, targetW: number) {
         return;
       }
       stack = top?.stack === 1 ? 2 : 1;
+      // A cleared profile no longer counts: what was a decrease may now be a raise.
+      targetW = goal();
+      if (!needsSend(c, targetW)) return await save();
     }
     const seq = (c.seq ?? 0) + 1;
     c.seq = seq;
@@ -646,8 +676,17 @@ async function applyBaseline(d: Depot, c: Charger, targetW: number) {
     };
     sent.push(p);
     await save();
-    await postProfile(c, p);
-    if (!sent.includes(p)) return await refused("the charger rejected it");
+    const notSet = await postProfile(c, p);
+    if (notSet.refused) return await refused(notSet.refused);
+    if (notSet.failed) {
+      // Not refused: sent again on the next replan, counted at the rating meanwhile.
+      await save();
+      return await logEvent(
+        d,
+        "charging_profile.error",
+        `${name}: not set (${notSet.failed}); retried on the next replan`,
+      );
+    }
     if (p.confirmed) {
       delete c.refused;
       await retireOlder(c, p);
@@ -662,7 +701,11 @@ async function applyBaseline(d: Depot, c: Charger, targetW: number) {
     if (e instanceof IvoraError && UNSUPPORTED.has(e.code))
       return await refused(describeError(e));
     await save();
-    await logEvent(d, "charging_profile.error", `${name}: ${describeError(e)}`);
+    await logEvent(
+      d,
+      "charging_profile.error",
+      `${name}: ${describeError(e)}; retried on the next replan`,
+    );
   }
 }
 
@@ -692,8 +735,15 @@ function show(
   if (p?.profileId) s.profile.profileId = p.profileId;
 }
 
+/**
+ * What became of a profile that was not set. `refused`: the charger answered with
+ * anything but Accepted, or the API says it cannot take profiles. `failed`: it never
+ * reached the charger (offline, a dispatch error), so it is worth sending again.
+ */
+type NotSet = { refused?: string; failed?: string };
+
 /** POST a profile with its stored key and body, and record the answer. */
-async function postProfile(s: Holder, p: SentProfile) {
+async function postProfile(s: Holder, p: SentProfile): Promise<NotSet> {
   const api = ivora();
   let op: Operation;
   try {
@@ -715,34 +765,46 @@ async function postProfile(s: Holder, p: SentProfile) {
   p.profileId = r.profile_id ?? p.profileId;
   if (op.status === "rejected") {
     drop(s, p);
-    show(
-      s,
-      "rejected",
-      `${r.error?.code ?? "rejected"}: ${r.error?.message ?? ""}`,
-      p,
-    );
+    const code = r.error?.code ?? "rejected";
+    const why = `${code}: ${r.error?.message ?? ""}`;
+    show(s, "rejected", why, p);
+    // station_offline and other dispatch errors: the charger never saw it.
+    return UNSUPPORTED.has(code) ? { refused: why } : { failed: why };
   } else if (r.charger_status === "Accepted") {
     p.confirmed = true;
     show(s, "accepted", undefined, p);
   } else if (r.charger_status) {
     drop(s, p);
-    show(s, "rejected", `charger answered ${r.charger_status}`, p);
+    const why = `charger answered ${r.charger_status}`;
+    show(s, "rejected", why, p);
+    return { refused: why };
   } else {
     // The charging_profile.* webhook (or the next replan) brings the answer.
     show(s, "pending", undefined, p);
   }
+  return {};
 }
 
 /** Read a profile the charger has not answered yet. Failures leave it counted. */
-async function refreshProfile(s: Holder, p: SentProfile) {
+async function refreshProfile(s: Holder, p: SentProfile, at: Date) {
   const rec = await ivora()
     .getChargingProfile(s.stationId, p.profileId!)
     .catch(() => undefined);
-  if (rec) applyProfileStatus(s, p, rec.status);
+  if (rec) applyProfileStatus(s, p, rec.status, at);
 }
 
-/** Apply a profile state from the API or a webhook to our record of it. */
-export function applyProfileStatus(s: Holder, p: SentProfile, status: string) {
+/**
+ * Apply a profile state from the API or a webhook to our record of it. A rejected
+ * baseline marks its charger as refused, unless `errorCode` says it never reached
+ * the charger (station_offline, a dispatch error): then it is sent again.
+ */
+export function applyProfileStatus(
+  s: Holder,
+  p: SentProfile,
+  status: string,
+  at: Date,
+  errorCode?: string,
+) {
   const charger = "connectors" in s ? (s as Charger) : undefined;
   if (status === "accepted") {
     p.confirmed = true;
@@ -754,8 +816,12 @@ export function applyProfileStatus(s: Holder, p: SentProfile, status: string) {
   } else if (["rejected", "cleared", "replaced", "ended"].includes(status)) {
     drop(s, p);
     if (status === "rejected") show(s, "rejected", "charger rejected it", p);
-    if (status === "rejected" && charger)
-      refuse(charger, "the charger rejected it");
+    if (
+      status === "rejected" &&
+      charger &&
+      (!errorCode || UNSUPPORTED.has(errorCode))
+    )
+      refuse(charger, errorCode ?? "the charger rejected it", at);
   }
   // pending, unknown and no_reply: it may still be in force; keep counting it.
 }
@@ -907,11 +973,19 @@ async function noteCharger(
   await d.store.put("chargers", id, c);
 }
 
+/** When a failed station read was last logged, per depot and station (ms). */
+const lookupLogged = new WeakMap<Depot, Map<number, number>>();
+
+/** A station that never answers is logged once an hour, not on every replan. */
+const LOOKUP_LOG_MS = 3600_000;
+
 /**
  * Add the chargers of sessions whose station could not be read when they started.
  * Until then their connectors are not in the split and have no baseline.
  */
 async function findChargers(d: Depot, sessions: Session[]) {
+  if (!lookupLogged.has(d)) lookupLogged.set(d, new Map());
+  const logged = lookupLogged.get(d)!;
   const known = new Set(
     (await d.store.list("chargers")).map((c) => c.stationId),
   );
@@ -929,11 +1003,16 @@ async function findChargers(d: Depot, sessions: Session[]) {
         st.protocol ?? undefined,
         stationConnectors(st),
       );
+      logged.delete(stationId);
     } catch (e) {
+      const at = now(d).getTime();
+      const last = logged.get(stationId);
+      if (last !== undefined && at - last < LOOKUP_LOG_MS) continue;
+      logged.set(stationId, at);
       await logEvent(
         d,
         "charging_profile.error",
-        `baseline of station ${stationId}: connectors unknown (${describeError(e)}); retried on the next replan`,
+        `baseline of station ${stationId}: connectors unknown (${describeError(e)}); retried on every replan, logged once an hour`,
       );
     }
   }
