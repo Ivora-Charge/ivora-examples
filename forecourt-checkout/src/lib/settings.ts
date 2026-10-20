@@ -2,7 +2,7 @@ import { parseBasisPoints, parseCents } from "./money";
 
 /** The portal page every API error links to. */
 export const ERRORS_URL =
-  "https://ivoracharge.co/developers/guides/reference/errors";
+  "https://ivoracharge.com/developers/guides/reference/errors";
 
 export type Settings = {
   demo: boolean;
@@ -66,7 +66,7 @@ export function readSettings(
   return {
     demo,
     missing: env.DEMO_MODE === "1" ? ["DEMO_MODE=1"] : [...missing],
-    ivoraApiUrl: (env.IVORA_API_URL || "https://api.ivoracharge.co").trim(),
+    ivoraApiUrl: (env.IVORA_API_URL || "https://api.ivoracharge.com").trim(),
     applicationFeeBps: parseBasisPoints(env.APPLICATION_FEE_BPS ?? "1000"),
     defaultHoldCents,
     idleGraceMinutes: integer(env.IDLE_GRACE_MINUTES, 10, "IDLE_GRACE_MINUTES"),

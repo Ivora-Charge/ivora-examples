@@ -3,7 +3,7 @@ import { z } from "zod";
 import type { Quote, Tariff, TariffElement } from "../tariff";
 
 // Routes and fields follow the published OpenAPI at
-// https://api.ivoracharge.co/openapi.json (version 2026-10-15).
+// https://api.ivoracharge.com/openapi.json (version 2026-10-15).
 export const IVORA_VERSION = "2026-10-15";
 
 export class IvoraError extends Error {

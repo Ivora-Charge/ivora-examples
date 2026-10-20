@@ -4,7 +4,7 @@ Pay-at-the-charger checkout for fuel stations, convenience stores and retail sit
 
 A driver scans the QR code on the charger with their phone, sees the price, pays with a card, Apple Pay or Google Pay, watches the session live and gets a receipt. No app, no account. When the car is full, the page asks the driver to move it and counts down to the idle fee. Site staff get password-protected pages for prices per charger, today's sessions and revenue, and recent faults.
 
-It is built on the [Ivora API](https://ivoracharge.co/developers/guides) and Stripe, and it follows the shared [template conventions](../docs/conventions.md).
+It is built on the [Ivora API](https://ivoracharge.com/developers/guides) and Stripe, and it follows the shared [template conventions](../docs/conventions.md).
 
 ## Demo
 
@@ -67,7 +67,7 @@ npm run test:e2e    # Playwright, demo end to end
 | `SITE_TIME_ZONE`              | No       | IANA zone for "today" and for tariff time rules. Default `UTC`.                                                                      |
 | `TYPICAL_SESSION_KWH`         | No       | The typical session quoted on the charger page. Default `30`.                                                                        |
 | `TYPICAL_SESSION_MINUTES`     | No       | Default `25`.                                                                                                                        |
-| `IVORA_API_URL`               | No       | Default `https://api.ivoracharge.co`.                                                                                                |
+| `IVORA_API_URL`               | No       | Default `https://api.ivoracharge.com`.                                                                                               |
 | `DEMO_MODE`                   | No       | `1` forces demo mode.                                                                                                                |
 
 `.env.example` lists them all. Never commit a real `.env` file.
@@ -131,7 +131,7 @@ OCPP 1.6 meter registers are Wh. The app does arithmetic on Ivora's integer `ene
 
 API key permissions documented on the portal: `stations:read`, `stations:control` (start and stop), `billing:read` (sessions, quotes, revenue), `billing:write` (create, finalize and cancel sessions) and `settlement:write` (create sessions and reports). Editing prices also writes tariffs; check the portal for the permission your key needs. The app sends `Ivora-Version: 2026-10-15` so tariff elements and bill breakdowns are present.
 
-Errors show the API's code and request ID with a link to [Errors and statuses](https://ivoracharge.co/developers/guides/reference/errors). On `429` the client waits once for a short `Retry-After` and otherwise reports `rate_limited`. `request_in_progress` and `outcome_unknown` are retried on the next poll with the same key.
+Errors show the API's code and request ID with a link to [Errors and statuses](https://ivoracharge.com/developers/guides/reference/errors). On `429` the client waits once for a short `Retry-After` and otherwise reports `rate_limited`. `request_in_progress` and `outcome_unknown` are retried on the next poll with the same key.
 
 ## Card terminals (planned)
 
