@@ -6,6 +6,7 @@ import {
   logEvent,
   replan,
   startSession,
+  stationConnectors,
   type Depot,
 } from "./depot";
 import type { IvoraEvent } from "./webhook";
@@ -79,7 +80,7 @@ async function startFromTransaction(d: Depot, tx: TransactionDetail) {
     connectorId: tx.connector_id,
     connectorNumber: tx.connector_number ?? conn?.number ?? undefined,
     connectorKw: conn?.max_power_w ? conn.max_power_w / 1000 : undefined,
-    connectorCount: station?.connectors.length,
+    connectors: station && stationConnectors(station),
     transactionId: tx.id,
     meterStartWh: tx.meter_start_wh ?? 0,
     startedAt: tx.started_at ?? undefined,

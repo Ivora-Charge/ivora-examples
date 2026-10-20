@@ -85,6 +85,11 @@ export interface Session {
    * these, not from what it planned.
    */
   sent?: SentProfile[];
+  /**
+   * Baseline on: what the charger's baseline let a new transaction draw when this
+   * session was registered, W (counted until its own profile is in force).
+   */
+  startBaselineW?: number;
 }
 
 export interface SentProfile {
@@ -110,12 +115,28 @@ export interface Charger {
   id: string;
   stationId: number;
   protocol?: string;
-  /** Connectors the baseline applies to (it covers every connector of the station). */
-  units: number;
+  /**
+   * The station's connectors, from `GET /stations/{id}`: the baseline covers all of
+   * them. `maxW` is the connector rating (null when the station reports none). A
+   * connector seen once stays in the split.
+   */
+  connectors: { id: number; maxW: number | null }[];
   /** Baseline profiles sent for this charger, counted like a session's. */
   sent?: SentProfile[];
   /** Number of the last baseline profile, for its idempotency key. */
   seq?: number;
+  /** Random part of the idempotency keys, so they stay unique if the store is reset. */
+  keyId: string;
+  /** Each connector's share of the cap in the last plan, W. */
+  shareW?: number;
+  /** The cap and connector total that share was planned for. */
+  plan?: string;
+  /**
+   * The charger rejected its baseline, or does not support it, under `plan`. It is
+   * not sent again until the plan changes; meanwhile the charger counts as having
+   * no baseline (its connectors are reserved at their rating).
+   */
+  refused?: { plan?: string; why: string };
 }
 
 export interface Transaction {
