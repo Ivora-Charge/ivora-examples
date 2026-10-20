@@ -1,0 +1,48 @@
+name: Template proposal
+description: Propose a new starter app for a kind of charging business.
+labels: ["template proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read CONTRIBUTING.md and docs/conventions.md first. Agree on scope here before writing code.
+  - type: input
+    id: folder
+    attributes:
+      label: Folder name
+      placeholder: e.g. workplace-charging
+    validations:
+      required: true
+  - type: textarea
+    id: audience
+    attributes:
+      label: Who it is for
+      description: The kind of charging business and the people who use the app (operators, drivers, staff).
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What it does
+      description: The main flows, and why an existing template does not cover them.
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: Ivora API features used
+      description: Stations, sessions, tariffs, bills, webhooks, commands, smart charging, and so on.
+    validations:
+      required: true
+  - type: textarea
+    id: demo
+    attributes:
+      label: Demo mode
+      description: What the offline demo shows, with no credentials and no payment or charger commands.
+    validations:
+      required: true
+  - type: textarea
+    id: services
+    attributes:
+      label: Other services
+      description: Payment provider, database, email, maps. Anything a deployer must sign up for.
