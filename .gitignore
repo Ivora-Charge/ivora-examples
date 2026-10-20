@@ -1,0 +1,34 @@
+# Environment files: never commit credentials. Only .env.example is tracked.
+.env*
+!.env.example
+
+# Dependencies
+node_modules/
+
+# Build output
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+.vercel/
+
+# Tests
+coverage/
+playwright-report/
+test-results/
+
+# Logs and local databases
+*.log
+npm-debug.log*
+*.sqlite
+*.sqlite3
+*.db
+
+# OS and editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json

@@ -1,0 +1,52 @@
+name: Bug report
+description: Something in a template does not work as described.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security issues must not be reported here. Follow SECURITY.md to report them privately.
+        Never paste API keys, webhook secrets or personal data. Redact them.
+  - type: dropdown
+    id: template
+    attributes:
+      label: Template
+      options:
+        - installer-kit
+        - forecourt-checkout
+        - fleet-depot
+        - Repository (root files, CI)
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: Mode
+      options:
+        - Demo mode
+        - Connected to Ivora and other services
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. npm ci && npm run dev
+        2. Open ...
+        3. ...
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Error codes, logs and versions
+      description: Ivora API error codes, browser console output, commit, Node.js version, browser. Redact secrets.
+      render: text
