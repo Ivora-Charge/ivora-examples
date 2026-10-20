@@ -1,0 +1,37 @@
+name: installer-kit
+
+on:
+  pull_request:
+    paths:
+      - "installer-kit/**"
+      - ".github/workflows/installer-kit.yml"
+  push:
+    branches: [main, preproduction]
+    paths:
+      - "installer-kit/**"
+      - ".github/workflows/installer-kit.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: installer-kit
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: installer-kit/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
