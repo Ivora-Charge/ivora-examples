@@ -336,6 +336,22 @@ describe("Ivora client", () => {
     expect((await backend.getTransaction("9001")).energyWh).toBe(425);
   });
 
+  it("accepts a transaction with active: null", async () => {
+    const tx = {
+      id: 9002,
+      connector_id: 701,
+      active: null,
+      started_at: "2026-10-19T12:00:00Z",
+      ended_at: null,
+      energy_kwh: "0.1",
+    };
+    const { backend } = fakeApi([{ status: 200, body: tx }]);
+    expect(await backend.getTransaction("9002")).toMatchObject({
+      transactionId: "9002",
+      active: true,
+    });
+  });
+
   it("refreshes, then reads configuration back", async () => {
     const { calls, backend } = fakeApi((call) => {
       if (call.url.endsWith("/configuration/refresh"))
