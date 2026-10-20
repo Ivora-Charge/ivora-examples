@@ -2,6 +2,13 @@
 export const whToKwh = (wh: number) => wh / 1000;
 export const kwhToWh = (kwh: number) => Math.round(kwh * 1000);
 
+/**
+ * Power in kW to whole watts, rounded down, for limits that must never overshoot.
+ * The tiny epsilon keeps a value like 7.4 kW (7399.999... W in floating point) at 7400 W.
+ */
+export const wholeW = (kw: number) =>
+  Number.isNaN(kw) ? 0 : Math.floor(kw * 1000 + 1e-6);
+
 export type EnergyNeed =
   | { kind: "kwh"; kwh: number }
   | {

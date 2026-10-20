@@ -1,13 +1,25 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { config, isDemo } from "./config";
-import { describeError, ivora, IvoraError, type Operation } from "./ivora";
+import {
+  describeError,
+  ivora,
+  IvoraError,
+  type Operation,
+  type ProfileInput,
+} from "./ivora";
 import { splitPower } from "./power";
 import { buildReport, type TxRecord } from "./reports";
 import { computeSchedule, toProfileInput } from "./schedule";
 import { createStore, type Store } from "./store";
-import type { Session, Settings, Vehicle } from "./types";
-import { clampPercent, whToKwh, type EnergyNeed } from "./units";
+import type {
+  ProfileState,
+  SentProfile,
+  Session,
+  Settings,
+  Vehicle,
+} from "./types";
+import { clampPercent, wholeW, whToKwh, type EnergyNeed } from "./units";
 import { seedDemo } from "./demo";
 
 export interface Depot {
@@ -87,21 +99,48 @@ function connectorLimitKw(s: Session, v?: Vehicle): number {
   return Math.min(v?.maxKw ?? Infinity, conn);
 }
 
+/** A raise smaller than this is not worth a new profile (a lower limit is always sent). */
+const STEP_W = 100;
+
 function wantedKw(s: Session, v: Vehicle | undefined, at: Date): number {
   // A session we could not match to a vehicle still draws power: reserve its connector limit.
   if (!v) return connectorLimitKw(s);
   if (!v.departure) return 0;
-  return computeSchedule({
-    need: needOf(v, s),
-    now: at,
-    departure: new Date(v.departure),
-    maxKw: connectorLimitKw(s, v),
-  }).chargeKw;
+  const needW = wholeW(
+    computeSchedule({
+      need: needOf(v, s),
+      now: at,
+      departure: new Date(v.departure),
+      maxKw: connectorLimitKw(s, v),
+    }).chargeKw,
+  );
+  // Keep the limit in force when it is only slightly above the need, so the
+  // rounding of a recomputed schedule does not send a new profile every replan.
+  const cur = enforcedW(s.sent);
+  return cur >= needW && cur - needW < STEP_W ? cur / 1000 : needW / 1000;
+}
+
+/**
+ * The most this session may draw under the profiles sent for it, W. Infinity when
+ * the charger has accepted none (it runs at its own default). Among accepted
+ * profiles the highest stack level wins (OCPP 1.6 replaces at the same level);
+ * one the charger has not answered yet may also be in force, so it counts too.
+ */
+export function enforcedW(sent: SentProfile[] = []): number {
+  const confirmed = sent.filter((p) => p.confirmed);
+  if (confirmed.length === 0) return Infinity;
+  const top = confirmed.reduce((a, b) => (b.stack >= a.stack ? b : a));
+  return Math.max(top.w, ...sent.filter((p) => !p.confirmed).map((p) => p.w));
 }
 
 /**
  * Recompute allocations for all active sessions and apply a charging profile for each
- * whose allocation changed. Called when a vehicle plugs in or leaves, and on edits.
+ * whose allocation changed. Called when a vehicle plugs in or leaves, on edits, on
+ * webhook answers and on a timer.
+ *
+ * Lower limits go first. Limits are raised only once every lowered limit is in
+ * force at its station; if any decrease fails or is not confirmed yet, the raises
+ * wait for the next replan, so a partial update never takes the site over the cap.
  */
 export async function replan(d: Depot): Promise<void> {
   const at = now(d);
@@ -109,10 +148,12 @@ export async function replan(d: Depot): Promise<void> {
   const vehicles = new Map(
     (await d.store.list("vehicles")).map((v) => [v.id, v]),
   );
+  const vehicleOf = (s: Session) =>
+    s.vehicleId ? vehicles.get(s.vehicleId) : undefined;
   const split = splitPower(
     d.settings.siteCapKw,
     sessions.map((s) => {
-      const v = s.vehicleId ? vehicles.get(s.vehicleId) : undefined;
+      const v = vehicleOf(s);
       return {
         id: s.id,
         departureMs: v?.departure ? Date.parse(v.departure) : Infinity,
@@ -121,51 +162,152 @@ export async function replan(d: Depot): Promise<void> {
     }),
   );
   for (const s of sessions) {
-    const v = s.vehicleId ? vehicles.get(s.vehicleId) : undefined;
     s.allocatedKw = split.get(s.id) ?? 0;
     await d.store.put("sessions", s.id, s);
-    if (v || !d.demo) await applyProfile(d, s, v, at);
   }
+  if (d.demo) {
+    for (const s of sessions) {
+      const v = vehicleOf(s);
+      if (v) await simulateProfile(d, s, v, at);
+    }
+    return;
+  }
+  // Without a transaction there is nothing to send a session profile for.
+  const live = sessions.filter((s) => s.transactionId);
+  const target = (s: Session) => wholeW(s.allocatedKw);
+  const over = (s: Session) => enforcedW(s.sent) > target(s);
+  // What the other sessions may draw right now: a profile is never sent above
+  // the cap minus that, so a session that just plugged in only gets what is free
+  // while a decrease elsewhere is still on its way.
+  const capW = wholeW(d.settings.siteCapKw);
+  const headroom = (s: Session) =>
+    capW -
+    sessions
+      .filter((o) => o !== s)
+      .reduce((sum, o) => sum + reservedW(o, target(o)), 0);
+  const apply = (s: Session) =>
+    applyProfile(
+      d,
+      s,
+      vehicleOf(s),
+      at,
+      Math.max(0, Math.min(target(s), headroom(s))),
+    );
+  const lower = live.filter(over);
+  for (const s of lower) await apply(s);
+  const waiting = lower.filter(over);
+  if (waiting.length > 0) {
+    const raises = live.filter(
+      (s) => !lower.includes(s) && needsSend(s, target(s)),
+    );
+    if (raises.length > 0)
+      await logEvent(
+        d,
+        "plan.deferred",
+        `${raises.length} higher limit(s) wait until the lower limit for ${waiting
+          .map((s) => describe(s, vehicleOf(s)))
+          .join(", ")} is in force; retried on the next replan`,
+      );
+    return;
+  }
+  for (const s of live) if (!lower.includes(s)) await apply(s);
 }
 
-const changed = (a: number, b: number) => Math.abs(a - b) >= 0.1;
+/**
+ * What a session may draw as far as the app knows, W. A session without an
+ * accepted profile counts at the most it was sent, or else at its allocation.
+ */
+function reservedW(s: Session, targetW: number): number {
+  const b = enforcedW(s.sent);
+  if (Number.isFinite(b)) return b;
+  return s.sent?.length ? Math.max(...s.sent.map((p) => p.w)) : targetW;
+}
 
-/** Send the session's plan as a charging profile, unless the station already has it. */
+const describe = (s: Session, v?: Vehicle) =>
+  v?.name ?? `card ${s.idTokenHint ?? "unknown"}`;
+
+/** True when the latest profile does not match the goal (or there is none). */
+function needsSend(s: Session, goalW: number): boolean {
+  const latest = s.sent?.at(-1);
+  if (!latest) return true;
+  return latest.w > goalW || goalW - latest.w >= STEP_W;
+}
+
+/** Demo never sends charger commands: the station's answer is simulated. */
+async function simulateProfile(d: Depot, s: Session, v: Vehicle, at: Date) {
+  const w = wholeW(s.allocatedKw);
+  if (!needsSend(s, w)) return;
+  const seq = (s.profile?.seq ?? 0) + 1;
+  s.sent = [{ key: "demo", body: null, w, stack: 1, confirmed: true }];
+  s.profile = {
+    status: "accepted",
+    seq,
+    key: "demo",
+    kw: s.allocatedKw,
+    at: at.toISOString(),
+    composite: `${w} W now, simulated`,
+  };
+  await d.store.put("sessions", s.id, s);
+  await logEvent(
+    d,
+    "charging_profile.accepted",
+    `${v.name}: ${s.allocatedKw.toFixed(1)} kW (simulated)`,
+  );
+}
+
+const isV16 = (s: Session) => s.protocol?.startsWith("ocpp1.6") ?? false;
+
+/**
+ * Bring the session's profiles in line with `targetW`: its allocation, or less
+ * while the rest of the site has not made room yet (live mode). Never throws: a
+ * failure is recorded on the session and in the event log, and the profile stays
+ * counted at its old limit until the station confirms otherwise.
+ */
 async function applyProfile(
   d: Depot,
   s: Session,
   v: Vehicle | undefined,
   at: Date,
+  targetW: number,
 ) {
-  const p = s.profile;
-  const retry = p && p.status === "error" && p.retriable && p.body;
-  if (p && !retry && !changed(p.kw, s.allocatedKw)) return;
-  const name = v?.name ?? `card ${s.idTokenHint ?? "unknown"}`;
+  const sent = (s.sent ??= []);
+  const name = describe(s, v);
+  const save = () => d.store.put("sessions", s.id, s);
+  try {
+    // 1. Settle what is in flight: resend a request whose outcome is unknown (same
+    // key, same body), and read the state of profiles the charger has not answered.
+    for (const p of [...sent]) {
+      if (!p.profileId) await postProfile(s, p);
+      else if (!p.confirmed) await refreshProfile(s, p);
+    }
+    await save();
 
-  if (d.demo) {
-    // Demo never sends charger commands: the station's answer is simulated.
-    s.profile = {
-      status: "accepted",
-      seq: (p?.seq ?? 0) + 1,
-      key: "demo",
-      kw: s.allocatedKw,
-      at: at.toISOString(),
-      composite: `${Math.round(s.allocatedKw * 1000)} W now, simulated`,
-    };
-    await d.store.put("sessions", s.id, s);
-    await logEvent(
-      d,
-      "charging_profile.accepted",
-      `${name}: ${s.allocatedKw.toFixed(1)} kW (simulated)`,
-    );
-    return;
-  }
-  if (!s.transactionId) return;
+    // 2. Nothing to send when the latest profile matches; tidy up older ones.
+    if (!needsSend(s, targetW)) {
+      const latest = sent.at(-1)!;
+      if (latest.confirmed) await retireOlder(s, latest);
+      await save();
+      return;
+    }
 
-  // A retry of a failed send reuses the same key and the same body.
-  let next = s.profile;
-  if (!retry || !next) {
-    const seq = (p?.seq ?? 0) + 1;
+    // 3. Send a new profile. OCPP 1.6 replaces the one at the same stack level.
+    // OCPP 2.x refuses a second profile at the same level, so alternate between
+    // levels 1 and 2 and clear the older one once the new one is accepted: the
+    // limit in force is always the old or the new one, never none.
+    let stack = 1;
+    if (!isV16(s)) {
+      const top = topConfirmed(sent);
+      for (const p of sent.filter((x) => x !== top)) await clearProfile(s, p);
+      if (sent.some((x) => x !== top)) {
+        const why = "waiting for the station to clear an earlier profile";
+        show(s, "error", why);
+        await save();
+        await logEvent(d, "charging_profile.error", `${name}: ${why}`);
+        return;
+      }
+      stack = top?.stack === 1 ? 2 : 1;
+    }
+    const seq = (s.profile?.seq ?? 0) + 1;
     const sched = computeSchedule({
       need: v ? needOf(v, s) : { kind: "kwh", kwh: Infinity },
       now: at,
@@ -173,103 +315,173 @@ async function applyProfile(
         ? new Date(v.departure)
         : new Date(at.getTime() + 12 * 3600_000),
       maxKw: connectorLimitKw(s, v),
-      allowedKw: s.allocatedKw,
+      allowedKw: targetW / 1000,
     });
-    next = {
-      status: "sending",
-      seq,
+    const p: SentProfile = {
       key: `fd-profile-${s.id}-${seq}`,
       body: toProfileInput(sched, {
-        transactionId: s.transactionId,
+        transactionId: s.transactionId!,
         startAt: at,
+        holdW: targetW,
+        stackLevel: stack,
       }),
-      kw: s.allocatedKw,
+      w: targetW,
+      stack,
+      confirmed: false,
+    };
+    // Stored before the request, so a retry after a crash reuses key and body.
+    sent.push(p);
+    s.profile = {
+      status: "sending",
+      seq,
+      key: p.key,
+      kw: targetW / 1000,
       at: at.toISOString(),
-      profileId: p?.profileId,
     };
-  }
-  s.profile = next;
-  await d.store.put("sessions", s.id, s);
-
-  const api = ivora();
-  try {
-    // OCPP 2.x refuses a second profile at the same purpose, EVSE and stack level:
-    // clear the previous one first. OCPP 1.6 replaces it in place.
-    if (p?.profileId && !s.protocol?.startsWith("ocpp1.6")) {
-      await api
-        .clearChargingProfile(
-          s.stationId,
-          p.profileId,
-          `fd-clear-${p.profileId}`,
-        )
-        .catch((e) => {
-          if (!(
-            e instanceof IvoraError && e.code === "charging_profile_inactive"
-          ))
-            throw e;
-        });
-    }
-    const op = await api.setChargingProfile(
-      s.stationId,
-      next.body as Parameters<typeof api.setChargingProfile>[1],
-      next.key,
-    );
-    const r = (op.result ?? {}) as {
-      profile_id?: string;
-      charger_status?: string | null;
-      error?: { code?: string; message?: string };
-    };
-    next.profileId = r.profile_id ?? next.profileId;
-    if (op.status === "rejected") {
-      next.status = "rejected";
-      next.detail = `${r.error?.code ?? "rejected"}: ${r.error?.message ?? ""}`;
-    } else if (r.charger_status === "Accepted") next.status = "accepted";
-    else if (r.charger_status) {
-      next.status = "rejected";
-      next.detail = `charger answered ${r.charger_status}`;
-    } else next.status = "pending"; // the charging_profile.* webhook brings the answer
-    next.retriable = false;
-    if (next.status !== "rejected") {
-      next.composite = await readComposite(
-        d,
-        s,
-        next.seq,
-        Math.min(
-          next.body
-            ? (next.body as { duration_seconds: number }).duration_seconds
-            : 3600,
-          86400,
-        ),
-      );
-    }
+    await save();
+    await postProfile(s, p);
+    if (p.confirmed) await retireOlder(s, p);
+    if (sent.includes(p)) s.profile.composite = await readComposite(s, seq);
+    await save();
     await logEvent(
       d,
-      `charging_profile.${next.status === "pending" ? "sent" : next.status}`,
-      `${name}: ${s.allocatedKw.toFixed(1)} kW${next.detail ? ` (${next.detail})` : ""}`,
+      `charging_profile.${s.profile.status === "pending" ? "sent" : s.profile.status}`,
+      `${name}: ${(targetW / 1000).toFixed(1)} kW${s.profile.detail ? ` (${s.profile.detail})` : ""}`,
     );
   } catch (e) {
-    next.status = "error";
-    next.retriable = e instanceof IvoraError && e.retriable;
-    next.detail = describeError(e);
-    await logEvent(d, "charging_profile.error", `${name}: ${next.detail}`);
+    const why = describeError(e);
+    show(s, "error", why);
+    await save();
+    await logEvent(d, "charging_profile.error", `${name}: ${why}`);
   }
-  s.profile = next;
-  await d.store.put("sessions", s.id, s);
+}
+
+function topConfirmed(sent: SentProfile[]) {
+  const c = sent.filter((p) => p.confirmed);
+  return c.length
+    ? c.reduce((a, b) => (b.stack >= a.stack ? b : a))
+    : undefined;
+}
+
+/** Forget a profile that is no longer in force (in place: callers hold the array). */
+function drop(s: Session, p: SentProfile) {
+  const i = s.sent?.indexOf(p) ?? -1;
+  if (i >= 0) s.sent!.splice(i, 1);
+}
+
+/** Update what the board shows, when `p` is the session's latest profile. */
+function show(
+  s: Session,
+  status: ProfileState["status"],
+  detail?: string,
+  p?: SentProfile,
+) {
+  if (!s.profile || (p && p.key !== s.profile.key)) return;
+  s.profile.status = status;
+  s.profile.detail = detail;
+  if (p?.profileId) s.profile.profileId = p.profileId;
+}
+
+/** POST a profile with its stored key and body, and record the answer. */
+async function postProfile(s: Session, p: SentProfile) {
+  const api = ivora();
+  let op: Operation;
+  try {
+    op = await api.setChargingProfile(
+      s.stationId,
+      p.body as ProfileInput,
+      p.key,
+    );
+  } catch (e) {
+    // Refused by the API: nothing was set. Unknown outcome: keep it counted.
+    if (!(e instanceof IvoraError && e.retriable)) drop(s, p);
+    throw e;
+  }
+  const r = (op.result ?? {}) as {
+    profile_id?: string;
+    charger_status?: string | null;
+    error?: { code?: string; message?: string };
+  };
+  p.profileId = r.profile_id ?? p.profileId;
+  if (op.status === "rejected") {
+    drop(s, p);
+    show(
+      s,
+      "rejected",
+      `${r.error?.code ?? "rejected"}: ${r.error?.message ?? ""}`,
+      p,
+    );
+  } else if (r.charger_status === "Accepted") {
+    p.confirmed = true;
+    show(s, "accepted", undefined, p);
+  } else if (r.charger_status) {
+    drop(s, p);
+    show(s, "rejected", `charger answered ${r.charger_status}`, p);
+  } else {
+    // The charging_profile.* webhook (or the next replan) brings the answer.
+    show(s, "pending", undefined, p);
+  }
+}
+
+/** Read a profile the charger has not answered yet. Failures leave it counted. */
+async function refreshProfile(s: Session, p: SentProfile) {
+  const rec = await ivora()
+    .getChargingProfile(s.stationId, p.profileId!)
+    .catch(() => undefined);
+  if (rec) applyProfileStatus(s, p, rec.status);
+}
+
+/** Apply a profile state from the API or a webhook to our record of it. */
+export function applyProfileStatus(s: Session, p: SentProfile, status: string) {
+  if (status === "accepted") {
+    p.confirmed = true;
+    show(s, "accepted", undefined, p);
+    // OCPP 1.6: it replaced the earlier profiles at its stack level.
+    const before = (s.sent ?? []).slice(0, (s.sent ?? []).indexOf(p));
+    if (isV16(s)) for (const x of before) if (x.stack === p.stack) drop(s, x);
+  } else if (["rejected", "cleared", "replaced", "ended"].includes(status)) {
+    drop(s, p);
+    if (status === "rejected") show(s, "rejected", "charger rejected it", p);
+  }
+  // pending, unknown and no_reply: it may still be in force; keep counting it.
+}
+
+/** Once `p` is accepted, remove the profiles it supersedes. */
+async function retireOlder(s: Session, p: SentProfile) {
+  const older = (s.sent ?? []).filter((x) => x !== p);
+  if (isV16(s)) {
+    // Same purpose, connector and stack level: the charger replaced them.
+    for (const x of older) if (x.stack === p.stack) drop(s, x);
+    return;
+  }
+  for (const x of older) await clearProfile(s, x);
+}
+
+/** Clear a profile by ID; it stays counted until the station confirms. */
+async function clearProfile(s: Session, p: SentProfile) {
+  if (!p.profileId) return;
+  try {
+    const op = await ivora().clearChargingProfile(
+      s.stationId,
+      p.profileId,
+      `fd-clear-${p.profileId}`,
+    );
+    if (op.status === "succeeded") drop(s, p);
+  } catch (e) {
+    if (e instanceof IvoraError && e.code === "charging_profile_inactive")
+      drop(s, p);
+    else throw e;
+  }
 }
 
 /** Ask the station what it will actually apply, and describe the first period. */
-async function readComposite(
-  d: Depot,
-  s: Session,
-  seq: number,
-  durationSeconds: number,
-): Promise<string> {
+async function readComposite(s: Session, seq: number): Promise<string> {
   const api = ivora();
   try {
     let op: Operation = await api.compositeSchedule(
       s.stationId,
       {
-        duration_seconds: durationSeconds,
+        duration_seconds: 86400,
         connector_id: s.connectorId,
         unit: "W",
       },

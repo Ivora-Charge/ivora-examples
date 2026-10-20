@@ -98,9 +98,25 @@ export async function importDrivers(
     const body = toIvoraImportCsv(
       batch.map((p) => ({ idTag: p.idTag!, externalReference: cardRef(p.id) })),
     );
-    // The same file gives the same key; a changed file is a new import.
-    const key = `fd-import-${createHash("sha256").update(body).digest("hex").slice(0, 40)}`;
-    const res = await client.importTokens(body, key);
+    // The same file gives the same key, so a retry is not imported twice; a changed
+    // file is a new import. After 503 outcome_unknown the tokens guide says to run
+    // the file again with a new key: the next attempt number does that.
+    const hash = createHash("sha256").update(body).digest("hex").slice(0, 40);
+    const run = (await d.store.list("imports")).find((x) => x.id === hash) ?? {
+      id: hash,
+      attempt: 1,
+    };
+    let res;
+    try {
+      res = await client.importTokens(body, `fd-import-${hash}-${run.attempt}`);
+    } catch (e) {
+      if (e instanceof IvoraError && e.code === "outcome_unknown")
+        await d.store.put("imports", hash, {
+          ...run,
+          attempt: run.attempt + 1,
+        });
+      throw e;
+    }
     out.counts = res.counts;
     for (const r of res.rows) {
       const drv = batch[r.row - 1];
@@ -153,13 +169,23 @@ export async function blockDriver(
     }
     if (tokenId === undefined)
       throw new UserError("this card is not registered in Ivora", 404);
-    await client.updateToken(
-      tokenId,
-      { status: "Blocked" },
-      `fd-token-block-${tokenId}`,
-    );
+    // One key per block action, stored before sending: a retry reuses it, while a
+    // block after the card was unblocked elsewhere is a new request, not a replay.
+    drv.blockKey ??= `fd-token-block-${tokenId}-${randomUUID().slice(0, 8)}`;
     drv.tokenId = tokenId;
+    await d.store.put("drivers", drv.id, drv);
+    try {
+      await client.updateToken(tokenId, { status: "Blocked" }, drv.blockKey);
+    } catch (e) {
+      // Refused for good: the next attempt is a new request with a new key.
+      if (!(e instanceof IvoraError && e.retriable)) {
+        drv.blockKey = undefined;
+        await d.store.put("drivers", drv.id, drv);
+      }
+      throw e;
+    }
   }
+  drv.blockKey = undefined;
   drv.cardBlocked = true;
   await d.store.put("drivers", drv.id, drv);
   await logEvent(d, "card.blocked", drv.name);

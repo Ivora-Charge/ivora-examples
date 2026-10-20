@@ -7,6 +7,11 @@ export interface Driver {
   /** Ivora token resource ID, once known. */
   tokenId?: number;
   cardBlocked: boolean;
+  /**
+   * Idempotency-Key of a block in progress: kept until the block succeeds so a
+   * retry reuses it, then cleared so a later block is a new request.
+   */
+  blockKey?: string;
   /** Last error from registering the card, with the API's code. */
   cardError?: string;
 }
@@ -28,17 +33,16 @@ export interface Vehicle {
   socPercent?: number;
 }
 
+/** What the board shows about the latest profile change of a session. */
 export interface ProfileState {
   /**
-   * sending: written before the request so a retry reuses the same key and body.
-   * pending/accepted/rejected follow the charger's answer; error is a failed request.
+   * sending: written before the request. pending/accepted/rejected follow the
+   * charger's answer; error is a failed request.
    */
   status: "sending" | "pending" | "accepted" | "rejected" | "error";
   /** Increases only when the plan changes; part of the idempotency key. */
   seq: number;
   key: string;
-  /** The exact body sent with `key`, reused on retry. */
-  body?: unknown;
   kw: number;
   at: string;
   /** Ivora profile resource ID (chp_...). */
@@ -46,7 +50,6 @@ export interface ProfileState {
   detail?: string;
   /** What the station reported it will apply (composite schedule). */
   composite?: string;
-  retriable?: boolean;
 }
 
 export interface Session {
@@ -76,6 +79,26 @@ export interface Session {
   reportedSocPercent?: number;
   allocatedKw: number;
   profile?: ProfileState;
+  /**
+   * Profiles sent for this session that the station may be applying: every one
+   * not known to be rejected, cleared or replaced. The site cap logic works from
+   * these, not from what it planned.
+   */
+  sent?: SentProfile[];
+}
+
+export interface SentProfile {
+  /** Idempotency-Key of the POST, reused with the same body on a retry. */
+  key: string;
+  /** The exact body sent with `key`. */
+  body: unknown;
+  /** The highest limit in the body, W. */
+  w: number;
+  stack: number;
+  /** Ivora profile resource ID (chp_...), once the API answered. */
+  profileId?: string;
+  /** The charger accepted it. */
+  confirmed: boolean;
 }
 
 export interface Transaction {

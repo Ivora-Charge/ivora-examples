@@ -17,6 +17,8 @@ export interface Docs {
   events: DepotEvent & { id: string };
   /** Webhook event IDs already received (deduplication). */
   webhookEvents: { id: string; at: string };
+  /** Token import runs by file hash: the attempt number is part of the idempotency key. */
+  imports: { id: string; attempt: number };
 }
 export type Kind = keyof Docs;
 

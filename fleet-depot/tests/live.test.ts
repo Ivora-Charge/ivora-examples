@@ -69,13 +69,14 @@ const api = fakeFetch((c: Call) => {
         },
       };
     }
-    const tx = JSON.parse(c.body!).transaction_id;
+    // One profile ID per idempotency key: fd-profile-tx-31-1 -> chp_31-1.
+    const id = c.headers["idempotency-key"].replace("fd-profile-tx-", "chp_");
     return {
       status: 202,
       json: {
-        id: `op_${tx}`,
+        id: `op_${id}`,
         status: "succeeded",
-        result: { profile_id: `chp_${tx}`, charger_status: null },
+        result: { profile_id: id, charger_status: null },
       },
     };
   }
@@ -192,7 +193,7 @@ describe("live session lifecycle (fake API)", () => {
     expect(s.allocatedKw).toBeCloseTo(3, 1);
     expect(s.profile).toMatchObject({
       status: "pending",
-      profileId: "chp_31",
+      profileId: "chp_31-1",
       key: "fd-profile-tx-31-1",
       composite: "3000 W now",
     });
@@ -205,15 +206,21 @@ describe("live session lifecycle (fake API)", () => {
       transaction_id: 31,
       kind: "absolute",
     });
+    // No duration: the profile never expires into an unlimited charger.
+    expect(body).not.toHaveProperty("duration_seconds");
     expect(body.periods[0].limit).toBeGreaterThan(2990);
-    expect(body.periods[0].limit).toBeLessThanOrEqual(3000);
+    // Rounded up to finish by departure, then held as the session's whole-watt share.
+    expect(body.periods[0].limit).toBeLessThanOrEqual(3001);
+    expect(
+      Math.max(...body.periods.map((p: { limit: number }) => p.limit)),
+    ).toBe(Math.round(s.allocatedKw * 1000));
   });
 
   it("records the station's answer from charging_profile.accepted", async () => {
     await handleEvent(
       d,
       evt("charging_profile.accepted", {
-        profile: { id: "chp_31", status: "accepted" },
+        profile: { id: "chp_31-1", status: "accepted" },
         station_id: 12,
         charger_status: "Accepted",
       }),
@@ -256,9 +263,11 @@ describe("live session lifecycle (fake API)", () => {
     let s = (await d.store.list("sessions")).find((x) => x.id === "tx-32")!;
     expect(s.profile).toMatchObject({
       status: "error",
-      retriable: true,
       key: "fd-profile-tx-32-2",
     });
+    // The outcome is unknown, so it stays counted until it is resolved.
+    expect(s.sent?.at(-1)?.key).toBe("fd-profile-tx-32-2");
+    expect(s.sent?.at(-1)?.profileId).toBeUndefined();
     const failed = profilePosts().slice(-4);
     expect(new Set(failed.map((c) => c.headers["idempotency-key"]))).toEqual(
       new Set(["fd-profile-tx-32-2"]),

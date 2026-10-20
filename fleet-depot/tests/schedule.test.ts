@@ -85,26 +85,82 @@ describe("computeSchedule", () => {
     expect(s.periods).toEqual([{ startPeriod: 0, limit: 0 }]);
     expect(s.feasible).toBe(true);
   });
-  it("builds an Ivora session profile in W, absolute from now", () => {
+  it("builds an open-ended Ivora session profile in W, absolute from now", () => {
     const s = computeSchedule({
       need: { kind: "kwh", kwh: 20 },
       now,
       departure: dep(10),
       maxKw: 11,
     });
-    const p = toProfileInput(s, { transactionId: 31, startAt: now });
+    const p = toProfileInput(s, {
+      transactionId: 31,
+      startAt: now,
+      holdW: 2000,
+    });
     expect(p).toMatchObject({
       purpose: "session",
       unit: "W",
       transaction_id: 31,
       kind: "absolute",
       start_at: now.toISOString(),
-      duration_seconds: 36000,
     });
-    // 20 kWh over 10 h is 2 kW for the whole window.
+    // No duration: the station keeps the last period until the session ends.
+    expect(p).not.toHaveProperty("duration_seconds");
+    // 20 kWh over 10 h is 2 kW for the whole window, and 2 kW after departure.
     expect(p.periods).toEqual([{ start_offset_seconds: 0, limit: 2000 }]);
   });
-  it("caps the schedule at the API maximum of 7 days, with integer W limits", () => {
+  it("holds the site allocation after departure instead of expiring", () => {
+    const s = computeSchedule({
+      need: { kind: "kwh", kwh: 11 },
+      now,
+      departure: dep(10),
+      maxKw: 11,
+      allowedKw: 7.4,
+    });
+    // 11 kWh over 10 h is 1.1 kW; from departure on, the 7.4 kW share holds.
+    const p = toProfileInput(s, {
+      transactionId: 1,
+      startAt: now,
+      holdW: 7400,
+    });
+    expect(p.periods).toEqual([
+      { start_offset_seconds: 0, limit: 1100 },
+      { start_offset_seconds: 36000, limit: 7400 },
+    ]);
+  });
+  it("never puts a period above the allocation", () => {
+    const s = computeSchedule({
+      need: { kind: "kwh", kwh: 80 },
+      now,
+      departure: dep(2),
+      maxKw: 22,
+    });
+    const p = toProfileInput(s, {
+      transactionId: 1,
+      startAt: now,
+      holdW: 5000,
+    });
+    expect(Math.max(...p.periods.map((x) => x.limit))).toBe(5000);
+  });
+  it("charges a vehicle still plugged in after its departure at the cap, with no expiry", () => {
+    const s = computeSchedule({
+      need: { kind: "kwh", kwh: 10 },
+      now,
+      departure: dep(-1),
+      maxKw: 11,
+      allowedKw: 6,
+    });
+    expect(s.feasible).toBe(false);
+    expect(s.chargeKw).toBe(6);
+    const p = toProfileInput(s, {
+      transactionId: 1,
+      startAt: now,
+      holdW: 6000,
+    });
+    expect(p.periods).toEqual([{ start_offset_seconds: 0, limit: 6000 }]);
+    expect(p).not.toHaveProperty("duration_seconds");
+  });
+  it("keeps integer W limits and offsets within the API's 7 days", () => {
     const s = computeSchedule({
       need: { kind: "kwh", kwh: 11 },
       now,
@@ -112,9 +168,23 @@ describe("computeSchedule", () => {
       maxKw: 11,
       allowedKw: 11,
     });
-    const p = toProfileInput(s, { transactionId: 1, startAt: now });
-    expect(p.duration_seconds).toBe(604800);
+    const p = toProfileInput(s, {
+      transactionId: 1,
+      startAt: now,
+      holdW: 11000,
+    });
     expect(p.periods[0].limit).toBeGreaterThan(0);
     expect(p.periods.every((x) => Number.isInteger(x.limit))).toBe(true);
+    expect(p.periods.every((x) => x.start_offset_seconds <= 604800)).toBe(true);
+  });
+  it("rounds limits down to whole watts", () => {
+    const s = computeSchedule({
+      need: { kind: "kwh", kwh: 100 },
+      now,
+      departure: dep(1),
+      maxKw: 11,
+      allowedKw: 3.3339,
+    });
+    expect(s.periods[0].limit).toBe(3333);
   });
 });

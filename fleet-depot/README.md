@@ -15,7 +15,11 @@ Depot charging for fleets (vans, buses, company cars) on the Ivora API. It is fo
   - The app picks the slowest constant power that finishes by departure, limited by the vehicle, the connector rating and the site allowance.
   - It sends that plan as a `session` charging profile in W for the running transaction, then asks the station for its composite schedule.
   - The board shows the station's answer from the `charging_profile.accepted` and `charging_profile.rejected` webhooks.
-- **Site power cap** (`SITE_CAP_KW`): split across active sessions, earliest departure first, and recomputed when a vehicle plugs in or leaves, or a departure changes. This is app-side logic. Server-side site load balancing is planned in the Ivora API, and when it ships this split can move there.
+- **Site power cap** (`SITE_CAP_KW`): split across active sessions in whole watts (rounded down), earliest departure first. It is recomputed when a vehicle plugs in or leaves, when a departure changes, when a station answers, and every `REPLAN_INTERVAL_SECONDS` (default 60). This is app-side logic. Server-side site load balancing is planned in the Ivora API, and when it ships this split can move there. How the app keeps the stations under the cap:
+  - **No expiry.** A profile has no duration, so the station keeps its last period until the session ends. Every period is at most the session's share, and from departure on the limit is that share, so a vehicle that stays plugged in past its departure is still capped.
+  - **Lower limits first.** A replan sends every decrease before any increase. Increases wait until each decrease is accepted by its charger (by answer, webhook or a status read). If a decrease fails, is refused, or its outcome is unknown, the increases wait for the next replan.
+  - **Counted until gone.** A profile counts at its limit until the charger rejects, replaces or clears it. On OCPP 2.x the app alternates between stack levels 1 and 2 and clears the old profile only after the new one is accepted, so a session is never left without a limit.
+  - **Only what is free.** A vehicle that just plugged in gets at most the cap minus what the other sessions may still draw; it is raised once the others have made room.
 - **Reports**: energy and cost per vehicle and per driver per month. They use Wh meter registers and the transaction's `energy_wh`, with the site tariff in integer cents (`TARIFF_CENTS_PER_KWH`). The CSV export is at `/api/reports?by=driver&format=csv&month=YYYY-MM` and guards against spreadsheet formula injection.
 - **Live board**: which vehicle is on which connector, the state of charge (the charger's `soc_percent` when it reports one, otherwise an estimate labelled "est."), ready-by status, and profile status with the composite schedule.
 - **Webhooks** arrive at `/api/webhooks`, verified with `Ivora-Signature` (see below).
@@ -43,6 +47,7 @@ With no credentials it starts in **demo mode**, with a persistent "Demo" banner.
 | `DATABASE_URL` / `SQLITE_PATH`            | Postgres connection string, or SQLite file (default `./data/depot.db`)                                                      |
 | `SITE_CAP_KW`                             | Depot limit in kW (default 60)                                                                                              |
 | `DEFAULT_CONNECTOR_KW`                    | Power reserved for a session whose card matches no vehicle, when the station reports no rating (default 11)                 |
+| `REPLAN_INTERVAL_SECONDS`                 | Live mode replans on this timer as well as on events, to retry failed decreases and follow departures (default 60)          |
 | `TARIFF_CENTS_PER_KWH`, `TARIFF_CURRENCY` | Site tariff for reports (integer cents)                                                                                     |
 | `DEMO_MODE=true`                          | Force demo mode                                                                                                             |
 
@@ -72,6 +77,8 @@ With no credentials it starts in **demo mode**, with a persistent "Demo" banner.
 - **Idempotency:**
   - Every write sends an `Idempotency-Key` derived from our record and action, for example `fd-profile-<session>-<plan number>` and `fd-token-create-<driver>`.
   - The plan number only changes when the allocation changes, and the key and body are stored before sending. A retry after a timeout, `429`, `409 request_in_progress` or `503 outcome_unknown` therefore reuses the same key and body.
+  - Blocking a card stores one key per block action (`fd-token-block-<token>-<random>`): a retry reuses it, and blocking again after the card was unblocked elsewhere is a new request.
+  - A card import's key is the file's hash plus an attempt number. After `503 outcome_unknown` the next run of the same file uses a new attempt number, as the tokens guide asks.
   - `Retry-After` is honoured. Other `4xx` errors are not retried.
 - **Errors:** API errors are shown with their code, the request ID and a link to [Errors and statuses](https://ivoracharge.com/developers/guides/reference/errors).
 - **Server-only code:** the Ivora client, configuration and database code import `server-only`, and card values reach the browser masked (`****1234`).
@@ -93,6 +100,7 @@ All paths are under `/v1/tenants/{tenant_id}` and follow the [published OpenAPI]
 | Find and block a card    | `GET /tokens?external_reference=…`, `PATCH /tokens/{token_id}`                                                  | `tokens:write`                  |
 | Session details          | `GET /transactions/{id}`, `GET /stations/{id}`                                                                  | `billing:read`, `stations:read` |
 | Charging plan            | `POST /stations/{id}/charging-profiles`, `DELETE /stations/{id}/charging-profiles/{profile_id}` (OCPP 2.x only) | `stations:control`              |
+| Profile state            | `GET /stations/{id}/charging-profiles/{profile_id}`                                                             | `stations:read`                 |
 | What the station applies | `POST /stations/{id}/composite-schedule`, `GET /operations/{id}`                                                | `stations:read`                 |
 | Events                   | Webhooks: `meter.sampled`, `connector.status_changed`, `charging_profile.*`, `token.updated`                    | `stations:read`, `tokens:read`  |
 
@@ -102,7 +110,8 @@ All paths are under `/v1/tenants/{tenant_id}` and follow the [published OpenAPI]
 
 - **Sessions come from webhooks.** Ivora has no transaction start or stop event. A session starts with a transaction's first `meter.sampled`, and ends when its connector leaves Charging and the transaction reads inactive. If a delivery fails after it is acknowledged, the event is logged and not retried; a reconcile job reading `GET …/events?after=` would close that gap.
 - **Matching uses the last four characters** of the card. Keep those unique across drivers, or assign sessions by hand.
-- **One process per depot.** Planning is serialized with an in-process lock, not a database lock.
+- **One process per depot.** Planning is serialized with an in-process lock, not a database lock, and the replan timer runs in that process (started from `instrumentation.ts`). On a serverless host the timer only runs while an instance is alive, so prefer a long-running server for live mode.
+- **Before the first profile.** Between plug-in and the charger accepting the first session profile, a charger runs at its own default. To keep the depot under the cap in that window too, give each charger a `charger_max` or `tx_default` profile sized to its share of `SITE_CAP_KW` (this app does not set those for you).
 - **The plan is one constant rate until done.** There is no time-of-use optimisation, and the tariff is a flat per-kWh price from the environment rather than read from Ivora tariffs.
 - **Reports bucket by UTC month.**
 - **Next:** server-side site load balancing once the Ivora API offers it, time-of-use windows, event-log reconciliation, and per-site time zones.

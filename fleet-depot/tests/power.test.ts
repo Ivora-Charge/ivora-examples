@@ -32,4 +32,15 @@ describe("splitPower", () => {
     expect(m.get("a")).toBe(5);
     expect(m.get("b")).toBe(0);
   });
+  it("rounds allocations down to whole watts so the sum never overshoots", () => {
+    const m = splitPower(10, [
+      { id: "a", departureMs: 1, wantedKw: 3.3333333 },
+      { id: "b", departureMs: 2, wantedKw: 3.3333333 },
+      { id: "c", departureMs: 3, wantedKw: 3.3333333 },
+      { id: "d", departureMs: 4, wantedKw: 3.3333333 },
+    ]);
+    expect([...m.values()]).toEqual([3.333, 3.333, 3.333, 0.001]);
+    const w = [...m.values()].reduce((a, x) => a + Math.round(x * 1000), 0);
+    expect(w).toBe(10000);
+  });
 });

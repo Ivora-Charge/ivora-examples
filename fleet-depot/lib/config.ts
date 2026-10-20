@@ -43,6 +43,10 @@ export const config = {
   get defaultConnectorKw() {
     return num("DEFAULT_CONNECTOR_KW", 11);
   },
+  /** How often live mode replans without an event, seconds. */
+  get replanIntervalSeconds() {
+    return num("REPLAN_INTERVAL_SECONDS", 60);
+  },
   get centsPerKwh() {
     return Math.round(num("TARIFF_CENTS_PER_KWH", 28));
   },

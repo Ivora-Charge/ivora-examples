@@ -154,6 +154,66 @@ describe("RFID cards through the tokens API", () => {
       "https://api.ivoracharge.com/v1/tenants/7/tokens/909",
     );
     expect(JSON.parse(calls[1].body!)).toEqual({ status: "Blocked" });
-    expect(calls[1].headers["idempotency-key"]).toBe("fd-token-block-909");
+    expect(calls[1].headers["idempotency-key"]).toMatch(
+      /^fd-token-block-909-[0-9a-f]{8}$/,
+    );
+  });
+
+  it("uses one key per block action: a retry reuses it, a later block gets a new one", async () => {
+    const d = depot();
+    await d.store.put("drivers", "x2", {
+      id: "x2",
+      name: "Leaver",
+      idTag: "CARD0010",
+      tokenId: 910,
+      cardBlocked: false,
+    });
+    let down = true;
+    const { api, calls } = client(() =>
+      down
+        ? { status: 503, json: { error: { code: "http_503", message: "" } } }
+        : { json: { id: 910, id_token: "CARD0010", status: "Blocked" } },
+    );
+    await expect(blockDriver(d, "x2", api)).rejects.toThrow();
+    const failedKey = calls.at(-1)!.headers["idempotency-key"];
+    down = false;
+    await blockDriver(d, "x2", api);
+    expect(calls.at(-1)!.headers["idempotency-key"]).toBe(failedKey);
+    // Unblocked elsewhere (token.updated), then blocked again: a new request.
+    const drv = (await d.store.list("drivers"))[0];
+    await d.store.put("drivers", "x2", { ...drv, cardBlocked: false });
+    await blockDriver(d, "x2", api);
+    expect(calls.at(-1)!.headers["idempotency-key"]).not.toBe(failedKey);
+  });
+
+  it("re-runs an import with a new key after 503 outcome_unknown", async () => {
+    const d = depot();
+    let unknown = true;
+    const { api, calls } = client(() =>
+      unknown
+        ? {
+            status: 503,
+            json: { error: { code: "outcome_unknown", message: "?" } },
+          }
+        : {
+            json: {
+              dry_run: false,
+              counts: { create: 1 },
+              rows: [{ row: 1, id_token: "CARD0001", action: "create" }],
+            },
+          },
+    );
+    const csv = "idTag,driverName\nCARD0001,One";
+    await expect(importDrivers(d, csv, api)).rejects.toThrow();
+    // Not retried with the same key inside the call.
+    expect(calls).toHaveLength(1);
+    unknown = false;
+    await importDrivers(d, csv, api);
+    const [first, second] = calls.map((c) => c.headers["idempotency-key"]);
+    expect(first).toMatch(/^fd-import-[0-9a-f]{40}-1$/);
+    expect(second).toBe(first.replace(/-1$/, "-2"));
+    // A plain retry of the same file after success keeps the key.
+    await importDrivers(d, csv, api);
+    expect(calls[2].headers["idempotency-key"]).toBe(second);
   });
 });

@@ -1,6 +1,7 @@
 import "server-only";
 import { describeError, ivora, type TransactionDetail } from "./ivora";
 import {
+  applyProfileStatus,
   endSession,
   logEvent,
   replan,
@@ -130,15 +131,16 @@ async function onProfileAnswer(
     error?: { code?: string; message?: string } | null;
   };
   const sessions = await d.store.list("sessions");
-  const s = sessions.find((y) => y.profile?.profileId === profile.id);
+  const s = sessions.find((y) =>
+    y.sent?.some((p) => p.profileId === profile.id),
+  );
   const charger =
     typeof x.charger_status === "string" ? x.charger_status : null;
-  if (s?.profile && type !== "charging_profile.cleared") {
-    const accepted = type === "charging_profile.accepted";
-    s.profile.status = accepted ? "accepted" : "rejected";
-    s.profile.detail = accepted
-      ? undefined
-      : profile.error?.code
+  if (s) {
+    const p = s.sent!.find((y) => y.profileId === profile.id)!;
+    applyProfileStatus(s, p, type.slice("charging_profile.".length));
+    if (type === "charging_profile.rejected" && s.profile?.key === p.key)
+      s.profile.detail = profile.error?.code
         ? `${profile.error.code}: ${profile.error.message ?? ""}`
         : `charger answered ${charger ?? "Rejected"}`;
     await d.store.put("sessions", s.id, s);
@@ -148,6 +150,8 @@ async function onProfileAnswer(
     type,
     `${s ? `session on connector ${s.connectorNumber ?? s.connectorId}` : `profile ${profile.id ?? "?"}`}${charger ? ` (${charger})` : ""}`,
   );
+  // An accepted lower limit may unblock raises that were waiting for it.
+  if (s) await replan(d);
 }
 
 async function onTokenUpdated(d: Depot, x: Record<string, unknown>) {
