@@ -43,7 +43,7 @@ All templates follow the shared [conventions](docs/conventions.md): server-side 
 
 ## Ivora API
 
-The [Ivora developer portal](https://ivoracharge.co/developers/guides) documents the API, including [errors and statuses](https://ivoracharge.co/developers/guides/reference/errors). The schema is published as [OpenAPI](https://api.ivoracharge.co/openapi.json).
+The [Ivora developer portal](https://ivoracharge.com/developers/guides) documents the API, including [errors and statuses](https://ivoracharge.com/developers/guides/reference/errors). The schema is published as [OpenAPI](https://api.ivoracharge.com/openapi.json).
 
 ## Contributing and security
 

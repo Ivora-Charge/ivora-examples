@@ -1,6 +1,6 @@
 # Template conventions
 
-Every template in this repository follows these conventions, the same ones used by the [Squid](https://github.com/Ivora-Charge/squid) reference app. The API reference is the [Ivora developer portal](https://ivoracharge.co/developers/guides) and the published [OpenAPI schema](https://api.ivoracharge.co/openapi.json). They keep templates safe to fork, easy to review, and consistent for people who run more than one.
+Every template in this repository follows these conventions, the same ones used by the [Squid](https://github.com/Ivora-Charge/squid) reference app. The API reference is the [Ivora developer portal](https://ivoracharge.com/developers/guides) and the published [OpenAPI schema](https://api.ivoracharge.com/openapi.json). They keep templates safe to fork, easy to review, and consistent for people who run more than one.
 
 If a template needs to break a convention, say why in its README and in the pull request.
 
@@ -71,7 +71,7 @@ Every template has a demo mode that runs with no credentials and no network acce
 
 ## Errors
 
-- Show the API's error code and a short message to the operator, with a link to the developer portal's [Errors and statuses](https://ivoracharge.co/developers/guides/reference/errors) page. Do not hide errors behind a generic "something went wrong".
+- Show the API's error code and a short message to the operator, with a link to the developer portal's [Errors and statuses](https://ivoracharge.com/developers/guides/reference/errors) page. Do not hide errors behind a generic "something went wrong".
 - Never show API keys, tenant IDs, raw stack traces or other customers' data in error messages or logs.
 - Distinguish errors the user can fix (validation, charger offline, card declined) from errors they cannot (configuration, outage), and say what to do next.
 - Log enough to debug (error code, request ID, your own record ID) without logging secrets or personal data.
