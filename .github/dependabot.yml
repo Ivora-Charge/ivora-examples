@@ -8,6 +8,10 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # Keep @types/node on the Node.js major the templates run on (22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /forecourt-checkout
@@ -17,6 +21,10 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # Keep @types/node on the Node.js major the templates run on (22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: npm
     directory: /fleet-depot
@@ -26,6 +34,10 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # Keep @types/node on the Node.js major the templates run on (22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: github-actions
     directory: /
