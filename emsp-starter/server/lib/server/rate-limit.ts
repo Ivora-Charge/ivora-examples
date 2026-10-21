@@ -54,28 +54,36 @@ export function rateLimit({
 }
 
 /**
- * The client key for rate limits (the public API's, and the admin secret's).
+ * The caller's address for per-client limits, or null when no trusted header says it.
+ * Same rule as the CPO Starter Kit's `sourceOf`.
  *
- * - TRUSTED_PROXY_HEADER, when set, names the one header your own proxy or CDN sets to
- *   the client address and callers cannot set themselves (for example
- *   `cf-connecting-ip`, or `x-forwarded-for` from a proxy that appends to it). For a
- *   comma list, the last entry is used: the one your proxy added. No other header is
- *   read, and a request without it counts as "unknown".
- * - Otherwise, the platform's own client-IP header first (Vercel's
- *   x-vercel-forwarded-for and x-real-ip, which a client cannot set there), then the
- *   right-most X-Forwarded-For entry, the one the nearest proxy added. Entries further
- *   left are whatever the client sent. Without a proxy every header can be forged, and
- *   with none of them every client is "unknown" and shares one limit.
+ * - TRUSTED_PROXY_HEADER names a header that your own proxy or CDN sets to the client
+ *   address and that callers cannot set themselves (for example `cf-connecting-ip`,
+ *   `x-real-ip`, or `x-forwarded-for` from a proxy that appends to it). For a comma
+ *   list, the last entry is used: the one your proxy added. No other header is read.
+ * - On Vercel (VERCEL=1), without it, Vercel's own `x-vercel-forwarded-for`.
+ * - Otherwise null: no per-client key. A raw `x-forwarded-for` or `x-real-ip` is never
+ *   used, because a caller can send any value and get a fresh quota each time.
+ */
+export function clientAddress(
+  h: Headers,
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  const name = env.TRUSTED_PROXY_HEADER?.trim().toLowerCase();
+  let ip: string | undefined;
+  if (name) ip = h.get(name)?.split(",").at(-1)?.trim();
+  else if (env.VERCEL === "1")
+    ip = h.get("x-vercel-forwarded-for")?.split(",")[0]?.trim();
+  return ip ? ip.slice(0, 64) : null;
+}
+
+/**
+ * The key for the public API's per-client limit: the client address, or one shared key
+ * without a trusted address, so a forged header never gets a fresh quota.
  */
 export function clientKey(
   h: Headers,
   env: Record<string, string | undefined> = process.env,
 ): string {
-  const trusted = env.TRUSTED_PROXY_HEADER?.trim().toLowerCase();
-  const ip = trusted
-    ? h.get(trusted)?.split(",").at(-1)?.trim()
-    : h.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
-      h.get("x-real-ip")?.trim() ||
-      h.get("x-forwarded-for")?.split(",").at(-1)?.trim();
-  return ip ? ip.slice(0, 64) : "unknown";
+  return clientAddress(h, env) ?? "unknown";
 }

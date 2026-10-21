@@ -97,6 +97,15 @@ QR codes printed on stickers and signs outlive any single app version or platfor
 - The path uses a stable code you control, not an internal database or Ivora ID, so you can move hosting, change providers or re-map a station without reprinting stickers.
 - Read the public base URL from a server-side variable and refuse to generate printable codes until it is set to a stable HTTPS origin. Demo mode may generate codes, clearly marked as demo.
 
+## Client address for rate limits
+
+- Never key a limit on a header the caller can set, such as a raw `X-Forwarded-For` or `X-Real-IP`: each forged value would get a fresh quota.
+- Take the client address from `TRUSTED_PROXY_HEADER` (the header your own proxy or CDN sets; for a comma list, its last entry) or from the platform's own header (`x-vercel-forwarded-for` on Vercel). Without either, there is no per-client key.
+- Pair every per-client limit with an account or total cap, so the limit holds when there is no per-client key.
+- Every template has a test that forges `X-Forwarded-For` and stays limited.
+
+The CPO Starter Kit is the reference: `sourceOf` in `cpo-starter-kit/lib/server/rate-limit.ts`, tested in `cpo-starter-kit/tests/config.test.ts`. Templates don't share runtime code, so copy the logic.
+
 ## README
 
 Each template README covers, in this order:

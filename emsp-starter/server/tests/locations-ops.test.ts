@@ -10,7 +10,12 @@ import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore } from "@/lib/ocpi/store";
 import { authorizationHeader } from "@/lib/ocpi/tokens";
 import { ocpiTimestamp } from "@/lib/ocpi/types";
-import { adminClientKey, resetAdminLimitForTests } from "@/lib/server/admin";
+import {
+  ADMIN_LIMIT,
+  checkAdminSecret,
+  resetAdminLimitForTests,
+} from "@/lib/server/admin";
+import { clientAddress } from "@/lib/server/rate-limit";
 import { setTokenStoreForTests } from "@/lib/tokens/registry";
 import { MemoryTokenStore } from "@/lib/tokens/store";
 import {
@@ -256,25 +261,62 @@ describe("credentials: a CPO without 2.2.1 or without a credentials module", () 
   });
 });
 
-describe("admin rate-limit client key", () => {
-  const key = (h: Record<string, string>) => adminClientKey(new Headers(h));
+describe("admin rate-limit client address", () => {
+  const key = (h: Record<string, string>, env: Record<string, string> = {}) =>
+    clientAddress(new Headers(h), env);
+  const forged = {
+    "x-real-ip": "1.1.1.1",
+    "x-forwarded-for": "forged-1, forged-2, 192.0.2.7",
+  };
 
-  it("prefers the platform's client-IP headers, then the proxy's own X-Forwarded-For entry", () => {
+  it("never keys on x-forwarded-for or x-real-ip without a trusted source", () => {
+    expect(key(forged)).toBeNull();
     expect(
-      key({
-        "x-vercel-forwarded-for": "203.0.113.9",
-        "x-real-ip": "198.51.100.1",
-        "x-forwarded-for": "1.1.1.1, 203.0.113.9",
-      }),
-    ).toBe("203.0.113.9");
-    expect(
-      key({ "x-real-ip": "198.51.100.1", "x-forwarded-for": "1.1.1.1" }),
-    ).toBe("198.51.100.1");
-    // A client may send any X-Forwarded-For; the proxy appends the address it saw.
-    expect(key({ "x-forwarded-for": "forged-1, forged-2, 192.0.2.7" })).toBe(
+      key({ "x-vercel-forwarded-for": "203.0.113.9", ...forged }),
+    ).toBeNull();
+    expect(key({})).toBeNull();
+  });
+
+  it("with TRUSTED_PROXY_HEADER, keys clients separately on that header only", () => {
+    const env = { TRUSTED_PROXY_HEADER: "CF-Connecting-IP" };
+    expect(key({ ...forged, "cf-connecting-ip": "203.0.113.5" }, env)).toBe(
+      "203.0.113.5",
+    );
+    expect(key({ ...forged, "cf-connecting-ip": "203.0.113.6" }, env)).toBe(
+      "203.0.113.6",
+    );
+    // A comma list: the entry the proxy added, not what the client sent.
+    expect(key(forged, { TRUSTED_PROXY_HEADER: "x-forwarded-for" })).toBe(
       "192.0.2.7",
     );
-    expect(key({})).toBe("unknown");
-    expect(key({ "x-real-ip": "x".repeat(100) })).toHaveLength(64);
+    expect(key(forged, env)).toBeNull();
+    expect(
+      key(
+        { "x-real-ip": "x".repeat(100) },
+        { TRUSTED_PROXY_HEADER: "x-real-ip" },
+      ),
+    ).toHaveLength(64);
+  });
+
+  it("on Vercel, uses x-vercel-forwarded-for", () => {
+    expect(
+      key(
+        { "x-vercel-forwarded-for": "203.0.113.9", ...forged },
+        { VERCEL: "1" },
+      ),
+    ).toBe("203.0.113.9");
+    expect(key(forged, { VERCEL: "1" })).toBeNull();
+  });
+
+  it("a forged header gets no fresh per-client quota", () => {
+    for (let i = 0; i < ADMIN_LIMIT.perClient + 1; i++)
+      expect(
+        checkAdminSecret(
+          "wrong",
+          key({ "x-forwarded-for": `198.51.100.${i}` }),
+        ),
+      ).toBe("wrong");
+    // None of them created a per-client count: the right secret still gets in.
+    expect(checkAdminSecret(SECRET, null)).toBe("ok");
   });
 });

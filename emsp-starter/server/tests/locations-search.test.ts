@@ -451,6 +451,7 @@ describe("location API in demo mode", () => {
   });
 
   it("rate limits each client, by the proxy's client address", async () => {
+    process.env.TRUSTED_PROXY_HEADER = "x-forwarded-for";
     const id = locationAppId({
       peerId: "demo-mock-cpo",
       countryCode: "ZZ",
@@ -461,7 +462,7 @@ describe("location API in demo mode", () => {
       previewRoute.GET(
         new Request(
           `http://localhost:3000/x?evse_uid=LOC3-1&connector_id=1&kwh=10&minutes=60`,
-          { headers: { "x-real-ip": ip } },
+          { headers: { "x-forwarded-for": `forged, ${ip}` } },
         ),
         ctx(id),
       );
@@ -493,5 +494,24 @@ describe("location API in demo mode", () => {
         )
       ).status,
     ).toBe(429);
+  });
+
+  it("a forged X-Forwarded-For or X-Real-IP gets no fresh quota without TRUSTED_PROXY_HEADER", async () => {
+    delete process.env.TRUSTED_PROXY_HEADER;
+    delete process.env.VERCEL;
+    const search = (headers: Record<string, string>) =>
+      searchRoute.GET(
+        new Request("http://localhost:3000/api/v1/locations?q=hall", {
+          headers,
+        }),
+      );
+    for (let i = 0; i < 120; i++)
+      expect((await search({ "x-forwarded-for": `192.0.2.${i}` })).status).toBe(
+        200,
+      );
+    expect((await search({ "x-forwarded-for": "203.0.113.77" })).status).toBe(
+      429,
+    );
+    expect((await search({ "x-real-ip": "203.0.113.78" })).status).toBe(429);
   });
 });
