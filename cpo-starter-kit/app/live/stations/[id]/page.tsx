@@ -151,13 +151,13 @@ export default async function Page({
                       confirmText={`I understand this switches on connector ${c.number} with our staff token: a vehicle plugged in there starts charging.`}
                     >
                       <p className="muted">
-                        Starts a staff session on connector {c.number} with your
-                        operator&apos;s staff token. Ivora records it as a staff
-                        session, so it shows in sessions and reports; no driver
-                        payment is taken. Only a free (Available) connector: a
-                        driver who has plugged in starts and pays as usual. With
-                        no vehicle plugged in, the charger waits for one for a
-                        short time.
+                        Starts a staff/test session on connector {c.number} with
+                        your operator&apos;s staff token. Ivora records it as a
+                        staff session, so it shows in sessions and reports; no
+                        driver payment is taken. Only a free (Available)
+                        connector: a driver who has plugged in starts and pays
+                        as usual. With no vehicle plugged in, the charger waits
+                        for one for a short time.
                       </p>
                     </CommandForm>
                     <CommandForm
@@ -216,7 +216,7 @@ export default async function Page({
                   {x.endedAt ? ` to ${when(x.endedAt)}` : ""} ·{" "}
                   {formatKwh(x.energyKwh)}
                   {x.idToken ? ` · token ${x.idToken}` : ""}
-                  {x.staff ? " · staff session" : ""}
+                  {x.staff ? " · staff/test session" : ""}
                 </span>
                 <span className={x.active ? "pill busy" : "pill ok"}>
                   {x.active ? "Charging" : "Ended"}

@@ -146,7 +146,7 @@ export default async function Page() {
                   Session {x.id} · since {when(x.startedAt)} ·{" "}
                   {formatKwh(x.energyKwh)}
                   {x.idToken ? ` · token ${x.idToken}` : ""}
-                  {x.staff ? " · staff session" : ""}
+                  {x.staff ? " · staff/test session" : ""}
                 </span>
               </li>
             ))}

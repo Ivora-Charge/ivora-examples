@@ -328,10 +328,11 @@ function RemoteTestCard({ c, canWork }: { c: ChargerView; canWork: boolean }) {
       </h2>
       <p className="muted">
         Starts a short session on one connector with an operator command (no
-        payment), then stops it. Energy is 0 kWh without a vehicle; the test
-        passes when the charger accepts the start and stop and reports the
-        session. It runs only on an Available connector, and it only ever stops
-        its own session.
+        payment) and the staff token, so it shows as a staff/test session in
+        Live and Ivora's reports, then stops it. Energy is 0 kWh without a
+        vehicle; the test passes when the charger accepts the start and stop and
+        reports the session. It runs only on an Available connector, and it only
+        ever stops its own session.
       </p>
       {t && (
         <p>
