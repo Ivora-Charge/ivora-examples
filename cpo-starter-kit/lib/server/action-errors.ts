@@ -3,13 +3,14 @@ import { unstable_rethrow } from "next/navigation";
 import type { ActionState } from "@/lib/action-state";
 import { AccessDeniedError } from "./auth";
 import { ChargerError } from "./chargers/types";
+import { LiveError } from "./live/types";
 import { describeError, IvoraError } from "./ivora";
 import { OnboardingError } from "./onboarding/types";
 import { TeamError } from "./team/types";
 
 /**
  * Turns an error from a server action into a message for the form. Errors staff can
- * act on (TeamError, OnboardingError, ChargerError, AccessDeniedError) are shown as they are, Ivora
+ * act on (TeamError, OnboardingError, ChargerError, LiveError, AccessDeniedError) are shown as they are, Ivora
  * API errors with their code and request ID; anything else is logged by name only and
  * shown as a setup problem, never with its details.
  */
@@ -19,6 +20,7 @@ export function actionError(e: unknown, what: string): ActionState {
     e instanceof TeamError ||
     e instanceof OnboardingError ||
     e instanceof ChargerError ||
+    e instanceof LiveError ||
     e instanceof AccessDeniedError
   )
     return { error: e.message };

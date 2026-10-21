@@ -237,4 +237,66 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
     expect(r.test_runs).toBe(1);
     expect(r.remote_test).toMatchObject({ phase: "starting", attempt: 1 });
   });
+
+  /**
+   * The first claim holds its insert in an open transaction; the second starts, waits
+   * for it, and its outcome is returned once the first commits.
+   */
+  async function raceClaims(firstRequest: string, secondRequest: string) {
+    await reset();
+    const claim = (
+      c: postgres.Sql | postgres.TransactionSql,
+      request: string,
+    ) =>
+      c<
+        { r: { id: string; created: boolean } }[]
+      >`select cpo_claim_live_command(${operator}, ${TECH}, ${request}, 77, 'reset', null, null, 'soft', '{}') as r`;
+    const secondPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let claimed!: (id: string) => void;
+    let claimFailed!: (e: unknown) => void;
+    const hasClaimed = new Promise<string>((resolve, reject) => {
+      claimed = resolve;
+      claimFailed = reject;
+    });
+    const first = a.begin(async (tx) => {
+      try {
+        const [{ r }] = await claim(tx, firstRequest);
+        claimed(r.id);
+      } catch (e) {
+        claimFailed(e);
+        throw e;
+      }
+      await released;
+    });
+    first.catch(() => undefined);
+    const firstId = await hasClaimed;
+    const second = Promise.resolve(claim(b, secondRequest)).then(
+      ([{ r }]) => r,
+      (e: Error) => e,
+    );
+    await waitingForLock(secondPid);
+    release();
+    await first;
+    return { firstId, second: await second };
+  }
+
+  it("sends one live command when two taps on the same charger race", async () => {
+    const { second } = await raceClaims(
+      "30000000-0000-4000-8000-000000000001",
+      "30000000-0000-4000-8000-000000000002",
+    );
+    expect(String(second)).toMatch(/cpo_command_busy/);
+    const rows = await a`select 1 from cpo_live_commands where station_id = 77`;
+    expect(rows).toHaveLength(1);
+  });
+
+  it("gives a resubmitted tap the command it already made", async () => {
+    const request = "30000000-0000-4000-8000-000000000003";
+    const { firstId, second } = await raceClaims(request, request);
+    expect(second).toEqual({ id: firstId, created: false });
+    const rows = await a`select 1 from cpo_live_commands where station_id = 77`;
+    expect(rows).toHaveLength(1);
+  });
 });

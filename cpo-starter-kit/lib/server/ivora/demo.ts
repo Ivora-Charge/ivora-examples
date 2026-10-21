@@ -4,6 +4,7 @@ import { IvoraError } from "./errors";
 import type {
   Branding,
   CommandInput,
+  Fault,
   IvoraClient,
   Location,
   LocationInput,
@@ -25,6 +26,9 @@ const SAMPLE_LOCATIONS: Location[] = [
     city: "Sampleton",
     postal_code: "00001",
     country: "USA",
+    // Open ocean off West Africa (0°N 0°E is "Null Island"): never a real site.
+    latitude: 0.012,
+    longitude: 0.004,
     external_reference: "cpo-demo-site-1",
   },
   {
@@ -34,6 +38,8 @@ const SAMPLE_LOCATIONS: Location[] = [
     city: "Sampleton",
     postal_code: "00002",
     country: "USA",
+    latitude: 0.006,
+    longitude: 0.021,
     external_reference: "cpo-demo-site-2",
   },
 ];
@@ -75,9 +81,10 @@ const SAMPLE_STATIONS: Station[] = [
     vendor: "Sample Vendor",
     model: "Sample AC 22",
     last_seen: "2026-01-01T00:00:00Z",
-    connectors: connectors(9102, 2, 22_000).map((c, i) =>
-      i === 0 ? { ...c, status: "Charging" } : c,
-    ),
+    connectors: connectors(9102, 2, 22_000).map((c, i) => ({
+      ...c,
+      status: i === 0 ? "Charging" : "Faulted",
+    })),
   },
   {
     id: 9103,
@@ -94,6 +101,34 @@ const SAMPLE_STATIONS: Station[] = [
       ...c,
       status: "Unavailable",
     })),
+  },
+];
+
+/** Sample faults: one open on DEMO-HARBOUR-02 connector 2, one cleared at the market. */
+const SAMPLE_FAULTS: Fault[] = [
+  {
+    id: "demo-fault-1",
+    station_id: 9102,
+    connector_id: 91022,
+    open: true,
+    error_code: "GroundFailure",
+    info: "Sample fault: residual current detected",
+    vendor_error_code: null,
+    ocpp_status: "Faulted",
+    opened_at: "2026-01-01T07:45:00Z",
+    cleared_at: null,
+  },
+  {
+    id: "demo-fault-2",
+    station_id: 9103,
+    connector_id: 91031,
+    open: false,
+    error_code: "HighTemperature",
+    info: null,
+    vendor_error_code: null,
+    ocpp_status: "Faulted",
+    opened_at: "2025-12-31T14:02:00Z",
+    cleared_at: "2025-12-31T14:20:00Z",
   },
 ];
 
@@ -200,6 +235,8 @@ export const DEMO_CONNECT_MS = 2_000;
 const DEMO_BOOT_MS = 1_500;
 /** Simulated charging power of a demo test session, W. */
 const DEMO_POWER_W = 7_400;
+/** A reset charger is offline this long, then reconnects with its faults cleared. */
+export const DEMO_RESET_MS = 4_000;
 
 const fleetSchema = z.object({
   v: z.literal(1),
@@ -233,6 +270,10 @@ const fleetSchema = z.object({
   moved: z.record(z.string(), z.number().int()),
   /** Sample stations the visitor deleted. */
   deleted: z.array(z.number().int()).max(8),
+  /** Sample sessions the visitor stopped: transaction ID to when (ms). */
+  ended: z.record(z.string(), z.number()).optional(),
+  /** Stations the visitor reset: station ID to when (ms). */
+  resets: z.record(z.string(), z.number()).optional(),
   transactions: z
     .array(
       z.object({
@@ -359,6 +400,74 @@ function ownStation(
   };
 }
 
+/** A sample session the visitor stopped (or ended by a reset or unlock). */
+function sampleTransaction(x: Transaction, f: DemoFleet): Transaction {
+  const ended = f.ended?.[String(x.id)];
+  if (!x.active || ended === undefined) return x;
+  return { ...x, active: false, ended_at: ISO(ended) };
+}
+
+/** Sample faults, cleared by a reset of their station after they opened. */
+function sampleFaults(f: DemoFleet): Fault[] {
+  return copy(SAMPLE_FAULTS).map((x) => {
+    const reset = f.resets?.[String(x.station_id)];
+    if (!x.open || reset === undefined || reset < Date.parse(x.opened_at))
+      return x;
+    return { ...x, open: false, cleared_at: ISO(reset + DEMO_RESET_MS) };
+  });
+}
+
+/** Offline while a reset runs; reconnects afterwards. */
+function resetting(s: Station, f: DemoFleet, now: number): Station {
+  const at = f.resets?.[String(s.id)];
+  if (at === undefined) return s;
+  // Back after the restart, it sends messages again.
+  if (now >= at + DEMO_RESET_MS) return { ...s, last_seen: ISO(now) };
+  return {
+    ...s,
+    online: false,
+    connectors: s.connectors.map((c) => ({ ...c, status: "Unavailable" })),
+  };
+}
+
+function sampleStation(s: Station, f: DemoFleet, now: number): Station {
+  const faults = sampleFaults(f).filter((x) => x.station_id === s.id);
+  const openOn = new Set(
+    faults.filter((x) => x.open).map((x) => x.connector_id),
+  );
+  const ended = new Set(
+    SAMPLE_TRANSACTIONS.filter(
+      (x) => x.active && f.ended?.[String(x.id)] !== undefined,
+    ).map((x) => x.connector_id),
+  );
+  const charging = new Set(
+    f.transactions
+      .filter((x) => x.station_id === s.id && x.ended_at === null)
+      .map((x) => x.connector_id),
+  );
+  return resetting(
+    {
+      ...s,
+      location_id: f.moved[s.id] ?? s.location_id,
+      open_faults: faults.filter((x) => x.open),
+      connectors: s.connectors.map((c) => ({
+        ...c,
+        status: !s.online
+          ? c.status
+          : charging.has(c.id)
+            ? "Charging"
+            : openOn.has(c.id)
+              ? "Faulted"
+              : ended.has(c.id) || c.status === "Faulted"
+                ? "Available"
+                : c.status,
+      })),
+    },
+    f,
+    now,
+  );
+}
+
 const op = (
   id: string,
   result: Record<string, unknown> | null = null,
@@ -388,15 +497,18 @@ export function createDemoClient(
     const t = now();
     const samples = copy(SAMPLE_STATIONS)
       .filter((s) => !f.deleted.includes(s.id))
-      .map((s) => ({ ...s, location_id: f.moved[s.id] ?? s.location_id }));
-    return [...samples, ...f.stations.map((s) => ownStation(s, f, t))];
+      .map((s) => sampleStation(s, f, t));
+    return [
+      ...samples,
+      ...f.stations.map((s) => resetting(ownStation(s, f, t), f, t)),
+    ];
   };
   const transactions = async () => {
     const f = await fleet.load();
     const t = now();
     return [
       ...f.transactions.map((x) => demoTransaction(x, t)).reverse(),
-      ...copy(SAMPLE_TRANSACTIONS),
+      ...copy(SAMPLE_TRANSACTIONS).map((x) => sampleTransaction(x, f)),
     ];
   };
   const station = async (id: number) => {
@@ -539,6 +651,33 @@ export function createDemoClient(
       if (!s.online)
         throw new IvoraError(409, "station_offline", "The station is offline");
       const txs = await transactions();
+      // Ends a running session, sample or the visitor's own.
+      const end = (f: DemoFleet, id: number) => {
+        const own = f.transactions.find((x) => x.id === id);
+        if (own) own.ended_at ??= now();
+        else (f.ended ??= {})[String(id)] = now();
+      };
+      if (command.action === "reset") {
+        // The charger restarts: its sessions end, it drops off for a few seconds and
+        // comes back with its faults cleared.
+        await update((f) => {
+          for (const t of txs)
+            if (t.station_id === stationId && t.active) end(f, t.id);
+          (f.resets ??= {})[String(stationId)] = now();
+        });
+        return op(key, { charger_status: "Accepted" });
+      }
+      if (command.action === "unlock") {
+        const c = s.connectors.find((x) => x.id === command.connector_id);
+        if (!c)
+          throw new IvoraError(404, "connector_not_found", "Unknown connector");
+        // Unlocking a connector in use ends its session (OCPP 1.6 behaviour).
+        await update((f) => {
+          for (const t of txs)
+            if (t.connector_id === c.id && t.active) end(f, t.id);
+        });
+        return op(key, { charger_status: "Unlocked" });
+      }
       if (command.action === "start") {
         const c = s.connectors.find((x) => x.id === command.connector_id);
         if (!c)
@@ -560,11 +699,11 @@ export function createDemoClient(
         return op(key, { charger_status: "Accepted" });
       }
       const ok = await update((f) => {
-        const t = f.transactions.find(
+        const t = txs.find(
           (x) => x.id === command.transaction_id && x.station_id === stationId,
         );
-        if (!t || t.ended_at !== null) return false;
-        t.ended_at = now();
+        if (!t?.active) return false;
+        end(f, t.id);
         return true;
       });
       if (!ok)
@@ -584,6 +723,12 @@ export function createDemoClient(
           (t) => o.station_id === undefined || t.station_id === o.station_id,
         )
         .slice(0, o.limit ?? 50);
+    },
+    async listFaults(stationId, o = {}) {
+      await station(stationId);
+      return sampleFaults(await fleet.load())
+        .filter((x) => x.station_id === stationId && (!o.open || x.open))
+        .slice(0, o.limit ?? 20);
     },
     async getTransaction(transactionId) {
       const t = (await transactions()).find((x) => x.id === transactionId);

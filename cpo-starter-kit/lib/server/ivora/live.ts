@@ -3,6 +3,7 @@ import { isDemo } from "../env";
 import { IvoraError } from "./errors";
 import type {
   Branding,
+  Fault,
   IvoraClient,
   Listed,
   ListOptions,
@@ -339,6 +340,14 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     },
     getTransaction(transactionId) {
       return request<Transaction>("GET", `transactions/${transactionId}`);
+    },
+    async listFaults(stationId, o = {}) {
+      return (
+        await request<Page<Fault>>(
+          "GET",
+          `stations/${stationId}/faults${query({ limit: o.limit ?? 20, open: o.open || undefined })}`,
+        )
+      ).data;
     },
     async listTransactions(o = {}) {
       return (

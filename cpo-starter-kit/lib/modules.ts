@@ -35,8 +35,9 @@ export const MODULES: Module[] = [
     slug: "live",
     href: "/live",
     label: "Live",
-    summary: "Sessions in progress, power and energy as they happen.",
-    status: "coming-soon",
+    summary:
+      "A map and list of chargers with live status, faults and sessions; start, stop, reset and unlock.",
+    status: "ready",
   },
   {
     slug: "pricing",

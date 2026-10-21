@@ -26,8 +26,9 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   manager:
     "Runs the network day to day: company details, brand and payments; removes chargers; invites, changes and removes technicians and viewers.",
   technician:
-    "Works on chargers: adds, tests and edits them and prints QR stickers. Cannot remove chargers or change the team.",
-  viewer: "Reads the overview, chargers and reports. Cannot change anything.",
+    "Works on chargers: adds, tests and edits them, prints QR stickers, and starts, stops, resets and unlocks them from the Live view. Cannot remove chargers or change the team.",
+  viewer:
+    "Reads the overview, chargers, the Live view and reports. Cannot change anything.",
 };
 
 export function isRole(value: unknown): value is Role {

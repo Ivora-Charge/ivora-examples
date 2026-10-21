@@ -5,9 +5,17 @@ import { authCookieOptions } from "@/lib/server/supabase";
 
 /**
  * Pages anyone may open: everything else needs a signed-in staff member. /c/ is where
- * QR stickers lead drivers.
+ * QR stickers lead drivers; /api/webhooks/ is where Ivora delivers signed events (the
+ * route verifies each signature itself).
  */
-const PUBLIC = ["/login", "/setup", "/invite", "/auth/", "/c/"];
+const PUBLIC = [
+  "/login",
+  "/setup",
+  "/invite",
+  "/auth/",
+  "/c/",
+  "/api/webhooks/",
+];
 
 /**
  * Refreshes the Supabase session cookies on each request (server components cannot
