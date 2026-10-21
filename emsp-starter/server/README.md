@@ -28,15 +28,15 @@ With no credentials it starts in **demo mode**, with a "Demo" banner on every pa
 
 Copy `.env.example` to `.env.local` and fill it in. All variables are server-side only; never prefix one with `NEXT_PUBLIC_`.
 
-| Variable                    | Purpose                                                                                               |
-| --------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `EMSP_COUNTRY_CODE`         | Your ISO 3166-1 alpha-2 country code, for example `NL`. Required for live mode.                       |
-| `EMSP_PARTY_ID`             | Your 3-character OCPI party ID. Required for live mode.                                               |
-| `PUBLIC_BASE_URL`           | The `https://` origin this server is reached at. CPO peers call the OCPI endpoints on it. Required.   |
-| `SUPABASE_URL`              | Supabase project URL. Required for live mode.                                                         |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Bypasses RLS: never logged, never sent to the app. Required for live mode. |
-| `SUPABASE_DB_URL`           | Postgres connection string, used only by `npm run db:migrate`.                                        |
-| `DEMO_MODE`                 | Set to `true` to force demo mode even when everything above is set (for example on a public demo).    |
+| Variable                    | Purpose                                                                                                                 |
+| --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `EMSP_COUNTRY_CODE`         | Your ISO 3166-1 alpha-2 country code, for example `NL`. Required for live mode.                                         |
+| `EMSP_PARTY_ID`             | Your 3-character OCPI party ID. Required for live mode.                                                                 |
+| `PUBLIC_BASE_URL`           | The `https://` origin this server is reached at. CPO peers call the OCPI endpoints on it. Required.                     |
+| `SUPABASE_URL`              | Supabase project URL. Required for live mode.                                                                           |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Bypasses RLS: never logged, never sent to the app. Required for live mode.                   |
+| `SUPABASE_DB_URL`           | Postgres connection string, used only by `npm run db:migrate`.                                                          |
+| `DEMO_MODE`                 | Set to `true` (or `1`, `yes`, `on`) to force demo mode even when everything above is set, for example on a public demo. |
 
 Live mode turns on only when all required variables are set and valid. OCPI peer credentials are not environment variables: they are exchanged with each CPO over the OCPI credentials module (a later part) and stored in the database, with tokens we issue stored as hashes and peer tokens encrypted at rest.
 
@@ -55,11 +55,13 @@ npm run db:migrate         # applies pending migrations using SUPABASE_DB_URL fr
 
 The **10-30 rule**, checked by `scripts/check-migrations.mjs`:
 
-- Every table created in `public` enables row-level security in the same migration.
-- No default grants (`alter default privileges ... grant`) and no `grant ... on all tables in schema`.
-- A grant to `anon`, `authenticated` or `public` needs a policy on that table. The app talks to this server only, so expect no such grants: tables are service-only.
+- Every table created in `public` enables row-level security and runs `revoke all on <table> from public, anon, authenticated` in the same migration. The revoke keeps older Supabase projects, whose default privileges still grant new tables to the Data API roles, as closed as new ones. No migration may `disable row level security`.
+- No default grants (`alter default privileges ... grant`) and no schema-wide grants (`grant ... on all tables in schema` or `all functions`).
+- A table grant to `anon`, `authenticated` or `public` needs a policy on that table. The app talks to this server only, so expect no such grants: tables are service-only.
+- Every function or procedure created in `public` runs `revoke execute (or all) on function <name> from public` in the same migration, because Postgres grants `EXECUTE` to `PUBLIC` by default. No migration grants `EXECUTE` to `anon`, `authenticated` or `public`.
+- Every `security definer` function sets `search_path` (for example `set search_path = ''`).
 
-`tests/migrations.test.ts` applies every migration to an in-memory Postgres ([PGlite](https://pglite.dev)) with Supabase's roles, and checks RLS, grants and table behaviour. Use `tests/support/pglite.ts` for the tests of new migrations.
+`tests/migrations.test.ts` applies every migration to an in-memory Postgres ([PGlite](https://pglite.dev)) with Supabase's roles, and checks RLS, table and function grants, `search_path` on `security definer` functions and table behaviour. It runs them twice: on a database like a new Supabase project, and on one with the legacy default grants of older projects. Use `tests/support/pglite.ts` for the tests of new migrations.
 
 ## Deploy
 

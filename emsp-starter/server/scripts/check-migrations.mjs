@@ -36,7 +36,7 @@ problems.push(...checkMigrations(files));
 for (const p of problems) console.error(`${p.file}: ${p.message}`);
 if (problems.length) {
   console.error(
-    `\n${problems.length} problem(s). Every public table needs RLS, no default grants, and grants to anon or authenticated need a policy.`,
+    `\n${problems.length} problem(s). Every public table needs RLS and an explicit revoke, every public function a revoke from public, no default grants, no execute grants to the Data API roles, and table grants to anon or authenticated need a policy.`,
   );
   process.exitCode = 1;
 } else {

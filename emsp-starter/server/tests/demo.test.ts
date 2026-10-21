@@ -49,10 +49,10 @@ describe("demo mode", () => {
       expect(missingForLive()).toEqual([name]);
       process.env[name] = LIVE[name as keyof typeof LIVE];
     }
-    process.env.DEMO_MODE = "true";
-    expect(isDemo()).toBe(true);
-    process.env.DEMO_MODE = "1";
-    expect(isDemo()).toBe(true);
+    for (const on of ["true", "1", "yes", "on", " TRUE "]) {
+      process.env.DEMO_MODE = on;
+      expect(isDemo()).toBe(true);
+    }
     process.env.DEMO_MODE = "false";
     expect(isDemo()).toBe(false);
   });
@@ -132,7 +132,7 @@ describe("outbound requests have one gate", () => {
       .map((f) => relative(root, f))
       .filter((f) => f !== join("lib", "server", "demo.ts"))
       .filter((f) =>
-        /\bfetch\s*\(|from\s+["'](node:)?(https?|net|tls)["']|\bXMLHttpRequest\b|\bWebSocket\b/.test(
+        /\bfetch\s*\(|(?:from\s+|require\s*\(\s*|import\s*\(\s*)["'](?:node:)?(?:https?|http2|net|tls|dgram|undici)(?:\/[\w/]*)?["']|\bundici\b|\bXMLHttpRequest\b|\bWebSocket\b/.test(
           readFileSync(join(root, f), "utf8"),
         ),
       );

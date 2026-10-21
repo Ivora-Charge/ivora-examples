@@ -30,8 +30,12 @@ describe("app demo mode", () => {
     process.env.EXPO_PUBLIC_API_URL = "https://emsp.example.test/";
     expect(isOfflineDemo()).toBe(false);
     expect(config.apiUrl).toBe("https://emsp.example.test");
-    process.env.EXPO_PUBLIC_DEMO_MODE = "true";
-    expect(isOfflineDemo()).toBe(true);
+    for (const on of ["true", "1", "yes", "On"]) {
+      process.env.EXPO_PUBLIC_DEMO_MODE = on;
+      expect(isOfflineDemo()).toBe(true);
+    }
+    process.env.EXPO_PUBLIC_DEMO_MODE = "false";
+    expect(isOfflineDemo()).toBe(false);
   });
 
   it("serves sample data without any network request", async () => {

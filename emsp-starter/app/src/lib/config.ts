@@ -20,6 +20,6 @@ export const config = {
  */
 export function isOfflineDemo(): boolean {
   const forced = clean(process.env.EXPO_PUBLIC_DEMO_MODE)?.toLowerCase();
-  if (forced === "true" || forced === "1") return true;
+  if (forced && ["true", "1", "yes", "on"].includes(forced)) return true;
   return !config.apiUrl;
 }

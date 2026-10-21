@@ -5,7 +5,7 @@ import { configErrors, missingForLive } from "./config";
  * The demo-mode switch. This file is the one place that decides whether the server
  * may talk to anything outside itself.
  *
- * Demo mode is on when DEMO_MODE=true (or 1), when any live-mode variable is missing,
+ * Demo mode is on when DEMO_MODE is true, 1, yes or on, when any live-mode variable is missing,
  * or when a set value is invalid. In demo mode the server uses its built-in mock CPO
  * and sample data: it never charges a card, never sends an OCPI command or request to
  * a real CPO, and never sends email or push notifications.
@@ -13,9 +13,11 @@ import { configErrors, missingForLive } from "./config";
  * Every outbound HTTP request (OCPI peers, payments, email, push) must go through
  * `outboundFetch`. A unit test fails if any other server file calls `fetch` directly.
  */
+const FORCED_ON = new Set(["true", "1", "yes", "on"]);
+
 export function isDemo(): boolean {
   const forced = process.env.DEMO_MODE?.trim().toLowerCase();
-  if (forced === "true" || forced === "1") return true;
+  if (forced && FORCED_ON.has(forced)) return true;
   return missingForLive().length > 0 || configErrors().length > 0;
 }
 

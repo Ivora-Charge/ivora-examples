@@ -31,7 +31,7 @@ Copy `.env.example` to `.env.local`.
 | Variable                | Purpose                                                                                       |
 | ----------------------- | --------------------------------------------------------------------------------------------- |
 | `EXPO_PUBLIC_API_URL`   | Origin of your eMSP Starter server, for example `http://localhost:3000`. Empty: offline demo. |
-| `EXPO_PUBLIC_DEMO_MODE` | Set to `true` to force the offline demo even when the URL is set.                             |
+| `EXPO_PUBLIC_DEMO_MODE` | Set to `true` (or `1`, `yes`, `on`) to force the offline demo even when the URL is set.       |
 
 `EXPO_PUBLIC_` values are built into the app and readable by anyone who has it. Never put a key, token or other secret in one; secrets stay on the server.
 

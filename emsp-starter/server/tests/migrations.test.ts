@@ -3,12 +3,32 @@ import type { PGlite } from "@electric-sql/pglite";
 import { asRole, migratedDatabase } from "./support/pglite";
 
 let db: PGlite;
+let legacy: PGlite;
 beforeAll(async () => {
   db = await migratedDatabase();
-}, 30_000);
+  legacy = await migratedDatabase({ legacyDefaults: true });
+}, 60_000);
 afterAll(async () => {
   await db?.close();
+  await legacy?.close();
 });
+
+/** Tables in public that a Data API role may use, and the role. */
+const EXPOSED_TABLES = `
+  select c.relname as table, r.rolname as role
+  from pg_class c join pg_namespace n on n.oid = c.relnamespace
+  cross join (values ('anon'), ('authenticated')) as r(rolname)
+  where n.nspname = 'public' and c.relkind in ('r', 'p', 'v', 'm')
+    and has_table_privilege(r.rolname, c.oid, 'select, insert, update, delete, truncate, references, trigger')
+    and not exists (select 1 from pg_policies p
+                    where p.schemaname = 'public' and p.tablename = c.relname)`;
+
+/** Functions in public that a Data API role (or PUBLIC, which they inherit) may execute. */
+const EXPOSED_FUNCTIONS = `
+  select p.oid::regprocedure::text as function, r.rolname as role
+  from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+  cross join (values ('anon'), ('authenticated')) as r(rolname)
+  where n.nspname = 'public' and has_function_privilege(r.rolname, p.oid, 'execute')`;
 
 describe("migrations on PGlite", () => {
   it("records every applied migration in the ledger", async () => {
@@ -34,6 +54,44 @@ describe("migrations on PGlite", () => {
                          where p.schemaname = 'public' and p.tablename = g.table_name)`,
     );
     expect(rows).toEqual([]);
+  });
+
+  it("lets anon and authenticated execute no public function", async () => {
+    const { rows } = await db.query(EXPOSED_FUNCTIONS);
+    expect(rows).toEqual([]);
+  });
+
+  it("sets search_path on every security definer function", async () => {
+    const { rows } = await db.query(
+      `select p.oid::regprocedure::text as function from pg_proc p
+       join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.prosecdef
+         and not exists (select 1 from unnest(coalesce(p.proconfig, '{}')) c
+                         where c like 'search_path=%')`,
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("stays closed on a project with legacy default grants", async () => {
+    // Sanity check: the legacy defaults really do grant new objects.
+    await legacy.exec(
+      "create table public.probe (id int); create function public.probe() returns int language sql as $$ select 1 $$;",
+    );
+    expect(
+      (await legacy.query(`${EXPOSED_TABLES} and c.relname = 'probe'`)).rows,
+    ).toHaveLength(2);
+    expect(
+      (await legacy.query(`${EXPOSED_FUNCTIONS} and p.proname = 'probe'`)).rows,
+    ).toHaveLength(2);
+    await legacy.exec("drop table public.probe; drop function public.probe();");
+
+    expect((await legacy.query(EXPOSED_TABLES)).rows).toEqual([]);
+    expect((await legacy.query(EXPOSED_FUNCTIONS)).rows).toEqual([]);
+    await asRole(legacy, "anon", async () => {
+      await expect(
+        legacy.query("select * from public.emsp_audit_log"),
+      ).rejects.toThrow(/permission denied/);
+    });
   });
 
   it("keeps the audit log away from anon and authenticated", async () => {

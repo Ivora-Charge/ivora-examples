@@ -11,7 +11,8 @@ const MIGRATIONS = new URL("../../supabase/migrations/", import.meta.url);
 /**
  * The parts of a Supabase database the migrations rely on: the Data API roles, the
  * service role (which bypasses RLS) and a minimal `auth` schema. Like a project
- * created after the 10-30 change, nothing has default grants.
+ * created after the 10-30 change, nothing has default grants; see LEGACY_DEFAULTS
+ * for older projects.
  */
 const SUPABASE_STUB = `
 create role anon nologin;
@@ -26,10 +27,27 @@ grant usage on schema auth to authenticated, service_role;
 grant execute on function auth.uid() to authenticated, service_role;
 `;
 
-/** A fresh in-memory Postgres with every migration applied, the way `npm run db:migrate` applies them. */
-export async function migratedDatabase(): Promise<PGlite> {
+/**
+ * Older Supabase projects grant every new table, sequence and function in `public`
+ * to the Data API roles by default. Migrations must stay closed there too, which is
+ * why the 10-30 check asks for an explicit revoke on every new table and function.
+ */
+const LEGACY_DEFAULTS = `
+alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
+`;
+
+/**
+ * A fresh in-memory Postgres with every migration applied, the way `npm run db:migrate`
+ * applies them. `legacyDefaults` models a project created before the 10-30 change.
+ */
+export async function migratedDatabase({
+  legacyDefaults = false,
+}: { legacyDefaults?: boolean } = {}): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(SUPABASE_STUB);
+  if (legacyDefaults) await db.exec(LEGACY_DEFAULTS);
   await db.transaction(async (tx) => {
     await tx.exec(LEDGER_SQL);
     for (const file of await listMigrations(MIGRATIONS)) {
