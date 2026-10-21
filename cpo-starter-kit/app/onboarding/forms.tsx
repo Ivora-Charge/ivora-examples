@@ -5,9 +5,11 @@ import { EMPTY } from "@/lib/action-state";
 import {
   checkBrandColor,
   describeBrandCheck,
+  describeDriverColor,
   KIT_COLORS,
   normalizeHex,
 } from "@/lib/brand-colors";
+import { LOGO_MAX_BYTES, logoFileProblem } from "@/lib/logo-limits";
 import { Result } from "../result";
 import {
   pushBrandingAction,
@@ -142,6 +144,7 @@ export function CompanyForm(p: {
 export function BrandForm(p: { color: string | null; hasLogo: boolean }) {
   const [state, action, pending] = useActionState(saveBrandAction, EMPTY);
   const [color, setColor] = useState(p.color ?? "");
+  const [logoProblem, setLogoProblem] = useState<string | null>(null);
   const id = useId();
   const hex = normalizeHex(color);
   const check = hex ? checkBrandColor(hex) : null;
@@ -173,7 +176,7 @@ export function BrandForm(p: { color: string | null; hasLogo: boolean }) {
           </div>
           <p id={`${id}-color-check`} className="hint" aria-live="polite">
             {check
-              ? `Driver pages: ${check.driverContrast.toFixed(1)}:1 on white${check.driverContrast < 4.5 ? " (below 4.5:1: text on it may be hard to read)" : ""}. In this app: ${describeBrandCheck(check)}`
+              ? `${describeDriverColor(check)} In this app: ${describeBrandCheck(check)}`
               : "Buttons and headings on the driver payment pages use it. This app uses it too where it keeps text readable (WCAG AA)."}
           </p>
           {check && (
@@ -188,6 +191,15 @@ export function BrandForm(p: { color: string | null; hasLogo: boolean }) {
               Sample button
             </span>
           )}
+          {check && check.driverColor !== check.color && (
+            <span
+              className="swatch"
+              // The darker shade the driver pages get instead, with white text.
+              style={{ background: check.driverColor, color: "#ffffff" }}
+            >
+              Driver pages: {check.driverColor}
+            </span>
+          )}
         </div>
         <div className="field">
           <label htmlFor={`${id}-logo`}>
@@ -198,10 +210,27 @@ export function BrandForm(p: { color: string | null; hasLogo: boolean }) {
             name="logo"
             type="file"
             accept="image/png,image/jpeg,image/webp"
-            aria-describedby={`${id}-logo-hint`}
+            aria-describedby={`${id}-logo-hint ${id}-logo-problem`}
+            aria-invalid={logoProblem ? true : undefined}
+            onChange={(e) => {
+              const input = e.currentTarget;
+              const file = input.files?.[0];
+              const problem = file ? logoFileProblem(file) : null;
+              // Blocks the submit until another file is chosen.
+              input.setCustomValidity(problem ?? "");
+              setLogoProblem(problem);
+            }}
           />
           <span id={`${id}-logo-hint`} className="hint">
-            PNG, JPEG or WebP, at most 512 KB, 32 to 2048 px a side. No SVG.
+            PNG, JPEG or WebP, at most {LOGO_MAX_BYTES / 1024} KB, 32 to 2048 px
+            a side. No SVG.
+          </span>
+          <span
+            id={`${id}-logo-problem`}
+            className={logoProblem ? "error" : undefined}
+            role={logoProblem ? "alert" : undefined}
+          >
+            {logoProblem}
           </span>
         </div>
         <div>

@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import type { z } from "zod";
+import { driverPageColor } from "@/lib/brand-colors";
 import { atLeast } from "@/lib/roles";
 import { demoPaymentAccount } from "../ivora/demo";
 import {
@@ -49,12 +50,15 @@ function parse<T>(schema: z.ZodType<T>, value: unknown): T {
 const sha256 = (data: string | Uint8Array) =>
   createHash("sha256").update(data).digest("hex");
 
-/** What Ivora's driver pages should show, or null until there is a company name. */
+/**
+ * What Ivora's driver pages should show, or null until there is a company name. A
+ * brand colour below 3:1 on white goes as a darker, readable shade of itself.
+ */
 export function brandingPayload(p: CompanyProfile): BrandingInput | null {
   if (!p.name) return null;
   return {
     display_name: p.name,
-    primary_color: p.primaryColor,
+    primary_color: p.primaryColor ? driverPageColor(p.primaryColor) : null,
     support_email: p.supportEmail,
     support_url: p.supportUrl,
   };

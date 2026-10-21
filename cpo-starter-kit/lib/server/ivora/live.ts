@@ -8,9 +8,11 @@ import type {
   ListOptions,
   Location,
   LocationInput,
+  Operation,
   Page,
   PaymentAccount,
   Station,
+  StationInput,
   Transaction,
 } from "./types";
 
@@ -71,7 +73,14 @@ export function parseRetryAfter(
   return Number.isNaN(at) ? null : Math.max(0, Math.ceil((at - now) / 1000));
 }
 
+/**
+ * Answers that ask for a new key or a person: password_unconfirmed means Ivora could
+ * not confirm a new charger password, so the kit sets a new one rather than repeating.
+ */
+const NEVER_RETRY = new Set(["password_unconfirmed"]);
+
 function retriable(e: IvoraError): boolean {
+  if (NEVER_RETRY.has(e.code)) return false;
   if (e.status === 429) return true;
   if (RETRY_SAME_KEY.has(e.code)) return true;
   // Lost connection or timeout (the request may have arrived), or a gateway error.
@@ -254,27 +263,36 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     return { data, truncated: true };
   }
 
+  /**
+   * A create that may already have happened (a lost response, or another tab) is
+   * looked up by our external_reference instead of being made twice.
+   */
+  async function create<T>(
+    resource: "locations" | "stations",
+    body: { external_reference: string },
+    key: string,
+  ): Promise<T> {
+    try {
+      return await request<T>("POST", resource, { body, key });
+    } catch (e) {
+      if (!(e instanceof IvoraError) || !ADOPT_BY_REFERENCE.has(e.code))
+        throw e;
+      const found = await request<Page<T>>(
+        "GET",
+        `${resource}${list({ external_reference: body.external_reference, limit: 1 })}`,
+      );
+      if (found.data[0]) return found.data[0];
+      throw e;
+    }
+  }
+
   return {
     mode: "live",
     async listLocations(o) {
       return (await request<Page<Location>>("GET", `locations${list(o)}`)).data;
     },
-    async createLocation(input: LocationInput, key: string) {
-      try {
-        return await request<Location>("POST", "locations", {
-          body: input,
-          key,
-        });
-      } catch (e) {
-        if (!(e instanceof IvoraError) || !ADOPT_BY_REFERENCE.has(e.code))
-          throw e;
-        const [found] = await this.listLocations({
-          external_reference: input.external_reference,
-          limit: 1,
-        });
-        if (found) return found;
-        throw e;
-      }
+    createLocation(input: LocationInput, key: string) {
+      return create<Location>("locations", input, key);
     },
     listAllLocations() {
       return listAll<Location>("locations");
@@ -287,6 +305,40 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     },
     getStation(stationId: number) {
       return request<Station>("GET", `stations/${stationId}`);
+    },
+    createStation(input: StationInput, key: string) {
+      return create<Station>("stations", input, key);
+    },
+    updateStation(stationId, input, key) {
+      return request<Operation>("PATCH", `stations/${stationId}`, {
+        body: input,
+        key,
+      });
+    },
+    async deleteStation(stationId, key) {
+      await request<unknown>("DELETE", `stations/${stationId}`, { key });
+    },
+    // The password goes in the body only: never in a URL, a log or an error.
+    setCredentials(stationId, password, key) {
+      return request<Operation>("PUT", `stations/${stationId}/credentials`, {
+        body: { password },
+        key,
+      });
+    },
+    sendCommand(stationId, command, key) {
+      return request<Operation>("POST", `stations/${stationId}/commands`, {
+        body: command,
+        key,
+      });
+    },
+    getOperation(operationId) {
+      return request<Operation>(
+        "GET",
+        `operations/${encodeURIComponent(operationId)}`,
+      );
+    },
+    getTransaction(transactionId) {
+      return request<Transaction>("GET", `transactions/${transactionId}`);
     },
     async listTransactions(o = {}) {
       return (

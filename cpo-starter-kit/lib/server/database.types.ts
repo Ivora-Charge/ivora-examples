@@ -2,6 +2,13 @@
 // `supabase gen types typescript` produces. Update them with each migration.
 
 type Timestamp = string;
+export type Json =
+  | string
+  | number
+  | boolean
+  | null
+  | { [key: string]: Json | undefined }
+  | Json[];
 
 export type Database = {
   public: {
@@ -96,6 +103,52 @@ export type Database = {
         Update: { [_ in never]: never };
         Relationships: [];
       };
+      cpo_chargers: {
+        Row: {
+          id: string;
+          operator_id: string;
+          station_id: number | null;
+          name: string;
+          label: string | null;
+          location_id: number | null;
+          new_site: Json | null;
+          connectors: number;
+          connection_url: string | null;
+          password_set_at: Timestamp | null;
+          credential_sets: number;
+          test_runs: number;
+          edits: number;
+          connection_test: Json | null;
+          remote_test: Json | null;
+          created_by: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          removed_at: Timestamp | null;
+        };
+        // Written only through the cpo_*_charger functions.
+        Insert: { operator_id: string; name: string };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
+      cpo_sticker_codes: {
+        Row: {
+          code: string;
+          operator_id: string;
+          charger_id: string;
+          connector_number: number;
+          connector_id: number | null;
+          created_at: Timestamp;
+        };
+        // Written only through cpo_add_sticker_codes.
+        Insert: {
+          code: string;
+          operator_id: string;
+          charger_id: string;
+          connector_number: number;
+        };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -173,6 +226,51 @@ export type Database = {
           p_logo_url: string | null;
           p_logo_uploaded: boolean;
         };
+        Returns: undefined;
+      };
+      cpo_create_charger: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_name: string;
+          p_label: string | null;
+          p_location_id: number | null;
+          p_new_site: Json | null;
+          p_connectors: number;
+          p_station_id: number | null;
+          p_connection_url: string | null;
+        };
+        Returns: string;
+      };
+      cpo_update_charger: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_id: string;
+          p_changes: Json;
+        };
+        Returns: undefined;
+      };
+      cpo_next_charger_seq: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_id: string;
+          p_kind: string;
+        };
+        Returns: number;
+      };
+      cpo_add_sticker_codes: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_charger_id: string;
+          p_codes: Json;
+        };
+        Returns: undefined;
+      };
+      cpo_remove_charger: {
+        Args: { p_operator_id: string; p_actor_id: string; p_id: string };
         Returns: undefined;
       };
     };

@@ -118,6 +118,47 @@ describe("demo mode", () => {
     ).rejects.toMatchObject({ code: "demo_logo_not_stored" });
     expect((await ivora.getPaymentAccount()).status).toBe("none");
 
+    // Chargers: registering, passwords, commands and deletes are simulated.
+    const st = await ivora.createStation(
+      {
+        name: "DEMO-NEW-01",
+        location_id: a.id,
+        connectors: 1,
+        external_reference: "cpo-charger-x",
+      },
+      idempotencyKey("charger", "x", "create"),
+    );
+    expect(st.connection_url).toMatch(/^wss:\/\/ocpp\.demo\.example\//);
+    const op = await ivora.setCredentials(
+      st.id,
+      "A".repeat(24),
+      idempotencyKey("credentials", "x", "set-1"),
+    );
+    expect(op.status).toBe("succeeded");
+    expect((await ivora.getOperation(op.id)).status).toBe("succeeded");
+    await expect(
+      ivora.sendCommand(
+        st.id,
+        {
+          action: "start",
+          connector_id: st.connectors[0].id,
+          token: "T",
+          token_type: "Central",
+        },
+        idempotencyKey("charger", "x", "test-1-start"),
+      ),
+    ).rejects.toMatchObject({ code: "station_offline" });
+    await ivora.updateStation(
+      st.id,
+      { location_id: 9001 },
+      idempotencyKey("charger", "x", "move-1"),
+    );
+    await ivora.deleteStation(st.id, idempotencyKey("charger", "x", "delete"));
+    await expect(ivora.getStation(st.id)).rejects.toMatchObject({
+      code: "station_not_found",
+    });
+    expect((await ivora.getTransaction(9201)).id).toBe(9201);
+
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -197,6 +238,32 @@ describe("demo mode", () => {
         idempotencyKey("branding", "x", "put-0"),
       ),
     ).rejects.toThrow(/Demo mode/);
+    for (const call of [
+      () =>
+        live.createStation(
+          {
+            name: "X-1",
+            location_id: 1,
+            connectors: 1,
+            external_reference: "cpo-charger-x",
+          },
+          idempotencyKey("charger", "x", "create"),
+        ),
+      () =>
+        live.setCredentials(
+          1,
+          "A".repeat(24),
+          idempotencyKey("credentials", "x", "set-1"),
+        ),
+      () =>
+        live.sendCommand(
+          1,
+          { action: "stop", transaction_id: 1 },
+          idempotencyKey("charger", "x", "test-1-stop"),
+        ),
+      () => live.deleteStation(1, idempotencyKey("charger", "x", "delete")),
+    ])
+      await expect(call()).rejects.toThrow(/Demo mode/);
     expect(liveFetch).not.toHaveBeenCalled();
     expect(fetchSpy).not.toHaveBeenCalled();
   });

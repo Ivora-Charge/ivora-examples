@@ -1,6 +1,7 @@
 import "server-only";
 import { config, isDemo } from "../env";
 import { createDemoClient } from "./demo";
+import { cookieDemoFleet, resetDemoFleetForTests } from "./demo-cookie";
 import { createLiveClient } from "./live";
 import type { IvoraClient } from "./types";
 
@@ -19,7 +20,8 @@ const cache = () => (g.__cpoIvora ??= {});
  */
 export function getIvora(): IvoraClient {
   const c = cache();
-  if (isDemo()) return (c.demo ??= createDemoClient());
+  // The demo client keeps each visitor's own chargers in their cookie.
+  if (isDemo()) return (c.demo ??= createDemoClient(cookieDemoFleet()));
   const liveFor = `${config.apiBaseUrl}|${config.tenantId}|${config.apiKey}`;
   if (!c.live || c.liveFor !== liveFor) {
     c.live = createLiveClient({
@@ -35,6 +37,7 @@ export function getIvora(): IvoraClient {
 /** Forget cached clients (tests change the environment between cases). */
 export function resetIvoraForTests() {
   delete g.__cpoIvora;
+  resetDemoFleetForTests();
 }
 
 /**

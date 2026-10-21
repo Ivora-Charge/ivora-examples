@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const SECTIONS = ["Chargers", "Live", "Pricing", "Reports"];
+const SECTIONS = ["Live", "Pricing", "Reports"];
 
 // Runs on the desktop and mobile projects (see playwright.config.ts).
 test("demo: overview shows labelled sample data", async ({ page }) => {

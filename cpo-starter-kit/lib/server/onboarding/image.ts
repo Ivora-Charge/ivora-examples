@@ -6,9 +6,9 @@ import { OnboardingError } from "./types";
 // PNG, JPEG or WebP (never SVG), at most 512 KB, 32 to 2048 px a side, not animated.
 // The type comes from the file's own bytes, not its name or the browser's label.
 
-export const LOGO_MAX_BYTES = 512 * 1024;
-export const LOGO_MIN_PX = 32;
-export const LOGO_MAX_PX = 2048;
+import { LOGO_MAX_BYTES, LOGO_MAX_PX, LOGO_MIN_PX } from "@/lib/logo-limits";
+
+export { LOGO_MAX_BYTES, LOGO_MAX_PX, LOGO_MIN_PX };
 
 export interface ImageInfo {
   contentType: LogoUpload["contentType"];

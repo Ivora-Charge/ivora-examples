@@ -13,6 +13,8 @@ import type {
   LogoUpload,
   PaymentAccount,
 } from "@/lib/server/ivora/types";
+import { driverPageColor } from "@/lib/brand-colors";
+import { LOGO_MAX_BYTES, logoFileProblem } from "@/lib/logo-limits";
 import { setupChecklist } from "@/lib/server/onboarding/checklist";
 import {
   createDemoOnboardingStore,
@@ -373,6 +375,35 @@ describe("brand", () => {
     ])
       expect(brandingHash({ ...base, ...change })).not.toBe(h);
   });
+
+  it("sends the driver pages a readable shade of a colour below 3:1 on white", async () => {
+    const { d, api } = deps();
+    await saveCompany(d, owner, COMPANY);
+    await saveBrand(d, owner, { primaryColor: "#ffff00", logo: null });
+    const sent = vi.mocked(api.putBranding).mock.calls.at(-1)![0];
+    expect(sent.primary_color).toBe(driverPageColor("#ffff00"));
+    expect(sent.primary_color).not.toBe("#ffff00");
+    // The kit keeps the operator's own choice; only the driver pages get the shade.
+    expect((await loadOnboarding(d, owner)).profile.primaryColor).toBe(
+      "#ffff00",
+    );
+  });
+});
+
+describe("logo file check in the browser", () => {
+  it("refuses other types and files over 512 KB with a clear message", () => {
+    expect(logoFileProblem({ size: 1000, type: "image/png" })).toBeNull();
+    expect(
+      logoFileProblem({ size: LOGO_MAX_BYTES, type: "image/webp" }),
+    ).toBeNull();
+    expect(logoFileProblem({ size: 1_200_000, type: "image/jpeg" })).toMatch(
+      /1172 KB; the limit is 512 KB/,
+    );
+    expect(logoFileProblem({ size: 1000, type: "image/svg+xml" })).toMatch(
+      /PNG, JPEG or WebP/,
+    );
+    expect(logoFileProblem({ size: 1000, type: "" })).not.toBeNull();
+  });
 });
 
 describe("logo checks", () => {
@@ -480,7 +511,7 @@ describe("setup checklist", () => {
       ["company", "todo"],
       ["brand", "todo"],
       ["stripe", "todo"],
-      ["charger", "soon"],
+      ["charger", "todo"],
       ["price", "soon"],
     ]);
     await saveCompany(d, owner, COMPANY);

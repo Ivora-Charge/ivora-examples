@@ -1,12 +1,16 @@
 import "server-only";
+import { z } from "zod";
 import { IvoraError } from "./errors";
 import type {
   Branding,
+  CommandInput,
   IvoraClient,
   Location,
   LocationInput,
+  Operation,
   PaymentAccount,
   Station,
+  StationInput,
   Transaction,
 } from "./types";
 
@@ -20,7 +24,7 @@ const SAMPLE_LOCATIONS: Location[] = [
     address: "1 Example Quay",
     city: "Sampleton",
     postal_code: "00001",
-    country: "US",
+    country: "USA",
     external_reference: "cpo-demo-site-1",
   },
   {
@@ -29,10 +33,14 @@ const SAMPLE_LOCATIONS: Location[] = [
     address: "20 Example Street",
     city: "Sampleton",
     postal_code: "00002",
-    country: "US",
+    country: "USA",
     external_reference: "cpo-demo-site-2",
   },
 ];
+
+/** Clearly not a real OCPP endpoint: demo chargers never connect anywhere. */
+const demoConnectionUrl = (name: string) =>
+  `wss://ocpp.demo.example/${encodeURIComponent(name)}`;
 
 const connectors = (stationId: number, n: number, maxPowerW: number) =>
   Array.from({ length: n }, (_, i) => ({
@@ -46,6 +54,8 @@ const SAMPLE_STATIONS: Station[] = [
   {
     id: 9101,
     name: "DEMO-HARBOUR-01",
+    connection_url: demoConnectionUrl("DEMO-HARBOUR-01"),
+    username: "DEMO-HARBOUR-01",
     online: true,
     location_id: 9001,
     protocol: "ocpp1.6",
@@ -57,6 +67,8 @@ const SAMPLE_STATIONS: Station[] = [
   {
     id: 9102,
     name: "DEMO-HARBOUR-02",
+    connection_url: demoConnectionUrl("DEMO-HARBOUR-02"),
+    username: "DEMO-HARBOUR-02",
     online: true,
     location_id: 9001,
     protocol: "ocpp1.6",
@@ -70,6 +82,8 @@ const SAMPLE_STATIONS: Station[] = [
   {
     id: 9103,
     name: "DEMO-MARKET-01",
+    connection_url: demoConnectionUrl("DEMO-MARKET-01"),
+    username: "DEMO-MARKET-01",
     online: false,
     location_id: 9002,
     protocol: "ocpp2.0.1",
@@ -168,80 +182,409 @@ export function demoPaymentAccount(state: DemoStripeState): PaymentAccount {
 
 const copy = <T>(v: T): T => structuredClone(v);
 
+// ---- The visitor's own demo fleet ----
+//
+// Sites and chargers a visitor adds in demo mode, and the test sessions they run, are
+// kept per visitor (in their own cookie, see demo-cookie.ts), so visitors never see each
+// other's changes and serverless instances need not share memory. Charger behaviour is
+// simulated from timestamps: a charger "connects" two seconds after its password is
+// set, "boots" a moment later, and sends a heartbeat on every read.
+
+/** Most chargers and sites a visitor can add in demo mode (they live in a cookie). */
+export const DEMO_MAX_STATIONS = 4;
+const MAX_LOCATIONS = 4;
+const MAX_TRANSACTIONS = 6;
+export const DEMO_CONNECT_MS = 2_000;
+const DEMO_BOOT_MS = 1_500;
+/** Simulated charging power of a demo test session, W. */
+const DEMO_POWER_W = 7_400;
+
+const fleetSchema = z.object({
+  v: z.literal(1),
+  locations: z
+    .array(
+      z.object({
+        id: z.number().int(),
+        name: z.string().max(90),
+        address: z.string().max(120).optional(),
+        city: z.string().max(120).optional(),
+        postal_code: z.string().max(20).optional(),
+        country: z.string().max(3).optional(),
+        external_reference: z.string().max(128),
+      }),
+    )
+    .max(MAX_LOCATIONS),
+  stations: z
+    .array(
+      z.object({
+        id: z.number().int(),
+        name: z.string().max(36),
+        location_id: z.number().int(),
+        connectors: z.number().int().min(1).max(8),
+        external_reference: z.string().max(128),
+        /** When the simulated charger connects (ms), once its password is set. */
+        connect_at: z.number().nullable(),
+      }),
+    )
+    .max(DEMO_MAX_STATIONS),
+  /** Sample stations moved to another site: station ID to location ID. */
+  moved: z.record(z.string(), z.number().int()),
+  /** Sample stations the visitor deleted. */
+  deleted: z.array(z.number().int()).max(8),
+  transactions: z
+    .array(
+      z.object({
+        id: z.number().int(),
+        station_id: z.number().int(),
+        connector_id: z.number().int(),
+        connector_number: z.number().int(),
+        started_at: z.number(),
+        ended_at: z.number().nullable(),
+      }),
+    )
+    .max(MAX_TRANSACTIONS),
+});
+export type DemoFleet = z.infer<typeof fleetSchema>;
+
+export const emptyDemoFleet = (): DemoFleet => ({
+  v: 1,
+  locations: [],
+  stations: [],
+  moved: {},
+  deleted: [],
+  transactions: [],
+});
+
+export function decodeDemoFleet(raw: string | undefined): DemoFleet {
+  if (!raw) return emptyDemoFleet();
+  try {
+    const parsed = fleetSchema.safeParse(
+      JSON.parse(Buffer.from(raw, "base64url").toString("utf8")),
+    );
+    return parsed.success ? parsed.data : emptyDemoFleet();
+  } catch {
+    return emptyDemoFleet();
+  }
+}
+
+export function encodeDemoFleet(f: DemoFleet): string {
+  return Buffer.from(JSON.stringify(fleetSchema.parse(f)), "utf8").toString(
+    "base64url",
+  );
+}
+
+/** Where a visitor's demo fleet is kept: their cookie, or memory in tests. */
+export interface DemoFleetStore {
+  load(): Promise<DemoFleet>;
+  save(f: DemoFleet): Promise<void>;
+}
+
+export function memoryDemoFleet(
+  initial = emptyDemoFleet(),
+): DemoFleetStore & { state: DemoFleet } {
+  const store = {
+    state: copy(initial),
+    async load() {
+      return copy(store.state);
+    },
+    async save(f: DemoFleet) {
+      store.state = copy(fleetSchema.parse(f));
+    },
+  };
+  return store;
+}
+
+const ISO = (ms: number) => new Date(ms).toISOString();
+
+function demoTransaction(
+  t: DemoFleet["transactions"][number],
+  now: number,
+): Transaction {
+  const end = t.ended_at ?? now;
+  return {
+    id: t.id,
+    station_id: t.station_id,
+    connector_id: t.connector_id,
+    connector_number: t.connector_number,
+    active: t.ended_at === null,
+    started_at: ISO(t.started_at),
+    ended_at: t.ended_at === null ? null : ISO(t.ended_at),
+    // Simulated energy at a steady 7.4 kW, in Wh like the API's energy_wh.
+    energy_wh: Math.round(
+      (DEMO_POWER_W * Math.max(0, end - t.started_at)) / 3_600_000,
+    ),
+  };
+}
+
+function ownStation(
+  s: DemoFleet["stations"][number],
+  f: DemoFleet,
+  now: number,
+): Station {
+  const online = s.connect_at !== null && now >= s.connect_at;
+  const booted = online && now >= s.connect_at! + DEMO_BOOT_MS;
+  const charging = new Set(
+    f.transactions
+      .filter((t) => t.station_id === s.id && t.ended_at === null)
+      .map((t) => t.connector_id),
+  );
+  return {
+    id: s.id,
+    name: s.name,
+    online,
+    location_id: s.location_id,
+    protocol: online ? "ocpp1.6" : null,
+    vendor: booted ? "Sample Vendor" : null,
+    model: booted ? "Sample AC 11" : null,
+    last_seen: online ? ISO(now) : null,
+    external_reference: s.external_reference,
+    connection_url: demoConnectionUrl(s.name),
+    username: s.name,
+    connectors: connectors(s.id, s.connectors, 11_000).map((c) => ({
+      ...c,
+      status: !online
+        ? "Unavailable"
+        : charging.has(c.id)
+          ? "Charging"
+          : "Available",
+    })),
+  };
+}
+
+const op = (
+  id: string,
+  result: Record<string, unknown> | null = null,
+): Operation => ({ id: `demo-op-${id}`, status: "succeeded", result });
+
 /**
  * The demo implementation of the Ivora client. It answers from the sample data above
- * (writes go to process memory) and never sends a request anywhere: no charger
- * commands, no payments, no email, no network.
+ * and the visitor's own demo fleet (`fleet`), and never sends a request anywhere: no
+ * charger commands, no payments, no email, no network.
  */
-export function createDemoClient(): IvoraClient {
-  const locations = copy(SAMPLE_LOCATIONS);
-  const stations = copy(SAMPLE_STATIONS);
-  const transactions = copy(SAMPLE_TRANSACTIONS);
-  // Same key, same answer, like the API's idempotent replays.
-  const replays = new Map<string, Location>();
+export function createDemoClient(
+  fleet: DemoFleetStore = memoryDemoFleet(),
+  now: () => number = Date.now,
+): IvoraClient {
+  const update = async <T>(change: (f: DemoFleet) => T): Promise<T> => {
+    const f = await fleet.load();
+    const r = change(f);
+    await fleet.save(f);
+    return r;
+  };
+  const locations = async () => [
+    ...copy(SAMPLE_LOCATIONS),
+    ...(await fleet.load()).locations,
+  ];
+  const stations = async () => {
+    const f = await fleet.load();
+    const t = now();
+    const samples = copy(SAMPLE_STATIONS)
+      .filter((s) => !f.deleted.includes(s.id))
+      .map((s) => ({ ...s, location_id: f.moved[s.id] ?? s.location_id }));
+    return [...samples, ...f.stations.map((s) => ownStation(s, f, t))];
+  };
+  const transactions = async () => {
+    const f = await fleet.load();
+    const t = now();
+    return [
+      ...f.transactions.map((x) => demoTransaction(x, t)).reverse(),
+      ...copy(SAMPLE_TRANSACTIONS),
+    ];
+  };
+  const station = async (id: number) => {
+    const s = (await stations()).find((x) => x.id === id);
+    if (!s)
+      throw new IvoraError(404, "station_not_found", "Unknown demo station");
+    return s;
+  };
+  const byReference = <T extends { external_reference?: string | null }>(
+    list: T[],
+    ref?: string,
+  ) => list.filter((x) => !ref || x.external_reference === ref);
 
   return {
     mode: "demo",
     async listLocations(o = {}) {
-      return copy(
-        locations
-          .filter(
-            (l) =>
-              !o.external_reference ||
-              l.external_reference === o.external_reference,
-          )
-          .slice(0, o.limit ?? 100),
+      return byReference(await locations(), o.external_reference).slice(
+        0,
+        o.limit ?? 100,
       );
     },
     async listAllLocations() {
-      return { data: copy(locations), truncated: false };
+      return { data: await locations(), truncated: false };
     },
     async listAllStations() {
-      return { data: copy(stations), truncated: false };
+      return { data: await stations(), truncated: false };
     },
-    async createLocation(input: LocationInput, key: string) {
-      const seen =
-        replays.get(key) ??
-        locations.find(
-          (l) => l.external_reference === input.external_reference,
-        );
-      if (seen) return copy(seen);
-      const created: Location = {
-        id: 9001 + locations.length,
-        ...input,
-        name: input.name.startsWith("Sample")
-          ? input.name
-          : `Sample Site: ${input.name}`,
-      };
-      locations.push(created);
-      replays.set(key, created);
-      return copy(created);
+    // Same reference, same record, like the API's idempotent replays.
+    async createLocation(input: LocationInput) {
+      const seen = byReference(await locations(), input.external_reference)[0];
+      if (seen) return seen;
+      return update((f) => {
+        if (f.locations.length >= MAX_LOCATIONS)
+          throw new IvoraError(
+            409,
+            "demo_limit",
+            `Demo mode keeps up to ${MAX_LOCATIONS} new sites in your browser. Reset the demo to start again`,
+          );
+        const created = {
+          id: 9011 + f.locations.length,
+          ...input,
+          name: input.name.startsWith("Sample")
+            ? input.name
+            : `Sample Site: ${input.name}`.slice(0, 90),
+        };
+        f.locations.push(created);
+        return copy(created);
+      });
     },
     async listStations(o = {}) {
-      return copy(
-        stations
-          .filter(
-            (s) =>
-              !o.external_reference ||
-              s.external_reference === o.external_reference,
-          )
-          .slice(0, o.limit ?? 100),
+      return byReference(await stations(), o.external_reference).slice(
+        0,
+        o.limit ?? 100,
       );
     },
-    async getStation(stationId: number) {
-      const s = stations.find((x) => x.id === stationId);
-      if (!s)
-        throw new IvoraError(404, "station_not_found", "Unknown demo station");
-      return copy(s);
+    getStation: station,
+    async createStation(input: StationInput) {
+      const all = await stations();
+      const seen = byReference(all, input.external_reference)[0];
+      if (seen) return seen;
+      if (all.some((s) => s.name.toLowerCase() === input.name.toLowerCase()))
+        throw new IvoraError(
+          409,
+          "station_name_taken",
+          "Another station already uses this connection name",
+        );
+      if (!(await locations()).some((l) => l.id === input.location_id))
+        throw new IvoraError(404, "location_not_found", "Unknown demo site");
+      await update((f) => {
+        if (f.stations.length >= DEMO_MAX_STATIONS)
+          throw new IvoraError(
+            409,
+            "demo_limit",
+            `Demo mode keeps up to ${DEMO_MAX_STATIONS} added chargers in your browser. Remove one or reset the demo`,
+          );
+        f.stations.push({
+          id: Math.max(9500, ...f.stations.map((s) => s.id)) + 1,
+          name: input.name,
+          location_id: input.location_id,
+          connectors: input.connectors,
+          external_reference: input.external_reference,
+          connect_at: null,
+        });
+      });
+      return byReference(await stations(), input.external_reference)[0];
+    },
+    async updateStation(stationId, input, key) {
+      await station(stationId);
+      if (
+        input.location_id !== undefined &&
+        !(await locations()).some((l) => l.id === input.location_id)
+      )
+        throw new IvoraError(404, "location_not_found", "Unknown demo site");
+      await update((f) => {
+        const own = f.stations.find((s) => s.id === stationId);
+        if (input.location_id === undefined) return;
+        if (own) own.location_id = input.location_id;
+        else f.moved[String(stationId)] = input.location_id;
+      });
+      return op(key);
+    },
+    async deleteStation(stationId) {
+      await station(stationId);
+      const txs = await transactions();
+      if (txs.some((t) => t.station_id === stationId && t.active))
+        throw new IvoraError(
+          409,
+          "transaction_active",
+          "A session is running on this station",
+        );
+      if (txs.some((t) => t.station_id === stationId))
+        throw new IvoraError(
+          409,
+          "station_has_history",
+          "The station has charging history and stays in inventory",
+        );
+      await update((f) => {
+        const before = f.stations.length;
+        f.stations = f.stations.filter((s) => s.id !== stationId);
+        if (f.stations.length === before) f.deleted.push(stationId);
+      });
+    },
+    async setCredentials(stationId, _password, key) {
+      // The password is not kept anywhere in demo mode.
+      const s = await station(stationId);
+      if (s.online && s.protocol === "ocpp1.6")
+        throw new IvoraError(
+          409,
+          "station_online",
+          "The station is connected over OCPP 1.6, so its password can't be pushed",
+        );
+      await update((f) => {
+        const own = f.stations.find((x) => x.id === stationId);
+        if (own) own.connect_at = now() + DEMO_CONNECT_MS;
+      });
+      return op(key, { applied: "stored" });
+    },
+    async sendCommand(stationId, command: CommandInput, key) {
+      const s = await station(stationId);
+      if (!s.online)
+        throw new IvoraError(409, "station_offline", "The station is offline");
+      const txs = await transactions();
+      if (command.action === "start") {
+        const c = s.connectors.find((x) => x.id === command.connector_id);
+        if (!c)
+          throw new IvoraError(404, "connector_not_found", "Unknown connector");
+        if (txs.some((t) => t.connector_id === c.id && t.active))
+          return op(key, { charger_status: "Rejected" });
+        await update((f) => {
+          f.transactions.push({
+            id: Math.max(9300, ...f.transactions.map((t) => t.id)) + 1,
+            station_id: stationId,
+            connector_id: c.id,
+            connector_number: c.number ?? 1,
+            started_at: now(),
+            ended_at: null,
+          });
+          f.transactions = f.transactions.slice(-MAX_TRANSACTIONS);
+        });
+        return op(key, { charger_status: "Accepted" });
+      }
+      const ok = await update((f) => {
+        const t = f.transactions.find(
+          (x) => x.id === command.transaction_id && x.station_id === stationId,
+        );
+        if (!t || t.ended_at !== null) return false;
+        t.ended_at = now();
+        return true;
+      });
+      if (!ok)
+        throw new IvoraError(
+          409,
+          "transaction_ended",
+          "That session has already ended",
+        );
+      return op(key, { charger_status: "Accepted" });
+    },
+    async getOperation(operationId) {
+      return { id: operationId, status: "succeeded", result: null };
     },
     async listTransactions(o = {}) {
-      return copy(
-        transactions
-          .filter(
-            (t) => o.station_id === undefined || t.station_id === o.station_id,
-          )
-          .slice(0, o.limit ?? 50),
-      );
+      return (await transactions())
+        .filter(
+          (t) => o.station_id === undefined || t.station_id === o.station_id,
+        )
+        .slice(0, o.limit ?? 50);
+    },
+    async getTransaction(transactionId) {
+      const t = (await transactions()).find((x) => x.id === transactionId);
+      if (!t)
+        throw new IvoraError(
+          404,
+          "transaction_not_found",
+          "Unknown demo session",
+        );
+      return t;
     },
     // Branding answers like the API but is kept nowhere: each visitor's demo brand
     // lives in their own cookie (lib/server/onboarding/demo.ts).

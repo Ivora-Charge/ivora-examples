@@ -169,10 +169,23 @@ test("demo: settings show every step and refuse a logo that isn't an image", asy
     mimeType: "image/svg+xml",
     buffer: Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>"),
   });
-  await page.getByRole("button", { name: "Save brand" }).click();
+  // The browser checks type and size first, with the API's limits, and blocks the save.
   await expect(page.locator("main").getByRole("alert")).toContainText(
-    "SVG isn't accepted",
+    "Choose a PNG, JPEG or WebP image",
   );
+  await page.getByRole("button", { name: "Save brand" }).click();
+  await expect(page.getByText(/Brand saved/)).toBeHidden();
+  await page.getByLabel("Logo (optional)").setInputFiles({
+    name: "big.png",
+    mimeType: "image/png",
+    buffer: Buffer.concat([pngHeader(), Buffer.alloc(1_100_000)]),
+  });
+  await expect(page.locator("main").getByRole("alert")).toContainText(
+    "the limit is 512 KB",
+  );
+  // A readable shade replaces a colour drivers could not read on white.
+  await page.getByLabel("Brand colour").fill("#ffff00");
+  await expect(page.getByText(/so they use the darker shade #/)).toBeVisible();
 
   await page.getByRole("button", { name: "Reset the demo company" }).click();
   await expect(

@@ -84,3 +84,54 @@ describe("app URL", () => {
     expect(config.appUrl).toBe("https://kit-git-branch.example.app");
   });
 });
+
+describe("Stripe settings link", () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+  const set = (o: Record<string, string>) => {
+    for (const k of [
+      "IVORA_DASHBOARD_URL",
+      "IVORA_DASHBOARD_STRIPE_PATH",
+      "IVORA_TENANT_ID",
+    ])
+      delete process.env[k];
+    Object.assign(process.env, o);
+  };
+
+  it("opens the dashboard home unless a deep-link path is configured", () => {
+    set({ IVORA_DASHBOARD_URL: "https://dash.example.com/ignored" });
+    expect(config.stripeSettingsUrl).toBe("https://dash.example.com");
+    set({
+      IVORA_DASHBOARD_URL: "https://dash.example.com",
+      IVORA_DASHBOARD_STRIPE_PATH: "/projects/{tenant_id}/settings",
+      IVORA_TENANT_ID: "42",
+    });
+    expect(config.stripeSettingsUrl).toBe(
+      "https://dash.example.com/projects/42/settings",
+    );
+  });
+
+  it("never lets the path change the host or carry a script", () => {
+    for (const bad of [
+      "//evil.example/x",
+      "https://evil.example",
+      "javascript:alert(1)",
+      "/a?next=https://evil.example",
+      "settings",
+    ]) {
+      set({
+        IVORA_DASHBOARD_URL: "https://dash.example.com",
+        IVORA_DASHBOARD_STRIPE_PATH: bad,
+      });
+      expect(config.stripeSettingsUrl).toBe("https://dash.example.com");
+    }
+    // A tenant placeholder without a tenant ID falls back to the home page.
+    set({
+      IVORA_DASHBOARD_URL: "https://dash.example.com",
+      IVORA_DASHBOARD_STRIPE_PATH: "/projects/{tenant_id}",
+    });
+    expect(config.stripeSettingsUrl).toBe("https://dash.example.com");
+  });
+});
