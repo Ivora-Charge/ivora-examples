@@ -11,12 +11,12 @@ export const field = (form: FormData, name: string) => {
 };
 
 /** Who is asking, for the admin-secret rate limit (see adminClientKey). */
-async function clientKey(): Promise<string> {
+async function clientKey(): Promise<string | null> {
   try {
     return adminClientKey(await headers());
   } catch {
-    // Outside a request (tests): one shared key.
-    return "unknown";
+    // Outside a request (tests): no per-client key.
+    return null;
   }
 }
 

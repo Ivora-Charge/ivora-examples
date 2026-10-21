@@ -1,7 +1,7 @@
 import "server-only";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { config } from "./config";
-import { clientKey } from "./rate-limit";
+import { clientAddress } from "./rate-limit";
 
 /**
  * TEMPORARY admin gate, until admin sign-in lands (part 7): every admin action asks
@@ -9,7 +9,8 @@ import { clientKey } from "./rate-limit";
  * are disabled. The comparison takes the same time whatever the input.
  *
  * Wrong secrets are rate limited: 5 per client and 50 in total per 15 minutes. While
- * limited, the secret is not even compared. The counts live in this server process, so
+ * limited, the secret is not even compared. Without a trusted client address (see
+ * clientAddress) there is no per-client count and the total cap alone applies. The counts live in this server process, so
  * each instance counts on its own; part 7 replaces all of this.
  */
 export function adminEnabled(): boolean {
@@ -43,29 +44,30 @@ function recent(key: string, now: number): number[] {
 }
 
 /**
- * Checks an admin secret for `client` (an IP address, or "unknown"), counting wrong
- * ones. "limited" means too many wrong secrets lately: try again later.
+ * Checks an admin secret for `client` (a trusted address, or null for none), counting
+ * wrong ones. "limited" means too many wrong secrets lately: try again later.
  */
 export function checkAdminSecret(
   input: unknown,
-  client: string,
+  client: string | null,
   now = Date.now(),
 ): "ok" | "wrong" | "limited" {
-  const key = `client:${client}`;
+  const key = client === null ? null : `client:${client}`;
   if (failures.size > 4 * ADMIN_LIMIT.total)
     for (const k of [...failures.keys()]) recent(k, now);
   if (
-    recent(key, now).length >= ADMIN_LIMIT.perClient ||
+    (key !== null && recent(key, now).length >= ADMIN_LIMIT.perClient) ||
     recent(ALL, now).length >= ADMIN_LIMIT.total
   )
     return "limited";
   if (isAdminSecret(input)) return "ok";
-  for (const k of [key, ALL]) failures.set(k, [...recent(k, now), now]);
+  for (const k of key === null ? [ALL] : [key, ALL])
+    failures.set(k, [...recent(k, now), now]);
   return "wrong";
 }
 
-/** The client key for the admin-secret rate limit: see clientKey. */
-export const adminClientKey = clientKey;
+/** The client key for the admin-secret rate limit: see clientAddress. */
+export const adminClientKey = clientAddress;
 
 export function resetAdminLimitForTests() {
   failures.clear();

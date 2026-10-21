@@ -89,15 +89,12 @@ describe("admin secret (temporary admin gate)", () => {
 
   it("rate limits wrong secrets, per client and in total", async () => {
     process.env.ADMIN_SECRET = SECRET;
-    const wrong = form({ adminSecret: "wrong" });
     for (let i = 0; i < ADMIN_LIMIT.perClient; i++)
-      expect((await listPeersAction({}, wrong)).message).toBe(
-        "Wrong admin secret.",
-      );
+      expect(checkAdminSecret("wrong", "192.0.2.1")).toBe("wrong");
     // Limited: even the right secret is not compared now.
-    expect(
-      (await listPeersAction({}, form({ adminSecret: SECRET }))).message,
-    ).toMatch(/Too many wrong admin secrets/);
+    expect(checkAdminSecret(SECRET, "192.0.2.1")).toBe("limited");
+    // Another client has its own count.
+    expect(checkAdminSecret(SECRET, "192.0.2.2")).toBe("ok");
 
     resetAdminLimitForTests();
     const t0 = Date.now();
@@ -108,6 +105,21 @@ describe("admin secret (temporary admin gate)", () => {
     expect(
       checkAdminSecret(SECRET, "192.0.2.1", t0 + ADMIN_LIMIT.windowMs),
     ).toBe("ok");
+  });
+
+  it("without a client address, only the total cap applies", async () => {
+    process.env.ADMIN_SECRET = SECRET;
+    const wrong = form({ adminSecret: "wrong" });
+    // The action runs outside a request here: no trusted address, no per-client key.
+    for (let i = 0; i < ADMIN_LIMIT.perClient + 1; i++)
+      expect((await listPeersAction({}, wrong)).message).toBe(
+        "Wrong admin secret.",
+      );
+    for (let i = ADMIN_LIMIT.perClient + 1; i < ADMIN_LIMIT.total; i++)
+      await listPeersAction({}, wrong);
+    expect(
+      (await listPeersAction({}, form({ adminSecret: SECRET }))).message,
+    ).toMatch(/Too many wrong admin secrets/);
   });
 });
 

@@ -821,7 +821,9 @@ describe("rate-limit client key", () => {
       "x-forwarded-for": "forged, 192.0.2.7",
       "cf-connecting-ip": "203.0.113.5",
     });
-    expect(clientKey(h, {})).toBe("198.51.100.1");
+    // Without a trusted source, x-real-ip and x-forwarded-for are not read.
+    expect(clientKey(h, {})).toBe("unknown");
+    expect(clientKey(h, { VERCEL: "1" })).toBe("unknown");
     expect(clientKey(h, { TRUSTED_PROXY_HEADER: "CF-Connecting-IP" })).toBe(
       "203.0.113.5",
     );
