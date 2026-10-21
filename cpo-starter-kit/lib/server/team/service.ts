@@ -44,6 +44,8 @@ import {
 // passwords or tokens.
 
 export const INVITE_TTL_HOURS = 72;
+/** Shorter setup secrets keep setup off. */
+export const SETUP_SECRET_MIN_LENGTH = 32;
 
 export interface TeamDeps {
   backend: TeamBackend;
@@ -383,17 +385,16 @@ export async function setupOwner(
   source: string | null,
 ): Promise<void> {
   const accounts = accountsOf(d);
-  await limit(
-    d.limiter,
-    d.secret,
-    "setupSource",
-    source,
-    "Too many setup attempts. Wait ten minutes and try again.",
-  );
-  if (d.setupSecret.length < 16)
+  const message = "Too many setup attempts. Wait ten minutes and try again.";
+  await limit(d.limiter, d.secret, "setupSource", source, message);
+  // Setup has no account to limit, so without a trusted client address every caller
+  // shares one quota: guessing the secret stays slow, at worst setup waits a while.
+  if (source === null)
+    await limit(d.limiter, d.secret, "setupShared", "setup", message);
+  if (d.setupSecret.length < SETUP_SECRET_MIN_LENGTH)
     throw new TeamError(
       "setup_disabled",
-      "Setup is off. Set SETUP_SECRET (at least 16 characters) in the deployment's environment variables and redeploy.",
+      `Setup is off. Set SETUP_SECRET (at least ${SETUP_SECRET_MIN_LENGTH} characters, for example from \`openssl rand -base64 32\`) in the deployment's environment variables and redeploy.`,
     );
   // Once set up, the secret is not even compared: nothing left to guess at.
   if (await d.backend.hasStaff())
@@ -468,7 +469,11 @@ export async function signInWithPassword(
   return staffOrSignOut(d, accounts, userId, email);
 }
 
-/** Emails a sign-in link to staff. Answers the same for any address. */
+/**
+ * Emails a sign-in link to staff and to invitees (for one with a login already, see
+ * acceptStaffInvite). Answers the same for any address, so the reply never shows
+ * that an invite is pending.
+ */
 export async function requestSignInLink(
   d: TeamDeps,
   raw: { email: unknown },
@@ -479,11 +484,18 @@ export async function requestSignInLink(
   const message = "Wait a minute before asking for another link.";
   await limit(d.limiter, d.secret, "linkSource", source, message);
   await limit(d.limiter, d.secret, "linkRecipient", email, message);
-  if (
-    (await d.backend.isStaffEmail(email)) ||
-    (await d.backend.hasPendingInvite(email))
-  )
+  if (await d.backend.isStaffEmail(email)) {
     await accounts.sendSignInLink(email);
+    return;
+  }
+  if (!(await d.backend.hasPendingInvite(email))) return;
+  // Without a login yet, Supabase Auth may refuse the link (their invite link is how
+  // they join): that failure must look like any other answer.
+  await accounts.sendSignInLink(email).catch((e: unknown) => {
+    console.info("cpo-starter-kit: no sign-in link for an invitee", {
+      error: e instanceof Error ? e.name : "error",
+    });
+  });
 }
 
 /** The emailed link's token (our own email). */

@@ -34,7 +34,8 @@ jobs:
     # It holds no data beyond the test run and is reachable only from this job.
     services:
       postgres:
-        image: postgres:17-alpine
+        # Pinned by digest, like the actions above; update tag and digest together.
+        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
         env:
           POSTGRES_PASSWORD: postgres
         ports:

@@ -7,6 +7,7 @@
 //
 // - Every public table (and view) enables row level security (views: security_invoker)
 //   and runs `revoke all on <table> from public, anon, authenticated` in the same file.
+//   That includes a table made by `select … into` or moved in with `set schema`.
 // - A grant to anon or authenticated names explicit privileges (never ALL), and each
 //   privilege on each table has a matching RLS policy for that role.
 // - Every public function or procedure runs
@@ -15,12 +16,19 @@
 //   never to anon or PUBLIC.
 // - Every SECURITY DEFINER function sets search_path, also after `alter function`.
 // - Nothing is granted to PUBLIC, no default privileges are granted, RLS is never
-//   disabled, and DDL never hides inside a `do $$ … $$` block, where this check can't
-//   read it.
+//   disabled, a view never turns security_invoker off, nothing is owned by or moved
+//   to the browser roles, and DDL never hides where this check can't read it: in a
+//   `do $$ … $$` block, or in a function the migrations create and then run.
 //
-// The parser is deliberately small and fails closed: it reads statement shapes, not a
-// full SQL grammar. A statement it can't place in the rules above is left alone, so
-// keep migrations plain.
+// What it guarantees: every statement is either one of the shapes above, which it
+// checks, or on a short list of statements that can't create, expose or grant
+// anything (transactions, DML, indexes, triggers, types, drops, revokes, comments…).
+// Anything else, including any create, alter, grant or set role it doesn't know,
+// fails with "unrecognised statement: review it or add a rule". It reads statement
+// shapes, not a full SQL grammar, so it can be stricter than Postgres, never looser,
+// for the statements it reads. It does not read code that runs outside the migration
+// text: functions that extensions provide (beyond refusing calls to pg_cron, dblink
+// and pg_background, which run SQL given as a string), or a live database's state.
 
 const BROWSER_ROLES = ["anon", "authenticated"];
 /** The roles every public object must be closed to. */
@@ -194,9 +202,77 @@ function fnLabel(key, schema = "public") {
   return `${schema}.${name}(${n === "null" ? "…" : `${n} arg${n === "1" ? "" : "s"}`})`;
 }
 
-/** Keywords that make a DO block DDL or dynamic SQL. */
+/** Keywords that make a DO block or a function body DDL or dynamic SQL. */
 const DO_DDL =
   /\b(create|alter|drop|grant|revoke|execute|comment|security|policy|truncate)\b/;
+
+/** Extension functions that run SQL given as a string, which this check can't read. */
+const RUNS_SQL =
+  /\b(cron\.schedule(?:_in_database)?|cron\.alter_job|dblink(?:_exec)?|pg_background_launch)\s*\(/;
+
+/**
+ * The table in `select … into <table>` (also after `with …`), which creates a table
+ * outside PL/pgSQL. Group 1 is set for a temporary table.
+ */
+const INTO = new RegExp(
+  String.raw`(?<!\b(?:insert|merge) )\binto (?:((?:global |local )?(?:temp|temporary) )|unlogged )?(?:table )?(${QNAME})`,
+);
+const selectInto = (st) =>
+  /^(?:select|with)\b/.test(st) ? st.match(INTO) : null;
+
+/** Statements that only name a function (define, change, grant or drop it), not run it. */
+const NAMES_ONLY =
+  /^(?:create (?:or replace )?(?:function|procedure)|alter (?:function|procedure|routine)|drop|grant|revoke|comment on)\b/;
+
+/** Statements that can't create, expose or grant anything. Calls are checked separately. */
+const HARMLESS = new RegExp(
+  "^(?:" +
+    [
+      // Transactions and session housekeeping.
+      String.raw`begin|start transaction|commit|end|rollback|abort|savepoint|release|prepare transaction|commit prepared|rollback prepared`,
+      String.raw`set|reset|show|discard|checkpoint|lock|listen|unlisten|notify`,
+      // Queries and data. Calls to functions are checked separately.
+      String.raw`select|values|table|with|insert|update|delete|merge|truncate|copy|call`,
+      String.raw`analy[sz]e|vacuum|reindex|cluster|refresh materialized view`,
+      // Objects without privileges that matter, and removals.
+      String.raw`create (?:unique )?index|create statistics|create (?:or replace )?(?:constraint )?trigger`,
+      String.raw`create type|create domain|create collation|create text search`,
+      String.raw`alter (?:index|type|domain|trigger|sequence|statistics|collation|text search|extension)`,
+      String.raw`drop|revoke|comment on`,
+      String.raw`alter default privileges\b.* revoke`,
+    ].join("|") +
+    ")\\b",
+);
+
+/** A statement's text with its dollar-quoted bodies, and the bodies inside those, read too. */
+function deep(text, bodies) {
+  return [
+    text,
+    ...bodies.map((b) =>
+      statements(b)
+        .map((s) => deep(s.text, s.bodies))
+        .join("; "),
+    ),
+  ].join(" ");
+}
+
+const unquote = (s) => s.replace(/^"|"$/g, "");
+/** The unqualified, unquoted name in `schema.name` or `name`. */
+const bare = (raw) => unquote(raw.trim().split(".").at(-1));
+const escape = (s) => s.replace(/[$]/g, "\\$");
+
+/** The message for a statement no rule covers. Literals are already blanked out. */
+function unrecognised(st) {
+  const shown = st.length > 80 ? `${st.slice(0, 80)}…` : st;
+  return `unrecognised statement: review it or add a rule (${shown})`;
+}
+
+/** `security_invoker` turned off or reset in a view's `set (…)` / `reset (…)`. */
+function invokerOff(sub) {
+  if (!/\bsecurity_invoker\b/.test(sub)) return false;
+  if (/^reset\b/.test(sub)) return true;
+  return !/\bsecurity_invoker\s*(?:=\s*(?:true|on|1)\s*)?(?:,|\))/.test(sub);
+}
 
 /**
  * @param {{ name: string, sql: string }[]} files
@@ -210,6 +286,18 @@ export function checkMigrations(files, options = {}) {
   // Function attributes carry across files: a later `alter function` can undo them.
   const definer = new Map();
   const matviews = new Set();
+  // Every function the migrations create, in any schema: name → what its body runs.
+  const fns = new Map();
+  const calledIn = (code) =>
+    [...fns.keys()].filter((n) =>
+      new RegExp(String.raw`(?:^|[^a-z0-9_$])"?${escape(n)}"?\s*\(`).test(code),
+    );
+  const runsDdl = (name, seen = new Set()) => {
+    if (seen.has(name) || !fns.has(name)) return false;
+    seen.add(name);
+    const fn = fns.get(name);
+    return fn.ddl || calledIn(fn.code).some((n) => runsDdl(n, seen));
+  };
 
   for (const file of [...files].sort((a, b) => a.name.localeCompare(b.name))) {
     const say = (msg) => problems.push(`${file.name}: ${msg}`);
@@ -238,18 +326,56 @@ export function checkMigrations(files, options = {}) {
 
     for (const { text: st, bodies } of statements(file.sql)) {
       let m;
+      // Anything that runs a function: DDL in its body runs too, unread.
+      if (!NAMES_ONLY.test(st)) {
+        const code = deep(st, bodies);
+        if ((m = code.match(RUNS_SQL)))
+          say(
+            `runs SQL through ${m[1]}(), which this check can't read; write it as plain statements`,
+          );
+        for (const n of calledIn(code))
+          if (runsDdl(n))
+            say(
+              `runs ${n}(), which runs DDL or dynamic SQL this check can't read; write it as plain statements`,
+            );
+      }
+      // Ownership and schema moves, for any kind of object.
+      const altered = st.match(
+        new RegExp(
+          String.raw`^alter ((?:materialized |foreign |event )?\w+) (?:if exists )?(?:only )?(${QNAME})`,
+        ),
+      );
+      if (altered) {
+        const what = `${altered[1]} ${altered[2]}`;
+        if (
+          (m = st.match(new RegExp(String.raw`\bowner to (${IDENT})`))) &&
+          CLOSED_TO.includes(unquote(m[1]))
+        )
+          say(`makes ${unquote(m[1])} the owner of ${what}`);
+        if (
+          altered[1] !== "table" &&
+          (m = st.match(new RegExp(String.raw`\bset schema (${IDENT})`))) &&
+          pub(`${m[1]}.x`)
+        ) {
+          say(
+            `moves ${what} into schema ${unquote(m[1])}; create it there instead, with its revokes`,
+          );
+          continue;
+        }
+      }
       if (/^do\b/.test(st)) {
-        const code = bodies
-          .map((b) =>
-            statements(b)
-              .map((s) => s.text)
-              .join("; "),
-          )
-          .join("; ");
-        if (DO_DDL.test(code))
+        // A DO block with a string body (`do '…'`) can't be read at all.
+        if (!bodies.length || DO_DDL.test(deep("", bodies)))
           say(
             "runs DDL or dynamic SQL inside a DO block, which this check can't read; write it as plain statements",
           );
+      } else if (
+        /^set (?:local |session )?(?:role|session authorization)\b/.test(st)
+      ) {
+        say(unrecognised(st));
+      } else if ((m = selectInto(st))) {
+        const t = !m[1] && pub(m[2]);
+        if (t) relations.set(t, "table");
       } else if (
         (m = st.match(
           new RegExp(
@@ -288,18 +414,64 @@ export function checkMigrations(files, options = {}) {
       } else if (
         (m = st.match(
           new RegExp(
-            String.raw`^alter table (?:if exists )?(?:only )?(${QNAME}) (enable|disable|force|no force) row level security`,
+            String.raw`^alter table (?:if exists )?(?:only )?(${QNAME}) (.+)$`,
           ),
         ))
       ) {
         const t = pub(m[1]);
-        if (t && m[2] === "enable") rls.add(t);
-        if (t && m[2] === "disable")
-          say(`disables row level security on public.${t}`);
+        let r;
+        for (const sub of list(m[2])) {
+          if (
+            (r = sub.match(
+              /^(enable|disable|force|no force) row level security$/,
+            ))
+          ) {
+            if (t && r[1] === "enable") rls.add(t);
+            if (t && r[1] === "disable")
+              say(`disables row level security on public.${t}`);
+          } else if (
+            (r = sub.match(new RegExp(String.raw`^set schema (${IDENT})$`)))
+          ) {
+            // Moved in: it needs RLS and the revokes, in this file, like a new table.
+            const moved = pub(`${r[1]}.${bare(m[1])}`);
+            if (moved) relations.set(moved, "table");
+          } else if (t && /^(?:set|reset) \(/.test(sub) && invokerOff(sub))
+            say(`turns security_invoker off on view public.${t}`);
+          // Anything else (columns, constraints, triggers, renames) exposes nothing new.
+        }
+      } else if (
+        (m = st.match(
+          new RegExp(
+            String.raw`^alter (view|materialized view) (?:if exists )?(${QNAME}) (.+)$`,
+          ),
+        ))
+      ) {
+        const v = pub(m[2]);
+        if (v)
+          for (const sub of list(m[3]))
+            if (/^(?:set|reset) \(/.test(sub) && invokerOff(sub))
+              say(`turns security_invoker off on view public.${v}`);
       } else if (
         (m = st.match(/^create (?:or replace )?(function|procedure) (.+)$/))
       ) {
         const sig = signature(m[2]);
+        if (sig) {
+          // Bodies are kept, in any schema, to follow a later call that runs them.
+          const lang = sig.rest.match(/\blanguage "?(\w+)/)?.[1];
+          const code = deep("", bodies);
+          fns.set(bare(sig.name), {
+            code,
+            ddl:
+              // A string body (`as '…'`) can't be read: assume the worst.
+              (!bodies.length && !/\bbegin atomic\b/.test(sig.rest)) ||
+              DO_DDL.test(code) ||
+              RUNS_SQL.test(code) ||
+              (lang !== "plpgsql" &&
+                bodies.some((b) =>
+                  statements(b).some((x) => selectInto(x.text)),
+                )),
+          });
+        }
         const f = sig && pub(sig.name);
         if (!f) continue;
         const key = fnKey(f, arity(sig.args ?? ""));
@@ -352,6 +524,22 @@ export function checkMigrations(files, options = {}) {
             command: m[3] ?? "all",
             roles: m[4] ? list(m[4]) : ["public"],
           });
+      } else if (
+        (m = st.match(
+          new RegExp(String.raw`^alter policy (${IDENT}) on (${QNAME}) (.+)$`),
+        ))
+      ) {
+        const name = unquote(m[1]);
+        const t = pub(m[2]);
+        const rename = m[3].match(
+          new RegExp(String.raw`^rename to (${IDENT})$`),
+        );
+        const to = m[3].match(/^to (.+?)(?: using\b| with check\b|$)/);
+        for (const pol of policies)
+          if (pol.table === t && pol.name === name) {
+            if (rename) pol.name = unquote(rename[1]);
+            if (to) pol.roles = list(to[1]);
+          }
       } else if (
         (m = st.match(
           new RegExp(
@@ -438,13 +626,25 @@ export function checkMigrations(files, options = {}) {
           continue;
         }
         const browser = rs.filter((r) => BROWSER_ROLES.includes(r));
-        if (
-          !browser.length ||
-          /^(schema|sequence|all sequences|database|type|domain|language|large object|foreign|tablespace|parameter) /.test(
-            target,
-          )
-        )
+        if (!browser.length) continue;
+        const privs = privileges(m[1]);
+        const to = browser.join(", ");
+        // Other kinds of object: only the privileges a Supabase app needs.
+        const allowed = /^(?:schema|type|domain) /.test(target)
+          ? ["usage"]
+          : /^(?:sequence|all sequences) /.test(target)
+            ? ["usage", "select"]
+            : /^(?:database|language|large object|foreign|tablespace|parameter) /.test(
+                  target,
+                )
+              ? []
+              : null;
+        if (allowed) {
+          const extra = privs.filter((p) => !allowed.includes(p));
+          if (extra.length)
+            say(`grants ${extra.join(", ")} on ${target} to ${to}`);
           continue;
+        }
         if (/^all tables/.test(target)) {
           say(
             `grants on all tables in a schema to ${browser.join(", ")}; grant each table explicitly`,
@@ -454,7 +654,6 @@ export function checkMigrations(files, options = {}) {
         const rels = list(target.replace(/^table /, ""))
           .map(pub)
           .filter(Boolean);
-        const privs = privileges(m[1]);
         if (privs.includes("all")) {
           say(
             `grants ALL on ${rels.map((t) => `public.${t}`).join(", ")} to ${browser.join(", ")}; grant explicit privileges`,
@@ -479,6 +678,47 @@ export function checkMigrations(files, options = {}) {
         const rs = roles(m[2]);
         const bad = rs.filter((r) => CLOSED_TO.includes(r));
         if (bad.length) say(`grants role ${m[1]} to ${bad.join(", ")}`);
+      } else if (
+        (m = st.match(
+          new RegExp(
+            String.raw`^create schema (?:if not exists )?(${IDENT})?(?: ?authorization (${IDENT}))?$`,
+          ),
+        ))
+      ) {
+        if (m[2] && CLOSED_TO.includes(unquote(m[2])))
+          say(`makes ${unquote(m[2])} the owner of schema ${m[1] ?? m[2]}`);
+      } else if (
+        (m = st.match(new RegExp(String.raw`^alter schema (${IDENT}) (.+)$`)))
+      ) {
+        const to = m[2].match(new RegExp(String.raw`^rename to (${IDENT})$`));
+        if (to && pub(`${to[1]}.x`))
+          say(
+            `renames schema ${m[1]} to ${unquote(to[1])}, which exposes everything in it`,
+          );
+      } else if (
+        (m = st.match(
+          new RegExp(
+            String.raw`^create extension (?:if not exists )?(${IDENT})(.*)$`,
+          ),
+        ))
+      ) {
+        const schema = m[2].match(new RegExp(String.raw`\bschema (${IDENT})`));
+        if (!schema || pub(`${schema[1]}.x`))
+          say(
+            `creates extension ${unquote(m[1])} without "with schema" naming a schema the Data API doesn't expose (for example extensions); its functions would be open to PUBLIC`,
+          );
+      } else if (
+        (m = st.match(
+          new RegExp(
+            String.raw`^create (?:(?:temp|temporary|unlogged) )?sequence (?:if not exists )?(${QNAME})`,
+          ),
+        ))
+      ) {
+        // Supabase's default privileges open a public sequence to the browser roles.
+        if (!/^create (?:temp|temporary) /.test(st) && pub(m[1]))
+          say(unrecognised(st));
+      } else if (!HARMLESS.test(st)) {
+        say(unrecognised(st));
       }
     }
 

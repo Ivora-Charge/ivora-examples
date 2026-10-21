@@ -77,6 +77,31 @@ create policy "Add" on public.part_t for insert with check (true);`,
     anon: "select v from public.hidden_t",
   },
   {
+    name: "table made with select … into",
+    sql: "select 5 as v into public.into_t;",
+    anon: "select v from public.into_t",
+  },
+  {
+    name: "table moved into public with set schema",
+    sql: `create schema stash;
+create table stash.moved_t (v int);
+insert into stash.moved_t values (6);
+grant select on stash.moved_t to anon;
+alter table stash.moved_t set schema public;`,
+    anon: "select v from public.moved_t",
+  },
+  {
+    name: "DDL in a function the migration runs",
+    sql: `create schema tools;
+create function tools.make() returns void language plpgsql as $$
+begin
+  create table public.made_t (v int);
+  insert into public.made_t values (7);
+end $$;
+select tools.make();`,
+    anon: "select v from public.made_t",
+  },
+  {
     name: "grant to PUBLIC",
     sql: `create table public.pub_t (v int);
 alter table public.pub_t enable row level security;

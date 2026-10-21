@@ -304,6 +304,211 @@ select 'grant all on public.z to anon; it''s fine', E'\\' grant all on public.z 
   });
 });
 
+describe("statements that create, move or run things", () => {
+  it("treats select … into as creating a table, but not into a temporary one", () => {
+    assert.deepEqual(only("select 1 as v into public.copied;"), [
+      "creates public.copied without enabling row level security",
+      "creates table public.copied without revoking all from public, anon, authenticated (add: revoke all on public.copied from public, anon, authenticated)",
+    ]);
+    assert.deepEqual(
+      check(`select 1 as v into public.copied;
+alter table public.copied enable row level security;
+revoke all on public.copied from public, anon, authenticated;
+select 1 as v into temp scratch;
+with a as (insert into public.copied values (2) returning v) select v from a;`),
+      [],
+    );
+  });
+
+  it("treats a table moved into public with set schema as new there", () => {
+    assert.deepEqual(
+      only(`create table stash.moved (v int);
+alter table stash.moved set schema public;`),
+      [
+        "creates public.moved without enabling row level security",
+        "creates table public.moved without revoking all from public, anon, authenticated (add: revoke all on public.moved from public, anon, authenticated)",
+      ],
+    );
+    assert.deepEqual(
+      check(`create table stash.moved (v int);
+alter table stash.moved set schema public;
+alter table public.moved enable row level security;
+revoke all on public.moved from public, anon, authenticated;
+alter table public.moved set schema stash;`),
+      [],
+    );
+    assert.deepEqual(only("alter function private.f(int) set schema public;"), [
+      "moves function private.f into schema public; create it there instead, with its revokes",
+    ]);
+  });
+
+  it("fails running a migration's own function whose body runs DDL, also through another function", () => {
+    const mk = `create function tools.mk() returns void language plpgsql as $$ begin create table public.y (v int); end $$;`;
+    assert.deepEqual(only(`${mk} select tools.mk();`), [
+      "runs mk(), which runs DDL or dynamic SQL this check can't read; write it as plain statements",
+    ]);
+    assert.deepEqual(
+      only(`${mk}
+create function tools.outer() returns void language plpgsql as $$ begin perform tools.mk(); end $$;
+do $$ begin perform tools.outer(); end $$;
+create trigger t after insert on public.things for each row execute function tools.mk();`),
+      [
+        "runs outer(), which runs DDL or dynamic SQL this check can't read; write it as plain statements",
+        "runs mk(), which runs DDL or dynamic SQL this check can't read; write it as plain statements",
+      ],
+    );
+    // A string body can't be read; select … into in a SQL function creates a table.
+    assert.equal(
+      only(
+        "create function tools.s() returns void language plpgsql as 'begin end'; select tools.s();",
+      ).length,
+      1,
+    );
+    assert.equal(
+      only(
+        "create function tools.q() returns void language sql as $$ select 1 into public.z $$; call tools.q();",
+      ).length,
+      1,
+    );
+    // Defining, granting and dropping it runs nothing; nor does a DML-only function.
+    assert.deepEqual(
+      check(`${mk}
+revoke execute on function tools.mk() from public;
+drop function tools.mk();
+create function tools.ok() returns int language plpgsql as $$ declare n int; begin select count(*) into n from public.things; return n; end $$;
+select tools.ok();`),
+      [],
+    );
+  });
+
+  it("fails turning security_invoker off on a view", () => {
+    assert.deepEqual(
+      only(`alter view public.v set (security_invoker = false);
+alter view if exists public.v reset (security_invoker);
+alter table public.v set (security_invoker = off);
+alter view private.v set (security_invoker = false);
+alter view public.v set (security_invoker = true, security_barrier);
+alter view public.v set (security_invoker);`),
+      [
+        "turns security_invoker off on view public.v",
+        "turns security_invoker off on view public.v",
+        "turns security_invoker off on view public.v",
+      ],
+    );
+  });
+
+  it("fails ownership by the browser roles, and statements that run SQL from a string", () => {
+    assert.deepEqual(
+      only(`alter table public.things owner to anon;
+alter function public.f() owner to authenticated;
+create schema api authorization anon;
+select cron.schedule('job', '* * * * *', 'drop table x');
+alter policy "Read" on public.things to anon;`),
+      [
+        "makes anon the owner of table public.things",
+        "makes authenticated the owner of function public.f",
+        "makes anon the owner of schema api",
+        "runs SQL through cron.schedule(), which this check can't read; write it as plain statements",
+      ],
+    );
+  });
+
+  it("fails grants on other kinds of object beyond what an app needs", () => {
+    assert.deepEqual(
+      only(`grant usage on schema public to anon, authenticated;
+grant create on schema public to authenticated;
+grant usage, select on sequence public.s to authenticated;
+grant update on sequence public.s to authenticated;
+grant temporary on database postgres to anon;
+grant usage on type public.k to anon;`),
+      [
+        "grants create on schema public to authenticated",
+        "grants update on sequence public.s to authenticated",
+        "grants temporary on database postgres to anon",
+      ],
+    );
+  });
+
+  it("follows alter policy, so a grant needs a policy that still covers the role", () => {
+    assert.deepEqual(
+      only(`${SAFE_TABLE}
+create policy "Read" on public.things for select to authenticated using (true);
+alter policy "Read" on public.things to service_role;
+grant select on public.things to authenticated;`),
+      [
+        "grants select on public.things to authenticated without a matching policy",
+      ],
+    );
+  });
+
+  it("asks for an extension's schema", () => {
+    assert.deepEqual(
+      only(`create extension pgcrypto;
+create extension if not exists pgcrypto with schema extensions;
+create extension citext schema public;`),
+      [
+        `creates extension pgcrypto without "with schema" naming a schema the Data API doesn't expose (for example extensions); its functions would be open to PUBLIC`,
+        `creates extension citext without "with schema" naming a schema the Data API doesn't expose (for example extensions); its functions would be open to PUBLIC`,
+      ],
+    );
+  });
+
+  it("fails closed on any statement no rule covers", () => {
+    const msg = (st) =>
+      `unrecognised statement: review it or add a rule (${st})`;
+    for (const st of [
+      "create rule r as on select to public.things do instead select 1",
+      "set role anon",
+      "set local session authorization anon",
+      "create sequence public.s",
+      "create event trigger e on ddl_command_end execute function f()",
+      "alter role anon bypassrls",
+      "create role helper in role anon",
+      "alter publication supabase_realtime add table public.things",
+      "security label for pgsodium on column public.things.id is ''",
+      "import foreign schema remote from server s into public",
+      "create foreign table public.ft (v int) server s",
+      "create aggregate public.agg (int) (sfunc = int4pl, stype = int)",
+      "explain analyze create table public.x as select 1",
+      "load ''",
+      "reassign owned by postgres to anon",
+    ])
+      assert.deepEqual(only(`${st};`), [msg(st)], st);
+    const long = `create rule ${"r".repeat(100)} as on select to public.things do instead select 1`;
+    assert.deepEqual(only(`${long};`), [msg(`${long.slice(0, 80)}…`)]);
+  });
+
+  it("lets through statements that can't create, expose or grant anything", () => {
+    assert.deepEqual(
+      check(`begin;
+${SAFE_TABLE}
+set statement_timeout = 0;
+reset role;
+create sequence private.s;
+create index if not exists things_owner on public.things (owner);
+create unique index things_id on public.things (id);
+alter table public.things add column note text, alter column note set default '';
+alter table public.things rename column note to remark;
+create type public.kind as enum ('a', 'b');
+alter type public.kind add value 'c';
+create domain public.pos as int check (value > 0);
+create schema if not exists private;
+alter schema private owner to postgres;
+insert into public.things (id) values (gen_random_uuid());
+update public.things set owner = null;
+delete from public.things;
+comment on table public.things is 'x';
+drop table if exists public.old;
+drop view if exists public.old_v;
+revoke service_role from authenticated;
+alter default privileges in schema public revoke all on tables from anon;
+alter extension pgcrypto update;
+commit;`),
+      [],
+    );
+  });
+});
+
 describe("cli", () => {
   const cli = fileURLToPath(new URL("..", import.meta.url));
   const run = (...args) =>
