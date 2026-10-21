@@ -23,7 +23,7 @@ export function demoTokenStore(): MemoryTokenStore {
     driverRef: DEMO_DRIVER_REF,
     groupId: "ZZDMOCDEMO0001",
     issuer: brand.name,
-    whitelist: "ALLOWED",
+    whitelist: "ALLOWED_OFFLINE",
     language: "en",
     expiresAt: null,
     lastUpdated: new Date().toISOString(),

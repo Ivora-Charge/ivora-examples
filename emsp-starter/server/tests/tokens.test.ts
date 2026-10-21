@@ -43,6 +43,8 @@ let cpo: MockCpo;
 let cpo2: MockCpo;
 let net: ReturnType<typeof inProcessNetwork>;
 let clock: Date;
+/** When set, runs before the first mock CPO handles a request: a test can hold it there. */
+let hold: ((r: Request) => Promise<void>) | undefined;
 const saved = { ...process.env };
 const client: ClientOptions = { retries: 0 };
 
@@ -58,13 +60,17 @@ beforeEach(() => {
   Object.assign(process.env, LIVE_ENV);
   delete process.env.DEMO_MODE;
   peers = new MemoryPeerStore();
-  tokens = new MemoryTokenStore();
+  tokens = new MemoryTokenStore(peers);
   setPeerStoreForTests(peers);
   setTokenStoreForTests(tokens);
   clock = T0;
+  hold = undefined;
   net = inProcessNetwork({
     "emsp.example.test": emspHandler,
-    "mock-cpo.example.test": (r) => cpo.handle(r),
+    "mock-cpo.example.test": async (r) => {
+      await hold?.(r);
+      return cpo.handle(r);
+    },
     "cpo-two.example.test": (r) => cpo2.handle(r),
   });
   // Two CPOs on different platforms: we register at one, the other registers with us.
@@ -116,7 +122,7 @@ describe("issuing tokens and pushing them to every CPO", () => {
       countryCode: "NL",
       partyId: "ABC",
       driverRef: "driver-1",
-      whitelist: "ALLOWED",
+      whitelist: "ALLOWED_OFFLINE",
       language: "nl",
       status: "active",
     });
@@ -292,6 +298,90 @@ describe("issuing tokens and pushing them to every CPO", () => {
     expect(await retryPendingPushes(deps())).toMatchObject({ sent: 1 });
     expect(tokenRequests(cpo).at(-1)?.method).toBe("PUT");
     expect(cpo.pushedToken(app.uid, "APP_USER")?.valid).toBe(false);
+    expect(await tokens.countPendingPushes(10)).toBe(0);
+  });
+
+  it("keeps a change owed in the outbox when the server fails before recording a failed push", async () => {
+    await registerBoth();
+    const app = (await createAppToken({ driverRef: "driver-1" }, deps())).token;
+    expect(await tokens.countPendingPushes(10)).toBe(0);
+    cpo.failNext(1, 503);
+    vi.spyOn(tokens, "pushFailed").mockRejectedValueOnce(
+      new Error("database down"),
+    );
+    await expect(blockToken(app.uid, "APP_USER", deps())).rejects.toThrow(
+      "database down",
+    );
+    // The block is committed, and the outbox still owes it to the CPO that missed it.
+    expect((await tokens.getToken(app.uid, "APP_USER"))?.status).toBe(
+      "blocked",
+    );
+    expect(cpo.pushedToken(app.uid, "APP_USER")?.valid).toBe(true);
+    const [owed] = await tokens.duePushes("9999-01-01T00:00:00Z", 10);
+    expect(owed).toMatchObject({ attempts: 0, tokenId: app.id });
+    // Blocking again changes nothing; the outbox delivers.
+    expect((await blockToken(app.uid, "APP_USER", deps())).pushes).toEqual([]);
+    clock = new Date(T0.getTime() + 61_000);
+    expect(await retryPendingPushes(deps())).toMatchObject({ sent: 1 });
+    expect(cpo.pushedToken(app.uid, "APP_USER")?.valid).toBe(false);
+    expect(await tokens.countPendingPushes(10)).toBe(0);
+  });
+
+  it("owes a change written without any push (a server that stopped) to every CPO", async () => {
+    await registerBoth();
+    const app = (await createAppToken({ driverRef: "driver-1" }, deps())).token;
+    await tokens.updateToken(
+      app.id,
+      { status: "blocked", lastUpdated: "2026-10-21T10:00:01.000Z" },
+      app.revision,
+    );
+    expect(await tokens.countPendingPushes(10)).toBe(2);
+    // Not before the first push's grace minute.
+    expect(await retryPendingPushes(deps())).toMatchObject({ sent: 0 });
+    clock = new Date(T0.getTime() + 61_000);
+    expect(await retryPendingPushes(deps())).toMatchObject({ sent: 2 });
+    for (const mock of [cpo, cpo2])
+      expect(mock.pushedToken(app.uid, "APP_USER")?.valid).toBe(false);
+    expect(await tokens.countPendingPushes(10)).toBe(0);
+  });
+
+  it("ends with valid: false at the CPO when a delayed unblock lands after a later block", async () => {
+    await registerBoth();
+    const app = (await createAppToken({ driverRef: "driver-1" }, deps())).token;
+    await blockToken(app.uid, "APP_USER", deps());
+
+    // Hold the unblock's PATCH on its way to the first CPO.
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let arrived!: () => void;
+    const atCpo = new Promise<void>((r) => (arrived = r));
+    hold = async (r) => {
+      if (r.method !== "PATCH") return;
+      hold = undefined;
+      arrived();
+      await released;
+    };
+    clock = new Date(T0.getTime() + 10_000);
+    const unblocking = unblockToken(app.uid, "APP_USER", deps());
+    await atCpo;
+
+    // Meanwhile the token is blocked again, and that push lands first.
+    clock = new Date(T0.getTime() + 20_000);
+    const blocked = await blockToken(app.uid, "APP_USER", deps());
+    expect(blocked.pushes.every((p) => p.ok)).toBe(true);
+    expect(cpo.pushedToken(app.uid, "APP_USER")?.valid).toBe(false);
+
+    // The stale unblock lands now (valid: true), and is followed by the current version.
+    release();
+    const unblocked = await unblocking;
+    expect(unblocked.pushes.every((p) => p.ok)).toBe(true);
+    const last = tokenRequests(cpo).slice(-2);
+    expect(last.map((r) => r.method)).toEqual(["PATCH", "PUT"]);
+    expect(cpo.pushedToken(app.uid, "APP_USER")).toMatchObject({
+      valid: false,
+      last_updated: "2026-10-21T10:00:20Z",
+    });
+    expect(cpo2.pushedToken(app.uid, "APP_USER")?.valid).toBe(false);
     expect(await tokens.countPendingPushes(10)).toBe(0);
   });
 
@@ -481,7 +571,88 @@ describe("Tokens Sender: CPOs pull our tokens", () => {
   });
 });
 
+describe("routing headers and CPO parties at both tokens endpoints", () => {
+  const OURS = { countryCode: "NL", partyId: "ABC" };
+
+  async function setup() {
+    const [one] = await registerBoth();
+    const app = (await createAppToken({ driverRef: "driver-1" }, deps())).token;
+    const call = (
+      endpoint: "list" | "authorize",
+      routing: {
+        from: { countryCode: string; partyId: string };
+        to: typeof OURS;
+      },
+    ) =>
+      ocpiRequest(
+        endpoint === "list"
+          ? { url: `${EMSP}/tokens`, token: cpo.state.emsp!.token, routing }
+          : {
+              method: "POST",
+              url: `${EMSP}/tokens/${app.uid}/authorize`,
+              query: { type: "APP_USER" },
+              token: cpo.state.emsp!.token,
+              routing,
+            },
+        { transport: net.transport, retries: 0 },
+      );
+    return { one, call };
+  }
+
+  for (const endpoint of ["list", "authorize"] as const) {
+    it(`${endpoint}: refuses an OCPI-from that is not the peer's party (2000, 403)`, async () => {
+      const { call } = await setup();
+      await expect(
+        call(endpoint, {
+          from: { countryCode: "YY", partyId: "TWO" },
+          to: OURS,
+        }),
+      ).rejects.toMatchObject({ statusCode: 2000, httpStatus: 403 });
+      // The right party works.
+      await expect(
+        call(endpoint, { from: cpo.party, to: OURS }),
+      ).resolves.toMatchObject({ statusCode: 1000 });
+    });
+
+    it(`${endpoint}: refuses an OCPI-to that is not this eMSP (2001, 400)`, async () => {
+      const { call } = await setup();
+      await expect(
+        call(endpoint, {
+          from: cpo.party,
+          to: { countryCode: "NL", partyId: "XYZ" },
+        }),
+      ).rejects.toMatchObject({ statusCode: 2001, httpStatus: 400 });
+    });
+
+    it(`${endpoint}: serves CPO parties only`, async () => {
+      const { one, call } = await setup();
+      const peer = peers.peers.get(one.id)!;
+      peer.roles = peer.roles.map((r) => ({ ...r, role: "NSP" }));
+      await expect(
+        call(endpoint, { from: cpo.party, to: OURS }),
+      ).rejects.toMatchObject({ statusCode: 2000, httpStatus: 403 });
+    });
+  }
+});
+
 describe("real-time authorization", () => {
+  it("answers 3000 and never ALLOWED when the token store fails", async () => {
+    await registerBoth();
+    const app = (await createAppToken({ driverRef: "driver-1" }, deps())).token;
+    vi.spyOn(tokens, "getToken").mockRejectedValue(new Error("database down"));
+    const err = await cpo.authorize(app.uid, { type: "APP_USER" }).then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+    expect(err).toMatchObject({ statusCode: 3000, httpStatus: 500 });
+    expect(
+      peers.auditLog.some(
+        (e) =>
+          e.action === "token.authorize" && e.details?.allowed === "ALLOWED",
+      ),
+    ).toBe(false);
+  });
+
   it("allows an active token, with a reference and the location echoed", async () => {
     await registerBoth();
     await createAppToken({ driverRef: "driver-1" }, deps());

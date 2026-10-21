@@ -16,10 +16,17 @@ import type { DriverToken, TokenStore } from "./store";
  *   PATCH {receiver}/{country_code}/{party_id}/{token_uid}?type={type}   changed fields
  *
  * Every registered peer with a tokens RECEIVER endpoint gets every change at once, in
- * parallel. A peer that fails (down, timed out, refused) is queued: the cron route and
- * the admin retry send it the token's current version with a PUT, after 1, 2, 4 ...
- * minutes, at most 6 hours apart, until it lands. A peer that pulls our Tokens Sender
- * with date_from catches up too. Demo mode pushes nothing.
+ * parallel. The store owes each of them the new version in the same write as the
+ * change (the outbox, store.ts), and a push that lands clears it. A peer that fails
+ * (down, timed out, refused), or a change whose server died before pushing, stays
+ * owed: the cron route and the admin retry send the token's current version with a
+ * PUT, after 1, 2, 4 ... minutes, at most 6 hours apart, until it lands. A peer that
+ * pulls our Tokens Sender with date_from catches up too. Demo mode pushes nothing.
+ *
+ * Pushes of one token may overlap (an unblock still being retried while a block goes
+ * out) and land in any order. So after every push that lands, the token is read again:
+ * if it changed meanwhile, its current version goes out too, and the last push to land
+ * always carries the newest version.
  */
 export type PushDeps = {
   tokens: TokenStore;
@@ -42,6 +49,9 @@ export type TokenChange =
 
 /** For pushes from an admin action: a short wait, one retry, then the queue. */
 const PUSH_CLIENT: ClientOptions = { timeoutMs: 10_000, retries: 1 };
+
+/** Follow-up pushes of newer versions, after the first, before leaving it to the queue. */
+const MAX_FOLLOW_UPS = 3;
 
 /** True while the token may charge: active and not past its expiry. */
 export function tokenValid(t: DriverToken, now = new Date()): boolean {
@@ -135,16 +145,29 @@ async function pushTo(
   deps: PushDeps,
   now: Date,
 ): Promise<PushOutcome> {
+  let sent = t;
   try {
-    await send(peer, t, change, deps, now);
-    await deps.tokens.pushSucceeded(peer.id, t.id, t.lastUpdated);
+    await send(peer, sent, change, deps, now);
+    for (let i = 0; i < MAX_FOLLOW_UPS; i++) {
+      // Another change may have landed before this push did: send what is current now.
+      const latest = await deps.tokens.getTokenById(t.id);
+      if (
+        !latest ||
+        Date.parse(latest.lastUpdated) <= Date.parse(sent.lastUpdated)
+      )
+        break;
+      sent = latest;
+      await send(peer, sent, { method: "PUT" }, deps, now);
+    }
+    // Clears what the peer is owed only up to the version sent: a newer one stays queued.
+    await deps.tokens.pushSucceeded(peer.id, t.id, sent.lastUpdated);
     return { peerId: peer.id, label: peer.label, ok: true };
   } catch (e) {
     const error = errorText(e);
     await deps.tokens.pushFailed({
       peerId: peer.id,
       tokenId: t.id,
-      tokenLastUpdated: t.lastUpdated,
+      tokenLastUpdated: sent.lastUpdated,
       error,
       now: now.toISOString(),
     });

@@ -2,7 +2,7 @@ import "server-only";
 import { OcpiProblem } from "@/lib/ocpi/errors";
 import { dateTimeMs } from "@/lib/ocpi/locations";
 import { ocpiResponse, type OcpiContext } from "@/lib/ocpi/server";
-import { STATUS } from "@/lib/ocpi/types";
+import { sameParty, STATUS } from "@/lib/ocpi/types";
 import { ocpiUrls } from "@/lib/server/config";
 import { toOcpiToken } from "./push";
 import { tokenStore } from "./registry";
@@ -47,10 +47,32 @@ function intParam(
   return Number(v);
 }
 
+/**
+ * Our tokens are for CPOs: the request must come from one of the peer's CPO parties
+ * (OCPI-from). withOcpi has already checked it is one of the peer's parties.
+ */
+export function requireCpoParty(ctx: OcpiContext) {
+  const from = ctx.from;
+  if (
+    !from ||
+    !ctx.peer.roles.some(
+      (r) =>
+        r.role === "CPO" &&
+        sameParty({ countryCode: r.country_code, partyId: r.party_id }, from),
+    )
+  )
+    throw new OcpiProblem(
+      403,
+      STATUS.CLIENT_ERROR,
+      "Tokens are served to CPO parties only",
+    );
+}
+
 /** GET /ocpi/2.2.1/tokens */
 export async function tokensSender(ctx: OcpiContext): Promise<Response> {
   if (ctx.request.method !== "GET")
     throw new OcpiProblem(405, STATUS.CLIENT_ERROR, "Method not allowed");
+  requireCpoParty(ctx);
   const q = new URL(ctx.request.url).searchParams;
   const dateFrom = dateParam(q, "date_from");
   const dateTo = dateParam(q, "date_to");

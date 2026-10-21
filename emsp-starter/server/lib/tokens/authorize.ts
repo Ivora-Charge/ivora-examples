@@ -13,6 +13,7 @@ import { STATUS } from "@/lib/ocpi/types";
 import type { DisplayText } from "@/lib/ocpi/locations";
 import { toOcpiToken } from "./push";
 import { tokenStore } from "./registry";
+import { requireCpoParty } from "./sender";
 import type { DriverToken } from "./store";
 
 /**
@@ -94,6 +95,7 @@ function uidFromPath(ctx: OcpiContext): string {
 export async function authorizeToken(ctx: OcpiContext): Promise<Response> {
   if (ctx.request.method !== "POST")
     throw new OcpiProblem(405, STATUS.CLIENT_ERROR, "Method not allowed");
+  requireCpoParty(ctx);
   const uid = uidFromPath(ctx);
   const type = new URL(ctx.request.url).searchParams.get("type") ?? "RFID";
   if (!isTokenType(type))

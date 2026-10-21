@@ -1,6 +1,7 @@
 -- Our drivers' OCPI tokens (APP_USER tokens and RFID cards), which every CPO peer may
 -- pull from our Tokens Sender interface, and which we push to each peer's Tokens
--- Receiver; and the queue of pushes a peer missed, retried until they land.
+-- Receiver; and the push outbox: what each peer is owed, written in the same
+-- transaction as the token change and cleared once the push lands.
 -- Service-only (10-30 rule): RLS on, nothing granted to anon or authenticated. The
 -- driver app reaches tokens through the server's API, never the Data API.
 begin;
@@ -52,10 +53,11 @@ grant select, insert, update on table public.emsp_tokens to service_role;
 create table public.emsp_token_pushes (
   peer_id uuid not null references public.emsp_ocpi_peers (id),
   token_id uuid not null references public.emsp_tokens (id),
-  -- The token's last_updated when the push failed. A later successful push of this or
-  -- a newer version clears the row; a change after it keeps it.
+  -- The newest token version the peer is owed. A successful push of this or a newer
+  -- version clears the row; a change after it keeps it.
   token_last_updated timestamptz not null,
-  attempts integer not null default 1 check (attempts > 0),
+  -- Failed attempts so far: 0 for a change whose first push is still under way.
+  attempts integer not null default 1 check (attempts >= 0),
   -- Safe to show: no tokens or peer data.
   last_error text not null default '' check (char_length(last_error) <= 300),
   next_attempt_at timestamptz not null,
@@ -120,5 +122,36 @@ as $$
 $$;
 revoke execute on function public.emsp_token_push_failed(uuid, uuid, timestamptz, text, timestamptz) from public, anon, authenticated;
 grant execute on function public.emsp_token_push_failed(uuid, uuid, timestamptz, text, timestamptz) to service_role;
+
+-- The outbox: every token change owes its new version to each registered peer with a
+-- tokens Receiver, in the same transaction as the change, so a push is never lost when
+-- the server dies before sending it. The first push follows at once from the server;
+-- the row becomes due for the retry job a minute later in case it never did.
+create function public.emsp_tokens_owe_push() returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  insert into public.emsp_token_pushes as q (
+    peer_id, token_id, token_last_updated, attempts, last_error, next_attempt_at, updated_at
+  )
+  select p.id, new.id, new.last_updated, 0, '', new.last_updated + interval '1 minute', now()
+  from public.emsp_ocpi_peers as p
+  where p.status = 'registered'
+    and p.token_ciphertext is not null
+    and p.endpoints @> '[{"identifier": "tokens", "role": "RECEIVER"}]'::jsonb
+  on conflict (peer_id, token_id) do update set
+    token_last_updated = greatest(q.token_last_updated, excluded.token_last_updated),
+    next_attempt_at = least(q.next_attempt_at, excluded.next_attempt_at),
+    updated_at = excluded.updated_at;
+  return null;
+end;
+$$;
+revoke execute on function public.emsp_tokens_owe_push() from public, anon, authenticated;
+
+create trigger emsp_tokens_owe_push
+  after insert or update on public.emsp_tokens
+  for each row execute function public.emsp_tokens_owe_push();
 
 commit;

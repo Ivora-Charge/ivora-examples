@@ -13,20 +13,20 @@ import {
 } from "./actions";
 
 const WHITELISTS = [
-  ["ALLOWED", "ALLOWED: ask us; charge if we cannot answer"],
   [
     "ALLOWED_OFFLINE",
-    "ALLOWED_OFFLINE: ask us; charge only if the charger is offline",
+    "ALLOWED_OFFLINE (default): CPO must ask us; charges unasked only if it cannot reach us",
   ],
-  ["NEVER", "NEVER: always ask us"],
-  ["ALWAYS", "ALWAYS: never ask us"],
+  ["NEVER", "NEVER: CPO must ask us; no answer, no charging"],
+  ["ALLOWED", "ALLOWED: CPO may charge unasked, even while it can reach us"],
+  ["ALWAYS", "ALWAYS: CPO never asks us"],
 ] as const;
 
 function WhitelistField() {
   return (
     <label>
       Whitelist
-      <select name="whitelist" defaultValue="ALLOWED">
+      <select name="whitelist" defaultValue="ALLOWED_OFFLINE">
         {WHITELISTS.map(([value, label]) => (
           <option key={value} value={value}>
             {label}

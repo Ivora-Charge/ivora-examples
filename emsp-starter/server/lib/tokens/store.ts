@@ -1,6 +1,8 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import type { PeerStore } from "@/lib/ocpi/store";
 import type { WhitelistType } from "@/lib/ocpi/token-objects";
+import { tokenReceivers } from "./push";
 
 /**
  * Our drivers' tokens: what this eMSP issues and CPOs authorize against. Each driver
@@ -8,8 +10,10 @@ import type { WhitelistType } from "@/lib/ocpi/token-objects";
  * with its contract ID, and any number of RFID cards that share that contract ID and
  * group ID.
  *
- * Also the push queue: a peer that missed a token change (its Tokens Receiver failed)
- * is owed the token's current version, and gets it on the next retry.
+ * Also the push outbox: inserting or changing a token records, in the same write, that
+ * every registered peer with a tokens Receiver is owed the new version. A successful
+ * push clears that; a failed one (or a server that died before pushing) leaves it for
+ * the retry job, which sends the token's current version.
  */
 export type DriverTokenType = "APP_USER" | "RFID";
 export type TokenStatus = "active" | "blocked" | "expired";
@@ -63,8 +67,9 @@ export type PageQuery = {
 export type PendingPush = {
   peerId: string;
   tokenId: string;
-  /** The token's last_updated when the push failed: a later success clears it. */
+  /** The newest version owed: a push of it, or of a later one, clears it. */
   tokenLastUpdated: string;
+  /** Failed attempts: 0 while the first push is still under way. */
   attempts: number;
   /** Safe to show: no tokens or peer data. */
   lastError: string;
@@ -78,8 +83,14 @@ export const MAX_PUSH_BACKOFF_MS = 6 * 60 * 60 * 1000;
 export const pushBackoffMs = (attempts: number) =>
   Math.min(MAX_PUSH_BACKOFF_MS, 60_000 * 2 ** Math.max(0, attempts - 1));
 
+/** How long a change's first push may take before the retry job sends it instead. */
+export const FIRST_PUSH_GRACE_MS = 60_000;
+
 export interface TokenStore {
-  /** Null when a token with this uid and type exists already. */
+  /**
+   * Null when a token with this uid and type exists already. Like updateToken, owes
+   * the token to every peer with a tokens Receiver, in the same write.
+   */
   insertToken(token: NewDriverToken): Promise<DriverToken | null>;
   getToken(uid: string, type: DriverTokenType): Promise<DriverToken | null>;
   getTokenById(id: string): Promise<DriverToken | null>;
@@ -87,7 +98,8 @@ export interface TokenStore {
   listByDriver(driverRef: string): Promise<DriverToken[]>;
   /**
    * Changes a token only if its revision is still `expectedRevision`. Null when another
-   * change got there first: read again and retry.
+   * change got there first: read again and retry. A change owes the new version to
+   * every peer with a tokens Receiver, in the same write (the outbox).
    */
   updateToken(
     id: string,
@@ -121,12 +133,48 @@ export interface TokenStore {
 
 const ms = (iso: string) => Date.parse(iso);
 
-/** Tokens in memory: for demo mode (nothing persists) and for tests. */
+/**
+ * Tokens in memory: for demo mode (nothing persists) and for tests. With `peers`, it
+ * keeps the outbox like the database's trigger does; demo mode pushes nothing and
+ * passes none.
+ */
 export class MemoryTokenStore implements TokenStore {
   readonly tokens = new Map<string, DriverToken>();
   readonly pushes = new Map<string, PendingPush>();
 
+  constructor(private readonly peers?: PeerStore) {}
+
+  private async receivers(): Promise<string[]> {
+    return (await tokenReceivers(this.peers!)).map((p) => p.id);
+  }
+
+  /** Owes `t` to `peerIds`: the database's emsp_tokens_owe_push trigger. */
+  private owe(t: DriverToken, peerIds: string[]) {
+    const due = ms(t.lastUpdated) + FIRST_PUSH_GRACE_MS;
+    for (const peerId of peerIds) {
+      const key = `${peerId}:${t.id}`;
+      const held = this.pushes.get(key);
+      this.pushes.set(key, {
+        peerId,
+        tokenId: t.id,
+        tokenLastUpdated:
+          held && ms(held.tokenLastUpdated) > ms(t.lastUpdated)
+            ? held.tokenLastUpdated
+            : t.lastUpdated,
+        attempts: held?.attempts ?? 0,
+        lastError: held?.lastError ?? "",
+        nextAttemptAt: new Date(
+          held ? Math.min(ms(held.nextAttemptAt), due) : due,
+        ).toISOString(),
+      });
+    }
+  }
+
   async insertToken(t: NewDriverToken) {
+    // Reads the peers first: from here on nothing awaits, so the check and the writes
+    // are one step, like a transaction. Without peers nothing awaits at all, which
+    // demoTokenStore relies on.
+    const owed = this.peers ? await this.receivers() : [];
     for (const held of this.tokens.values()) {
       if (held.uid === t.uid && held.type === t.type) return null;
       // Like the database's unique indexes: one APP_USER per driver, one contract per driver.
@@ -145,6 +193,7 @@ export class MemoryTokenStore implements TokenStore {
       revision: randomUUID(),
     };
     this.tokens.set(token.id, token);
+    this.owe(token, owed);
     return structuredClone(token);
   }
 
@@ -171,9 +220,11 @@ export class MemoryTokenStore implements TokenStore {
   }
 
   async updateToken(id: string, patch: TokenPatch, expectedRevision: string) {
+    const owed = this.peers ? await this.receivers() : [];
     const t = this.tokens.get(id);
     if (!t || t.revision !== expectedRevision) return null;
     Object.assign(t, structuredClone(patch), { revision: randomUUID() });
+    this.owe(t, owed);
     return structuredClone(t);
   }
 

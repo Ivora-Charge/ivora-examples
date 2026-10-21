@@ -37,8 +37,20 @@ export class TokenError extends Error {
   }
 }
 
-/** Default whitelist: the CPO asks us in real time, and may let the driver charge if we cannot answer. */
-export const DEFAULT_WHITELIST: WhitelistType = "ALLOWED";
+/**
+ * When a CPO may let a token charge without asking us (OCPI 2.2.1 WhitelistType):
+ *
+ * - ALWAYS: never asks; blocks and expiries reach it only through pushes.
+ * - ALLOWED: may ask, or may let the token charge from its cached copy, even while we
+ *   are reachable.
+ * - ALLOWED_OFFLINE: must ask us in real time; may let the token charge from its
+ *   cached copy only when it cannot reach us.
+ * - NEVER: must ask us in real time; no answer, no charging.
+ *
+ * The default, ALLOWED_OFFLINE, keeps every block, expiry and (from part 7) NO_CREDIT
+ * checked while we are reachable, and lets drivers charge through an outage.
+ */
+export const DEFAULT_WHITELIST: WhitelistType = "ALLOWED_OFFLINE";
 
 /** Attempts at a compare-and-swap change before giving up. */
 const MAX_ATTEMPTS = 5;
@@ -84,10 +96,9 @@ async function audit(
     actor: deps.actor,
     action,
     subjectId: t.id,
+    // subjectId names the token; the details never repeat its uid or driver.
     details: {
       type: t.type,
-      uid: t.uid,
-      driver_ref: t.driverRef,
       ...details,
       pushed_to: pushes.filter((p) => p.ok).map((p) => p.peerId),
       queued_for: pushes.filter((p) => !p.ok).map((p) => p.peerId),
