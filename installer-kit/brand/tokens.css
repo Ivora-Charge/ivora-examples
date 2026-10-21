@@ -1,0 +1,42 @@
+/*
+ * Lugline brand tokens: the only place for colour, type, radius and spacing.
+ * Colours are light-dark(<light>, <dark>). The page follows the system
+ * setting; the header toggle sets data-theme="light" or "dark" on <html>.
+ * tests/contrast.test.ts checks every text pair against WCAG AA (4.5:1).
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Colour */
+  --bg: light-dark(#f3f0e6, #0f1214); /* page: warm concrete / garage black */
+  --surface: light-dark(#ffffff, #1a1f22); /* cards, inputs */
+  --ink: light-dark(#14181b, #f2efe6); /* text, borders */
+  --muted: light-dark(#4a524f, #a9b1ac); /* secondary text */
+  --accent: light-dark(#b34700, #ffa62b); /* safety orange: primary action */
+  --on-accent: light-dark(#ffffff, #14181b); /* text on accent */
+  --ok: light-dark(#116b3a, #4fd08a); /* online, passed */
+  --danger: light-dark(#b0200f, #ff8a78); /* errors, failed */
+
+  /* Type (families come from brand/fonts.ts through next/font) */
+  --font-body: var(--font-barlow), sans-serif;
+  --font-head: var(--font-barlow-condensed), var(--font-body);
+  --font-mono: var(--font-jetbrains-mono), monospace;
+  --text-label: 0.8rem;
+  --text-mono: 0.95rem;
+  --text-h2: 1.5rem;
+  --text-h1: 2.5rem;
+  --text-button: 1.1rem;
+
+  /* Shape and space */
+  --radius: 6px;
+  --border: 2px;
+  --shadow: 5px 5px 0;
+  --target: 48px;
+  --space: 1rem;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}

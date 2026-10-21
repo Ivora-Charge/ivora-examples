@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { brand as copy } from "../../brand/brand";
 import { describe } from "@/lib/status";
 import { formatCents, quoteCents } from "@/lib/tariff";
 import type { Charger, ConfigKey, LocationOption, Site } from "@/lib/types";
@@ -80,6 +81,39 @@ function Copy({ value, label }: { value: string; label: string }) {
     >
       {done ? "Copied" : "Copy"}
     </button>
+  );
+}
+
+const STEPS = ["Site", "Connect charger", "Test", "Price", "Hand over"];
+
+/** Desktop step rail; on phones CSS turns it into "Step n of 5" and segments. */
+function Steps({ now }: { now: number }) {
+  return (
+    <nav className="steps" aria-label="Progress">
+      <p className="steps-count" aria-hidden="true">
+        Step {now} of {STEPS.length}
+      </p>
+      <ol>
+        {STEPS.map((name, i) => {
+          const n = i + 1;
+          const state = n < now ? "done" : n === now ? "now" : "next";
+          return (
+            <li key={name} className={state}>
+              {state === "done" ? (
+                <a href={`#step-${n}`}>
+                  {name}
+                  <span className="sr">, done</span>
+                </a>
+              ) : (
+                <span aria-current={state === "now" ? "step" : undefined}>
+                  {name}
+                </span>
+              )}
+            </li>
+          );
+        })}
+      </ol>
+    </nav>
   );
 }
 
@@ -186,11 +220,22 @@ export default function Wizard({
     </label>
   );
 
+  const step = !site
+    ? 1
+    : charger?.state !== "booted"
+      ? 2
+      : charger.test?.phase !== "done"
+        ? 3
+        : charger.tariffCentsPerKwh === undefined
+          ? 4
+          : 5;
+
   return (
-    <>
+    <div className="wizard">
+      <Steps now={step} />
       {error && <ErrorNote e={error} />}
 
-      <section>
+      <section id="step-1">
         <h2>1. Site</h2>
         {site ? (
           <p>
@@ -253,8 +298,8 @@ export default function Wizard({
       </section>
 
       {site && (
-        <section>
-          <h2>2. Add charger</h2>
+        <section id="step-2">
+          <h2>2. Connect charger</h2>
           {!created ? (
             <form
               className="row"
@@ -370,10 +415,18 @@ export default function Wizard({
 
       {charger && (
         <section aria-live="polite">
-          <h2>3. Connection</h2>
-          <p className={`status ${charger.state}`}>{status.label}</p>
+          <h2>Online check</h2>
+          {charger.state === "booted" ? (
+            <p className="status live">Charger online. {status.label}.</p>
+          ) : (
+            <>
+              <p className="status">{status.label}</p>
+              <p className="hint">{copy.connectHint}</p>
+            </>
+          )}
+          {status.hints.length > 0 && <p className="muted">{copy.support}</p>}
           {status.hints.length > 0 && (
-            <ul className="hints">
+            <ul>
               {status.hints.map((h) => (
                 <li key={h}>{h}</li>
               ))}
@@ -399,8 +452,8 @@ export default function Wizard({
 
       {charger?.state === "booted" && (
         <>
-          <section>
-            <h2>4. Test</h2>
+          <section id="step-3">
+            <h2>3. Test</h2>
             <div className="row">
               <label>
                 Connector
@@ -542,8 +595,8 @@ export default function Wizard({
             )}
           </section>
 
-          <section>
-            <h2>5. Price (optional)</h2>
+          <section id="step-4">
+            <h2>4. Price (optional)</h2>
             <form
               className="row"
               onSubmit={(e) => {
@@ -589,8 +642,8 @@ export default function Wizard({
             </p>
           </section>
 
-          <section>
-            <h2>6. Hand-over</h2>
+          <section id="step-5">
+            <h2>5. Hand over</h2>
             {qrProblem && (
               <p role="alert" className="error">
                 Stickers are disabled: {qrProblem}
@@ -621,7 +674,7 @@ export default function Wizard({
           </section>
         </>
       )}
-    </>
+    </div>
   );
 }
 
@@ -641,27 +694,30 @@ function Credentials({
     <>
       <dl>
         <dt>Connection URL</dt>
-        <dd>
-          <code>{c.connectionUrl}</code>{" "}
+        <dd className="value">
+          <code title={c.connectionUrl}>{c.connectionUrl}</code>
           <Copy value={c.connectionUrl} label="connection URL" />
         </dd>
         <dt>Charge point ID / user</dt>
-        <dd>
-          <code>{c.username}</code> <Copy value={c.username} label="user" />
+        <dd className="value">
+          <code title={c.username}>{c.username}</code>
+          <Copy value={c.username} label="user" />
         </dd>
         <dt>Password</dt>
-        <dd>
+        <dd className="value">
           {created.password ? (
             <>
-              <code data-testid="password">{created.password}</code>{" "}
-              <Copy value={created.password} label="password" />{" "}
+              <code data-testid="password" title={created.password}>
+                {created.password}
+              </code>
+              <Copy value={created.password} label="password" />
               <button type="button" className="secondary" onClick={onHide}>
                 Hide
               </button>
             </>
           ) : (
             <>
-              <code>{c.passwordMasked}</code>{" "}
+              <code>{c.passwordMasked}</code>
               <button
                 type="button"
                 className="secondary"
