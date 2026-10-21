@@ -7,6 +7,7 @@ import { resetStoreForTests } from "@/lib/server/store";
 import { POST as addChargerRoute } from "@/app/api/chargers/route";
 import { GET as getCharger } from "@/app/api/chargers/[id]/route";
 import { POST as testRoute } from "@/app/api/chargers/[id]/test/route";
+import { POST as inServiceRoute } from "@/app/api/chargers/[id]/in-service/route";
 import { POST as configRoute } from "@/app/api/chargers/[id]/config/route";
 import { GET as stickerRoute } from "@/app/api/chargers/[id]/sticker/route";
 import { GET as reportRoute } from "@/app/api/chargers/[id]/report/route";
@@ -172,6 +173,17 @@ describe("demo mode end to end", () => {
         .toString(),
     ).toBe("%PDF-");
 
+    // Mark in service: recorded with its time, and tests are refused after it.
+    charger = await (
+      await inServiceRoute(post(`/api/chargers/${id}/in-service`, {}), ctx(id))
+    ).json();
+    expect(charger.inServiceAt).toBe(new Date().toISOString());
+    const refused = await testRoute(
+      post(`/api/chargers/${id}/test`, { action: "start", connector: 1 }),
+      ctx(id),
+    );
+    expect(refused.status).toBe(409);
+    expect(await refused.json()).toMatchObject({ error: "in_service" });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

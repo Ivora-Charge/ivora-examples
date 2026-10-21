@@ -5,6 +5,7 @@ import {
   addCharger,
   createSite,
   refresh,
+  markInService,
   setBackendForTests,
   startTest,
   stopTest,
@@ -232,5 +233,26 @@ describe("test session start and stop", () => {
     ]);
     expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
     expect(fake.state.starts).toHaveLength(1);
+  });
+
+  it("refuses a test start once the charger is marked in service", async () => {
+    const c = markInService(id);
+    expect(c.inServiceAt).toBe(iso(0));
+    // Repeating it keeps the first time.
+    vi.setSystemTime(NOW + 5_000);
+    expect(markInService(id).inServiceAt).toBe(iso(0));
+    // A stale page that still shows the Start button gets a 409.
+    await expect(startTest(id, 1)).rejects.toMatchObject({
+      status: 409,
+      code: "in_service",
+    });
+    expect(fake.state.starts).toEqual([]);
+  });
+
+  it("will not mark in service while a test is running", async () => {
+    await startTest(id, 1);
+    expect(() => markInService(id)).toThrowError(
+      expect.objectContaining({ code: "test_running" }),
+    );
   });
 });

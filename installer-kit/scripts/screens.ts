@@ -49,6 +49,8 @@ for (const [device, viewport] of Object.entries(VIEWPORTS)) {
       await expect(page.getByText(/^Passed/)).toBeVisible();
       await page.getByLabel("Price per kWh (cents)").fill("40");
       await page.getByRole("button", { name: "Add to report" }).click();
+      await page.getByRole("button", { name: "Mark in service" }).click();
+      await expect(page.getByText(/In service since 20/)).toBeVisible();
       await shot("handover");
       await ctx.close();
     });

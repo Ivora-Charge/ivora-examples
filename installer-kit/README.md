@@ -7,7 +7,7 @@ For installers and hardware sellers: connect a site's OCPP 1.6J charger to Ivora
 3. **Wait for connection:** live status from webhooks (`station.connected`, `station.booted`, `station.disconnected`) and polling every 2 seconds. Shows vendor, model, firmware and connectors once the charger boots, with troubleshooting hints for a wrong URL, a wrong password or no network.
 4. **Test:** remote start and stop of a short session on a chosen connector, with energy delivered (kWh). Reads the heartbeat and meter value intervals back from the charger, and can change either and read it back again.
 5. **Price (optional):** a per-kWh price in integer cents with a quote preview, recorded on the report.
-6. **Hand-over:** a printable QR sticker PDF per connector and a commissioning report PDF (charger details, test result, configuration, date).
+6. **Hand-over:** a printable QR sticker PDF per connector and a commissioning report PDF (charger details, test result, configuration, date, in-service time). **Mark in service** records the time on the charger; after that the kit refuses to start a test on it (`409 in_service`).
 
 This template collects no payments. For paid charging, see [forecourt-checkout](../forecourt-checkout) and [Squid](https://github.com/Ivora-Charge/squid).
 
@@ -112,7 +112,7 @@ All calls go from the server to `https://api.ivoracharge.com` ([OpenAPI](https:/
 - Every write sends an `Idempotency-Key` derived from this app's record and action (for example `<charger>:test:2:start`). Retries after `429`, `5xx`, a lost response, `request_in_progress` or `outcome_unknown` reuse the same key; other `4xx` errors are not retried. `429` waits for `Retry-After` when it is 10 seconds or less, otherwise the error goes back to the operator.
 - Locations and stations carry an `external_reference`, so an uncertain create is adopted instead of duplicated.
 - Errors show the API's code, message and request ID with a link to [Errors and statuses](https://ivoracharge.com/developers/guides/reference/errors).
-- The test session starts with the operator ID tag `INSTALLER-TEST`. A start is an operator command and authorizes no payment. Energy is 0 kWh if no vehicle is plugged in; the test passes when the charger accepts the remote start and stop and reports the transaction.
+- The test session starts with the operator ID tag `INSTALLER-TEST`. A start is an operator command and authorizes no payment. The kit labels these sessions "Test session (not billed)" in the wizard, the quote preview and the report. **These sessions appear in Ivora under the `INSTALLER-TEST` token: exclude that token from billing and revenue reports.** A commissioning tool runs before a charger is in service, so Mark in service (step 5) ends testing for that charger. Energy is 0 kWh if no vehicle is plugged in; the test passes when the charger accepts the remote start and stop and reports the transaction.
 - Units: OCPP 1.6 meter registers are Wh, session energy is shown in kWh (`src/lib/units.ts`), and money is integer cents.
 
 ## Limits and next steps

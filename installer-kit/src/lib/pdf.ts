@@ -7,7 +7,7 @@ import {
 } from "pdf-lib";
 import { qrPng } from "./qr";
 import { formatCents } from "./tariff";
-import type { Charger, Site } from "./types";
+import { TEST_SESSION_LABEL, type Charger, type Site } from "./types";
 import { formatKwh } from "./units";
 
 // Written from scratch for this template.
@@ -137,6 +137,7 @@ export async function reportPdf(opts: {
   line("Model", c.boot?.model ?? "-");
   line("Firmware", c.boot?.firmware ?? "-");
   line("Status", c.state);
+  line("In service", c.inServiceAt ?? "Not yet");
   line("Password", c.passwordSet ? "Set (not shown)" : "Not confirmed");
 
   heading("Connectors and stickers");
@@ -149,7 +150,7 @@ export async function reportPdf(opts: {
         : "-",
     );
 
-  heading("Test session");
+  heading(TEST_SESSION_LABEL);
   const t = c.test;
   line(
     "Result",
@@ -162,7 +163,7 @@ export async function reportPdf(opts: {
           : `In progress (${t.phase})`,
   );
   if (t) {
-    line("Energy delivered", formatKwh(t.energyWh));
+    line("Energy delivered", `${formatKwh(t.energyWh)} (test)`);
     line("Started", t.startedAt ?? "-");
     line("Finished", t.finishedAt ?? "-");
   }

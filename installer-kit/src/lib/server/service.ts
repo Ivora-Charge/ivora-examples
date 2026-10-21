@@ -244,8 +244,16 @@ const inProgress = (t?: TestRun) =>
   t &&
   (t.phase === "starting" || t.phase === "charging" || t.phase === "stopping");
 
+const inServiceError = () =>
+  new HttpError(
+    409,
+    "in_service",
+    "This charger is in service, so test sessions are no longer allowed. Use a normal charging session instead.",
+  );
+
 export async function startTest(id: string, connectorNumber?: number) {
   const c = await refresh(id);
+  if (c.inServiceAt) throw inServiceError();
   if (c.state !== "booted")
     throw new HttpError(
       409,
@@ -276,7 +284,8 @@ export async function startTest(id: string, connectorNumber?: number) {
       "That connector is not free. Wait until it is available, or pick another.",
     );
   // Nothing may be awaited between this check and setting the test, or two
-  // starts could both pass it.
+  // starts could both pass it, or one could start after Mark in service.
+  if (c.inServiceAt) throw inServiceError();
   if (inProgress(c.test))
     throw new HttpError(409, "test_running", "A test is already running.");
   const attempt = c.seq.test + 1;
@@ -316,6 +325,20 @@ function isRefusal(e: unknown) {
     (e instanceof IvoraError && e.refused) ||
     (e instanceof HttpError && e.code === "start_not_accepted")
   );
+}
+
+/** Record that the charger is handed over. Repeating it keeps the first time. */
+export function markInService(id: string): Charger {
+  const c = charger(id);
+  if (c.inServiceAt) return c;
+  if (inProgress(c.test))
+    throw new HttpError(
+      409,
+      "test_running",
+      "Stop the test session before marking the charger in service.",
+    );
+  c.inServiceAt = new Date().toISOString();
+  return c;
 }
 
 export async function stopTest(id: string) {
