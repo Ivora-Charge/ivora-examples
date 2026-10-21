@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { counter } from "@/lib/server/cashier";
 import { counterAllowed } from "@/lib/server/auth";
+import { trustedClient } from "@/lib/server/client";
 import { errorResponse } from "@/lib/server/http";
 import { settings } from "@/lib/server/services";
 import { UserError } from "@/lib/server/sessions";
@@ -16,9 +17,7 @@ export async function GET(
   try {
     const { code, connector } = await params;
     const s = settings();
-    const client =
-      request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
-    if (!counterAllowed(client))
+    if (!counterAllowed(trustedClient(request.headers)))
       throw new UserError(
         429,
         "rate_limited",

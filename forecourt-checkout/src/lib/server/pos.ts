@@ -9,6 +9,7 @@ import {
   type PosStatus,
 } from "../pos";
 import { SaleError, type PaymentMethod, type SaleView } from "../store";
+import { trustedClient } from "./client";
 import { UserError } from "./sessions";
 
 // Inbound POS endpoints: POST /api/pos/mark-paid and GET /api/pos/sessions.
@@ -132,5 +133,10 @@ export class RateLimiter {
   }
 }
 
+/**
+ * The key for the POS limits: trustedClient(), or one shared bucket for every
+ * caller when no trusted source gives an address, so token guessing stays
+ * limited (a flood can then hold back the real POS too).
+ */
 export const clientOf = (request: Request) =>
-  request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  trustedClient(request.headers) ?? "shared";

@@ -113,7 +113,7 @@ npm run test:e2e    # Playwright, demo end to end: card flow on a phone; in-stor
 | `TYPICAL_SESSION_MINUTES`     | No       | Default `25`.                                                                                                                        |
 | `IVORA_API_URL`               | No       | Default `https://api.ivoracharge.com`.                                                                                               |
 | `DEMO_MODE`                   | No       | `1` forces demo mode.                                                                                                                |
-| `TRUSTED_PROXY_HEADER`        | No       | Off Vercel: the header your proxy sets to the client address, for login limits. See [Security](#security).                           |
+| `TRUSTED_PROXY_HEADER`        | No       | Off Vercel: the header your proxy sets to the client address, for every rate limit. See [Security](#security).                       |
 
 `.env.example` lists them all. Never commit a real `.env` file.
 
@@ -198,7 +198,7 @@ If the charger rejects a stop, the app retries it with a new idempotency key (`:
 
 The QR page offers "Pay here by card" (unchanged) and "Pay at the counter: tell the cashier Charger 3". The counter page shows the number large, then live status once the cashier starts the charger: energy, power, cost against the prepaid amount, "please move your car", and finally the amount due or the change to collect.
 
-The counter page's API (`GET /api/counter/<code>/<connector>`) is public, so it answers only what the driver needs (status, energy, time, the amount due or change; no sale ID, payments or POS references), reuses one answer per charger for 5 seconds on each server instance, and allows 60 reads a minute per client.
+The counter page's API (`GET /api/counter/<code>/<connector>`) is public, so it answers only what the driver needs (status, energy, time, the amount due or change; no sale ID, payments or POS references), reuses one answer per charger for 5 seconds on each server instance, and allows 60 reads a minute per client. The client address comes from the same trusted source as the logins (see [Security](#security)); without one, there is no per-client limit, since every driver at a busy site would share it, only a site-wide cap of 6,000 reads a minute per server instance that normal polling (one read every 2 seconds or more per driver) can't reach.
 
 ### Receipts
 
@@ -206,7 +206,7 @@ The counter page's API (`GET /api/counter/<code>/<connector>`) is public, so it 
 
 ### Emailed receipts
 
-Optional. With `RESEND_API_KEY` and `RECEIPT_EMAIL_FROM` set, the receipt page has an "Email receipt" form. The cashier types the driver's address; it is sent once to the provider with the receipt and is **never stored**: not in Ivora, a cookie, a URL or the logs (logs show only the sale ID and the provider's message ID). Each tap carries its own idempotency key, so a retry after a timeout doesn't send twice. The form is rate-limited to 20 a minute per signed-in console and client IP, per server instance, so one busy till doesn't hold back the others.
+Optional. With `RESEND_API_KEY` and `RECEIPT_EMAIL_FROM` set, the receipt page has an "Email receipt" form. The cashier types the driver's address; it is sent once to the provider with the receipt and is **never stored**: not in Ivora, a cookie, a URL or the logs (logs show only the sale ID and the provider's message ID). Each tap carries its own idempotency key, so a retry after a timeout doesn't send twice. The form is rate-limited to 20 a minute per signed-in console (its login alone, not the client address, which could be forged), per server instance, so one busy till doesn't hold back the others.
 
 Any provider fits behind the `ReceiptMailer` interface in `src/lib/server/mailer.ts` (one `send()` method); `ResendMailer` is the example. To use another provider, implement the interface and return it from `receiptMailer()` in `src/lib/server/services.ts`. Demo mode has no mailer at all and shows the email that would be sent instead; a unit test checks that demo mode never sends.
 
@@ -222,7 +222,7 @@ Any provider fits behind the `ReceiptMailer` interface in `src/lib/server/mailer
 - A charger is only started by the cashier's "Authorise" or "Confirm … paid and start", which require the cashier (or operator) cookie. Reading a sale never starts it: a session that was created but not started (for example after a lost response) is canceled after 2 minutes, and the cashier taps again.
 - Starts, stops, cancels, finalizes and reports use idempotency keys from the sale ID and action (`forecourt:store:<sale ID>:start`, `:stop` and so on). The same tap reuses the same sale ID, so a retry after a timeout never starts twice. A stop the cashier presses and the automatic prepay stop share one key per attempt.
 - Idle fees apply in both flows with `IDLE_GRACE_MINUTES`.
-- The cashier password is separate from the operator one. A cashier can authorise, stop and mark paid; the operator pages (prices, settings) stay closed to it. An operator can also use the console. Both logins are rate-limited per client, separately (10 attempts per 15 minutes per server instance). The client address comes only from a trusted source: on Vercel, Vercel's own `x-vercel-forwarded-for`; elsewhere, set `TRUSTED_PROXY_HEADER` to the header your proxy or CDN sets (for example `cf-connecting-ip`, or `x-forwarded-for` from a proxy that appends to it; the last entry is used). A plain `x-forwarded-for` from the client is never trusted, since it could be rotated for unlimited guesses. Without a trusted source, every caller shares one bucket per role, so guessing stays limited, but a single shared bucket can lock out real cashiers while the login is under attack. Changing `CASHIER_PASSWORD` signs every cashier out; logging out only accepts same-origin requests.
+- The cashier password is separate from the operator one. A cashier can authorise, stop and mark paid; the operator pages (prices, settings) stay closed to it. An operator can also use the console. Both logins are rate-limited per client, separately (10 attempts per 15 minutes per server instance). The client address comes only from a trusted source: on Vercel, Vercel's own `x-vercel-forwarded-for`; elsewhere, set `TRUSTED_PROXY_HEADER` to the header your proxy or CDN sets (for example `cf-connecting-ip`, or `x-forwarded-for` from a proxy that appends to it; the last entry is used). A plain `x-forwarded-for` from the client is never trusted, since it could be rotated for unlimited guesses. The same source keys the POS and driver-screen limits (`src/lib/server/client.ts`). Without a trusted source, every caller shares one bucket per role, so guessing stays limited, but a single shared bucket can lock out real cashiers while the login is under attack. Changing `CASHIER_PASSWORD` signs every cashier out; logging out only accepts same-origin requests.
 
 ### What is stored
 
@@ -271,7 +271,7 @@ function verify(rawBody, header, secret) {
 }
 ```
 
-**Inbound REST.** With `POS_API_SECRET` set (and pay in store on), the POS calls the app with `Authorization: Bearer <POS_API_SECRET>`, compared in constant time. Both endpoints are rate-limited per client (30 and 60 a minute per server instance), and the logs show only sale IDs, never the token.
+**Inbound REST.** With `POS_API_SECRET` set (and pay in store on), the POS calls the app with `Authorization: Bearer <POS_API_SECRET>`, compared in constant time. Both endpoints are rate-limited per client (30 and 60 a minute per server instance), and the logs show only sale IDs, never the token. The client address comes from the same trusted source as the logins (see [Security](#security)). Without one, every caller shares one bucket per endpoint, so token guessing stays limited, but a flood of guesses can then hold back the real POS too; set `TRUSTED_PROXY_HEADER` off Vercel to avoid that.
 
 `POST /api/pos/mark-paid` records that the POS took the money, through the same `markSalePaid()` as the console's "Mark paid", so Ivora gets exactly the same settlement report. `amount_minor` must be what the final bill leaves to collect (the `amount_due_minor` from the webhook, or from the sessions list).
 

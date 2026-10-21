@@ -7,7 +7,7 @@ import {
 } from "@/lib/server/cashier";
 import { consoleLogin } from "@/lib/server/auth";
 import { errorResponse } from "@/lib/server/http";
-import { clientOf, RateLimiter } from "@/lib/server/pos";
+import { RateLimiter } from "@/lib/server/pos";
 import { UserError } from "@/lib/server/sessions";
 import { cashierRequest, noStore } from "@/lib/server/cashier-guard";
 
@@ -34,7 +34,8 @@ const email = z.object({
 });
 
 // Emailed receipts: a brake per server instance on how many one signed-in
-// console sends from one client, so one busy till doesn't block the others.
+// console sends, so one busy till doesn't block the others. Keyed on the login
+// alone: a client address could be forged to get a fresh quota.
 const emails = new RateLimiter(20);
 
 /** Stop, mark paid, give change, email the receipt, or (demo only) unplug. */
@@ -47,7 +48,7 @@ export async function POST(
     const { sale, action } = await params;
     if (action === "email") {
       const login = (await consoleLogin(s)) ?? "none";
-      if (!emails.allow(`${login}|${clientOf(request)}`))
+      if (!emails.allow(login))
         throw new UserError(
           429,
           "rate_limited",

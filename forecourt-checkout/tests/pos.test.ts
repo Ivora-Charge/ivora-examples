@@ -449,12 +449,52 @@ describe("POS routes", () => {
 
   it("rate-limit mark-paid per client, before checking the token", async () => {
     const { POST } = await import("@/app/api/pos/mark-paid/route");
-    stub({ ...live, POS_API_SECRET: "pos_secret_1" });
+    stub({
+      ...live,
+      POS_API_SECRET: "pos_secret_1",
+      TRUSTED_PROXY_HEADER: "x-forwarded-for",
+    });
     const codes: number[] = [];
     for (let i = 0; i < 31; i++)
       codes.push((await POST(post("Bearer guess", {}, "10.0.9.9"))).status);
     expect(codes.slice(0, 30).every((c) => c === 401)).toBe(true);
     expect(codes[30]).toBe(429);
+    // Another client, by the trusted header, has its own quota.
+    expect((await POST(post("Bearer guess", {}, "10.0.9.10"))).status).toBe(
+      401,
+    );
+  });
+
+  it("give a forged x-forwarded-for no fresh quota without a trusted source", async () => {
+    const { POST } = await import("@/app/api/pos/mark-paid/route");
+    const { GET } = await import("@/app/api/pos/sessions/route");
+    stub({
+      ...live,
+      POS_API_SECRET: "pos_secret_1",
+      TRUSTED_PROXY_HEADER: "",
+      VERCEL: "",
+    });
+    const paid: number[] = [];
+    for (let i = 0; i < 31; i++)
+      paid.push(
+        (await POST(post("Bearer guess", {}, `198.51.100.${i}`))).status,
+      );
+    expect(paid.at(-1)).toBe(429);
+    const list: number[] = [];
+    for (let i = 0; i < 61; i++)
+      list.push(
+        (
+          await GET(
+            new Request("https://charge.example.com/api/pos/sessions", {
+              headers: {
+                authorization: "Bearer guess",
+                "x-forwarded-for": `198.51.100.${i}`,
+              },
+            }),
+          )
+        ).status,
+      );
+    expect(list.at(-1)).toBe(429);
   });
 });
 

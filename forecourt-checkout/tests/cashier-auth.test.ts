@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 // The cashier role can use the console; it never opens the operator pages.
 
@@ -8,8 +8,14 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({
     get: (name: string) =>
       jar.has(name) ? { name, value: jar.get(name)! } : undefined,
+    set: (name: string, value: string) => void jar.set(name, value),
   }),
 }));
+
+afterEach(() => {
+  jar.clear();
+  vi.unstubAllEnvs();
+});
 
 describe("cashier and operator roles", () => {
   const post = () =>
@@ -44,7 +50,6 @@ describe("cashier and operator roles", () => {
         }),
       ),
     ).rejects.toMatchObject({ status: 403 });
-    vi.unstubAllEnvs();
   });
 
   it("rate-limits each login separately", async () => {
@@ -58,7 +63,9 @@ describe("cashier and operator roles", () => {
 
   it("keys login limits on a trusted header only", async () => {
     const { loginClient } = await import("@/lib/server/auth");
+    const { trustedClient } = await import("@/lib/server/client");
     const h = (v: Record<string, string>) => new Headers(v);
+    expect(trustedClient(h({ "x-forwarded-for": "1.1.1.1" }), {})).toBeNull();
     // No trusted source: a spoofed x-forwarded-for shares one bucket.
     expect(loginClient(h({ "x-forwarded-for": "1.1.1.1" }), {})).toBe("shared");
     expect(loginClient(h({ "x-forwarded-for": "2.2.2.2" }), {})).toBe("shared");
@@ -107,7 +114,6 @@ describe("cashier and operator roles", () => {
     let last = "";
     for (let i = 0; i < 12; i++) last = await attempt(`198.51.100.${i}`);
     expect(last).toContain("too_many_attempts");
-    vi.unstubAllEnvs();
   });
 
   it("signs cashiers out when CASHIER_PASSWORD changes", async () => {
@@ -121,8 +127,6 @@ describe("cashier and operator roles", () => {
     await expect(cashierRequest(post())).resolves.toBeTruthy();
     vi.stubEnv("CASHIER_PASSWORD", "second-password");
     await expect(cashierRequest(post())).rejects.toMatchObject({ status: 401 });
-    jar.clear();
-    vi.unstubAllEnvs();
   });
 
   it("caps how often one client reads the driver's screen", async () => {
@@ -132,9 +136,31 @@ describe("cashier and operator roles", () => {
     expect(counterAllowed("5.6.7.8", T0)).toBe(false);
     expect(counterAllowed("5.6.7.9", T0)).toBe(true);
     expect(counterAllowed("5.6.7.8", T0 + 61_000)).toBe(true);
+    // No trusted address: one site-wide cap far above normal polling.
+    for (let i = 0; i < 6000; i++) expect(counterAllowed(null, T0)).toBe(true);
+    expect(counterAllowed(null, T0)).toBe(false);
   });
 
-  it("rate-limits emailed receipts per signed-in console and client, not for the whole site", async () => {
+  it("lets many drivers poll the counter screen at once without a trusted address", async () => {
+    vi.stubEnv("DEMO_MODE", "1");
+    vi.stubEnv("TRUSTED_PROXY_HEADER", "");
+    vi.stubEnv("VERCEL", "");
+    const { GET } = await import("@/app/api/counter/[code]/[connector]/route");
+    const poll = (ip: string) =>
+      GET(
+        new Request("http://localhost/api/counter/DEMO-4/1", {
+          headers: { "x-forwarded-for": ip },
+        }),
+        { params: Promise.resolve({ code: "DEMO-4", connector: "1" }) },
+      ).then((r) => r.status);
+    // 20 drivers, a few minutes' worth of polls each, well past 60 a client.
+    const codes: number[] = [];
+    for (let round = 0; round < 5; round++)
+      for (let d = 0; d < 20; d++) codes.push(await poll(`203.0.113.${d}`));
+    expect(codes.filter((c) => c !== 200)).toEqual([]);
+  });
+
+  it("rate-limits emailed receipts per signed-in console, not for the whole site", async () => {
     vi.stubEnv("DEMO_MODE", "1");
     const auth = await import("@/lib/server/auth");
     const { settings: read } = await import("@/lib/server/services");
@@ -173,10 +199,8 @@ describe("cashier and operator roles", () => {
     };
     for (let i = 0; i < 20; i++) expect(await send("a", "10.1.0.1")).toBe(400);
     expect(await send("a", "10.1.0.1")).toBe(429);
-    // Another till, or the same login from another client, isn't held back.
+    // A forged x-forwarded-for gets no fresh quota; another till isn't held back.
+    expect(await send("a", "10.1.0.2")).toBe(429);
     expect(await send("b", "10.1.0.1")).toBe(400);
-    expect(await send("a", "10.1.0.2")).toBe(400);
-    jar.clear();
-    vi.unstubAllEnvs();
   });
 });
