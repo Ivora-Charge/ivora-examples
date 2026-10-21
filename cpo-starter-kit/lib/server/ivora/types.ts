@@ -5,6 +5,14 @@ import "server-only";
 
 export interface Page<T> {
   data: T[];
+  /** Pass as `after` for the next page. Absent, null or 0 on the last page. */
+  next_cursor?: number | null;
+}
+
+/** Every page of a list, up to a ceiling; `truncated` says the ceiling was hit. */
+export interface Listed<T> {
+  data: T[];
+  truncated: boolean;
 }
 
 export interface Location {
@@ -72,9 +80,13 @@ export interface ListOptions {
  */
 export interface IvoraClient {
   readonly mode: "live" | "demo";
+  /** One page (up to 100). */
   listLocations(o?: ListOptions): Promise<Location[]>;
+  /** Every page, up to MAX_LIST_PAGES pages. */
+  listAllLocations(): Promise<Listed<Location>>;
   createLocation(input: LocationInput, key: string): Promise<Location>;
   listStations(o?: ListOptions): Promise<Station[]>;
+  listAllStations(): Promise<Listed<Station>>;
   getStation(stationId: number): Promise<Station>;
   listTransactions(o?: {
     limit?: number;

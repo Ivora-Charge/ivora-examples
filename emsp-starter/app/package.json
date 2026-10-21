@@ -1,0 +1,46 @@
+{
+  "name": "emsp-starter-app",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "main": "expo-router/entry",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "expo start",
+    "start": "expo start",
+    "web": "expo start --web",
+    "ios": "expo start --ios",
+    "android": "expo start --android",
+    "build": "expo export --platform web",
+    "serve": "expo serve",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@expo/metro-runtime": "~58.0.14",
+    "expo": "~58.0.16",
+    "expo-constants": "~58.0.12",
+    "expo-linking": "~58.0.13",
+    "expo-router": "~58.0.24",
+    "expo-status-bar": "~58.0.3",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "react-native": "0.88.0",
+    "react-native-safe-area-context": "~5.10.1",
+    "react-native-screens": "~4.30.0",
+    "react-native-web": "~0.21.4"
+  },
+  "devDependencies": {
+    "@playwright/test": "~1.63.0",
+    "@types/node": "^26.6.5",
+    "@types/react": "~19.3.0",
+    "prettier": "^3.9.10",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5"
+  }
+}

@@ -56,7 +56,7 @@ export const MODULES: Module[] = [
     href: "/team",
     label: "Team",
     summary: "Invite staff and choose what each person may do.",
-    status: "coming-soon",
+    status: "ready",
   },
   {
     slug: "settings",

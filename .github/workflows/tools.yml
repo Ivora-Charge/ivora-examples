@@ -1,0 +1,41 @@
+name: tools
+
+on:
+  pull_request:
+    paths:
+      - "tools/**"
+      - ".github/workflows/tools.yml"
+  push:
+    branches: [main, preproduction]
+    paths:
+      - "tools/**"
+      - ".github/workflows/tools.yml"
+
+permissions:
+  contents: read
+
+# One run per workflow and PR: a new push to a PR cancels its older run.
+# Pushes to branches (preproduction, main) are never cancelled, so every
+# merge commit is verified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check-migrations:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: tools/check-migrations
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: tools/check-migrations/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      # Unit tests for every rule, plus the PGlite proof with Supabase's default privileges.
+      - run: npm test
