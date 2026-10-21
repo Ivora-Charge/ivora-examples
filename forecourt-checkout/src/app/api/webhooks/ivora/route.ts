@@ -1,7 +1,14 @@
 import { after, NextResponse } from "next/server";
 import { z } from "zod";
-import { ivoraClient, liveDeps, settings } from "@/lib/server/services";
+import {
+  ivoraClient,
+  liveDeps,
+  liveStoreDeps,
+  settings,
+} from "@/lib/server/services";
 import { APPLICATION_PREFIX, reconcile } from "@/lib/server/sessions";
+import { reconcileStoreSession } from "@/lib/server/store";
+import { STORE_PREFIX } from "@/lib/store";
 import {
   RecentIds,
   sessionIdFromEvent,
@@ -58,7 +65,10 @@ export async function POST(request: Request) {
   after(async () => {
     try {
       const session = await ivoraClient(s).getSession(ivoraSession);
-      if (session.application_reference.startsWith(APPLICATION_PREFIX))
+      // Pay in store: stop at the prepaid limit, finalize, record the money.
+      if (session.application_reference.startsWith(STORE_PREFIX))
+        await reconcileStoreSession(session, liveStoreDeps(s));
+      else if (session.application_reference.startsWith(APPLICATION_PREFIX))
         await reconcile(
           session.application_reference.slice(APPLICATION_PREFIX.length),
           liveDeps(s),

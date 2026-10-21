@@ -10,7 +10,9 @@ export default function Home() {
       <p className="muted">
         Drivers scan the QR code on a DC fast charger, pay with a card, Apple
         Pay or Google Pay, watch the session live and get a receipt. No app or
-        account.
+        account. Or they pay in the store, like fuel: the cashier authorises the
+        charger, takes cash or card on the store&apos;s POS, and prints a
+        receipt.
       </p>
       {s.demo ? (
         <div className="card stack">
@@ -38,6 +40,12 @@ export default function Home() {
       )}
       <p className="muted">
         Site staff: <Link href="/operator">operator pages</Link>
+        {s.payInStore ? (
+          <>
+            {" "}
+            · <Link href="/cashier">cashier console</Link>
+          </>
+        ) : null}
         {s.demo ? " (demo password: demo)" : null}
       </p>
     </main>

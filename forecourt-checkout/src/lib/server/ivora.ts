@@ -162,6 +162,14 @@ export const externalSessionSchema = z.object({
 });
 export type ExternalSession = z.infer<typeof externalSessionSchema>;
 
+export const settlementReportSchema = z.object({
+  kind: z.enum(["authorization", "capture", "refund", "release"]),
+  operation_reference: z.string(),
+  outcome: z.enum(["pending", "unknown", "succeeded", "failed"]),
+  amount_minor: z.number().int(),
+  created_at: z.string().optional(),
+});
+
 // Billed, not collected: captures are the payment provider's.
 const revenueLine = z.object({
   currency: z.string(),
@@ -423,7 +431,11 @@ export class IvoraClient {
     );
   }
 
-  /** Optional audit trail of what the app did with the card. Reports never move money. */
+  /**
+   * Records what the app did with the money: the card hold, or a payment taken
+   * in store. Reports never move money. `idempotencyKey` defaults to one key
+   * per session and kind, which is what card payments use.
+   */
   reportSettlement(
     id: string,
     report: {
@@ -431,6 +443,7 @@ export class IvoraClient {
       operation_reference: string;
       amount_minor: number;
     },
+    idempotencyKey = `${id}:report:${report.kind}`,
   ) {
     return this.request(
       "POST",
@@ -438,9 +451,18 @@ export class IvoraClient {
       z.unknown(),
       {
         body: { ...report, outcome: "succeeded", currency: "USD" },
-        idempotencyKey: `${id}:report:${report.kind}`,
+        idempotencyKey,
       },
     );
+  }
+
+  /** The session's settlement audit trail, oldest first. */
+  listSettlementReports(id: string) {
+    return this.request(
+      "GET",
+      `charging-sessions/${encodeURIComponent(id)}/settlement-reports?limit=100`,
+      z.object({ data: z.array(settlementReportSchema) }),
+    ).then((page) => page.data);
   }
 
   stats(query: { from: string; to: string; timeZone: string }) {
