@@ -1,5 +1,6 @@
 import "server-only";
-import type { Location } from "@/lib/ocpi/locations";
+import { randomUUID } from "node:crypto";
+import { dateTimeMs, type Location } from "@/lib/ocpi/locations";
 import type { Tariff } from "@/lib/ocpi/tariffs";
 import {
   eq,
@@ -19,8 +20,18 @@ import {
   type SyncState,
 } from "./store";
 
-type LocationRow = { peer_id: string; data: Location; seen_at: string };
-type TariffRow = { peer_id: string; data: Tariff; seen_at: string };
+type LocationRow = {
+  peer_id: string;
+  data: Location;
+  seen_at: string;
+  revision: string;
+};
+type TariffRow = {
+  peer_id: string;
+  data: Tariff;
+  seen_at: string;
+  revision: string;
+};
 type SyncRow = {
   peer_id: string;
   module: SyncModule;
@@ -31,13 +42,76 @@ type SyncRow = {
   last_result: SyncState["lastResult"];
 };
 
+const ROW = "select=peer_id,data,seen_at,revision";
+
 const keyFilter = (k: ObjectKey, idColumn: string) =>
   `peer_id=${eq(k.peerId)}&country_code=${eq(k.countryCode.toUpperCase())}&party_id=${eq(k.partyId.toUpperCase())}&${idColumn}=${eq(k.id)}`;
+
+const location = (r: LocationRow): StoredLocation => ({
+  peerId: r.peer_id,
+  location: r.data,
+  seenAt: r.seen_at,
+  revision: r.revision,
+});
+const tariff = (r: TariffRow): StoredTariff => ({
+  peerId: r.peer_id,
+  tariff: r.data,
+  seenAt: r.seen_at,
+  revision: r.revision,
+});
+
+/** The columns of a location row, beside the key and seen_at. */
+const locationColumns = (l: Location) => ({
+  country_code: l.country_code,
+  party_id: l.party_id,
+  location_id: l.id,
+  data: l,
+  publish: l.publish,
+  latitude: Number(l.coordinates.latitude),
+  longitude: Number(l.coordinates.longitude),
+  search_text: searchText(l),
+  search_ids: searchIds(l),
+  last_updated: l.last_updated,
+});
+
+const tariffColumns = (t: Tariff) => ({
+  country_code: t.country_code,
+  party_id: t.party_id,
+  tariff_id: t.id,
+  data: t,
+  last_updated: t.last_updated,
+});
+
+/**
+ * One object per key, the newest: one insert cannot change a row twice, and a page may
+ * repeat an object.
+ */
+function newestPerKey<
+  T extends {
+    country_code: string;
+    party_id: string;
+    id: string;
+    last_updated: string;
+  },
+>(objects: T[]): T[] {
+  const out = new Map<string, T>();
+  for (const o of objects) {
+    const k = JSON.stringify([o.country_code, o.party_id, o.id]);
+    const held = out.get(k);
+    if (!held || dateTimeMs(o.last_updated) >= dateTimeMs(held.last_updated))
+      out.set(k, o);
+  }
+  return [...out.values()];
+}
 
 /**
  * The locations and tariffs cache in Supabase Postgres (emsp_ocpi_locations,
  * emsp_ocpi_tariffs, emsp_ocpi_sync_state), through the Data API as the service role.
  * Each object is stored whole as jsonb, with the columns the search filters on beside it.
+ *
+ * Writes never lose a concurrent change: a push writes with compare-and-swap on the
+ * row's revision (a PATCH that matches only the revision it read), and a pull stores a
+ * page with emsp_ocpi_save_locations / _tariffs, which keep rows that are newer.
  */
 export class SupabaseLocationStore implements LocationStore {
   private readonly rest: ReturnType<typeof supabaseRest>;
@@ -53,49 +127,75 @@ export class SupabaseLocationStore implements LocationStore {
   async getLocation(k: ObjectKey): Promise<StoredLocation | null> {
     const [row] = await this.rest<LocationRow[]>(
       "GET",
-      `emsp_ocpi_locations?${keyFilter(k, "location_id")}&select=peer_id,data,seen_at`,
+      `emsp_ocpi_locations?${keyFilter(k, "location_id")}&${ROW}`,
     );
-    return row
-      ? { peerId: row.peer_id, location: row.data, seenAt: row.seen_at }
-      : null;
-  }
-
-  async findLocationsById(peerId: string, ids: string[]) {
-    if (!ids.length) return [];
-    const rows = await this.rest<LocationRow[]>(
-      "GET",
-      `emsp_ocpi_locations?peer_id=${eq(peerId)}&location_id=${inList(ids)}&select=peer_id,data,seen_at`,
-    );
-    return rows.map((r) => ({
-      peerId: r.peer_id,
-      location: r.data,
-      seenAt: r.seen_at,
-    }));
+    return row ? location(row) : null;
   }
 
   async saveLocations(peerId: string, locations: Location[], seenAt: string) {
     if (!locations.length) return;
-    const updatedAt = new Date().toISOString();
-    await this.rest(
-      "POST",
-      "emsp_ocpi_locations?on_conflict=peer_id,country_code,party_id,location_id",
-      locations.map((l) => ({
-        peer_id: peerId,
-        country_code: l.country_code,
-        party_id: l.party_id,
-        location_id: l.id,
-        data: l,
-        publish: l.publish,
-        latitude: Number(l.coordinates.latitude),
-        longitude: Number(l.coordinates.longitude),
-        search_text: searchText(l),
-        search_ids: searchIds(l),
-        last_updated: l.last_updated,
-        seen_at: seenAt,
-        updated_at: updatedAt,
-      })),
-      "resolution=merge-duplicates,return=minimal",
+    await this.rest("POST", "rpc/emsp_ocpi_save_locations", {
+      p_peer_id: peerId,
+      p_seen_at: seenAt,
+      p_rows: newestPerKey(locations).map(locationColumns),
+    });
+  }
+
+  async putLocation(
+    peerId: string,
+    l: Location,
+    seenAt: string,
+    expectedRevision: string | null,
+  ) {
+    const row = {
+      ...locationColumns(l),
+      seen_at: seenAt,
+      updated_at: new Date().toISOString(),
+      revision: randomUUID(),
+    };
+    return this.compareAndSwap(
+      "emsp_ocpi_locations",
+      keyFilter(
+        {
+          peerId,
+          countryCode: l.country_code,
+          partyId: l.party_id,
+          id: l.id,
+        },
+        "location_id",
+      ),
+      { peer_id: peerId, ...row },
+      expectedRevision,
+      "peer_id,country_code,party_id,location_id",
     );
+  }
+
+  /**
+   * Updates the row only while its revision is `expected`; with null, inserts it only
+   * if there is none. True when this write won.
+   */
+  private async compareAndSwap(
+    table: string,
+    key: string,
+    row: Record<string, unknown>,
+    expected: string | null,
+    conflict: string,
+  ): Promise<boolean> {
+    const written =
+      expected === null
+        ? await this.rest<unknown[]>(
+            "POST",
+            `${table}?on_conflict=${conflict}&select=revision`,
+            row,
+            "resolution=ignore-duplicates,return=representation",
+          )
+        : await this.rest<unknown[]>(
+            "PATCH",
+            `${table}?${key}&revision=${eq(expected)}&select=revision`,
+            row,
+            "return=representation",
+          );
+    return written.length > 0;
   }
 
   async pruneLocations(peerId: string, before: string) {
@@ -110,72 +210,75 @@ export class SupabaseLocationStore implements LocationStore {
 
   async findLocations(f: CandidateFilter): Promise<StoredLocation[]> {
     if (!f.peerIds.length) return [];
-    const q = [
-      `peer_id=${inList(f.peerIds)}`,
-      "publish=is.true",
-      "select=peer_id,data,seen_at",
-      `limit=${f.limit}`,
-    ];
-    if (f.bbox) {
-      q.push(`latitude=gte.${f.bbox.minLat}`, `latitude=lte.${f.bbox.maxLat}`);
-      if (f.bbox.minLng !== undefined)
-        q.push(
-          `longitude=gte.${f.bbox.minLng}`,
-          `longitude=lte.${f.bbox.maxLng}`,
-        );
-    }
-    // Words are letters and digits only (search.ts), so they are safe in a pattern.
-    for (const w of f.words ?? [])
-      q.push(`search_text=ilike.${encodeURIComponent(`*${w}*`)}`);
-    if (f.id) q.push(`search_ids=cs.${encodeURIComponent(`{${f.id}}`)}`);
+    // Ordered nearest first in the database, so the limit drops the farthest.
     const rows = await this.rest<LocationRow[]>(
-      "GET",
-      `emsp_ocpi_locations?${q.join("&")}`,
+      "POST",
+      "rpc/emsp_ocpi_location_candidates",
+      {
+        p_peer_ids: f.peerIds,
+        p_min_lat: f.bbox?.minLat ?? null,
+        p_max_lat: f.bbox?.maxLat ?? null,
+        p_min_lng: f.bbox?.minLng ?? null,
+        p_max_lng: f.bbox?.maxLng ?? null,
+        p_lat: f.near?.lat ?? null,
+        p_lng: f.near?.lng ?? null,
+        p_words: f.words?.length ? f.words : null,
+        p_search_id: f.id ?? null,
+        p_limit: f.limit,
+      },
     );
-    return rows.map((r) => ({
-      peerId: r.peer_id,
-      location: r.data,
-      seenAt: r.seen_at,
-    }));
+    return rows.map(location);
   }
 
   async getTariff(k: ObjectKey): Promise<StoredTariff | null> {
     const [row] = await this.rest<TariffRow[]>(
       "GET",
-      `emsp_ocpi_tariffs?${keyFilter(k, "tariff_id")}&select=peer_id,data,seen_at`,
+      `emsp_ocpi_tariffs?${keyFilter(k, "tariff_id")}&${ROW}`,
     );
-    return row
-      ? { peerId: row.peer_id, tariff: row.data, seenAt: row.seen_at }
-      : null;
+    return row ? tariff(row) : null;
   }
 
   async saveTariffs(peerId: string, tariffs: Tariff[], seenAt: string) {
     if (!tariffs.length) return;
-    const updatedAt = new Date().toISOString();
-    await this.rest(
-      "POST",
-      "emsp_ocpi_tariffs?on_conflict=peer_id,country_code,party_id,tariff_id",
-      tariffs.map((t) => ({
+    await this.rest("POST", "rpc/emsp_ocpi_save_tariffs", {
+      p_peer_id: peerId,
+      p_seen_at: seenAt,
+      p_rows: newestPerKey(tariffs).map(tariffColumns),
+    });
+  }
+
+  async putTariff(
+    peerId: string,
+    t: Tariff,
+    seenAt: string,
+    expectedRevision: string | null,
+  ) {
+    return this.compareAndSwap(
+      "emsp_ocpi_tariffs",
+      keyFilter(
+        { peerId, countryCode: t.country_code, partyId: t.party_id, id: t.id },
+        "tariff_id",
+      ),
+      {
         peer_id: peerId,
-        country_code: t.country_code,
-        party_id: t.party_id,
-        tariff_id: t.id,
-        data: t,
-        last_updated: t.last_updated,
+        ...tariffColumns(t),
         seen_at: seenAt,
-        updated_at: updatedAt,
-      })),
-      "resolution=merge-duplicates,return=minimal",
+        updated_at: new Date().toISOString(),
+        revision: randomUUID(),
+      },
+      expectedRevision,
+      "peer_id,country_code,party_id,tariff_id",
     );
   }
 
-  async deleteTariff(k: ObjectKey) {
-    await this.rest(
+  async deleteTariff(k: ObjectKey, expectedRevision: string) {
+    const rows = await this.rest<unknown[]>(
       "DELETE",
-      `emsp_ocpi_tariffs?${keyFilter(k, "tariff_id")}`,
+      `emsp_ocpi_tariffs?${keyFilter(k, "tariff_id")}&revision=${eq(expectedRevision)}&select=tariff_id`,
       undefined,
-      "return=minimal",
+      "return=representation",
     );
+    return rows.length > 0;
   }
 
   async pruneTariffs(peerId: string, before: string) {
@@ -192,13 +295,9 @@ export class SupabaseLocationStore implements LocationStore {
     if (!ids.length) return [];
     const rows = await this.rest<TariffRow[]>(
       "GET",
-      `emsp_ocpi_tariffs?peer_id=${eq(peerId)}&tariff_id=${inList(ids)}&select=peer_id,data,seen_at`,
+      `emsp_ocpi_tariffs?peer_id=${eq(peerId)}&tariff_id=${inList(ids)}&${ROW}`,
     );
-    return rows.map((r) => ({
-      peerId: r.peer_id,
-      tariff: r.data,
-      seenAt: r.seen_at,
-    }));
+    return rows.map(tariff);
   }
 
   async getSyncState(

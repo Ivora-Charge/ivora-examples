@@ -31,7 +31,8 @@ import {
 
 /**
  * The location search behind the app's API. The store narrows the candidates (peer,
- * published, bounding box, words, ID); this file applies the exact filters, sorts,
+ * published, bounding box, words, ID), nearest first, up to SEARCH_LIMITS.candidates;
+ * this file applies the exact filters, sorts,
  * pages and shapes the results. Locations of peers that are not registered, unpublished
  * locations and REMOVED EVSEs never appear.
  */
@@ -449,18 +450,20 @@ export async function tariffsFor(
   return out;
 }
 
-/** A location's tariffs: same peer, same party first, then any party of the peer. */
+/**
+ * A location's tariffs: those of the same peer and the same party. Tariff IDs are
+ * unique only per country_code and party_id, so another party's tariff with the same
+ * ID is a different tariff.
+ */
 export function tariffsOfLocation(
   s: StoredLocation,
   byPeer: Map<string, Tariff[]>,
 ): Tariff[] {
-  const all = byPeer.get(s.peerId) ?? [];
-  const own = all.filter(
+  return (byPeer.get(s.peerId) ?? []).filter(
     (t) =>
       t.country_code === s.location.country_code &&
       t.party_id === s.location.party_id,
   );
-  return [...own, ...all.filter((t) => !own.includes(t))];
 }
 
 export type SearchResult = {
@@ -481,7 +484,10 @@ export async function searchLocations(
     peerIds,
     limit: SEARCH_LIMITS.candidates,
   };
-  if (q.near) filter.bbox = boundingBox(q.near.lat, q.near.lng, q.near.radiusM);
+  if (q.near) {
+    filter.bbox = boundingBox(q.near.lat, q.near.lng, q.near.radiusM);
+    filter.near = { lat: q.near.lat, lng: q.near.lng };
+  }
   if (q.text) filter.words = words(q.text);
   const id = q.evseId ?? q.chargerId;
   if (id) filter.id = normaliseId(id);

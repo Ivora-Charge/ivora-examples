@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PGlite } from "@electric-sql/pglite";
+import { checkMigrations } from "../../../tools/check-migrations/check.mjs";
+import { LEDGER_SQL } from "../scripts/migrate.mjs";
 import { asRole, migratedDatabase } from "./support/pglite";
 
 let db: PGlite;
@@ -29,6 +31,16 @@ const EXPOSED_FUNCTIONS = `
   from pg_proc p join pg_namespace n on n.oid = p.pronamespace
   cross join (values ('anon'), ('authenticated')) as r(rolname)
   where n.nspname = 'public' and has_function_privilege(r.rolname, p.oid, 'execute')`;
+
+describe("migration ledger", () => {
+  // npm run db:migrate creates the ledger before any migration: the shared 10-30
+  // check (which CI runs on supabase/migrations) holds for it too.
+  it("follows the 10-30 rule", () => {
+    expect(
+      checkMigrations([{ name: "migrate.mjs LEDGER_SQL", sql: LEDGER_SQL }]),
+    ).toEqual([]);
+  });
+});
 
 describe("migrations on PGlite", () => {
   it("records every applied migration in the ledger", async () => {

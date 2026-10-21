@@ -18,13 +18,24 @@ import {
  * match is the one that applies; restriction times are local to the location; min
  * values are inclusive and max values exclusive; a tariff's min_price and max_price
  * bound the total.
+ *
+ * Money is computed in integers, never floating point (docs/conventions.md):
+ * - Tariff prices are OCPI numbers with at most 4 decimals. They are read as integer
+ *   ten-thousandths of the currency's major unit, "E4": €0.4235 is 4235. VAT rates
+ *   are read the same way, as ten-thousandths of a percent.
+ * - A preview keeps each line's amount as an exact fraction and sums them exactly.
+ *   It rounds once, half up, when it turns the total into the currency's minor units
+ *   (cents for EUR, none for JPY). Line amounts are rounded the same way for display only.
  */
 
 export type DisplayComponent = {
   type: TariffDimensionType;
   unit: "kWh" | "hour" | "session";
-  /** Per unit, with VAT when the CPO gave the VAT rate. */
-  price: number;
+  /**
+   * Per unit, in ten-thousandths of the currency's major unit (4235 is €0.4235), with
+   * VAT when the CPO gave the VAT rate, rounded half up to that precision.
+   */
+  priceE4: number;
   vatIncluded: boolean;
   /** For example "€0.35 per kWh". */
   text: string;
@@ -64,23 +75,63 @@ const fractionDigits = (currency: string) => {
   }
 };
 
-/** A price in its currency: at least the currency's usual decimals, up to 4. */
-export function formatMoney(value: number, currency: string): string {
+/** A number with at most 4 decimals (an OCPI price or VAT rate), in ten-thousandths. */
+export const toE4 = (n: number): bigint => BigInt(Math.round(n * 10_000));
+
+/** 100% in ten-thousandths of a percent: VAT factors are (VAT_100 + vat) / VAT_100. */
+const VAT_100 = 1_000_000n;
+const vatFactor = (vat: number | undefined) => VAT_100 + toE4(vat ?? 0);
+
+/** n / d rounded half up (away from zero), d > 0. */
+export function divRound(n: bigint, d: bigint): bigint {
+  return n < 0n ? -divRound(-n, d) : (2n * n + d) / (2n * d);
+}
+
+const pow10 = (n: number) => 10n ** BigInt(n);
+
+/** `units` of 10^-scale of the major unit, as an exact decimal string: (4235, 4) is "0.4235". */
+function decimal(units: bigint, scale: number): string {
+  const neg = units < 0n;
+  const digits = (neg ? -units : units).toString().padStart(scale + 1, "0");
+  const s = scale
+    ? `${digits.slice(0, -scale)}.${digits.slice(-scale)}`
+    : digits;
+  return neg ? `-${s}` : s;
+}
+
+/**
+ * `units` of 10^-scale of the currency's major unit, formatted with at least the
+ * currency's usual decimals. Formats the exact decimal: no floating point.
+ */
+export function formatUnits(
+  units: bigint,
+  scale: number,
+  currency: string,
+): string {
   const digits = fractionDigits(currency);
+  const value = decimal(units, scale);
   try {
     return new Intl.NumberFormat("en", {
       style: "currency",
       currency,
       minimumFractionDigits: digits,
-      maximumFractionDigits: Math.max(digits, 4),
-    }).format(value);
+      maximumFractionDigits: Math.max(digits, scale),
+    }).format(value as Intl.StringNumericLiteral);
   } catch {
-    return `${value.toFixed(Math.max(digits, 2))} ${currency}`;
+    return `${value} ${currency}`;
   }
 }
 
-const withVat = (c: PriceComponent) =>
-  c.vat === undefined ? c.price : c.price * (1 + c.vat / 100);
+/** An OCPI price (at most 4 decimals) in its currency: at least the currency's usual decimals. */
+export function formatMoney(value: number, currency: string): string {
+  return formatUnits(toE4(value), 4, currency);
+}
+
+/** A component's price per unit in E4, with VAT when the CPO gave the rate. */
+const withVatE4 = (c: PriceComponent): bigint =>
+  c.vat === undefined
+    ? toE4(c.price)
+    : divRound(toE4(c.price) * vatFactor(c.vat), VAT_100);
 
 const DAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -208,9 +259,9 @@ export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
   for (const e of t.elements) {
     const conditions = describeRestrictions(e.restrictions);
     for (const c of e.price_components) {
-      const price = withVat(c);
+      const priceE4 = withVatE4(c);
       const unit = UNIT[c.type];
-      const amount = formatMoney(price, t.currency);
+      const amount = formatUnits(priceE4, 4, t.currency);
       const text =
         c.type === "FLAT"
           ? `${amount} per session`
@@ -220,7 +271,7 @@ export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
       components.push({
         type: c.type,
         unit,
-        price,
+        priceE4: Number(priceE4),
         vatIncluded: c.vat !== undefined,
         text: c.vat === undefined ? `${text} excl. VAT` : text,
         // After a restricted element, an unrestricted one is the fallback.
@@ -237,7 +288,7 @@ export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
   // dimension (other times, other tiers) make the price vary.
   const first = new Map<TariffDimensionType, DisplayComponent>();
   for (const c of components) if (!first.has(c.type)) first.set(c.type, c);
-  const main = [...first.values()].filter((c) => c.price > 0);
+  const main = [...first.values()].filter((c) => c.priceE4 > 0);
   const varies = first.size < components.length;
   const line = main
     .map((c) =>
@@ -280,19 +331,31 @@ export type PreviewSession = {
 
 export type PreviewLine = {
   type: TariffDimensionType;
-  /** kWh, hours or sessions, after rounding to the step size. */
+  /** kWh, hours or sessions, after rounding to the step size. For display. */
   quantity: number;
-  unitPrice: number;
-  amountExclVat: number;
+  /** Excluding VAT, in ten-thousandths of the major unit (5900 is €0.59). */
+  unitPriceE4: number;
+  /**
+   * Excluding VAT, in minor units, rounded half up for display. The total is summed
+   * from the exact line amounts, so lines may not add up to it to the last minor unit.
+   */
+  amountExclVatMinor: number;
+  /** VAT rate in percent, when the CPO gave one. */
   vat?: number;
 };
 
 export type Preview = {
   currency: string;
+  /** Decimals of the currency's minor unit: 2 for EUR (cents), 0 for JPY. */
+  minorDigits: number;
   lines: PreviewLine[];
-  totalExclVat: number;
-  /** Null when a component used has no VAT rate and max/min price gives no incl_vat. */
-  totalInclVat: number | null;
+  /** In minor units (cents), rounded once, half up, from the exact sum. */
+  totalExclVatMinor: number;
+  /**
+   * In minor units. Null when a component used has no VAT rate and max/min price gives
+   * no incl_vat.
+   */
+  totalInclVatMinor: number | null;
   /** "min" or "max" when min_price or max_price changed the total. */
   bounded?: "min" | "max";
   /** For example "€7.40". */
@@ -398,24 +461,38 @@ function active(t: Tariff, type: TariffDimensionType, m: Moment) {
   return undefined;
 }
 
-const round = (n: number, digits: number) =>
-  Math.round(n * 10 ** digits) / 10 ** digits;
+/** Line amounts are exact fractions of E4 units over this: lcm(1000 Wh, 3600 s). */
+const LINE_DEN = 18_000n;
+
+/** The exact amount, in E4 units times LINE_DEN, of `qty` Wh, seconds or sessions. */
+function lineAmount(type: TariffDimensionType, priceE4: bigint, qty: number) {
+  const q = BigInt(qty);
+  if (type === "ENERGY") return priceE4 * q * (LINE_DEN / 1000n);
+  if (type === "FLAT") return priceE4 * q * LINE_DEN;
+  return priceE4 * q * (LINE_DEN / 3600n);
+}
 
 /**
  * What a session would cost under a tariff, minute by minute. An estimate for display:
  * the CDR is what counts. step_size rounds up the last period of each dimension, as
- * OCPI 2.2.1 says, so earlier periods are billed exactly.
+ * OCPI 2.2.1 says, so earlier periods are billed exactly. Quantities are whole Wh and
+ * seconds; amounts are exact until the total is rounded once to minor units.
  */
 export function previewCost(t: Tariff, s: PreviewSession): Preview {
   const chargingMin = Math.max(0, Math.round(s.chargingMinutes));
   const parkingMin = Math.max(0, Math.round(s.parkingMinutes ?? 0));
   const total = Math.min(MAX_PREVIEW_MINUTES, chargingMin + parkingMin);
-  const energy = Math.max(0, s.energyKwh);
-  const kwhPerMin = chargingMin ? energy / chargingMin : 0;
-  const power = s.powerKw ?? (chargingMin ? energy / (chargingMin / 60) : 0);
+  const energyWh = Math.max(0, Math.round(s.energyKwh * 1000));
+  /** Wh charged by the start of `minute`, spread evenly over the charging time. */
+  const whAt = (minute: number) =>
+    chargingMin
+      ? Math.floor((energyWh * Math.min(minute, chargingMin)) / chargingMin)
+      : 0;
+  const power =
+    s.powerKw ?? (chargingMin ? energyWh / 1000 / (chargingMin / 60) : 0);
   const tz = s.timeZone || "UTC";
 
-  // Quantities per (element, dimension), in Wh, seconds or sessions.
+  // Quantities per (element, dimension), in whole Wh, seconds or sessions.
   type Bucket = {
     type: TariffDimensionType;
     c: PriceComponent;
@@ -438,7 +515,7 @@ export function previewCost(t: Tariff, s: PreviewSession): Preview {
   };
   const moment = (minute: number, charging: boolean): Moment => ({
     ...localParts(new Date(s.start.getTime() + minute * 60_000), tz),
-    kwh: Math.min(energy, kwhPerMin * minute),
+    kwh: whAt(minute) / 1000,
     powerKw: charging ? power : 0,
     currentA: charging ? s.currentA : 0,
     seconds: minute * 60,
@@ -449,7 +526,12 @@ export function previewCost(t: Tariff, s: PreviewSession): Preview {
     const charging = minute < chargingMin;
     const m = moment(minute, charging);
     if (charging) {
-      add("ENERGY", active(t, "ENERGY", m), kwhPerMin * 1000, minute);
+      add(
+        "ENERGY",
+        active(t, "ENERGY", m),
+        whAt(minute + 1) - whAt(minute),
+        minute,
+      );
       add("TIME", active(t, "TIME", m), 60, minute);
     } else {
       add("PARKING_TIME", active(t, "PARKING_TIME", m), 60, minute);
@@ -461,53 +543,64 @@ export function previewCost(t: Tariff, s: PreviewSession): Preview {
     const cur = lastOfType.get(b.type);
     if (!cur || b.last >= cur.last) lastOfType.set(b.type, b);
   }
+  const digits = fractionDigits(t.currency);
+  /** An exact amount over `den` E4 units, rounded half up to minor units. */
+  const toMinor = (n: bigint, den: bigint) =>
+    Number(divRound(n * pow10(digits), den * 10_000n));
+
   const lines: PreviewLine[] = [];
-  let excl = 0;
-  let incl = 0;
-  let vatKnown = true;
+  let excl = 0n; // over LINE_DEN
+  let incl: bigint | null = 0n; // over LINE_DEN * VAT_100
   for (const b of buckets.values()) {
     let qty = b.qty;
-    if (b.type !== "FLAT" && b.c.step_size > 0 && lastOfType.get(b.type) === b)
-      qty = Math.ceil(round(qty, 6) / b.c.step_size) * b.c.step_size;
-    const units =
-      b.type === "ENERGY" ? qty / 1000 : b.type === "FLAT" ? qty : qty / 3600;
-    const amount = units * b.c.price;
+    const step = Math.round(b.c.step_size);
+    if (b.type !== "FLAT" && step > 0 && lastOfType.get(b.type) === b)
+      qty = Math.ceil(qty / step) * step;
+    const priceE4 = toE4(b.c.price);
+    const amount = lineAmount(b.type, priceE4, qty);
     excl += amount;
-    incl += amount * (1 + (b.c.vat ?? 0) / 100);
-    if (b.c.vat === undefined && amount > 0) vatKnown = false;
+    if (b.c.vat === undefined) {
+      if (amount > 0n) incl = null;
+    } else if (incl !== null) incl += amount * vatFactor(b.c.vat);
+    const quantity =
+      b.type === "ENERGY" ? qty / 1000 : b.type === "FLAT" ? qty : qty / 3600;
     const line: PreviewLine = {
       type: b.type,
-      quantity: round(units, 4),
-      unitPrice: b.c.price,
-      amountExclVat: round(amount, 4),
+      quantity: Math.round(quantity * 10_000) / 10_000,
+      unitPriceE4: Number(priceE4),
+      amountExclVatMinor: toMinor(amount, LINE_DEN),
     };
     if (b.c.vat !== undefined) line.vat = b.c.vat;
     lines.push(line);
   }
 
   let bounded: Preview["bounded"];
-  let inclVat: number | null = vatKnown ? incl : null;
-  if (t.min_price && excl < t.min_price.excl_vat) {
+  const bound = (p: { excl_vat: number; incl_vat?: number }) => {
+    excl = toE4(p.excl_vat) * LINE_DEN;
+    incl =
+      p.incl_vat === undefined ? null : toE4(p.incl_vat) * LINE_DEN * VAT_100;
+  };
+  if (t.min_price && excl < toE4(t.min_price.excl_vat) * LINE_DEN) {
     bounded = "min";
-    excl = t.min_price.excl_vat;
-    inclVat = t.min_price.incl_vat ?? null;
-  } else if (t.max_price && excl > t.max_price.excl_vat) {
+    bound(t.min_price);
+  } else if (t.max_price && excl > toE4(t.max_price.excl_vat) * LINE_DEN) {
     bounded = "max";
-    excl = t.max_price.excl_vat;
-    inclVat = t.max_price.incl_vat ?? null;
+    bound(t.max_price);
   }
-  const digits = fractionDigits(t.currency);
-  const totalExclVat = round(excl, digits);
-  const totalInclVat = inclVat === null ? null : round(inclVat, digits);
+  // The one rounding of the total, to minor units.
+  const totalExclVatMinor = toMinor(excl, LINE_DEN);
+  const totalInclVatMinor =
+    incl === null ? null : toMinor(incl, LINE_DEN * VAT_100);
   const preview: Preview = {
     currency: t.currency,
+    minorDigits: digits,
     lines,
-    totalExclVat,
-    totalInclVat,
+    totalExclVatMinor,
+    totalInclVatMinor,
     text:
-      totalInclVat !== null
-        ? formatMoney(totalInclVat, t.currency)
-        : `${formatMoney(totalExclVat, t.currency)} excl. VAT`,
+      totalInclVatMinor !== null
+        ? formatUnits(BigInt(totalInclVatMinor), digits, t.currency)
+        : `${formatUnits(BigInt(totalExclVatMinor), digits, t.currency)} excl. VAT`,
   };
   if (bounded) preview.bounded = bounded;
   return preview;

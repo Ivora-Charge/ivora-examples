@@ -1,5 +1,6 @@
 import "server-only";
-import type { Location } from "@/lib/ocpi/locations";
+import { randomUUID } from "node:crypto";
+import { dateTimeMs, type Location } from "@/lib/ocpi/locations";
 import type { Tariff } from "@/lib/ocpi/tariffs";
 
 /**
@@ -19,8 +20,15 @@ export type StoredLocation = {
   peerId: string;
   location: Location;
   seenAt: string;
+  /** Changes with every change of data: the compare-and-swap token for putLocation. */
+  revision: string;
 };
-export type StoredTariff = { peerId: string; tariff: Tariff; seenAt: string };
+export type StoredTariff = {
+  peerId: string;
+  tariff: Tariff;
+  seenAt: string;
+  revision: string;
+};
 
 export type SyncModule = "locations" | "tariffs";
 export type SyncMode = "full" | "incremental";
@@ -71,27 +79,53 @@ export type CandidateFilter = {
   words?: string[];
   /** A normalised ID (searchIds()) the location must contain. */
   id?: string;
+  /** The search point: candidates nearest to it come first, before the limit. */
+  near?: { lat: number; lng: number };
   limit: number;
 };
 
 export interface LocationStore {
   getLocation(key: ObjectKey): Promise<StoredLocation | null>;
-  /** A peer's locations with these IDs (any party). */
-  findLocationsById(peerId: string, ids: string[]): Promise<StoredLocation[]>;
-  /** Inserts or replaces, all with the same seenAt. */
+  /**
+   * Stores a page of pulled locations, all with the same seenAt. A location held with a
+   * newer last_updated (a push got there first) keeps its data, and only gets seenAt.
+   */
   saveLocations(
     peerId: string,
     locations: Location[],
     seenAt: string,
   ): Promise<void>;
+  /**
+   * Writes one location only if it is unchanged since it was read: `expectedRevision`
+   * is the revision read, or null when there was none (insert only). Returns false
+   * when another write got there first; read again and retry.
+   */
+  putLocation(
+    peerId: string,
+    location: Location,
+    seenAt: string,
+    expectedRevision: string | null,
+  ): Promise<boolean>;
   /** Removes a peer's locations last seen before `before`. Returns how many. */
   pruneLocations(peerId: string, before: string): Promise<number>;
-  /** Published locations matching the coarse filter, at most `limit`. */
+  /**
+   * Published locations matching the coarse filter, at most `limit`, nearest to
+   * `filter.near` first when it is given.
+   */
   findLocations(filter: CandidateFilter): Promise<StoredLocation[]>;
 
   getTariff(key: ObjectKey): Promise<StoredTariff | null>;
+  /** Like saveLocations: a tariff held with a newer last_updated keeps its data. */
   saveTariffs(peerId: string, tariffs: Tariff[], seenAt: string): Promise<void>;
-  deleteTariff(key: ObjectKey): Promise<void>;
+  /** Like putLocation. */
+  putTariff(
+    peerId: string,
+    tariff: Tariff,
+    seenAt: string,
+    expectedRevision: string | null,
+  ): Promise<boolean>;
+  /** Deletes only if unchanged since read (`expectedRevision`). False: retry. */
+  deleteTariff(key: ObjectKey, expectedRevision: string): Promise<boolean>;
   pruneTariffs(peerId: string, before: string): Promise<number>;
   /** The tariffs of one peer with these IDs (any party). */
   findTariffs(peerId: string, ids: string[]): Promise<StoredTariff[]>;
@@ -137,7 +171,31 @@ const key = (k: ObjectKey) =>
     k.id,
   ]);
 
-/** The cache in memory: demo mode (seeded with sample data) and tests. */
+/**
+ * A distance proxy that ranks like the great-circle distance at search radii
+ * (equirectangular, longitudes wrapping at the antimeridian). The Supabase store orders
+ * candidates by the same formula in SQL.
+ */
+export function nearness(
+  from: { lat: number; lng: number },
+  lat: number,
+  lng: number,
+): number {
+  const dLng = Math.abs(lng - from.lng);
+  const x = Math.min(dLng, 360 - dLng) * Math.cos((from.lat * Math.PI) / 180);
+  return (lat - from.lat) ** 2 + x ** 2;
+}
+
+/** Whether the held object stays: it is newer than the pulled one. */
+const heldIsNewer = (
+  held: { last_updated: string },
+  pulled: { last_updated: string },
+) => dateTimeMs(held.last_updated) > dateTimeMs(pulled.last_updated);
+
+/**
+ * The cache in memory: demo mode (seeded with sample data) and tests. Each method reads
+ * and writes without awaiting in between, so compare-and-swap holds within a process.
+ */
 export class MemoryLocationStore implements LocationStore {
   readonly locations = new Map<string, StoredLocation>();
   readonly tariffs = new Map<string, StoredTariff>();
@@ -148,22 +206,37 @@ export class MemoryLocationStore implements LocationStore {
     return l ? structuredClone(l) : null;
   }
 
-  async findLocationsById(peerId: string, ids: string[]) {
-    return [...this.locations.values()]
-      .filter((l) => l.peerId === peerId && ids.includes(l.location.id))
-      .map((l) => structuredClone(l));
-  }
-
   async saveLocations(peerId: string, locations: Location[], seenAt: string) {
     for (const location of locations) {
-      const k = key({
-        peerId,
-        countryCode: location.country_code,
-        partyId: location.party_id,
-        id: location.id,
-      });
-      this.locations.set(k, structuredClone({ peerId, location, seenAt }));
+      const k = locationKey(peerId, location);
+      const held = this.locations.get(k);
+      if (held && heldIsNewer(held.location, location)) held.seenAt = seenAt;
+      else
+        this.locations.set(k, {
+          peerId,
+          location: structuredClone(location),
+          seenAt,
+          revision: randomUUID(),
+        });
     }
+  }
+
+  async putLocation(
+    peerId: string,
+    location: Location,
+    seenAt: string,
+    expectedRevision: string | null,
+  ) {
+    const k = locationKey(peerId, location);
+    if ((this.locations.get(k)?.revision ?? null) !== expectedRevision)
+      return false;
+    this.locations.set(k, {
+      peerId,
+      location: structuredClone(location),
+      seenAt,
+      revision: randomUUID(),
+    });
+    return true;
   }
 
   async pruneLocations(peerId: string, before: string) {
@@ -186,10 +259,19 @@ export class MemoryLocationStore implements LocationStore {
       const text = searchText(l);
       if (f.words?.some((w) => !text.includes(w))) continue;
       if (f.id && !searchIds(l).includes(f.id)) continue;
-      out.push(structuredClone(s));
-      if (out.length >= f.limit) break;
+      out.push(s);
     }
-    return out;
+    const near = f.near;
+    if (near) {
+      const rank = (s: StoredLocation) =>
+        nearness(
+          near,
+          Number(s.location.coordinates.latitude),
+          Number(s.location.coordinates.longitude),
+        );
+      out.sort((a, b) => rank(a) - rank(b));
+    }
+    return out.slice(0, f.limit).map((s) => structuredClone(s));
   }
 
   async getTariff(k: ObjectKey) {
@@ -199,18 +281,41 @@ export class MemoryLocationStore implements LocationStore {
 
   async saveTariffs(peerId: string, tariffs: Tariff[], seenAt: string) {
     for (const tariff of tariffs) {
-      const k = key({
-        peerId,
-        countryCode: tariff.country_code,
-        partyId: tariff.party_id,
-        id: tariff.id,
-      });
-      this.tariffs.set(k, structuredClone({ peerId, tariff, seenAt }));
+      const k = tariffKey(peerId, tariff);
+      const held = this.tariffs.get(k);
+      if (held && heldIsNewer(held.tariff, tariff)) held.seenAt = seenAt;
+      else
+        this.tariffs.set(k, {
+          peerId,
+          tariff: structuredClone(tariff),
+          seenAt,
+          revision: randomUUID(),
+        });
     }
   }
 
-  async deleteTariff(k: ObjectKey) {
+  async putTariff(
+    peerId: string,
+    tariff: Tariff,
+    seenAt: string,
+    expectedRevision: string | null,
+  ) {
+    const k = tariffKey(peerId, tariff);
+    if ((this.tariffs.get(k)?.revision ?? null) !== expectedRevision)
+      return false;
+    this.tariffs.set(k, {
+      peerId,
+      tariff: structuredClone(tariff),
+      seenAt,
+      revision: randomUUID(),
+    });
+    return true;
+  }
+
+  async deleteTariff(k: ObjectKey, expectedRevision: string) {
+    if (this.tariffs.get(key(k))?.revision !== expectedRevision) return false;
     this.tariffs.delete(key(k));
+    return true;
   }
 
   async pruneTariffs(peerId: string, before: string) {
@@ -236,6 +341,11 @@ export class MemoryLocationStore implements LocationStore {
     return true;
   }
 }
+
+const locationKey = (peerId: string, l: Location) =>
+  key({ peerId, countryCode: l.country_code, partyId: l.party_id, id: l.id });
+const tariffKey = (peerId: string, t: Tariff) =>
+  key({ peerId, countryCode: t.country_code, partyId: t.party_id, id: t.id });
 
 function prune(
   map: Map<string, { peerId: string; seenAt: string }>,

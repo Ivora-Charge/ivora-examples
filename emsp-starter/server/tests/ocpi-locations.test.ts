@@ -498,6 +498,14 @@ describe("receiving pushes", () => {
         }),
       ),
     ).toMatchObject({ http: 404, code: 2003 });
+    // 2003 is Unknown Location: an unknown tariff is a plain client error.
+    expect(
+      await fails(cpo.push("tariffs", "DELETE", ["ZZ", "MCK", "NOPE"])),
+    ).toMatchObject({
+      http: 404,
+      code: 2000,
+      message: expect.stringContaining("Unknown tariff"),
+    });
     const invalid = await fails(
       cpo.push("locations", "PATCH", ["ZZ", "MCK", "LOC1", "LOC1-1"], {
         status: "EXPLODED",

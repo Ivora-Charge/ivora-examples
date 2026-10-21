@@ -1,6 +1,7 @@
 import "server-only";
 import { sameId } from "@/lib/ocpi/locations";
 import { mode } from "@/lib/server/demo";
+import { clientKey, rateLimit } from "@/lib/server/rate-limit";
 import { displayPrice, previewCost, primaryTariff } from "./pricing";
 import { locationStore, visiblePeerIds } from "./registry";
 import {
@@ -33,6 +34,32 @@ export const preflight = () =>
     headers: { ...HEADERS, "Access-Control-Allow-Methods": "GET, OPTIONS" },
   });
 
+/**
+ * Per-client limits on the public API, per server instance: searches and location
+ * details share one; price previews, which compute a session minute by minute, have a
+ * lower one.
+ */
+export const API_LIMITS = {
+  read: rateLimit({ limit: 120, windowMs: 60_000 }),
+  preview: rateLimit({ limit: 30, windowMs: 60_000 }),
+};
+
+/** A 429 answer when `request`'s client is over `limit`, else null. */
+function limited(
+  limit: (typeof API_LIMITS)[keyof typeof API_LIMITS],
+  request: Request,
+): Response | null {
+  const retryAfter = limit.check(clientKey(request.headers));
+  if (retryAfter === null) return null;
+  return Response.json(
+    { error: "Too many requests; try again shortly" },
+    {
+      status: 429,
+      headers: { ...HEADERS, "Retry-After": String(retryAfter) },
+    },
+  );
+}
+
 const failed = (what: string, e: unknown) => {
   // Name the error only: messages may carry database or peer details.
   console.error(
@@ -42,6 +69,8 @@ const failed = (what: string, e: unknown) => {
 };
 
 export async function searchResponse(request: Request): Promise<Response> {
+  const busy = limited(API_LIMITS.read, request);
+  if (busy) return busy;
   let query;
   try {
     query = parseSearchQuery(new URL(request.url).searchParams);
@@ -69,7 +98,12 @@ async function findLocation(id: string): Promise<StoredLocation | null> {
   return held?.location.publish ? held : null;
 }
 
-export async function detailResponse(id: string): Promise<Response> {
+export async function detailResponse(
+  id: string,
+  request: Request,
+): Promise<Response> {
+  const busy = limited(API_LIMITS.read, request);
+  if (busy) return busy;
   try {
     const held = await findLocation(id);
     if (!held) return json({ error: "Location not found" }, 404);
@@ -104,6 +138,8 @@ export async function previewResponse(
   id: string,
   request: Request,
 ): Promise<Response> {
+  const busy = limited(API_LIMITS.preview, request);
+  if (busy) return busy;
   const q = new URL(request.url).searchParams;
   let session;
   try {

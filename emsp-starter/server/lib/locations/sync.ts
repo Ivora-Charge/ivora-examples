@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { ocpiPages, type ClientOptions } from "@/lib/ocpi/client";
 import { OcpiError } from "@/lib/ocpi/errors";
 import { ourParty } from "@/lib/ocpi/identity";
-import { dateTimeMs, parseLocation, sameId } from "@/lib/ocpi/locations";
+import { parseLocation, sameId } from "@/lib/ocpi/locations";
 import type { Peer, PeerStore } from "@/lib/ocpi/store";
 import { parseTariff } from "@/lib/ocpi/tariffs";
 import { decryptToken } from "@/lib/ocpi/tokens";
@@ -98,26 +98,11 @@ const ofPeer = (peer: Peer, o: { country_code: string; party_id: string }) =>
       sameId(r.country_code, o.country_code) && sameId(r.party_id, o.party_id),
   );
 
-const sameKey = (
-  a: { country_code: string; party_id: string; id: string },
-  b: { country_code: string; party_id: string; id: string },
-) =>
-  a.country_code === b.country_code &&
-  a.party_id === b.party_id &&
-  a.id === b.id;
-
-/** The held object when it is newer than the pulled one (a push got there first). */
-const newer = <T extends { last_updated: string }>(
-  held: T | undefined,
-  pulled: T,
-) =>
-  held && dateTimeMs(held.last_updated) > dateTimeMs(pulled.last_updated)
-    ? held
-    : pulled;
-
 /**
  * Validates and stores one page. Returns how many objects were stored and how many
- * were skipped as invalid or not of this peer's parties.
+ * were skipped as invalid or not of this peer's parties. The store keeps an object it
+ * holds with a newer last_updated (a push got there first), even one pushed while this
+ * page is being stored.
  */
 async function storePage(
   store: LocationStore,
@@ -130,29 +115,13 @@ async function storePage(
     const pulled = raw
       .map((x) => parseLocation(x))
       .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
-    const held = await store.findLocationsById(peer.id, [
-      ...new Set(pulled.map((l) => l.id)),
-    ]);
-    await store.saveLocations(
-      peer.id,
-      pulled.map((l) =>
-        newer(held.find((h) => sameKey(h.location, l))?.location, l),
-      ),
-      seenAt,
-    );
+    await store.saveLocations(peer.id, pulled, seenAt);
     return { items: pulled.length, invalid: raw.length - pulled.length };
   }
   const pulled = raw
     .map((x) => parseTariff(x))
     .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
-  const held = await store.findTariffs(peer.id, [
-    ...new Set(pulled.map((t) => t.id)),
-  ]);
-  await store.saveTariffs(
-    peer.id,
-    pulled.map((t) => newer(held.find((h) => sameKey(h.tariff, t))?.tariff, t)),
-    seenAt,
-  );
+  await store.saveTariffs(peer.id, pulled, seenAt);
   return { items: pulled.length, invalid: raw.length - pulled.length };
 }
 

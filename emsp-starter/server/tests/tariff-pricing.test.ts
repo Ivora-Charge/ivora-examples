@@ -44,7 +44,7 @@ describe("display price", () => {
       {
         type: "ENERGY",
         unit: "kWh",
-        price: expect.closeTo(0.7139, 6),
+        priceE4: 7139,
         vatIncluded: true,
         text: "€0.7139 per kWh",
         conditions: [],
@@ -52,7 +52,7 @@ describe("display price", () => {
       {
         type: "TIME",
         unit: "hour",
-        price: expect.closeTo(7.26, 6),
+        priceE4: 72600,
         vatIncluded: true,
         text: "€7.26 per hour",
         conditions: ["after 45 min"],
@@ -205,22 +205,23 @@ describe("price preview", () => {
       {
         type: "ENERGY",
         quantity: 30,
-        unitPrice: 0.59,
-        amountExclVat: 17.7,
+        unitPriceE4: 5900,
+        amountExclVatMinor: 1770,
         vat: 21,
       },
       {
         type: "TIME",
         quantity: 0.25,
-        unitPrice: 6,
-        amountExclVat: 1.5,
+        unitPriceE4: 60000,
+        amountExclVatMinor: 150,
         vat: 21,
       },
     ]);
     expect(p).toMatchObject({
       currency: "EUR",
-      totalExclVat: 19.2,
-      totalInclVat: 23.23,
+      minorDigits: 2,
+      totalExclVatMinor: 1920,
+      totalInclVatMinor: 2323,
       text: "€23.23",
     });
   });
@@ -233,15 +234,15 @@ describe("price preview", () => {
       chargingMinutes: 60,
       timeZone: AMSTERDAM,
     });
-    expect(weekday.lines.map((l) => [l.type, l.unitPrice, l.quantity])).toEqual(
-      [
-        ["FLAT", 0.5, 1],
-        ["ENERGY", 0.39, 5.5],
-        ["ENERGY", 0.29, 5.5],
-      ],
-    );
-    expect(weekday.totalExclVat).toBe(4.24);
-    expect(weekday.totalInclVat).toBe(5.13);
+    expect(
+      weekday.lines.map((l) => [l.type, l.unitPriceE4, l.quantity]),
+    ).toEqual([
+      ["FLAT", 5000, 1],
+      ["ENERGY", 3900, 5.5],
+      ["ENERGY", 2900, 5.5],
+    ]);
+    expect(weekday.totalExclVatMinor).toBe(424);
+    expect(weekday.totalInclVatMinor).toBe(513);
 
     const saturday = previewCost(SAMPLE.AC_DAY_NIGHT, {
       start: new Date("2026-10-24T10:00:00Z"),
@@ -249,14 +250,14 @@ describe("price preview", () => {
       chargingMinutes: 60,
       timeZone: AMSTERDAM,
     });
-    expect(saturday.totalExclVat).toBe(3.4);
+    expect(saturday.totalExclVatMinor).toBe(340);
     // In UTC the same instant is still a weekday evening at 18:30: day rate first.
     const utc = previewCost(SAMPLE.AC_DAY_NIGHT, {
       start: new Date("2026-10-21T18:30:00Z"),
       energyKwh: 11,
       chargingMinutes: 60,
     });
-    expect(utc.lines.find((l) => l.unitPrice === 0.39)?.quantity).toBe(11);
+    expect(utc.lines.find((l) => l.unitPriceE4 === 3900)?.quantity).toBe(11);
   });
 
   it("bills parking after charging, rounded up to the step size", () => {
@@ -270,10 +271,10 @@ describe("price preview", () => {
     // 61 minutes in 5-minute steps: 65 minutes.
     expect(p.lines.find((l) => l.type === "PARKING_TIME")).toMatchObject({
       quantity: 1.0833,
-      amountExclVat: 2.1667,
+      amountExclVatMinor: 217,
     });
-    expect(p.totalExclVat).toBe(5.67);
-    expect(p.totalInclVat).toBe(6.86);
+    expect(p.totalExclVatMinor).toBe(567);
+    expect(p.totalInclVatMinor).toBe(686);
   });
 
   it("applies energy tiers and power bands", () => {
@@ -289,13 +290,13 @@ describe("price preview", () => {
       energyKwh: 20,
       chargingMinutes: 20,
     });
-    expect(t.lines.map((l) => [l.unitPrice, l.quantity])).toEqual([
-      [0.3, 10],
-      [0.2, 10],
+    expect(t.lines.map((l) => [l.unitPriceE4, l.quantity])).toEqual([
+      [3000, 10],
+      [2000, 10],
     ]);
-    expect(t.totalExclVat).toBe(5);
+    expect(t.totalExclVatMinor).toBe(500);
     // No VAT rate given: no total with VAT.
-    expect(t.totalInclVat).toBeNull();
+    expect(t.totalInclVatMinor).toBeNull();
     expect(t.text).toBe("€5.00 excl. VAT");
 
     const bands = tariff([
@@ -308,12 +309,12 @@ describe("price preview", () => {
     const start = new Date("2026-10-21T10:00:00Z");
     expect(
       previewCost(bands, { start, energyKwh: 50, chargingMinutes: 30 })
-        .totalExclVat,
-    ).toBe(25);
+        .totalExclVatMinor,
+    ).toBe(2500);
     expect(
       previewCost(bands, { start, energyKwh: 11, chargingMinutes: 60 })
-        .totalExclVat,
-    ).toBe(3.3);
+        .totalExclVatMinor,
+    ).toBe(330);
   });
 
   it("applies min_price and max_price to the total", () => {
@@ -324,8 +325,8 @@ describe("price preview", () => {
     });
     expect(min).toMatchObject({
       bounded: "min",
-      totalExclVat: 1,
-      totalInclVat: 1.21,
+      totalExclVatMinor: 100,
+      totalInclVatMinor: 121,
       text: "€1.21",
     });
     const capped = tariff(
@@ -345,8 +346,8 @@ describe("price preview", () => {
     });
     expect(max).toMatchObject({
       bounded: "max",
-      totalExclVat: 15,
-      totalInclVat: null,
+      totalExclVatMinor: 1500,
+      totalInclVatMinor: null,
     });
   });
 
@@ -357,8 +358,8 @@ describe("price preview", () => {
       chargingMinutes: 60,
     });
     expect(free).toMatchObject({
-      totalExclVat: 0,
-      totalInclVat: 0,
+      totalExclVatMinor: 0,
+      totalInclVatMinor: 0,
       text: "€0.00",
     });
     const flat = previewCost(SAMPLE.AC_DAY_NIGHT, {
@@ -366,7 +367,7 @@ describe("price preview", () => {
       energyKwh: 0,
       chargingMinutes: 0,
     });
-    expect(flat.totalExclVat).toBe(0.5);
+    expect(flat.totalExclVatMinor).toBe(50);
   });
 
   it("reads an unknown time zone as UTC", () => {
@@ -376,6 +377,74 @@ describe("price preview", () => {
       chargingMinutes: 60,
       timeZone: "Not/AZone",
     });
-    expect(p.lines.find((l) => l.unitPrice === 0.39)?.quantity).toBe(11);
+    expect(p.lines.find((l) => l.unitPriceE4 === 3900)?.quantity).toBe(11);
+  });
+
+  it("computes in integers and rounds the total once, half up", () => {
+    const start = new Date("2026-10-21T10:00:00Z");
+    // 1.005 * 100 is 100.49999... in floating point; in integers it is 100.5 cents.
+    const flat = tariff([
+      { price_components: [{ type: "FLAT", price: 1.005, step_size: 1 }] },
+    ]);
+    expect(
+      previewCost(flat, { start, energyKwh: 0, chargingMinutes: 0 }),
+    ).toMatchObject({ totalExclVatMinor: 101, text: "€1.01 excl. VAT" });
+
+    // Three lines of half a cent each: each shows 1 cent, the total is 1.5 cents → 2.
+    const half = tariff([
+      {
+        price_components: [
+          { type: "FLAT", price: 0.005, step_size: 1 },
+          { type: "TIME", price: 0.005, step_size: 1 },
+          { type: "PARKING_TIME", price: 0.005, step_size: 1 },
+        ],
+      },
+    ]);
+    const p = previewCost(half, {
+      start,
+      energyKwh: 1,
+      chargingMinutes: 60,
+      parkingMinutes: 60,
+    });
+    expect(p.lines.map((l) => l.amountExclVatMinor)).toEqual([1, 1, 1]);
+    expect(p.totalExclVatMinor).toBe(2);
+    for (const n of [
+      p.totalExclVatMinor,
+      ...p.lines.map((l) => l.amountExclVatMinor),
+    ])
+      expect(Number.isInteger(n)).toBe(true);
+
+    // VAT applied to the exact amount: 0.3333 * 3 kWh = 0.9999, * 1.21 = 1.209879.
+    const vat = tariff([
+      {
+        price_components: [
+          { type: "ENERGY", price: 0.3333, vat: 21, step_size: 1 },
+        ],
+      },
+    ]);
+    expect(
+      previewCost(vat, { start, energyKwh: 3, chargingMinutes: 30 }),
+    ).toMatchObject({ totalExclVatMinor: 100, totalInclVatMinor: 121 });
+  });
+
+  it("uses the currency's own minor unit", () => {
+    const yen = tariff(
+      [{ price_components: [{ type: "ENERGY", price: 35.5, step_size: 1 }] }],
+      { currency: "JPY" },
+    );
+    const p = previewCost(yen, {
+      start: new Date("2026-10-21T10:00:00Z"),
+      energyKwh: 7.3,
+      chargingMinutes: 60,
+    });
+    expect(p).toMatchObject({
+      minorDigits: 0,
+      totalExclVatMinor: 259,
+      text: "¥259 excl. VAT",
+    });
+    expect(displayPrice(yen).components[0]).toMatchObject({
+      priceE4: 355_000,
+      text: "¥35.5 per kWh excl. VAT",
+    });
   });
 });

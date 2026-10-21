@@ -4,10 +4,10 @@ export const dynamic = "force-dynamic";
 
 /** One location with its EVSEs, connectors and display prices. */
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  return detailResponse((await params).id);
+  return detailResponse((await params).id, request);
 }
 
 export function OPTIONS() {

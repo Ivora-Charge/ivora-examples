@@ -11,8 +11,12 @@ import {
   parseSearchQuery,
   searchLocations,
   SearchQueryError,
+  SEARCH_LIMITS,
+  tariffsOfLocation,
   type SearchQuery,
 } from "@/lib/locations/search";
+import { API_LIMITS } from "@/lib/locations/api";
+import { rateLimit } from "@/lib/server/rate-limit";
 import { MemoryLocationStore } from "@/lib/locations/store";
 
 const ONE = "peer-one";
@@ -234,6 +238,65 @@ describe("location search", () => {
   });
 });
 
+describe("candidates and tariffs", () => {
+  it("keeps the nearest sites when a dense area has more than the candidate cap", async () => {
+    const dense = new MemoryLocationStore();
+    const [base] = sampleLocations({ countryCode: "ZZ", partyId: "MCK" }, 1);
+    // More sites than the cap, saved farthest first, all inside the radius.
+    const n = SEARCH_LIMITS.candidates + 50;
+    const sites = Array.from({ length: n }, (_, i) => ({
+      ...base,
+      id: `D${n - i}`,
+      name: `Site ${n - i}`,
+      coordinates: {
+        latitude: CENTER.lat.toFixed(6),
+        longitude: (CENTER.lng + (n - i) * 0.00002).toFixed(6),
+      },
+    }));
+    await dense.saveLocations(ONE, sites, "2026-10-21T10:00:00Z");
+    const r = await searchLocations(dense, [ONE], near({ limit: "3" }));
+    expect(r.items.map((i) => i.name)).toEqual(["Site 1", "Site 2", "Site 3"]);
+    expect(r.total).toBe(SEARCH_LIMITS.candidates);
+  });
+
+  it("prices a location only with its own party's tariffs", () => {
+    const [l] = sampleLocations({ countryCode: "ZZ", partyId: "MCK" }, 1);
+    const own = sampleTariffs({ countryCode: "ZZ", partyId: "MCK" });
+    const other = sampleTariffs({ countryCode: "ZZ", partyId: "OTH" });
+    const found = tariffsOfLocation(
+      { peerId: ONE, location: l, seenAt: "x", revision: "r" },
+      new Map([[ONE, [...other, ...own]]]),
+    );
+    expect(found).toEqual(own);
+    // Only another party has the ID: no price, rather than someone else's.
+    expect(
+      tariffsOfLocation(
+        { peerId: ONE, location: l, seenAt: "x", revision: "r" },
+        new Map([[ONE, other]]),
+      ),
+    ).toEqual([]);
+  });
+});
+
+describe("rate limit", () => {
+  it("allows `limit` requests per client per window, then says when to retry", () => {
+    const limit = rateLimit({ limit: 2, windowMs: 10_000 });
+    expect(limit.check("a", 0)).toBeNull();
+    expect(limit.check("a", 1_000)).toBeNull();
+    expect(limit.check("a", 2_000)).toBe(8);
+    expect(limit.check("b", 2_000)).toBeNull();
+    expect(limit.check("a", 10_000)).toBeNull();
+  });
+
+  it("forgets the oldest clients past its size", () => {
+    const limit = rateLimit({ limit: 1, windowMs: 60_000, maxClients: 2 });
+    for (const c of ["a", "b", "c"]) expect(limit.check(c, 0)).toBeNull();
+    // "a" was dropped to stay within two clients, so it starts afresh.
+    expect(limit.check("a", 1)).toBeNull();
+    expect(limit.check("c", 1)).not.toBeNull();
+  });
+});
+
 describe("geometry and IDs", () => {
   it("computes distances and boxes that contain the circle", () => {
     expect(
@@ -259,6 +322,8 @@ describe("geometry and IDs", () => {
 describe("location API in demo mode", () => {
   const saved = { ...process.env };
   beforeEach(() => {
+    API_LIMITS.read.reset();
+    API_LIMITS.preview.reset();
     for (const k of [
       "EMSP_COUNTRY_CODE",
       "EMSP_PARTY_ID",
@@ -342,7 +407,11 @@ describe("location API in demo mode", () => {
     expect(await preview.json()).toMatchObject({
       mode: "demo",
       display_only: true,
-      preview: { totalExclVat: 5.67, totalInclVat: 6.86, text: "€6.86" },
+      preview: {
+        totalExclVatMinor: 567,
+        totalInclVatMinor: 686,
+        text: "€6.86",
+      },
     });
   });
 
@@ -379,5 +448,50 @@ describe("location API in demo mode", () => {
     );
     expect(missing.status).toBe(400);
     expect(await missing.json()).toEqual({ error: "kwh is required" });
+  });
+
+  it("rate limits each client, by the proxy's client address", async () => {
+    const id = locationAppId({
+      peerId: "demo-mock-cpo",
+      countryCode: "ZZ",
+      partyId: "MCK",
+      id: "LOC3",
+    });
+    const preview = (ip: string) =>
+      previewRoute.GET(
+        new Request(
+          `http://localhost:3000/x?evse_uid=LOC3-1&connector_id=1&kwh=10&minutes=60`,
+          { headers: { "x-real-ip": ip } },
+        ),
+        ctx(id),
+      );
+    for (let i = 0; i < 30; i++)
+      expect((await preview("198.51.100.1")).status).toBe(200);
+    const limited = await preview("198.51.100.1");
+    expect(limited.status).toBe(429);
+    expect(Number(limited.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(limited.headers.get("access-control-allow-origin")).toBe("*");
+    expect((await preview("198.51.100.2")).status).toBe(200);
+
+    const search = (ip: string) =>
+      searchRoute.GET(
+        new Request("http://localhost:3000/api/v1/locations?q=hall", {
+          headers: { "x-forwarded-for": `forged, ${ip}` },
+        }),
+      );
+    for (let i = 0; i < 120; i++)
+      expect((await search("192.0.2.1")).status).toBe(200);
+    expect((await search("192.0.2.1")).status).toBe(429);
+    // Details share the search limit.
+    expect(
+      (
+        await detailRoute.GET(
+          new Request("http://localhost:3000/x", {
+            headers: { "x-forwarded-for": "192.0.2.1" },
+          }),
+          ctx(id),
+        )
+      ).status,
+    ).toBe(429);
   });
 });
