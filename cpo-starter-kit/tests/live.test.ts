@@ -345,4 +345,62 @@ describe("live Ivora client", () => {
     );
     expect(() => idempotencyKey("location", "a b", "create")).toThrow();
   });
+
+  it("pushes the driver-page branding with PUT and an Idempotency-Key", async () => {
+    const branding = {
+      display_name: "Sample Charging Co",
+      primary_color: "#17613a",
+      support_email: "help@example.com",
+      support_url: "https://example.com/help",
+    };
+    const { ivora, calls } = client([
+      ok({ ...branding, logo_url: null, is_default: false }),
+    ]);
+    const key = idempotencyKey("branding", "op-1", "put-0-abc");
+    expect((await ivora.putBranding(branding, key)).is_default).toBe(false);
+    expect(calls[0].url).toBe(`${BASE}/v1/tenants/42/branding`);
+    expect(calls[0].init.method).toBe("PUT");
+    expect(header(calls[0], "idempotency-key")).toBe(key);
+    expect(header(calls[0], "content-type")).toBe("application/json");
+    expect(JSON.parse(String(calls[0].init.body))).toEqual(branding);
+    await expect(ivora.putBranding(branding, "")).rejects.toThrow(
+      /Idempotency-Key/,
+    );
+    expect(calls).toHaveLength(1);
+  });
+
+  it("uploads the logo as the raw image with its own content type, and retries with the same bytes", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+    const { ivora, calls } = client([
+      err(409, "request_in_progress"),
+      ok({ display_name: "X", logo_url: "https://api.example.test/l.png" }),
+    ]);
+    const key = idempotencyKey("logo", "op-1", "put-0-abc");
+    const r = await ivora.putBrandingLogo(
+      { bytes, contentType: "image/png" },
+      key,
+    );
+    expect(r.logo_url).toBe("https://api.example.test/l.png");
+    expect(calls.map((c) => c.url)).toEqual([
+      `${BASE}/v1/tenants/42/branding/logo`,
+      `${BASE}/v1/tenants/42/branding/logo`,
+    ]);
+    for (const c of calls) {
+      expect(c.init.method).toBe("PUT");
+      expect(header(c, "content-type")).toBe("image/png");
+      expect(header(c, "idempotency-key")).toBe(key);
+      expect([...(c.init.body as Uint8Array)]).toEqual([...bytes]);
+    }
+  });
+
+  it("reads the Stripe payment account under the payment provider's path, with no key", async () => {
+    const { ivora, calls } = client([
+      ok({ status: "pending_review", charges_enabled: true }),
+    ]);
+    expect((await ivora.getPaymentAccount()).status).toBe("pending_review");
+    expect(calls[0].url).toBe(`${BASE}/payment/stripe/v1/tenants/42/account`);
+    expect(calls[0].init.method).toBe("GET");
+    expect(header(calls[0], "idempotency-key")).toBeNull();
+    expect(header(calls[0], "authorization")).toBe(`Bearer ${API_KEY}`);
+  });
 });

@@ -4,6 +4,9 @@ import { config, isDemo } from "@/lib/server/env";
 import { currentStaff } from "@/lib/server/auth";
 import { MODULES } from "@/lib/modules";
 import { ROLE_LABELS } from "@/lib/roles";
+import { brandThemeCss } from "@/lib/brand-colors";
+import { getOnboarding } from "@/lib/server/onboarding";
+import type { Staff } from "@/lib/server/team";
 import { THEME_COLORS, THEME_KEY } from "@/lib/theme";
 import { brand } from "@/brand/brand";
 import { fontVariables } from "@/brand/fonts";
@@ -52,6 +55,23 @@ async function signedInStaff() {
   }
 }
 
+/**
+ * The operator's brand colour as the kit's primary colour, in each mode where it keeps
+ * text readable (see lib/brand-colors.ts). Null keeps the kit's own colours.
+ */
+async function brandCss(staff: Staff | null) {
+  if (!staff) return null;
+  try {
+    const p = await getOnboarding().store.load(staff.operatorId);
+    return brandThemeCss(p.primaryColor);
+  } catch (e) {
+    console.error("cpo-starter-kit: brand theme failed:", {
+      error: e instanceof Error ? e.name : "error",
+    });
+    return null;
+  }
+}
+
 export default async function RootLayout({
   children,
 }: {
@@ -59,10 +79,18 @@ export default async function RootLayout({
 }) {
   const demo = isDemo();
   const staff = await signedInStaff();
+  const themeCss = await brandCss(staff);
   return (
     <html lang="en" className={fontVariables} suppressHydrationWarning>
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+        {/* Built only from a validated #rrggbb colour. */}
+        {themeCss && (
+          <style
+            id="brand-theme"
+            dangerouslySetInnerHTML={{ __html: themeCss }}
+          />
+        )}
       </head>
       <body>
         <a className="skip" href="#main">
