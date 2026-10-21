@@ -13,6 +13,11 @@ import {
   type Station,
   type Transaction,
 } from "../ivora";
+import {
+  ensureStaffToken,
+  isStaffSession,
+  type LiveDeps,
+} from "../live/service";
 import type { Staff } from "../team/types";
 import { addChargerInput, connectorNumber, editChargerInput } from "./input";
 import { generatePassword } from "./password";
@@ -38,14 +43,12 @@ import {
 export interface ChargerDeps {
   store: ChargerStore;
   ivora: IvoraClient;
+  /** The Live view's store and client: the operator's staff token lives there. */
+  live: LiveDeps;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** The ID tag a remote test session starts with. It authorizes no payment. */
-export const TEST_TOKEN = "CPO-KIT-TEST";
-/** How the API shows it on a session: the last 4 characters behind ****. */
-const TEST_TOKEN_MASKED = `****${TEST_TOKEN.slice(-4)}`;
 /** A last OCPP message older than this fails the heartbeat check (Ivora asks for 60 s). */
 export const HEARTBEAT_FRESH_SECONDS = 300;
 /** A test whose session the charger has not reported by then fails. */
@@ -610,6 +613,9 @@ export async function startTest(
       "not_ready",
       `Connector ${number} is ${c.status ?? "in an unknown state"}, not Available. The test runs only on a free connector.`,
     );
+  // The operator's staff token (the Live view's, created once if missing). It authorizes
+  // no payment. Resolved before the claim, so a blocked token costs no attempt.
+  const staffToken = await ensureStaffToken(d.live, actor.operatorId);
   const claimed: Omit<RemoteTest, "attempt"> = {
     phase: "starting",
     connectorNumber: number,
@@ -630,7 +636,7 @@ export async function startTest(
       {
         action: "start",
         connector_id: c.id,
-        token: TEST_TOKEN,
+        token: staffToken,
         token_type: "Central",
       },
       idempotencyKey("charger", r.id, `test-${attempt}-start`),
@@ -688,7 +694,13 @@ export async function checkTest(
     applyAnswer(t, op, t.phase === "stopping" ? "stop" : "start");
   }
   if (running(t)) {
-    const tx = await findTestSession(d, r.stationId, t);
+    const stored = await d.live.store.getStaffToken(actor.operatorId);
+    const tx = await findTestSession(
+      d,
+      r.stationId,
+      t,
+      stored?.idToken ?? null,
+    );
     if (tx) {
       t.transactionId = tx.id;
       t.energyWh = tx.energy_wh ?? 0;
@@ -713,12 +725,17 @@ export async function checkTest(
 }
 
 /**
- * The test's own session, and never a driver's: started with the test token, on the
- * test's connector, no earlier than the test was requested.
+ * The test's own session, and never a driver's: started with the operator's staff
+ * token (as the API shows it, masked), on the test's connector, no earlier than the
+ * test was requested.
  */
-function isTestSession(x: Transaction, t: RemoteTest): boolean {
+function isTestSession(
+  x: Transaction,
+  t: RemoteTest,
+  staffToken: string | null,
+): boolean {
   return (
-    (x.id_token === TEST_TOKEN || x.id_token === TEST_TOKEN_MASKED) &&
+    isStaffSession(x, staffToken) &&
     (x.connector_id == null || x.connector_id === t.connectorId) &&
     Date.parse(x.started_at ?? "") >= Date.parse(t.requestedAt)
   );
@@ -728,16 +745,17 @@ async function findTestSession(
   d: ChargerDeps,
   stationId: number,
   t: RemoteTest,
+  staffToken: string | null,
 ): Promise<Transaction | null> {
   if (t.transactionId) {
     const tx = await d.ivora.getTransaction(t.transactionId);
-    return isTestSession(tx, t) ? tx : null;
+    return isTestSession(tx, t, staffToken) ? tx : null;
   }
   const list = await d.ivora.listTransactions({
     station_id: stationId,
     limit: 10,
   });
-  return list.find((x) => isTestSession(x, t)) ?? null;
+  return list.find((x) => isTestSession(x, t, staffToken)) ?? null;
 }
 
 /** Stops the test session (`stop` command with its transaction), and only that. */

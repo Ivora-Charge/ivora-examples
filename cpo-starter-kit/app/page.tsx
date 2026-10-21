@@ -17,7 +17,7 @@ export const metadata = { title: "Overview" };
 
 export default async function Page() {
   const me = await requireRole("viewer");
-  const r = await loadOverview();
+  const r = await loadOverview(me.operatorId);
   // The setup checklist is for the people who can act on it: owners and managers.
   let checklist: ChecklistItem[] | null = null;
   if (atLeast(me.role, "manager")) {
@@ -51,6 +51,11 @@ export default async function Page() {
             <Stat
               label="Recent sessions"
               value={formatKwh(r.overview.recentEnergyKwh)}
+              note={
+                r.overview.staffSessions
+                  ? `incl. ${r.overview.staffSessions} staff/test`
+                  : undefined
+              }
             />
           </section>
           <section className="card" aria-labelledby="chargers-heading">
@@ -141,11 +146,22 @@ function Checklist({ items }: { items: ChecklistItem[] }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string | number }) {
+function Stat({
+  label,
+  value,
+  note,
+}: {
+  label: string;
+  value: string | number;
+  note?: string;
+}) {
   return (
     <div className="stat">
       <span className="stat-value">{value}</span>
-      <span className="stat-label">{label}</span>
+      <span className="stat-label">
+        {label}
+        {note ? ` (${note})` : ""}
+      </span>
     </div>
   );
 }

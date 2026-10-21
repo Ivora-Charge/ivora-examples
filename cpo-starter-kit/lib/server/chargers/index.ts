@@ -1,6 +1,7 @@
 import "server-only";
 import { isDemo } from "../env";
 import { getIvora } from "../ivora";
+import { getLive } from "../live";
 import { createDemoChargerStore } from "./demo";
 import { cookieDemoChargers } from "./demo-cookie";
 import type { ChargerDeps } from "./service";
@@ -21,5 +22,6 @@ export function getChargers(): ChargerDeps {
       ? createDemoChargerStore(cookieDemoChargers())
       : createSupabaseChargerStore(),
     ivora: getIvora(),
+    live: getLive(),
   };
 }

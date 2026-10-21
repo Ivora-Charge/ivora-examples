@@ -1,5 +1,6 @@
 import "server-only";
 import { describeError, getIvora, IvoraError } from "./ivora";
+import { getLive, isStaffSession } from "./live";
 import { whToKwh } from "../units";
 
 export interface Overview {
@@ -11,6 +12,8 @@ export interface Overview {
   activeSessions: number;
   /** Energy of the most recent sessions (up to 50), kWh. */
   recentEnergyKwh: number;
+  /** Of those sessions, how many were started with the staff token (remote start, charger test). */
+  staffSessions: number;
   stations: { id: number; name: string; online: boolean; connectors: number }[];
   /** More sites or chargers than the client pages through: counts are a lower bound. */
   truncated: boolean;
@@ -21,7 +24,9 @@ export type OverviewResult =
   | { ok: false; mode: "live" | "demo"; error: string };
 
 /** What the Overview page shows. Reads only; works the same in demo and live mode. */
-export async function loadOverview(): Promise<OverviewResult> {
+export async function loadOverview(
+  operatorId?: string,
+): Promise<OverviewResult> {
   const ivora = getIvora();
   try {
     const [sites, chargers, transactions] = await Promise.all([
@@ -29,6 +34,9 @@ export async function loadOverview(): Promise<OverviewResult> {
       ivora.listAllStations(),
       ivora.listTransactions({ limit: 50 }),
     ]);
+    const staffToken = operatorId
+      ? ((await getLive().store.getStaffToken(operatorId))?.idToken ?? null)
+      : null;
     const locations = sites.data;
     const stations = chargers.data;
     const energyWh = transactions.reduce((n, t) => n + (t.energy_wh ?? 0), 0);
@@ -42,6 +50,8 @@ export async function loadOverview(): Promise<OverviewResult> {
         connectors: stations.reduce((n, s) => n + s.connectors.length, 0),
         activeSessions: transactions.filter((t) => t.active).length,
         recentEnergyKwh: whToKwh(energyWh),
+        staffSessions: transactions.filter((t) => isStaffSession(t, staffToken))
+          .length,
         stations: stations.map((s) => ({
           id: s.id,
           name: s.name,

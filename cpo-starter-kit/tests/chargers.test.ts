@@ -20,10 +20,10 @@ import {
   startTest,
   stopTest,
   testConnection,
-  TEST_TOKEN,
   type ChargerDeps,
 } from "@/lib/server/chargers/service";
 import { ChargerError } from "@/lib/server/chargers/types";
+import { createDemoLiveStore, memoryDemoLive } from "@/lib/server/live/demo";
 import { createDemoClient, memoryDemoFleet } from "@/lib/server/ivora/demo";
 import { createLiveClient } from "@/lib/server/ivora/live";
 import type { Station, Transaction } from "@/lib/server/ivora/types";
@@ -66,10 +66,12 @@ function fakeIvora() {
   const locations = [{ id: 5, name: "Depot", external_reference: null }];
   const stations: Station[] = [];
   const transactions: Transaction[] = [];
+  const tokens: Record<string, unknown>[] = [];
   const s = {
     calls,
     stations,
     transactions,
+    tokens,
     clock: T0,
     override: null as null | ((c: Call) => Reply | undefined),
   };
@@ -78,6 +80,22 @@ function fakeIvora() {
     const p = m?.[1] ?? "";
     if (c.method === "GET" && p === "locations")
       return { body: { data: locations, next_cursor: null } };
+    if (c.method === "GET" && p === "tokens") {
+      const ref = new URL(`https://x${c.path}`).searchParams.get(
+        "external_reference",
+      );
+      return {
+        body: {
+          data: tokens.filter((t) => t.external_reference === ref),
+          next_cursor: null,
+        },
+      };
+    }
+    if (c.method === "POST" && p === "tokens") {
+      const t = { id: 300 + tokens.length, ...(c.body as object) };
+      tokens.push(t);
+      return { status: 201, body: t };
+    }
     if (c.method === "POST" && p === "locations") {
       const l = { id: 6, ...(c.body as object) };
       locations.push(l as never);
@@ -217,12 +235,20 @@ function fakeIvora() {
   return { ...s, ivora, fetch, state: s };
 }
 
+/** How the API shows the registered staff token on a session. */
+const staffMask = (api: { tokens: Record<string, unknown>[] }) =>
+  `****${String((api.tokens[0] as { id_token: string }).id_token).slice(-4)}`;
+
 function liveDeps() {
   const api = fakeIvora();
   const cookie = memoryDemoChargers();
   const d: ChargerDeps = {
     store: createDemoChargerStore(cookie),
     ivora: api.ivora,
+    live: {
+      store: createDemoLiveStore(memoryDemoLive()),
+      ivora: api.ivora,
+    },
     now: () => api.state.clock,
     sleep: async () => {},
   };
@@ -487,10 +513,14 @@ describe("chargers (live API mocked)", () => {
       body: {
         action: "start",
         connector_id: 701,
-        token: TEST_TOKEN,
+        token: expect.stringMatching(/^STAFF[A-Z0-9]{15}$/),
         token_type: "Central",
       },
     });
+    // The same registered per-operator staff token Live view uses, created once.
+    const registered = api.tokens[0] as { id_token: string; label: string };
+    expect(start.body?.token).toBe(registered.id_token);
+    expect(api.tokens).toHaveLength(1);
     expect(t).toMatchObject({
       phase: "charging",
       transactionId: 900,
@@ -547,7 +577,7 @@ describe("chargers (live API mocked)", () => {
             id: 950,
             station_id: 70,
             connector_id: 700,
-            id_token: "****TEST",
+            id_token: staffMask(api),
             active: true,
             started_at: new Date(api.state.clock + 1_000).toISOString(),
             ended_at: null,
@@ -649,6 +679,22 @@ describe("chargers (live API mocked)", () => {
     ]);
   });
 
+  it("sends no command and uses no attempt when the staff token is blocked", async () => {
+    const { d, api } = liveDeps();
+    const { charger } = await addCharger(d, technician, { ...ADD, site: "5" });
+    goOnline(api);
+    api.tokens.push({
+      id: 299,
+      id_token: "STAFFBLOCKED000001",
+      status: "Blocked",
+      external_reference: `cpo-staff-${OPERATOR}`,
+    });
+    await expect(
+      startTest(d, technician, charger.id, { connector: "1", confirmed: true }),
+    ).rejects.toMatchObject({ code: "not_ready" });
+    expect(api.calls.some((c) => c.path.endsWith("/commands"))).toBe(false);
+  });
+
   it("never adopts or stops a driver's session", async () => {
     const { d, api } = liveDeps();
     const { charger } = await addCharger(d, technician, { ...ADD, site: "5" });
@@ -692,7 +738,7 @@ describe("chargers (live API mocked)", () => {
       driver(961, 700, T0 + 2_000),
       driver(962, null, T0 + 3_000),
       // A test-token session from before this test is not this test's either.
-      { ...driver(963, 700, T0 - 1_000), id_token: "****TEST" },
+      { ...driver(963, 700, T0 - 1_000), id_token: staffMask(api) },
     );
     t = await checkTest(d, technician, charger.id);
     expect(t).toMatchObject({ phase: "starting", transactionId: null });
@@ -873,6 +919,10 @@ describe("chargers in demo mode", () => {
     const d: ChargerDeps = {
       store: createDemoChargerStore(memoryDemoChargers()),
       ivora: createDemoClient(fleet, () => now),
+      live: {
+        store: createDemoLiveStore(memoryDemoLive()),
+        ivora: createDemoClient(fleet, () => now),
+      },
       now: () => now,
       sleep: async () => {},
     };
@@ -915,6 +965,10 @@ describe("chargers in demo mode", () => {
     const d: ChargerDeps = {
       store: createDemoChargerStore(memoryDemoChargers()),
       ivora: createDemoClient(memoryDemoFleet()),
+      live: {
+        store: createDemoLiveStore(memoryDemoLive()),
+        ivora: createDemoClient(memoryDemoFleet()),
+      },
     };
     expect(await removeCharger(d, owner, "station-9103", true)).toEqual({
       deletedInIvora: true,
