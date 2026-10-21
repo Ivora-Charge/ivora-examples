@@ -3,7 +3,13 @@ import { useEffect, useState } from "react";
 import { brand as copy } from "../../brand/brand";
 import { describe } from "@/lib/status";
 import { formatCents, quoteCents } from "@/lib/tariff";
-import type { Charger, ConfigKey, LocationOption, Site } from "@/lib/types";
+import {
+  TEST_SESSION_LABEL,
+  type Charger,
+  type ConfigKey,
+  type LocationOption,
+  type Site,
+} from "@/lib/types";
 import { formatKwh } from "@/lib/units";
 
 const GENERIC_NOTES = `- Open the charger's installer app or web UI and find the OCPP / backend settings.
@@ -527,7 +533,7 @@ export default function Wizard({
               </label>
               <button
                 type="button"
-                disabled={busy || !!testRunning}
+                disabled={busy || !!testRunning || !!charger.inServiceAt}
                 onClick={() =>
                   run(async () =>
                     setCharger(
@@ -557,6 +563,11 @@ export default function Wizard({
                 Stop test session
               </button>
             </div>
+            {charger.inServiceAt && (
+              <p className="muted">
+                This charger is in service: test sessions are no longer allowed.
+              </p>
+            )}
             {demo && (
               <p className="muted">
                 Demo: the start and stop are simulated, nothing is sent.
@@ -577,7 +588,8 @@ export default function Wizard({
                 </span>
                 <span className="kwh">{formatKwh(charger.test.energyWh)}</span>
                 <span className="muted">
-                  delivered on connector {charger.test.connectorNumber}.
+                  delivered on connector {charger.test.connectorNumber}.{" "}
+                  {TEST_SESSION_LABEL}.
                   {charger.test.phase === "done" &&
                     charger.test.energyWh === 0 &&
                     " No energy: plug in a vehicle to see energy flow."}
@@ -699,8 +711,9 @@ export default function Wizard({
               <strong>{formatCents(quoteCents(20_000, tariff))}</strong>
               {charger.test && (
                 <>
-                  ; the test session ({formatKwh(charger.test.energyWh)}) would
-                  cost {formatCents(quoteCents(charger.test.energyWh, tariff))}
+                  ; the {TEST_SESSION_LABEL.toLowerCase()} (
+                  {formatKwh(charger.test.energyWh)}) would cost{" "}
+                  {formatCents(quoteCents(charger.test.energyWh, tariff))}
                 </>
               )}
               . This template does not collect payments; see forecourt-checkout.
@@ -740,8 +753,10 @@ export default function Wizard({
                   <dd>{charger.name}</dd>
                   <dt>Model</dt>
                   <dd>{charger.boot?.model ?? "-"}</dd>
-                  <dt>Test</dt>
+                  <dt>{TEST_SESSION_LABEL}</dt>
                   <dd>{charger.test?.passed ? "Pass" : "-"}</dd>
+                  <dt>In service</dt>
+                  <dd>{charger.inServiceAt ?? "Not yet"}</dd>
                   <dt>Price</dt>
                   <dd>
                     {charger.tariffCentsPerKwh === undefined
@@ -750,6 +765,30 @@ export default function Wizard({
                   </dd>
                 </dl>
               </figure>
+            </div>
+            <div className="row">
+              <button
+                type="button"
+                disabled={busy || !!charger.inServiceAt || !!testRunning}
+                onClick={() =>
+                  run(async () =>
+                    setCharger(
+                      await api<Charger>(
+                        `/api/chargers/${charger.id}/in-service`,
+                        {},
+                      ),
+                    ),
+                  )
+                }
+              >
+                Mark in service
+              </button>
+              {charger.inServiceAt && (
+                <span role="status">
+                  In service since {charger.inServiceAt}. Test sessions are
+                  refused.
+                </span>
+              )}
             </div>
             <div className="row">
               {!qrProblem &&

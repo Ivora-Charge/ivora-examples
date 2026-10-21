@@ -58,6 +58,12 @@ export type TestRun = {
   errorCode?: string;
 };
 
+/**
+ * Sessions started with the INSTALLER-TEST token are commissioning tests,
+ * not customer sessions. Every record that shows one uses this label.
+ */
+export const TEST_SESSION_LABEL = "Test session (not billed)";
+
 export type ConfigKey = "HeartbeatInterval" | "MeterValueSampleInterval";
 
 export type ConfigReadback = {
@@ -88,6 +94,8 @@ export type Charger = {
   test?: TestRun;
   config?: ConfigReadback;
   tariffCentsPerKwh?: number;
+  /** Set by "Mark in service"; no test session can start after it. */
+  inServiceAt?: string;
   /** Counters that make idempotency keys unique per record and action. */
   seq: { credentials: number; test: number; config: number };
 };
