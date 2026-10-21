@@ -4,6 +4,7 @@ import {
   chargeSpans,
   clock,
   hourTicks,
+  miniLabels,
   pct,
   statusOf,
 } from "@/lib/timeline";
@@ -72,6 +73,10 @@ export default function Timeline({ s }: { s: State }) {
           const { done, plan } = r.session
             ? chargeSpans(now, axis, r.session, r.remainingKwh)
             : { done: undefined, plan: undefined };
+          const lab = miniLabels(
+            pct(now, axis),
+            dep ? pct(dep, axis) : undefined,
+          );
           return (
             <li className="row" key={r.vehicle.id}>
               <div className="v">
@@ -113,13 +118,23 @@ export default function Timeline({ s }: { s: State }) {
                   <i className="dep" style={{ left: `${pct(dep, axis)}%` }} />
                 )}
               </div>
-              <div className="tl-lab" aria-hidden="true">
-                <span style={{ left: 0 }}>start {clock(axis.start)}</span>
-                <span className="n" style={{ left: `${pct(now, axis)}%` }}>
+              <div className="tl-lab tl-now" aria-hidden="true">
+                <span
+                  className={`n ${lab.now.align}`}
+                  style={{ left: `${lab.now.left}%` }}
+                >
                   now {clock(now)}
                 </span>
-                {dep && (
-                  <span className="d" style={{ left: `${pct(dep, axis)}%` }}>
+              </div>
+              <div className="tl-lab" aria-hidden="true">
+                {lab.start && (
+                  <span style={{ left: 0 }}>start {clock(axis.start)}</span>
+                )}
+                {dep && lab.dep && (
+                  <span
+                    className={`d ${lab.dep.align}`}
+                    style={{ left: `${lab.dep.left}%` }}
+                  >
                     dep {clock(dep)}
                   </span>
                 )}

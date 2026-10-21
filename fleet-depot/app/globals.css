@@ -772,7 +772,7 @@ button.danger {
   }
   .row .track {
     grid-column: 1 / -1;
-    order: 3;
+    order: 4;
   }
   .row .right,
   .row .conn,
@@ -786,23 +786,31 @@ button.danger {
   .tl-lab {
     display: block;
     grid-column: 1 / -1;
-    order: 4;
+    order: 5;
     position: relative;
     height: 16px;
     font: 500 var(--text-tick) var(--font-mono);
     color: var(--muted);
   }
+  .tl-lab.tl-now {
+    order: 3;
+    margin-bottom: -6px;
+  }
   .tl-lab span {
     position: absolute;
     white-space: nowrap;
   }
+  .tl-lab .middle {
+    transform: translateX(-50%);
+  }
+  .tl-lab .end {
+    transform: translateX(-100%);
+  }
   .tl-lab .n {
     color: var(--accent);
-    padding-left: 6px;
   }
   .tl-lab .d {
     color: var(--ink);
-    transform: translateX(-100%);
   }
   .vcard {
     grid-template-columns: minmax(0, 1fr) auto;

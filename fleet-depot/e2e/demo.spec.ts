@@ -61,3 +61,45 @@ test("demo: refuses cross-origin writes", async ({ request }) => {
   });
   expect(r.status()).toBe(403);
 });
+
+test("phone: mini-timeline labels never overlap as the clock advances", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/depot");
+  await expect(page.locator(".row").first()).toBeVisible();
+  // Runs after the flow above (same file, in order): 22:30 to 14:30 next day,
+  // past every departure.
+  for (let h = 0; h <= 16; h++) {
+    for (const width of [390, 360]) {
+      await page.setViewportSize({ width, height: 844 });
+      const clashes = await page.evaluate(() => {
+        const out: string[] = [];
+        for (const row of document.querySelectorAll(".tl-rows .row")) {
+          const boxes = [...row.querySelectorAll(".tl-lab span")].map((s) => ({
+            text: s.textContent ?? "",
+            r: s.getBoundingClientRect(),
+          }));
+          const track = row.querySelector(".track")!.getBoundingClientRect();
+          for (const [i, a] of boxes.entries()) {
+            if (a.r.left < track.left - 1 || a.r.right > track.right + 1)
+              out.push(`${a.text} leaves the track`);
+            for (const b of boxes.slice(i + 1))
+              if (
+                a.r.left < b.r.right &&
+                b.r.left < a.r.right &&
+                a.r.top < b.r.bottom &&
+                b.r.top < a.r.bottom
+              )
+                out.push(`${a.text} / ${b.text}`);
+          }
+        }
+        return out;
+      });
+      expect(clashes, `after ${h} h at ${width} px`).toEqual([]);
+    }
+    const r = page.waitForResponse("**/api/state");
+    await page.getByRole("button", { name: "Advance 1 h" }).click();
+    await r;
+  }
+});

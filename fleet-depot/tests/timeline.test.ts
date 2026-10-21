@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   axisFor,
   chargeSpans,
+  LABEL_PCT,
   hourTicks,
+  miniLabels,
   pct,
   statusOf,
 } from "../lib/timeline";
@@ -65,5 +67,37 @@ describe("status", () => {
     expect(statusOf({ session: {}, readyBy: true, remainingKwh: 9 })).toBe(
       "charging",
     );
+  });
+});
+
+describe("phone mini-timeline labels", () => {
+  // Label boxes in % of the track, from the anchor and alignment.
+  const box = (left: number, align: string, w: number) =>
+    align === "end"
+      ? [left - w, left]
+      : align === "middle"
+        ? [left - w / 2, left + w / 2]
+        : [left, left + w];
+
+  it("never lets start and departure touch, and keeps every label on the track", () => {
+    for (let now = 0; now <= 100; now += 2.5) {
+      for (const dep of [undefined, 0, 5, 20, 30, 50, 52, 60, 90, 100]) {
+        const l = miniLabels(now, dep);
+        const n = box(l.now.left, l.now.align, LABEL_PCT.now);
+        expect(n[0]).toBeGreaterThanOrEqual(0);
+        expect(n[1]).toBeLessThanOrEqual(100);
+        if (!l.dep) continue;
+        const d = box(l.dep.left, l.dep.align, LABEL_PCT.dep);
+        expect(d[0]).toBeGreaterThanOrEqual(0);
+        expect(d[1]).toBeLessThanOrEqual(100);
+        if (l.start) expect(d[0]).toBeGreaterThanOrEqual(LABEL_PCT.start);
+      }
+    }
+  });
+
+  it("keeps all three labels when now is close to start (19:00, now 21:30)", () => {
+    const l = miniLabels(21, 92);
+    expect(l.start).toBe(true);
+    expect(l.dep?.align).toBe("end");
   });
 });

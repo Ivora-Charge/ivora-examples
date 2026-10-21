@@ -34,7 +34,7 @@ for (const scheme of ["light", "dark"] as const) {
   });
 }
 
-test("phone: no sideways scroll and each vehicle row has start, now and departure labels", async ({
+test("phone: no sideways scroll and vehicle rows have now and departure labels", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -57,8 +57,8 @@ test("phone: no sideways scroll and each vehicle row has start, now and departur
   }
   await page.getByRole("tab", { name: "Overview" }).click();
   const first = page.locator(".row").first();
-  await expect(first.locator(".tl-lab")).toContainText(/now/);
-  await expect(first.locator(".tl-lab")).toContainText(/dep/);
+  await expect(first.locator(".tl-now")).toContainText(/now/);
+  await expect(first).toContainText(/dep/);
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,

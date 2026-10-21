@@ -58,6 +58,37 @@ export function chargeSpans(
   return { done: span(doneFrom, nowMs), plan: span(nowMs, planTo) };
 }
 
+export type Align = "start" | "middle" | "end";
+
+/** Label widths in % of a phone track, measured at 360 px wide (310 px track, 11 px mono) plus a margin. */
+export const LABEL_PCT = { start: 26, dep: 22, now: 22 };
+
+/**
+ * Where the phone mini-timeline labels go. "now" sits above the bar, so it
+ * never meets the others. Below it, "start" is on the left and the departure
+ * label anchors on its tick, facing away from the nearer edge; "start" is
+ * dropped when the two would touch.
+ */
+export function miniLabels(nowPct: number, depPct?: number) {
+  const now: { left: number; align: Align } = {
+    left: nowPct,
+    align:
+      nowPct < LABEL_PCT.now / 2
+        ? "start"
+        : nowPct > 100 - LABEL_PCT.now / 2
+          ? "end"
+          : "middle",
+  };
+  if (depPct === undefined) return { now, start: true, dep: undefined };
+  const depAlign: Align = depPct >= LABEL_PCT.dep ? "end" : "start";
+  const depFrom = depAlign === "end" ? depPct - LABEL_PCT.dep : depPct;
+  return {
+    now,
+    start: depFrom >= LABEL_PCT.start,
+    dep: { left: depPct, align: depAlign },
+  };
+}
+
 export type VehicleStatus = "charging" | "waiting" | "ready" | "late";
 
 export function statusOf(r: {
