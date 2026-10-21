@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { THEME_KEY } from "@/lib/theme";
 
-/** Light/dark switch. Until it is used, the page follows the system setting. */
+/** Light/dark switch, labelled by the action it performs. Until it is used, the page follows the system setting. */
 export default function ThemeToggle() {
   const [dark, setDark] = useState<boolean>();
   useEffect(() => {
@@ -15,7 +15,6 @@ export default function ThemeToggle() {
     <button
       type="button"
       className="secondary theme"
-      aria-pressed={dark}
       onClick={() => {
         const theme = dark ? "light" : "dark";
         document.documentElement.dataset.theme = theme;
@@ -34,7 +33,7 @@ export default function ThemeToggle() {
         />
         <path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" />
       </svg>
-      Dark mode
+      {dark ? "Light mode" : "Dark mode"}
     </button>
   );
 }

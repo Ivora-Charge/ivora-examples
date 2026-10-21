@@ -15,7 +15,9 @@ This template collects no payments. For paid charging, see [forecourt-checkout](
 | ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
 | ![Lugline demo after hand-over, desktop, light](docs/screens/handover-desktop-light.png) | ![Lugline demo after hand-over, desktop, dark](docs/screens/handover-desktop-dark.png) |
 
-More in [docs/screens](docs/screens) (desktop and phone, light and dark).
+More in [docs/screens](docs/screens): landing, site, connect, test and hand-over at 1440 px and 390 px, light and dark. Regenerate them with `npm run build && npm run screenshots`.
+
+The landing page is at `/` (copy in `brand/brand.ts`, `landing`); the wizard is at `/commission`. Accessibility is checked with axe in `e2e/a11y.spec.ts`.
 
 ## Make it yours in 5 minutes
 
