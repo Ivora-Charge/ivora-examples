@@ -52,6 +52,15 @@ export type CommandChanges = Partial<
   Pick<LiveCommand, "phase" | "operationId" | "chargerStatus" | "error">
 >;
 
+/**
+ * The operator's staff token: the ID token a remote start from the Live view uses.
+ * tokenId is Ivora's token ID once it is registered in the operator's token list.
+ */
+export interface StaffToken {
+  idToken: string;
+  tokenId: number | null;
+}
+
 /** One webhook delivery, as the kit stores it to deduplicate. */
 export interface StoredEvent {
   id: string;
@@ -92,6 +101,16 @@ export interface LiveStore {
   findByOperation(
     operationId: string,
   ): Promise<{ operatorId: string; command: LiveCommand } | null>;
+  getStaffToken(operatorId: string): Promise<StaffToken | null>;
+  /**
+   * Stores the operator's staff token and returns the one stored. Without replace, a
+   * token already there wins (two first uses at once keep one token).
+   */
+  putStaffToken(
+    operatorId: string,
+    t: StaffToken,
+    o?: { replace?: boolean },
+  ): Promise<StaffToken>;
   /** True for a new event, false for a redelivery. */
   recordEvent(e: StoredEvent): Promise<boolean>;
   markProcessed(eventId: string): Promise<void>;

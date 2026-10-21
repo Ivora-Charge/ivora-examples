@@ -6,6 +6,7 @@ import type {
   Fault,
   Location,
   Station,
+  TokenRecord,
   Transaction,
 } from "@/lib/server/ivora/types";
 import {
@@ -16,12 +17,15 @@ import {
 } from "@/lib/server/live/demo";
 import {
   handleEvent,
+  isStaffSession,
   loadLive,
   loadStation,
   observe,
   recheckCommand,
+  resendCommand,
   sendCommand,
-  STAFF_TOKEN,
+  STAFF_TOKEN_LABEL,
+  staffTokenReference,
   type LiveDeps,
 } from "@/lib/server/live/service";
 import { LiveError, type LiveCommand } from "@/lib/server/live/types";
@@ -132,11 +136,13 @@ function fakeIvora() {
     },
   ];
   const ops = new Map<string, Op>();
+  const tokens: TokenRecord[] = [];
   const s = {
     calls,
     stations,
     transactions,
     ops,
+    tokens,
     clock: T0,
     /** What the next command's operation looks like. */
     answer: {
@@ -161,6 +167,26 @@ function fakeIvora() {
           next_cursor: null,
         },
       };
+    }
+    if (c.method === "GET" && p === "tokens")
+      return {
+        body: {
+          data: tokens.filter(
+            (t) => t.external_reference === q.get("external_reference"),
+          ),
+          next_cursor: null,
+        },
+      };
+    if (c.method === "POST" && p === "tokens") {
+      const b = c.body as Omit<TokenRecord, "id">;
+      if (tokens.some((t) => t.external_reference === b.external_reference))
+        return {
+          status: 409,
+          body: { error: { code: "external_reference_taken", message: "m" } },
+        };
+      const t = { id: 300 + tokens.length, ...b };
+      tokens.push(t);
+      return { status: 201, body: t };
     }
     if (c.method === "GET" && p.startsWith("operations/")) {
       const op = ops.get(decodeURIComponent(p.slice(11)));
@@ -244,6 +270,14 @@ function deps() {
 
 const commands = (calls: Call[]) =>
   calls.filter((c) => c.method === "POST" && c.path.endsWith("/commands"));
+const tokenCalls = (calls: Call[]) =>
+  calls.filter((c) => /\/tokens(\?|$)/.test(c.path));
+
+/** Moves the test clock and the wall clock (the demo store stamps commands with it). */
+function advance(api: { state: { clock: number } }, ms: number) {
+  api.state.clock += ms;
+  vi.setSystemTime(api.state.clock);
+}
 
 describe("live view (live API mocked)", () => {
   const saved = { ...process.env };
@@ -254,9 +288,12 @@ describe("live view (live API mocked)", () => {
     process.env.SUPABASE_ANON_KEY = "test-anon";
     process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service";
     delete process.env.DEMO_MODE;
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(T0);
   });
   afterEach(() => {
     process.env = { ...saved };
+    vi.useRealTimers();
   });
 
   it("shows sites, chargers, connector status, sessions, faults and map points", async () => {
@@ -328,7 +365,7 @@ describe("live view (live API mocked)", () => {
     });
   });
 
-  it("sends a remote start with a key from its own record, and observes the session", async () => {
+  it("sends a remote start with the operator's registered staff token, and observes the session", async () => {
     const { d, api } = deps();
     const c = await sendCommand(d, technician, {
       requestId: rid(),
@@ -338,6 +375,25 @@ describe("live view (live API mocked)", () => {
       confirmed: true,
       sessions: [],
     });
+    // The staff token is registered once in the operator's Ivora token list, with a key
+    // and an external reference derived from the operator.
+    const [lookup, created] = tokenCalls(api.calls);
+    expect(lookup).toMatchObject({
+      method: "GET",
+      path: `/v1/tenants/42/tokens?limit=1&external_reference=${staffTokenReference(OPERATOR)}`,
+    });
+    expect(created).toMatchObject({
+      method: "POST",
+      key: `cpo-staff-token-${OPERATOR}-create`,
+      body: {
+        type: "Central",
+        status: "Accepted",
+        label: STAFF_TOKEN_LABEL,
+        external_reference: `cpo-staff-${OPERATOR}`,
+      },
+    });
+    const token = api.tokens[0].id_token;
+    expect(token).toMatch(/^STAFF[A-Z0-9]{15}$/);
     const [sent] = commands(api.calls);
     expect(sent).toMatchObject({
       path: "/v1/tenants/42/stations/70/commands",
@@ -345,36 +401,110 @@ describe("live view (live API mocked)", () => {
       body: {
         action: "start",
         connector_id: 702,
-        token: STAFF_TOKEN,
+        token,
         token_type: "Central",
       },
     });
     expect(c).toMatchObject({ phase: "accepted", chargerStatus: "Accepted" });
     // Accepted is not assumed to mean charging: the view looks for the session.
     const s = api.stations[0];
-    // The demo store stamps commands with the wall clock; observe at the test's.
-    c.requestedAt = new Date(T0).toISOString();
-    expect(observe(c, s, api.transactions, T0 + 10_000)).toMatch(
+    expect(observe(c, s, api.transactions, T0 + 10_000, token)).toMatch(
       /Waiting for the session/,
     );
-    expect(observe(c, s, api.transactions, T0 + 4 * 60_000)).toMatch(
+    expect(observe(c, s, api.transactions, T0 + 4 * 60_000, token)).toMatch(
       /No session started/,
     );
-    const tx = {
-      id: 901,
+    const tx = (id: number, idToken: string) => ({
+      id,
       station_id: 70,
       connector_id: 702,
+      id_token: idToken,
       active: true,
       started_at: new Date(T0 + 3_000).toISOString(),
       ended_at: null,
-    };
-    expect(observe(c, s, [tx], T0 + 10_000)).toBe("Session 901 started.");
+    });
+    // A driver's own session on that connector is not this command's result.
+    expect(observe(c, s, [tx(902, "****B2C3")], T0 + 10_000, token)).toMatch(
+      /Waiting for the session/,
+    );
+    // The API masks the token to its last 4 characters.
+    const staffTx = tx(901, `****${token.slice(-4)}`);
+    expect(isStaffSession(staffTx, token)).toBe(true);
+    expect(observe(c, s, [staffTx], T0 + 10_000, token)).toBe(
+      "Session 901 started.",
+    );
+    // The view labels it as a staff session.
+    api.transactions.push(staffTx);
+    const r = await loadLive(d, viewer);
+    expect(r.ok && r.live.sessions.map((x) => [x.id, x.staff]).sort()).toEqual([
+      [900, false],
+      [901, true],
+    ]);
+    // Registered once: the next start reuses the stored token without asking Ivora.
+    const before = tokenCalls(api.calls).length;
+    api.transactions.pop();
+    api.stations[0].connectors[1].status = "Available";
+    advance(api, 60_000);
+    await sendCommand(d, technician, {
+      requestId: rid(),
+      stationId: 71,
+      action: "start",
+      connectorId: 711,
+      confirmed: true,
+      sessions: [],
+    }).catch(() => undefined);
+    api.stations[1].connectors[0].status = "Available";
+    await sendCommand(d, technician, {
+      requestId: rid(),
+      stationId: 71,
+      action: "start",
+      connectorId: 711,
+      confirmed: true,
+      sessions: [],
+    });
+    expect(tokenCalls(api.calls)).toHaveLength(before);
+    expect(commands(api.calls).at(-1)?.body).toMatchObject({ token });
   });
 
-  it("starts only on a free connector or one with a vehicle waiting", async () => {
+  it("adopts a staff token already in Ivora, and refuses a blocked one", async () => {
+    const { d, api } = deps();
+    api.tokens.push({
+      id: 77,
+      id_token: "STAFFEXISTING0001",
+      status: "Blocked",
+      label: STAFF_TOKEN_LABEL,
+      external_reference: staffTokenReference(OPERATOR),
+    });
+    const input = {
+      stationId: 70,
+      action: "start",
+      connectorId: 702,
+      confirmed: true,
+      sessions: [],
+    };
+    await expect(
+      sendCommand(d, technician, { ...input, requestId: rid() }),
+    ).rejects.toThrow(/is Blocked/);
+    expect(commands(api.calls)).toHaveLength(0);
+    api.tokens[0].status = "Accepted";
+    await sendCommand(d, technician, { ...input, requestId: rid() });
+    expect(
+      api.calls.filter((c) => c.method === "POST" && c.path.endsWith("tokens")),
+    ).toHaveLength(0);
+    expect(commands(api.calls)[0].body).toMatchObject({
+      token: "STAFFEXISTING0001",
+    });
+    expect(await d.store.getStaffToken(OPERATOR)).toEqual({
+      idToken: "STAFFEXISTING0001",
+      tokenId: 77,
+    });
+  });
+
+  it("starts only on a free (Available) connector, never one a driver plugged into", async () => {
     const { d, api } = deps();
     for (const [stationId, connectorId] of [
       [70, 701], // charging
+      [71, 711], // Preparing: a driver plugged in and pays as usual
       [71, 712], // faulted
     ]) {
       const e = await sendCommand(d, technician, {
@@ -398,12 +528,11 @@ describe("live view (live API mocked)", () => {
         sessions: [],
       }),
     ).rejects.toThrow(/offline/);
-    // A vehicle waiting (Preparing) is the remote start's main use.
     const ok = await sendCommand(d, technician, {
       requestId: rid(),
-      stationId: 71,
+      stationId: 70,
       action: "start",
-      connectorId: 711,
+      connectorId: 702,
       confirmed: true,
       sessions: [],
     });
@@ -477,12 +606,11 @@ describe("live view (live API mocked)", () => {
       body: { action: "stop", transaction_id: 900 },
     });
     // The session still runs until the charger reports it ended.
-    stop.requestedAt = new Date(T0).toISOString();
-    expect(observe(stop, api.stations[0], api.transactions, T0)).toMatch(
+    expect(observe(stop, api.stations[0], api.transactions, T0, null)).toMatch(
       /Waiting for the charger to end session 900/,
     );
     api.transactions[0].active = false;
-    expect(observe(stop, api.stations[0], api.transactions, T0)).toBe(
+    expect(observe(stop, api.stations[0], api.transactions, T0, null)).toBe(
       "Session 900 ended.",
     );
   });
@@ -570,18 +698,44 @@ describe("live view (live API mocked)", () => {
       sendCommand(d, manager, input),
     ]);
     expect(a.id).toBe(b.id);
-    // The second submission re-reads the first's operation; it never sends again
-    // with a new key.
-    expect(new Set(commands(api.calls).map((c) => c.key))).toEqual(
-      new Set([`cpo-command-${a.id}-reset`]),
-    );
+    // The second submission only reads the command the first made: exactly one POST.
+    expect(commands(api.calls)).toHaveLength(1);
+    expect(commands(api.calls)[0].key).toBe(`cpo-command-${a.id}-reset`);
+    // Even while the first send has not reached Ivora yet.
+    const late = await sendCommand(d, technician, input);
+    expect(late.id).toBe(a.id);
+    expect(commands(api.calls)).toHaveLength(1);
     await expect(
       sendCommand(d, manager, { ...input, requestId: rid(), mode: "hard" }),
     ).rejects.toMatchObject({ code: "busy" });
-    expect(new Set(commands(api.calls).map((c) => c.key)).size).toBe(1);
+    expect(commands(api.calls)).toHaveLength(1);
   });
 
-  it("keeps an uncertain send pending and re-checks it with the same key", async () => {
+  it("a double click while the first send is unconfirmed sends nothing more", async () => {
+    const { d, api } = deps();
+    api.state.override = (c) =>
+      c.method === "POST"
+        ? {
+            status: 503,
+            body: { error: { code: "outcome_unknown", message: "m" } },
+          }
+        : undefined;
+    const input = {
+      requestId: rid(),
+      stationId: 70,
+      action: "unlock",
+      connectorId: 702,
+      confirmed: true,
+      sessions: [],
+    };
+    const first = await sendCommand(d, technician, input);
+    const posts = commands(api.calls).length;
+    const again = await sendCommand(d, technician, input);
+    expect(again).toMatchObject({ id: first.id, phase: "pending" });
+    expect(commands(api.calls)).toHaveLength(posts);
+  });
+
+  it("checking again only reads; sending again is separate, same key, within a minute", async () => {
     const { d, api } = deps();
     let lost = true;
     api.state.override = (c) => {
@@ -602,11 +756,145 @@ describe("live view (live API mocked)", () => {
     expect(c).toMatchObject({ phase: "pending", operationId: null });
     expect(c.error).toMatch(/same idempotency key/);
     const keys = () => commands(api.calls).map((x) => x.key);
-    expect(new Set(keys())).toEqual(new Set([`cpo-command-${c.id}-unlock`]));
+    const posts = keys().length;
     lost = false;
-    const again = await recheckCommand(d, technician, c.id);
+    // Check again: no operation to read, so nothing happens and nothing is sent.
+    expect(await recheckCommand(d, technician, c.id)).toMatchObject({
+      phase: "pending",
+    });
+    expect(keys()).toHaveLength(posts);
+    const r = await loadStation(d, viewer, 70);
+    expect(r.ok && r.detail?.pending?.resendUntil).toBe(
+      new Date(T0 + 60_000).toISOString(),
+    );
+    // Send again: the same key, after the sessions are read again.
+    advance(api, 30_000);
+    const again = await resendCommand(d, technician, c.id);
     expect(again).toMatchObject({ phase: "accepted", error: null });
     expect(new Set(keys())).toEqual(new Set([`cpo-command-${c.id}-unlock`]));
+    expect(keys()).toHaveLength(posts + 1);
+    // Viewers can do neither.
+    await expect(resendCommand(d, viewer, c.id)).rejects.toMatchObject({
+      code: "not_allowed",
+    });
+  });
+
+  it("closes an unconfirmed command as unknown after a minute, without sending", async () => {
+    const { d, api } = deps();
+    const lose = () =>
+      (api.state.override = (c) =>
+        c.method === "POST"
+          ? {
+              status: 503,
+              body: { error: { code: "outcome_unknown", message: "m" } },
+            }
+          : undefined);
+    lose();
+    const input = {
+      stationId: 70,
+      action: "reset",
+      mode: "hard",
+      confirmed: true,
+      sessions: [900],
+    };
+    const a = await sendCommand(d, technician, { ...input, requestId: rid() });
+    const posts = commands(api.calls).length;
+    api.state.override = null;
+    advance(api, 61_000);
+    // Send again is refused: it closes as unknown instead.
+    const late = await resendCommand(d, technician, a.id);
+    expect(late.phase).toBe("unknown");
+    expect(late.error).toMatch(/more than a minute/);
+    expect(commands(api.calls)).toHaveLength(posts);
+    expect((await loadLive(d, viewer)).ok).toBe(true);
+
+    // Check again does the same for the next one, an hour later: never a resend.
+    lose();
+    const b = await sendCommand(d, technician, { ...input, requestId: rid() });
+    // The client's own retries of the first send, all with the same key.
+    const sent = commands(api.calls).length;
+    api.state.override = null;
+    advance(api, 60 * 60_000);
+    const checked = await recheckCommand(d, technician, b.id);
+    expect(checked.phase).toBe("unknown");
+    expect(commands(api.calls)).toHaveLength(sent);
+    expect(
+      new Set(
+        commands(api.calls)
+          .filter((x) => x.key?.includes(b.id))
+          .map((x) => x.key),
+      ).size,
+    ).toBe(1);
+  });
+
+  it("never sends a reset again once a session it would end started since the confirmation", async () => {
+    const { d, api } = deps();
+    api.state.override = (c) =>
+      c.method === "POST"
+        ? {
+            status: 503,
+            body: { error: { code: "outcome_unknown", message: "m" } },
+          }
+        : undefined;
+    const c = await sendCommand(d, technician, {
+      requestId: rid(),
+      stationId: 70,
+      action: "reset",
+      mode: "hard",
+      confirmed: true,
+      sessions: [900],
+    });
+    const posts = commands(api.calls).length;
+    api.state.override = null;
+    // A driver plugs in on connector 2 within the minute.
+    api.transactions.push({
+      id: 906,
+      station_id: 70,
+      connector_id: 702,
+      id_token: "****D4E5",
+      active: true,
+      started_at: new Date(T0 + 20_000).toISOString(),
+      ended_at: null,
+    });
+    advance(api, 20_000);
+    const again = await resendCommand(d, technician, c.id);
+    expect(again.phase).toBe("unknown");
+    expect(again.error).toMatch(/session 906 on connector 2/);
+    expect(commands(api.calls)).toHaveLength(posts);
+  });
+
+  it("closes a command still dispatching after 15 minutes as unknown on a check", async () => {
+    const { d, api } = deps();
+    api.state.answer = { status: "dispatching", result: null };
+    const c = await sendCommand(d, technician, {
+      requestId: rid(),
+      stationId: 70,
+      action: "unlock",
+      connectorId: 702,
+      confirmed: true,
+      sessions: [],
+    });
+    advance(api, 5 * 60_000);
+    expect((await recheckCommand(d, technician, c.id)).phase).toBe("pending");
+    advance(api, 11 * 60_000);
+    const late = await recheckCommand(d, technician, c.id);
+    expect(late.phase).toBe("unknown");
+    // A command that reached Ivora is never sent again: Send again only reads it.
+    expect((await resendCommand(d, technician, c.id)).phase).toBe("unknown");
+    expect(commands(api.calls)).toHaveLength(1);
+  });
+
+  it("passes Ivora's Retry-After to the page after a 429", async () => {
+    const { d, api } = deps();
+    api.state.override = (c) =>
+      c.path.includes("/locations")
+        ? {
+            status: 429,
+            body: { error: { code: "rate_limited", message: "m" } },
+          }
+        : undefined;
+    const r = await loadLive(d, viewer);
+    expect(r).toMatchObject({ ok: false, retryAfter: 60 });
   });
 
   it("fails only on a definite refusal", async () => {

@@ -187,6 +187,27 @@ export type Database = {
         Update: { processed_at?: Timestamp | null };
         Relationships: [];
       };
+      cpo_staff_tokens: {
+        Row: {
+          operator_id: string;
+          id_token: string;
+          token_id: number | null;
+          created_at: Timestamp;
+          registered_at: Timestamp | null;
+        };
+        Insert: {
+          operator_id: string;
+          id_token: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Update: {
+          id_token?: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {

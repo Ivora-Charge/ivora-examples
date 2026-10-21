@@ -64,7 +64,8 @@ function changesJson(c: CommandChanges): Json {
 }
 
 /**
- * Commands and webhook event IDs in Supabase (cpo_live_commands, cpo_ivora_events).
+ * Commands, staff tokens and webhook event IDs in Supabase (cpo_live_commands,
+ * cpo_staff_tokens, cpo_ivora_events).
  * Service role only, for the operator of the signed-in staff member; a command is
  * claimed by a function that checks the actor's role in the same statement.
  */
@@ -81,6 +82,16 @@ export function createSupabaseLiveStore(): LiveStore {
         .maybeSingle(),
     );
     return data ? toCommand(data as Row) : null;
+  };
+  const getStaffToken = async (operatorId: string) => {
+    const { data } = check(
+      await svc()
+        .from("cpo_staff_tokens")
+        .select("id_token, token_id")
+        .eq("operator_id", operatorId)
+        .maybeSingle(),
+    );
+    return data ? { idToken: data.id_token, tokenId: data.token_id } : null;
   };
   return {
     mode: "live",
@@ -143,6 +154,25 @@ export function createSupabaseLiveStore(): LiveStore {
             command: toCommand(data as Row),
           }
         : null;
+    },
+    getStaffToken,
+    async putStaffToken(operatorId, t, o = {}) {
+      check(
+        await svc()
+          .from("cpo_staff_tokens")
+          .upsert(
+            {
+              operator_id: operatorId,
+              id_token: t.idToken,
+              token_id: t.tokenId,
+              registered_at: t.tokenId ? new Date().toISOString() : null,
+            },
+            { onConflict: "operator_id", ignoreDuplicates: !o.replace },
+          ),
+      );
+      const stored = await getStaffToken(operatorId);
+      if (!stored) throw new Error("Staff token not stored");
+      return stored;
     },
     async recordEvent(e) {
       const { data } = check(

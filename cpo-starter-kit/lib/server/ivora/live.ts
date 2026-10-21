@@ -14,6 +14,7 @@ import type {
   PaymentAccount,
   Station,
   StationInput,
+  TokenRecord,
   Transaction,
 } from "./types";
 
@@ -269,7 +270,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
    * looked up by our external_reference instead of being made twice.
    */
   async function create<T>(
-    resource: "locations" | "stations",
+    resource: "locations" | "stations" | "tokens",
     body: { external_reference: string },
     key: string,
   ): Promise<T> {
@@ -340,6 +341,19 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     },
     getTransaction(transactionId) {
       return request<Transaction>("GET", `transactions/${transactionId}`);
+    },
+    async findToken(externalReference) {
+      return (
+        (
+          await request<Page<TokenRecord>>(
+            "GET",
+            `tokens${list({ external_reference: externalReference, limit: 1 })}`,
+          )
+        ).data[0] ?? null
+      );
+    },
+    createToken(input, key) {
+      return create<TokenRecord>("tokens", input, key);
     },
     async listFaults(stationId, o = {}) {
       return (

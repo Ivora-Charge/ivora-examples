@@ -1,6 +1,6 @@
 import Link from "next/link";
 import type { CommandView } from "@/lib/server/live";
-import { RecheckForm } from "./forms";
+import { RecheckForm, ResendForm } from "./forms";
 import { commandTitle, PhasePill, when } from "./status";
 
 /** Recent commands with what Ivora answered and what the view has seen since. */
@@ -42,6 +42,9 @@ export function CommandsCard({
                 </span>
               )}
               {canWork && c.phase === "pending" && <RecheckForm id={c.id} />}
+              {canWork && c.resendUntil && (
+                <ResendForm id={c.id} until={c.resendUntil} />
+              )}
             </li>
           ))}
         </ul>

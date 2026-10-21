@@ -9,12 +9,13 @@ import { resetDemoFleet } from "@/lib/server/ivora/demo-cookie";
 import {
   getLive,
   recheckCommand,
+  resendCommand,
   sendCommand,
   type LiveCommand,
 } from "@/lib/server/live";
 import { resetDemoLive } from "@/lib/server/live/demo-cookie";
 
-// Technicians and above send and re-check charger commands. Every action checks the
+// Technicians and above send, re-check and send again charger commands. Every action checks the
 // signed-in staff member's role on the server first (requireRole), the live service
 // checks it again, and the database checks it in the same statement that claims the
 // command.
@@ -98,6 +99,24 @@ export async function recheckCommandAction(
   } catch (e) {
     refresh();
     return actionError(e, "live command check");
+  }
+}
+
+/** Sends an unconfirmed command again: same key, within a minute, sessions re-read. */
+export async function resendCommandAction(
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  try {
+    const actor = await requireRole("technician");
+    if (str(form, "confirm") !== "on")
+      return { error: "Tick the box to send the same command again." };
+    const c = await resendCommand(getLive(), actor, str(form, "id") ?? "");
+    refresh(c.stationId);
+    return describe(c);
+  } catch (e) {
+    refresh();
+    return actionError(e, "live command resend");
   }
 }
 

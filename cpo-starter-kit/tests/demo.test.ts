@@ -270,6 +270,24 @@ describe("demo mode", () => {
     expect(cleared.ok && cleared.detail?.faults.every((f) => !f.open)).toBe(
       true,
     );
+    // A remote start registers the demo staff token (in the cookie) and its session
+    // is labelled as a staff session.
+    const start = await sendCommand(d, tech, {
+      requestId: rid(4),
+      stationId: 9101,
+      action: "start",
+      connectorId: 91011,
+      confirmed: true,
+      sessions: [],
+    });
+    expect(start.phase).toBe("accepted");
+    const started = await loadLive(d, tech);
+    expect(started.ok && started.live.sessions).toMatchObject([
+      { stationId: 9101, staff: true },
+    ]);
+    expect(started.ok && started.live.commands[0].observed).toMatch(
+      /^Session \d+ started\.$/,
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

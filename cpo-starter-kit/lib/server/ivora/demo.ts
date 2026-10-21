@@ -12,6 +12,7 @@ import type {
   PaymentAccount,
   Station,
   StationInput,
+  TokenRecord,
   Transaction,
 } from "./types";
 
@@ -274,6 +275,20 @@ const fleetSchema = z.object({
   ended: z.record(z.string(), z.number()).optional(),
   /** Stations the visitor reset: station ID to when (ms). */
   resets: z.record(z.string(), z.number()).optional(),
+  /** Tokens the visitor's kit registered (the Live view's staff token). */
+  tokens: z
+    .array(
+      z.object({
+        id: z.number().int(),
+        id_token: z.string().max(20),
+        type: z.string().max(20),
+        status: z.string().max(20),
+        label: z.string().max(60),
+        external_reference: z.string().max(128),
+      }),
+    )
+    .max(2)
+    .optional(),
   transactions: z
     .array(
       z.object({
@@ -723,6 +738,30 @@ export function createDemoClient(
           (t) => o.station_id === undefined || t.station_id === o.station_id,
         )
         .slice(0, o.limit ?? 50);
+    },
+    async findToken(externalReference) {
+      const t = (await fleet.load()).tokens?.find(
+        (x) => x.external_reference === externalReference,
+      );
+      return t ? (copy(t) satisfies TokenRecord) : null;
+    },
+    // Same reference, same token, like the API's idempotent replays.
+    async createToken(input) {
+      return update((f) => {
+        const tokens = (f.tokens ??= []);
+        const seen = tokens.find(
+          (x) => x.external_reference === input.external_reference,
+        );
+        if (seen) return copy(seen);
+        const created = {
+          id: Math.max(9700, ...tokens.map((x) => x.id)) + 1,
+          ...input,
+          label: input.label.slice(0, 60),
+        };
+        tokens.push(created);
+        f.tokens = tokens.slice(-2);
+        return copy(created);
+      });
     },
     async listFaults(stationId, o = {}) {
       await station(stationId);

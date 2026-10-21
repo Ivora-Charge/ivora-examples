@@ -12,7 +12,7 @@ import {
 } from "@/lib/server/live";
 import { formatKwh } from "@/lib/units";
 import { CommandsCard } from "../../commands";
-import { CommandForm, RecheckForm } from "../../forms";
+import { CommandForm, RecheckForm, ResendForm } from "../../forms";
 import { Refresher } from "../../refresher";
 import { commandTitle, ConnectorPill, StatePill, when } from "../../status";
 
@@ -20,7 +20,7 @@ export const metadata = { title: "Live charger" };
 
 /** How a session is named in a confirmation: the driver's session, unmistakably. */
 const sessionLabel = (s: SessionView) =>
-  `session ${s.id}${s.connectorNumber ? ` on connector ${s.connectorNumber}` : ""} (since ${when(s.startedAt)}, ${formatKwh(s.energyKwh)}${s.idToken ? `, token ${s.idToken}` : ""})`;
+  `${s.staff ? "staff " : ""}session ${s.id}${s.connectorNumber ? ` on connector ${s.connectorNumber}` : ""} (since ${when(s.startedAt)}, ${formatKwh(s.energyKwh)}${s.idToken ? `, token ${s.idToken}` : ""})`;
 
 export default async function Page({
   params,
@@ -38,6 +38,12 @@ export default async function Page({
           <Link href="/live">← Live</Link>
         </p>
         <h1>Charger</h1>
+        <Refresher
+          readAt={new Date().toISOString()}
+          webhooks={Boolean(config.webhookSecret)}
+          pending={false}
+          retryAfter={r.retryAfter}
+        />
         <p className="error" role="alert">
           {r.error}
         </p>
@@ -95,10 +101,12 @@ export default async function Page({
           </p>
           <p>
             No other command is sent to this charger until it is answered.
-            Checking again never sends a second command: an unconfirmed send is
-            repeated with the same idempotency key.
+            Checking again only reads its status; it never sends anything.
           </p>
           {canWork && <RecheckForm id={d.pending.id} />}
+          {canWork && d.pending.resendUntil && (
+            <ResendForm id={d.pending.id} until={d.pending.resendUntil} />
+          )}
         </div>
       )}
 
@@ -140,13 +148,16 @@ export default async function Page({
                       requestId={rid()}
                       label="Remote start…"
                       sendLabel={`Start connector ${c.number}`}
-                      confirmText={`I understand this switches on connector ${c.number}: a vehicle plugged in there starts charging, free of charge.`}
+                      confirmText={`I understand this switches on connector ${c.number} with our staff token: a vehicle plugged in there starts charging.`}
                     >
                       <p className="muted">
-                        Starts a session on connector {c.number} for a driver on
-                        site, with the operator ID tag (no payment is taken).
-                        With no vehicle plugged in, the charger waits for one
-                        for a short time.
+                        Starts a staff session on connector {c.number} with your
+                        operator&apos;s staff token. Ivora records it as a staff
+                        session, so it shows in sessions and reports; no driver
+                        payment is taken. Only a free (Available) connector: a
+                        driver who has plugged in starts and pays as usual. With
+                        no vehicle plugged in, the charger waits for one for a
+                        short time.
                       </p>
                     </CommandForm>
                     <CommandForm
@@ -205,6 +216,7 @@ export default async function Page({
                   {x.endedAt ? ` to ${when(x.endedAt)}` : ""} ·{" "}
                   {formatKwh(x.energyKwh)}
                   {x.idToken ? ` · token ${x.idToken}` : ""}
+                  {x.staff ? " · staff session" : ""}
                 </span>
                 <span className={x.active ? "pill busy" : "pill ok"}>
                   {x.active ? "Charging" : "Ended"}

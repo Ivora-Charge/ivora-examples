@@ -49,6 +49,7 @@ const TABLES = [
   "cpo_sticker_codes",
   "cpo_live_commands",
   "cpo_ivora_events",
+  "cpo_staff_tokens",
 ] as const;
 
 beforeAll(async () => {
@@ -980,7 +981,11 @@ describe("live commands", () => {
   it("is not readable or writable from the browser, even by an owner", async () => {
     for (const role of ["anon", "authenticated"] as const)
       await as(role, OWNER_A, async () => {
-        for (const t of ["cpo_live_commands", "cpo_ivora_events"]) {
+        for (const t of [
+          "cpo_live_commands",
+          "cpo_ivora_events",
+          "cpo_staff_tokens",
+        ]) {
           await expect(pg.query(`select * from ${t}`)).rejects.toThrow(
             /permission denied/,
           );

@@ -21,6 +21,12 @@ export default async function Page() {
     return (
       <>
         <h1>Live</h1>
+        <Refresher
+          readAt={new Date().toISOString()}
+          webhooks={Boolean(config.webhookSecret)}
+          pending={false}
+          retryAfter={r.retryAfter}
+        />
         <p className="error" role="alert">
           {r.error}
         </p>
@@ -140,6 +146,7 @@ export default async function Page() {
                   Session {x.id} · since {when(x.startedAt)} ·{" "}
                   {formatKwh(x.energyKwh)}
                   {x.idToken ? ` · token ${x.idToken}` : ""}
+                  {x.staff ? " · staff session" : ""}
                 </span>
               </li>
             ))}

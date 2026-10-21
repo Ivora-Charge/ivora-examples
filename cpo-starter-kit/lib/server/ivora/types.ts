@@ -133,6 +133,26 @@ export type CommandInput =
   | { action: "reset"; mode: "soft" | "hard" }
   | { action: "unlock"; connector_id: number };
 
+/** An ID token in the operator's Ivora token list (`/tokens`). */
+export interface TokenRecord {
+  id: number;
+  id_token: string;
+  type?: string | null;
+  status: "Accepted" | "Blocked" | "Expired" | (string & {});
+  label?: string | null;
+  external_reference?: string | null;
+}
+
+/** `POST /tokens`: registers an ID token, found again by its external_reference. */
+export interface TokenInput {
+  id_token: string;
+  type: "Central";
+  status: "Accepted";
+  label: string;
+  /** Derived from our own record, so a retry finds the token instead of duplicating it. */
+  external_reference: string;
+}
+
 export interface Transaction {
   id: number;
   station_id: number | null;
@@ -247,6 +267,10 @@ export interface IvoraClient {
     station_id?: number;
   }): Promise<Transaction[]>;
   getTransaction(transactionId: number): Promise<Transaction>;
+  /** The token with this external_reference, if any (`GET /tokens`). */
+  findToken(externalReference: string): Promise<TokenRecord | null>;
+  /** Adopts the token by external_reference when the create may already have happened. */
+  createToken(input: TokenInput, key: string): Promise<TokenRecord>;
   /** Open and recent faults of one station, newest first (cleared ones kept 90 days). */
   listFaults(
     stationId: number,

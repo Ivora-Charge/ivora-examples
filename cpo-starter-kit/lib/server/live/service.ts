@@ -1,4 +1,5 @@
 import "server-only";
+import { randomInt } from "node:crypto";
 import { z } from "zod";
 import { atLeast } from "@/lib/roles";
 import { whToKwh } from "@/lib/units";
@@ -12,6 +13,7 @@ import {
   type Location,
   type Operation,
   type Station,
+  type TokenRecord,
   type Transaction,
 } from "../ivora";
 import type { Staff } from "../team/types";
@@ -27,9 +29,10 @@ import {
 // Live view rules, shared by demo and live mode. Reading is for everyone on the team;
 // sending a command is for technicians and above, checked here on the server and again
 // by the store in the same statement that claims the command. Every command carries an
-// Idempotency-Key derived from the kit's own command record, so re-checking an
-// uncertain command repeats it with the same key and it happens at most once. Logs
-// carry error codes and request IDs only.
+// Idempotency-Key derived from the kit's own command record. "Check again" only
+// re-reads; sending an uncertain command again is a separate action, allowed within a
+// minute of the first send and after a fresh session check, with the same key, so it
+// happens at most once. Logs carry error codes and request IDs only.
 
 export interface LiveDeps {
   store: LiveStore;
@@ -38,8 +41,13 @@ export interface LiveDeps {
   sleep?: (ms: number) => Promise<void>;
 }
 
-/** The ID tag of a remote start from the Live view. An operator start: no payment. */
-export const STAFF_TOKEN = "CPO-KIT-STAFF";
+/** How the operator's staff token is labelled in Ivora's token list and reports. */
+export const STAFF_TOKEN_LABEL = "Staff remote start (CPO kit)";
+/** The staff token's external reference in Ivora: one per operator. */
+export const staffTokenReference = (operatorId: string) =>
+  `cpo-staff-${operatorId}`;
+/** OCPP 1.6 ID tags are at most 20 characters. */
+const STAFF_TOKEN_FORMAT = /^[A-Z0-9-]{8,20}$/;
 /** Sessions read for the Live view (the API's maximum page). */
 export const SESSION_LIMIT = 100;
 /** Commands shown, newest first. */
@@ -52,9 +60,16 @@ const OPERATION_POLLS = 8;
 const START_WAIT_MS = 3 * 60_000;
 /** Commands this old no longer get an "observed" line. */
 const OBSERVE_MS = 30 * 60_000;
+/** An uncertain command may be sent again (same key) only this soon after the first send. */
+export const RESEND_WINDOW_MS = 60_000;
+/** A pending command older than this is closed as unknown (as the database does). */
+export const PENDING_MAX_MS = 15 * 60_000;
 
-/** Connector statuses a remote start may be sent to: free, or a vehicle waiting. */
-export const STARTABLE = new Set(["Available", "Preparing"]);
+/**
+ * Connector statuses a staff remote start may be sent to: free only. A driver who has
+ * plugged in (Preparing) starts and pays through the normal flow.
+ */
+export const STARTABLE = new Set(["Available"]);
 /** The charger's answers that mean yes. */
 const ACCEPTED = new Set(["Accepted", "Unlocked", "Scheduled"]);
 
@@ -89,6 +104,29 @@ function definitelyRefused(e: unknown): boolean {
 const running = (t: Transaction) =>
   t.active === true || (t.active === null && !t.ended_at);
 
+/**
+ * A session started with the operator's staff token. The API shows a session's token
+ * masked to its last 4 characters, so that is what is compared.
+ */
+export function isStaffSession(
+  t: { id_token?: string | null },
+  staffToken: string | null,
+): boolean {
+  if (!staffToken || !t.id_token) return false;
+  return (
+    t.id_token === staffToken || t.id_token === `****${staffToken.slice(-4)}`
+  );
+}
+
+const TOKEN_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+
+/** A new random staff token: STAFF and 15 random characters (about 75 bits). */
+export function newStaffToken(): string {
+  let t = "STAFF";
+  while (t.length < 20) t += TOKEN_CHARS[randomInt(TOKEN_CHARS.length)];
+  return t;
+}
+
 const validCoord = (lat: unknown, lng: unknown) =>
   typeof lat === "number" &&
   typeof lng === "number" &&
@@ -109,6 +147,8 @@ export interface SessionView {
   connectorNumber: number | null;
   /** The API shows the last 4 characters behind ****. */
   idToken: string | null;
+  /** Started with the operator's staff token (a remote start from the Live view). */
+  staff: boolean;
   startedAt: string | null;
   energyKwh: number;
 }
@@ -162,6 +202,11 @@ export interface CommandView extends LiveCommand {
   connectorNumber: number | null;
   /** What the view shows has happened since, for a command the charger accepted. */
   observed: string | null;
+  /**
+   * Until when it may be sent again (UTC): set for a pending command Ivora never
+   * confirmed, within a minute of its first send.
+   */
+  resendUntil: string | null;
 }
 
 /** A map marker: one site, its worst state, and counts by state. */
@@ -196,10 +241,28 @@ export interface LiveSnapshot {
   truncated: boolean;
 }
 
-export type LiveResult =
-  { ok: true; live: LiveSnapshot } | { ok: false; error: string };
+/**
+ * A failed read. retryAfter (seconds) is set when Ivora rate-limited it, so the
+ * browser waits that long before it reads again.
+ */
+export interface LiveFailure {
+  ok: false;
+  error: string;
+  retryAfter: number | null;
+}
 
-function sessionView(t: Transaction, s: Station | undefined): SessionView {
+export type LiveResult = { ok: true; live: LiveSnapshot } | LiveFailure;
+
+/** Seconds to wait after a 429: Retry-After, else a minute. */
+function retryAfter(e: IvoraError): number | null {
+  return e.status === 429 ? Math.max(e.retryAfterSeconds ?? 60, 10) : null;
+}
+
+function sessionView(
+  t: Transaction,
+  s: Station | undefined,
+  staffToken: string | null,
+): SessionView {
   const c = s?.connectors.find((x) => x.id === t.connector_id);
   return {
     id: t.id,
@@ -208,6 +271,7 @@ function sessionView(t: Transaction, s: Station | undefined): SessionView {
     connectorId: t.connector_id,
     connectorNumber: t.connector_number ?? c?.number ?? null,
     idToken: t.id_token ?? null,
+    staff: isStaffSession(t, staffToken),
     startedAt: t.started_at,
     energyKwh: whToKwh(t.energy_wh ?? 0),
   };
@@ -265,15 +329,19 @@ export function observe(
   s: Station | undefined,
   txs: Transaction[],
   now: number,
+  staffToken: string | null,
 ): string | null {
   if (c.phase !== "accepted") return null;
   const at = Date.parse(c.requestedAt);
   if (now - at > OBSERVE_MS) return null;
   switch (c.action) {
     case "start": {
+      // Only a session with the staff token is this command's; a driver's own session
+      // on the same connector is not.
       const tx = txs.find(
         (t) =>
           t.connector_id === c.connectorId &&
+          isStaffSession(t, staffToken) &&
           Date.parse(t.started_at ?? "") >= at - 5_000,
       );
       if (tx)
@@ -303,11 +371,18 @@ export function observe(
   }
 }
 
+function resendUntil(c: LiveCommand, now: number): string | null {
+  if (c.phase !== "pending" || c.operationId) return null;
+  const until = Date.parse(c.requestedAt) + RESEND_WINDOW_MS;
+  return now <= until ? new Date(until).toISOString() : null;
+}
+
 function commandView(
   c: LiveCommand,
   stations: Map<number, Station>,
   txs: Transaction[],
   now: number,
+  staffToken: string | null,
 ): CommandView {
   const s = stations.get(c.stationId);
   return {
@@ -315,7 +390,8 @@ function commandView(
     stationName: s?.name ?? `Station ${c.stationId}`,
     connectorNumber:
       s?.connectors.find((x) => x.id === c.connectorId)?.number ?? null,
-    observed: observe(c, s, txs, now),
+    observed: observe(c, s, txs, now, staffToken),
+    resendUntil: resendUntil(c, now),
   };
 }
 
@@ -351,25 +427,27 @@ async function refreshPending(
 
 /** Everything the Live page shows. Reads only (it re-reads pending operations). */
 export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
-  let locations, stations, txs: Transaction[], commands;
+  let locations, stations, txs: Transaction[], commands, token;
   try {
-    [locations, stations, txs, commands] = await Promise.all([
+    [locations, stations, txs, commands, token] = await Promise.all([
       d.ivora.listAllLocations(),
       d.ivora.listAllStations(),
       d.ivora.listTransactions({ limit: SESSION_LIMIT }),
       d.store.listCommands(staff.operatorId, { limit: COMMAND_LIMIT }),
+      d.store.getStaffToken(staff.operatorId),
     ]);
     commands = await refreshPending(d, staff.operatorId, commands);
   } catch (e) {
     if (!(e instanceof IvoraError)) throw e;
     logIvora("live view", e);
-    return { ok: false, error: describeError(e) };
+    return { ok: false, error: describeError(e), retryAfter: retryAfter(e) };
   }
   const now = nowOf(d);
+  const staffToken = token?.idToken ?? null;
   const byId = new Map(stations.data.map((s) => [s.id, s]));
   const sessions = txs
     .filter(running)
-    .map((t) => sessionView(t, byId.get(t.station_id ?? 0)));
+    .map((t) => sessionView(t, byId.get(t.station_id ?? 0), staffToken));
   const views = stations.data.map((s) => stationView(s, sessions));
   const siteOf = new Map<number, Location>(
     locations.data.map((l) => [l.id, l]),
@@ -429,7 +507,7 @@ export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
       points,
       sessions,
       faults,
-      commands: commands.map((c) => commandView(c, byId, txs, now)),
+      commands: commands.map((c) => commandView(c, byId, txs, now, staffToken)),
       counts: {
         stations: views.length,
         online: views.filter((v) => v.online).length,
@@ -462,10 +540,13 @@ export async function loadStation(
   d: LiveDeps,
   staff: Staff,
   stationId: number,
-): Promise<
-  { ok: true; detail: StationDetail | null } | { ok: false; error: string }
-> {
-  let s: Station, txs: Transaction[], faults: Fault[], locations, commands;
+): Promise<{ ok: true; detail: StationDetail | null } | LiveFailure> {
+  let s: Station,
+    txs: Transaction[],
+    faults: Fault[],
+    locations,
+    commands,
+    token;
   try {
     s = await d.ivora.getStation(stationId);
   } catch (e) {
@@ -473,14 +554,15 @@ export async function loadStation(
       return { ok: true, detail: null };
     if (!(e instanceof IvoraError)) throw e;
     logIvora("live station", e);
-    return { ok: false, error: describeError(e) };
+    return { ok: false, error: describeError(e), retryAfter: retryAfter(e) };
   }
   try {
-    [txs, faults, locations, commands] = await Promise.all([
+    [txs, faults, locations, commands, token] = await Promise.all([
       d.ivora.listTransactions({ station_id: stationId, limit: 20 }),
       d.ivora.listFaults(stationId, { limit: 20 }),
       d.ivora.listAllLocations(),
       d.store.listCommands(staff.operatorId, { stationId, limit: 10 }),
+      d.store.getStaffToken(staff.operatorId),
     ]);
     if (commands.some((c) => c.phase === "pending" && c.operationId)) {
       await refreshPending(d, staff.operatorId, commands);
@@ -492,12 +574,13 @@ export async function loadStation(
   } catch (e) {
     if (!(e instanceof IvoraError)) throw e;
     logIvora("live station", e);
-    return { ok: false, error: describeError(e) };
+    return { ok: false, error: describeError(e), retryAfter: retryAfter(e) };
   }
   const now = nowOf(d);
-  const active = txs.filter(running).map((t) => sessionView(t, s));
+  const staffToken = token?.idToken ?? null;
+  const active = txs.filter(running).map((t) => sessionView(t, s, staffToken));
   const views = commands.map((c) =>
-    commandView(c, new Map([[s.id, s]]), txs, now),
+    commandView(c, new Map([[s.id, s]]), txs, now, staffToken),
   );
   return {
     ok: true,
@@ -509,7 +592,7 @@ export async function loadStation(
         locations.data.find((l) => l.id === s.location_id)?.name ?? null,
       recent: txs
         .map((t) => ({
-          ...sessionView(t, s),
+          ...sessionView(t, s, staffToken),
           active: running(t),
           endedAt: t.ended_at,
         }))
@@ -557,6 +640,23 @@ const VERB: Record<LiveCommand["action"], string> = {
   unlock: "unlock",
 };
 
+/** The running sessions a command would end. */
+function sessionsEnded(
+  c: Pick<LiveCommand, "action" | "connectorId" | "transactionId">,
+  txs: Transaction[],
+): Transaction[] {
+  switch (c.action) {
+    case "start":
+      return [];
+    case "stop":
+      return txs.filter((t) => t.id === c.transactionId);
+    case "reset":
+      return txs;
+    case "unlock":
+      return txs.filter((t) => t.connector_id === c.connectorId);
+  }
+}
+
 const describeSession = (t: Transaction, s: Station) => {
   const n =
     t.connector_number ??
@@ -564,14 +664,71 @@ const describeSession = (t: Transaction, s: Station) => {
   return `session ${t.id}${n ? ` on connector ${n}` : ""}`;
 };
 
+/**
+ * The operator's staff token, registered in its Ivora token list once (on the first
+ * remote start) and idempotently: a random token is stored first, so two first uses at
+ * once register the same one; the create carries a key derived from the operator and
+ * is found again by its external reference. A token already in Ivora under that
+ * reference is adopted. Remote starts use it, so staff sessions are labelled in
+ * Ivora's sessions and reports instead of using a shared, unregistered tag.
+ */
+export async function ensureStaffToken(
+  d: LiveDeps,
+  operatorId: string,
+): Promise<string> {
+  const stored = await d.store.getStaffToken(operatorId);
+  if (stored?.tokenId) return stored.idToken;
+  const reference = staffTokenReference(operatorId);
+  const usable = (t: TokenRecord) => {
+    if (!STAFF_TOKEN_FORMAT.test(t.id_token))
+      throw new LiveError(
+        "not_ready",
+        `The staff token in Ivora (${reference}) can't be read back. Remove it in Ivora and try again.`,
+      );
+    if (t.status !== "Accepted")
+      throw new LiveError(
+        "not_ready",
+        `The staff token in Ivora (${reference}) is ${t.status}. Accept it in Ivora to use remote start.`,
+      );
+    return d.store
+      .putStaffToken(
+        operatorId,
+        { idToken: t.id_token, tokenId: t.id },
+        { replace: true },
+      )
+      .then((x) => x.idToken);
+  };
+  const found = await d.ivora.findToken(reference);
+  if (found) return usable(found);
+  const token =
+    stored ??
+    (await d.store.putStaffToken(operatorId, {
+      idToken: newStaffToken(),
+      tokenId: null,
+    }));
+  return usable(
+    await d.ivora.createToken(
+      {
+        id_token: token.idToken,
+        type: "Central",
+        status: "Accepted",
+        label: STAFF_TOKEN_LABEL,
+        external_reference: reference,
+      },
+      idempotencyKey("staff-token", operatorId, "create"),
+    ),
+  );
+}
+
 /** The command's request body, the same on every send of the same command. */
-function body(c: LiveCommand): CommandInput {
+function body(c: LiveCommand, staffToken: string | null): CommandInput {
   switch (c.action) {
     case "start":
+      if (!staffToken) throw new Error("Remote start needs the staff token");
       return {
         action: "start",
         connector_id: c.connectorId!,
-        token: STAFF_TOKEN,
+        token: staffToken,
         token_type: "Central",
       };
     case "stop":
@@ -635,7 +792,10 @@ export function fromOperation(op: Operation): CommandChanges {
 }
 
 const UNCERTAIN =
-  "Ivora did not confirm this command yet, so it may have reached the charger. Check again: that repeats it with the same idempotency key, so it happens at most once.";
+  "Ivora did not confirm this command yet, so it may have reached the charger. Within a minute of the first send you can send it again: that repeats it with the same idempotency key, so it happens at most once. After that it closes as unknown.";
+
+const LATE =
+  "Not sent again: Ivora never confirmed it, and more than a minute has passed since it was sent, so it may still reach the charger or may have already. Check the charger's status and sessions, then send a new command if it is still needed.";
 
 /**
  * Sends (or re-sends, with the same key and body) a pending command without an
@@ -645,18 +805,19 @@ async function send(
   d: LiveDeps,
   operatorId: string,
   c: LiveCommand,
+  staffToken: string | null,
 ): Promise<void> {
   let op: Operation;
   try {
     op = await d.ivora.sendCommand(
       c.stationId,
-      body(c),
+      body(c, staffToken),
       idempotencyKey("command", c.id, c.action),
     );
   } catch (e) {
     logIvora(`command ${c.action}`, e);
     // Only a definite refusal fails the command; anything else stays pending, and
-    // checking again repeats it with the same key.
+    // can be sent again (same key) within a minute.
     await d.store.record(
       operatorId,
       c.id,
@@ -729,7 +890,6 @@ export async function sendCommand(
   const connector = input.connectorId
     ? s.connectors.find((c) => c.id === input.connectorId)
     : undefined;
-  let ends: Transaction[] = [];
   switch (input.action) {
     case "start": {
       if (!s.online)
@@ -741,20 +901,17 @@ export async function sendCommand(
       )
         throw new LiveError(
           "not_ready",
-          `Connector ${connector.number ?? ""} is ${connector.status ?? "in an unknown state"}. A remote start goes only to an Available connector or one with a vehicle waiting (Preparing).`,
+          `Connector ${connector.number ?? ""} is ${connector.status ?? "in an unknown state"}. A staff remote start goes only to an Available connector; a driver who has plugged in starts and pays as usual.`,
         );
       break;
     }
-    case "stop": {
-      const tx = txs.find((t) => t.id === input.transactionId);
-      if (!tx)
+    case "stop":
+      if (!txs.some((t) => t.id === input.transactionId))
         throw new LiveError(
           "not_ready",
           "That session is not running on this charger any more. Reload the page.",
         );
-      ends = [tx];
       break;
-    }
     case "reset":
       if (!input.mode)
         throw new LiveError("invalid", "Choose a soft or hard reset.");
@@ -763,13 +920,19 @@ export async function sendCommand(
           "not_ready",
           "The charger is offline, so it can't receive a reset. Power-cycle it on site.",
         );
-      ends = txs;
       break;
     case "unlock":
       if (!connector) throw new LiveError("invalid", "Choose a connector.");
-      ends = txs.filter((t) => t.connector_id === connector.id);
       break;
   }
+  const ends = sessionsEnded(
+    {
+      action: input.action,
+      connectorId: connector?.id ?? null,
+      transactionId: input.transactionId ?? null,
+    },
+    txs,
+  );
   // Never end a driver's session implicitly: every session the command would end must
   // be named in the confirmation. A session that started since the form was opened is
   // not, so the command is refused until it is reviewed.
@@ -780,6 +943,11 @@ export async function sendCommand(
       "confirm",
       `This ${VERB[input.action]} ends ${unconfirmed.map((t) => describeSession(t, s)).join(" and ")}. Reload the page, review the session and confirm it by name.`,
     );
+  // Registered once per operator, before the command is claimed.
+  const staffToken =
+    input.action === "start"
+      ? await ensureStaffToken(d, actor.operatorId)
+      : null;
   const { command, created } = await d.store.claim(actor, {
     requestId: input.requestId,
     stationId: s.id,
@@ -792,18 +960,32 @@ export async function sendCommand(
     mode: input.action === "reset" ? input.mode! : null,
     confirmedSessions: ends.map((t) => t.id),
   });
-  // The same tap again (a double click, a resubmitted form): check the command it
-  // already made instead of sending a new one.
-  if (!created) return recheckCommand(d, actor, command.id);
-  await send(d, actor.operatorId, command);
+  // The same tap again (a double click, a resubmitted form): show the command it
+  // already made. Read-only: the first request is still sending it.
+  if (!created) return command;
+  await send(d, actor.operatorId, command, staffToken);
   return reload(d, actor.operatorId, command.id);
 }
 
+const ageOf = (d: LiveDeps, c: LiveCommand) =>
+  nowOf(d) - Date.parse(c.requestedAt);
+
+/** Closes a pending command as unknown: staff check the charger and start a new one. */
+async function closeUnknown(
+  d: LiveDeps,
+  operatorId: string,
+  c: LiveCommand,
+  error: string,
+): Promise<LiveCommand> {
+  await d.store.record(operatorId, c.id, { phase: "unknown", error });
+  return reload(d, operatorId, c.id);
+}
+
 /**
- * Checks a pending command again. With an operation, reads it; without one (Ivora did
- * not confirm the send), sends it again with the same key and body, which the API
- * answers with the original operation instead of a second command. Technicians and
- * above only, since it may send.
+ * Checks a pending command again: reads its operation, if it has one, and records the
+ * answer. It never sends anything. A command Ivora never confirmed is closed as unknown
+ * once the minute in which it may be sent again has passed, and any pending command
+ * after 15 minutes, as the database does.
  */
 export async function recheckCommand(
   d: LiveDeps,
@@ -813,19 +995,85 @@ export async function recheckCommand(
   if (!atLeast(actor.role, "technician")) throw notAllowed();
   const c = await reload(d, actor.operatorId, id);
   if (c.phase !== "pending") return c;
-  if (c.operationId) {
-    try {
-      await settle(
+  const age = ageOf(d, c);
+  if (!c.operationId)
+    return age > RESEND_WINDOW_MS
+      ? closeUnknown(d, actor.operatorId, c, LATE)
+      : c;
+  let changes: CommandChanges;
+  try {
+    changes = fromOperation(await d.ivora.getOperation(c.operationId));
+  } catch (e) {
+    logIvora("command check", e);
+    throw e;
+  }
+  if (changes.phase !== "pending")
+    await d.store.record(actor.operatorId, c.id, changes);
+  else if (age > PENDING_MAX_MS)
+    return closeUnknown(
+      d,
+      actor.operatorId,
+      c,
+      "Ivora did not confirm this command within 15 minutes. Check the charger before sending it again.",
+    );
+  return reload(d, actor.operatorId, c.id);
+}
+
+/**
+ * Sends a command Ivora never confirmed again, as its own explicit action: the same
+ * Idempotency-Key and body, so the API answers with the first send's operation if that
+ * arrived. Allowed only within a minute of the first send, and only after the
+ * charger's sessions are read again: a session the command would end that was not
+ * confirmed (or, for a start, a connector that is no longer free) closes it as unknown,
+ * so staff review the charger and confirm a new command. Technicians and above only.
+ */
+export async function resendCommand(
+  d: LiveDeps,
+  actor: Staff,
+  id: string,
+): Promise<LiveCommand> {
+  if (!atLeast(actor.role, "technician")) throw notAllowed();
+  const c = await reload(d, actor.operatorId, id);
+  if (c.phase !== "pending") return c;
+  // It reached Ivora: there is an answer to read, nothing to send.
+  if (c.operationId) return recheckCommand(d, actor, id);
+  if (ageOf(d, c) > RESEND_WINDOW_MS)
+    return closeUnknown(d, actor.operatorId, c, LATE);
+  const s = await d.ivora.getStation(c.stationId);
+  const txs = (
+    await d.ivora.listTransactions({ station_id: s.id, limit: 20 })
+  ).filter(running);
+  // Read again after the session check: the minute may have passed meanwhile.
+  if (ageOf(d, c) > RESEND_WINDOW_MS)
+    return closeUnknown(d, actor.operatorId, c, LATE);
+  const confirmed = new Set(c.confirmedSessions);
+  const unconfirmed = sessionsEnded(c, txs).filter((t) => !confirmed.has(t.id));
+  if (unconfirmed.length)
+    return closeUnknown(
+      d,
+      actor.operatorId,
+      c,
+      `Not sent again: it would now end ${unconfirmed.map((t) => describeSession(t, s)).join(" and ")}, which was not confirmed. Check the charger, then send a new command and confirm the session by name.`,
+    );
+  if (c.action === "start") {
+    const connector = s.connectors.find((x) => x.id === c.connectorId);
+    if (
+      !connector ||
+      !STARTABLE.has(connector.status ?? "") ||
+      txs.some((t) => t.connector_id === c.connectorId)
+    )
+      return closeUnknown(
         d,
         actor.operatorId,
-        c.id,
-        await d.ivora.getOperation(c.operationId),
+        c,
+        `Not sent again: the connector is ${connector?.status ?? "gone"} now, so the first send may have started it, or a driver is using it. Check the charger before starting it again.`,
       );
-    } catch (e) {
-      logIvora("command check", e);
-      throw e;
-    }
-  } else await send(d, actor.operatorId, c);
+  }
+  const staffToken =
+    c.action === "start"
+      ? ((await d.store.getStaffToken(actor.operatorId))?.idToken ?? null)
+      : null;
+  await send(d, actor.operatorId, c, staffToken);
   return reload(d, actor.operatorId, c.id);
 }
 

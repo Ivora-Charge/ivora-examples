@@ -142,4 +142,7 @@ test("demo: remote start on a free connector, observed in the sessions", async (
   await expect(page.getByRole("list", { name: "Sessions" })).toContainText(
     "Charging",
   );
+  await expect(page.getByRole("list", { name: "Sessions" })).toContainText(
+    "staff session",
+  );
 });

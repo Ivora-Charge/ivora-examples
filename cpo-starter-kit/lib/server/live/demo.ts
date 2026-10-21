@@ -44,6 +44,9 @@ const commandSchema = z.object({
 const stateSchema = z.object({
   v: z.literal(1),
   commands: z.array(commandSchema).max(MAX_COMMANDS),
+  staffToken: z
+    .object({ idToken: text(20), tokenId: z.number().int().nullable() })
+    .optional(),
 });
 export type DemoLiveState = z.infer<typeof stateSchema>;
 
@@ -201,6 +204,15 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
         (x) => x.operationId === operationId && x.phase === "pending",
       );
       return c ? { operatorId: "demo", command: c } : null;
+    },
+    async getStaffToken() {
+      return (await cookie.load()).staffToken ?? null;
+    },
+    putStaffToken(_operatorId, t, o = {}) {
+      return update((s) => {
+        if (!s.staffToken || o.replace) s.staffToken = { ...t };
+        return { ...s.staffToken };
+      });
     },
     // Demo mode accepts no webhooks: nothing to deduplicate.
     async recordEvent() {

@@ -10,7 +10,11 @@ import {
 } from "react";
 import { EMPTY } from "@/lib/action-state";
 import { Result } from "../result";
-import { recheckCommandAction, sendCommandAction } from "./actions";
+import {
+  recheckCommandAction,
+  resendCommandAction,
+  sendCommandAction,
+} from "./actions";
 
 /** A session the command would end, named in its confirmation. */
 export interface SessionToConfirm {
@@ -127,7 +131,7 @@ export function CommandForm(p: {
   );
 }
 
-/** Checks a pending command again (same idempotency key, never a new command). */
+/** Checks a pending command again: reads its status, never sends anything. */
 export function RecheckForm({ id }: { id: string }) {
   const [state, action, pending] = useActionState(recheckCommandAction, EMPTY);
   return (
@@ -137,6 +141,39 @@ export function RecheckForm({ id }: { id: string }) {
         <input type="hidden" name="id" value={id} />
         <button type="submit" className="button secondary" disabled={pending}>
           {pending ? "Checking…" : "Check again"}
+        </button>
+      </form>
+    </>
+  );
+}
+
+/**
+ * Sends a command Ivora never confirmed again, with the same idempotency key: its own
+ * explicit action, offered only within a minute of the first send. The server reads
+ * the charger's sessions again first.
+ */
+export function ResendForm({ id, until }: { id: string; until: string }) {
+  const [state, action, pending] = useActionState(resendCommandAction, EMPTY);
+  const tick = useId();
+  return (
+    <>
+      <Result state={state} />
+      <form action={action} className="resend">
+        <input type="hidden" name="id" value={id} />
+        <p className="muted">
+          Ivora did not confirm it received this command. Until{" "}
+          {until.slice(11, 19)} UTC you can send the same command again (same
+          idempotency key, so it happens at most once). After that it closes as
+          unknown and you start a new one.
+        </p>
+        <div className="confirm">
+          <input id={tick} type="checkbox" name="confirm" required />
+          <label htmlFor={tick}>
+            I checked the charger; send the same command again
+          </label>
+        </div>
+        <button type="submit" className="button secondary" disabled={pending}>
+          {pending ? "Sending…" : "Send again"}
         </button>
       </form>
     </>

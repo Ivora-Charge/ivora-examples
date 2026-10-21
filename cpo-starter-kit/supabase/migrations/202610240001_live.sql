@@ -1,7 +1,8 @@
 begin;
 
--- Live view: the charger commands staff send (remote start, stop, reset, unlock) and
--- the Ivora webhook events the kit has received.
+-- Live view: the charger commands staff send (remote start, stop, reset, unlock), each
+-- operator's staff token for remote starts, and the Ivora webhook events the kit has
+-- received.
 --
 -- 10-30 rule: RLS on, no privileges for anon or authenticated. Nothing here is read
 -- through the Data API: the server reads it with the service role, for the operator of
@@ -65,10 +66,24 @@ create table if not exists public.cpo_ivora_events (
 );
 create index if not exists cpo_ivora_events_received on public.cpo_ivora_events(received_at);
 
+-- Each operator's staff token: the ID token a remote start from the Live view uses.
+-- Random per operator (never a shared, guessable value), registered once in the
+-- operator's Ivora token list with the external reference cpo-staff-<operator_id>, so
+-- staff sessions are labelled and show in Ivora's sessions and reports. token_id is
+-- Ivora's token ID once registered. 20 characters: the OCPP 1.6 idTag maximum.
+create table if not exists public.cpo_staff_tokens (
+  operator_id uuid primary key references public.cpo_operators(id) on delete cascade,
+  id_token text not null unique check (id_token ~ '^[A-Z0-9-]{8,20}$'),
+  token_id bigint check (token_id > 0),
+  created_at timestamptz not null default now(),
+  registered_at timestamptz
+);
+
 alter table public.cpo_live_commands enable row level security;
 alter table public.cpo_ivora_events enable row level security;
-revoke all on public.cpo_live_commands, public.cpo_ivora_events from public, anon, authenticated;
-grant all on public.cpo_live_commands, public.cpo_ivora_events to service_role;
+alter table public.cpo_staff_tokens enable row level security;
+revoke all on public.cpo_live_commands, public.cpo_ivora_events, public.cpo_staff_tokens from public, anon, authenticated;
+grant all on public.cpo_live_commands, public.cpo_ivora_events, public.cpo_staff_tokens to service_role;
 
 -- Claims a command for one tap: technicians and above only, checked (and the staff
 -- row locked) in the same statement as the insert. The same p_request_id again returns

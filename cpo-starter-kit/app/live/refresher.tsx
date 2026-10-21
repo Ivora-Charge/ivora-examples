@@ -11,8 +11,10 @@ export const MIN_REFRESH_MS = 10_000;
 export const FALLBACK_WITH_WEBHOOKS_MS = 120_000;
 export const FALLBACK_WITHOUT_WEBHOOKS_MS = 30_000;
 /** While a command waits for its answer, re-read this often (for 2 minutes). */
-export const PENDING_REFRESH_MS = 5_000;
+export const PENDING_REFRESH_MS = MIN_REFRESH_MS;
 const PENDING_FOR_MS = 120_000;
+/** After a 429 without Retry-After, wait this long before reading again. */
+export const RATE_LIMITED_MS = 60_000;
 
 const time = (iso: string) => `${iso.slice(11, 19)} UTC`;
 
@@ -20,22 +22,29 @@ const time = (iso: string) => `${iso.slice(11, 19)} UTC`;
  * Keeps the Live view current. With webhooks, it polls the kit's own /api/live/changes
  * (a database read, no Ivora request) and re-reads the page when a webhook or command
  * moved it, at most every 10 seconds. A slow full re-read covers webhook downtime:
- * every 2 minutes with webhooks, every 30 seconds without. Hidden tabs do nothing.
+ * every 2 minutes with webhooks, every 30 seconds without. While a command waits for
+ * its answer, every 10 seconds for 2 minutes. After a 429 (Ivora's, passed on by the
+ * page as retryAfter, or the kit's own) it reads nothing until Retry-After has passed.
+ * Hidden tabs do nothing.
  */
 export function Refresher(p: {
   readAt: string;
   webhooks: boolean;
   pending: boolean;
+  /** Seconds Ivora asked to wait (the page's read was rate limited). */
+  retryAfter?: number | null;
 }) {
   const router = useRouter();
   const last = useRef(Date.now());
+  const holdUntil = useRef(0);
   const version = useRef<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   useEffect(() => {
     last.current = Date.now();
+    if (p.retryAfter) holdUntil.current = Date.now() + p.retryAfter * 1000;
     setRefreshing(false);
-  }, [p.readAt]);
+  }, [p.readAt, p.retryAfter]);
 
   useEffect(() => {
     const started = Date.now();
@@ -49,19 +58,21 @@ export function Refresher(p: {
       ? FALLBACK_WITH_WEBHOOKS_MS
       : FALLBACK_WITHOUT_WEBHOOKS_MS;
     const tick = async () => {
-      if (document.hidden) return;
+      if (document.hidden || Date.now() < holdUntil.current) return;
       const age = Date.now() - last.current;
       if (p.pending && Date.now() - started < PENDING_FOR_MS) {
-        if (age >= PENDING_REFRESH_MS) {
-          last.current = Date.now();
-          router.refresh();
-        }
+        if (age >= PENDING_REFRESH_MS) reread();
         return;
       }
       if (age >= fallback) return reread();
       if (!p.webhooks) return;
       try {
         const r = await fetch("/api/live/changes", { cache: "no-store" });
+        if (r.status === 429) {
+          const s = Number(r.headers.get("retry-after"));
+          holdUntil.current = Date.now() + (s > 0 ? s * 1000 : RATE_LIMITED_MS);
+          return;
+        }
         if (!r.ok) return;
         const { version: v } = (await r.json()) as { version?: string };
         if (typeof v !== "string") return;
@@ -86,9 +97,11 @@ export function Refresher(p: {
     <p className="muted refresher" role="status" aria-live="polite">
       Updated {time(p.readAt)}
       {refreshing ? " · refreshing…" : ""}.{" "}
-      {p.webhooks
-        ? "Updates when Ivora reports a change, and every 2 minutes."
-        : "Updates every 30 seconds."}{" "}
+      {p.retryAfter
+        ? `Ivora asked the kit to slow down: the next update is in ${p.retryAfter} seconds.`
+        : p.webhooks
+          ? "Updates when Ivora reports a change, and every 2 minutes."
+          : "Updates every 30 seconds."}{" "}
       <button
         type="button"
         className="link-button"
