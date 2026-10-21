@@ -15,6 +15,10 @@ export interface ActionState {
    * response to the action that set it; never stored or logged.
    */
   secret?: { password: string; connectionUrl: string; username: string };
+  /** Every problem with a form, after the first (in `error`). */
+  problems?: string[];
+  /** A tariff preview (Pricing). */
+  quote?: QuotePreview;
   invite?: {
     email: string;
     role: string;
@@ -25,3 +29,26 @@ export interface ActionState {
 }
 
 export const EMPTY: ActionState = {};
+
+/**
+ * A tariff preview: Ivora's simulated amounts for one session, formatted on the server
+ * exactly as Ivora returned them. The browser only shows it.
+ */
+export interface QuotePreview {
+  /** "A 30 kWh session on Tue, Oct 20, 2026 from 18:00 to 20:30 … costs $13.50." */
+  sentence: string;
+  lines: {
+    label: string;
+    quantity: string;
+    unitPrice: string;
+    amount: string;
+  }[];
+  adjustments: { label: string; amount: string }[];
+  subtotal: string;
+  total: string;
+  totalMinor: number;
+  currency: string;
+  driverText: string;
+  notes: string[];
+  demo: boolean;
+}

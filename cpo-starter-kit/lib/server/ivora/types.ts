@@ -45,6 +45,11 @@ export interface Connector {
   number: number | null;
   status?: string | null;
   max_power_w?: number | null;
+  /**
+   * The connector's tariff in Ivora (charger screens show its price). Read-only
+   * through the API: the kit bills with its own assignment (see lib/server/pricing).
+   */
+  tariff_id?: number | null;
 }
 
 export interface Station {
@@ -212,6 +217,138 @@ export interface PaymentAccount {
   livemode?: boolean | null;
 }
 
+// ---- Tariffs (OCPI 2.2.1-aligned elements) ----
+
+export type PriceDimension = "ENERGY" | "TIME" | "PARKING_TIME" | "FLAT";
+
+export interface PriceComponent {
+  type: PriceDimension;
+  /** Major units excluding tax, at most 4 decimals (OCPI): 0.35 is $0.35 per kWh. */
+  price: number;
+  /** ENERGY in Wh, TIME and PARKING_TIME in seconds; ignored for FLAT. */
+  step_size?: number;
+}
+
+export type DayOfWeek =
+  | "MONDAY"
+  | "TUESDAY"
+  | "WEDNESDAY"
+  | "THURSDAY"
+  | "FRIDAY"
+  | "SATURDAY"
+  | "SUNDAY";
+
+/** The OCPI restrictions the kit uses: local time of day and days of the week. */
+export interface TariffRestrictions {
+  /** HH:MM local time, inclusive. */
+  start_time?: string;
+  /** HH:MM local time, exclusive; before start_time wraps midnight. */
+  end_time?: string;
+  day_of_week?: DayOfWeek[];
+}
+
+export interface TariffElement {
+  price_components: PriceComponent[];
+  restrictions?: TariffRestrictions | null;
+}
+
+/** Driver-facing description (OCPI tariff_alt_text). */
+export interface AltText {
+  /** ISO 639-1. */
+  language: string;
+  /** 1 to 512 characters. */
+  text: string;
+}
+
+/** A tariff definition, as `POST /tariffs/simulate` takes it (no hold, no reference). */
+export interface TariffDefinitionInput {
+  currency: string;
+  elements: TariffElement[];
+  tariff_alt_text: AltText[];
+  /** IANA time zone of the restrictions' local times. */
+  time_zone: string;
+}
+
+/** `POST /tariffs`: a new tariff, found again by its external_reference. */
+export interface TariffInput extends TariffDefinitionInput {
+  /** Integer minor units held before charging. */
+  authorization_minor: number;
+  /** Derived from our own record and version, so a retry finds the tariff. */
+  external_reference: string;
+}
+
+export interface Tariff {
+  id: number;
+  currency: string;
+  /** The base rate (the last unrestricted ENERGY price), integer minor units per kWh. */
+  rate_minor_per_kwh: number;
+  authorization_minor: number;
+  archived?: boolean;
+  external_reference?: string | null;
+  is_complex?: boolean;
+  /** The English driver-facing description. */
+  pricing_summary?: string | null;
+}
+
+/** What `DELETE /tariffs/{id}` answers: the archived tariff and what moved off it. */
+export interface TariffArchived {
+  id: number;
+  archived: true;
+  replacement_tariff_id: number | null;
+  /** Connector resource IDs moved to the replacement. */
+  reassigned_connectors: number[];
+}
+
+/** A session to price. Energy spreads evenly over the charging time. */
+export interface SessionProfile {
+  /** ISO 8601 with an offset. */
+  start_at: string;
+  /** IANA time zone for local-time restrictions. */
+  time_zone: string;
+  /** Charging time in minutes. */
+  duration_minutes: number;
+  energy_kwh: number;
+  /** Minutes connected after charging ends (PARKING_TIME is billed on them). */
+  idle_minutes: number;
+}
+
+export interface QuoteLine {
+  type: PriceDimension;
+  /** Index of the element that priced this line. */
+  element: number;
+  reservation: boolean;
+  /** Decimal quantity in `unit`. */
+  quantity: string;
+  unit: "kWh" | "h" | "session";
+  /** Minor units per unit, as a decimal string. */
+  price_minor: string;
+  /** Unrounded amount, minor units (decimal string). */
+  exact_minor: string;
+  /** Rounded half up, for display; the total rounds the exact sum once. */
+  amount_minor: number;
+}
+
+export interface QuoteAdjustment {
+  kind: string;
+  rule: string;
+  exact_minor: string;
+  amount_minor: number;
+}
+
+/** `POST /tariffs/simulate` and `/quote`: the same calculation bills finalize with. */
+export interface Quote {
+  tariff_id?: number | null;
+  currency: string;
+  pricing_version: string;
+  lines: QuoteLine[];
+  subtotal_minor: number;
+  exact_subtotal_minor: string;
+  adjustments: QuoteAdjustment[];
+  /** Integer minor units: the exact subtotal after rules, rounded half up once. */
+  total_minor: number;
+  tariff_alt_text?: AltText[];
+}
+
 export interface ListOptions {
   /** 1 to 100 (the API's maximum). */
   limit?: number;
@@ -281,4 +418,27 @@ export interface IvoraClient {
   /** Needs the branding to be set first. */
   putBrandingLogo(logo: LogoUpload, key: string): Promise<Branding>;
   getPaymentAccount(): Promise<PaymentAccount>;
+  /**
+   * Creates a tariff (a new version of one of the kit's tariffs). Adopts it by
+   * external_reference when the create may already have happened.
+   */
+  createTariff(input: TariffInput, key: string): Promise<Tariff>;
+  /**
+   * Archives a tariff: bills that snapshot it keep its price. With a replacement,
+   * Ivora first moves the connectors and charger displays that use it.
+   */
+  archiveTariff(
+    tariffId: number,
+    replacementTariffId: number | null,
+    key: string,
+  ): Promise<TariffArchived>;
+  /**
+   * Validates a draft tariff like creation does (422 tariff_invalid with every problem
+   * in details.errors) and prices the session with the billing function. Stores
+   * nothing.
+   */
+  simulateTariff(
+    tariff: TariffDefinitionInput,
+    session: SessionProfile,
+  ): Promise<Quote>;
 }

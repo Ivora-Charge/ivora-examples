@@ -1075,6 +1075,114 @@ h2 .muted {
   font: inherit;
 }
 
+/* Pricing */
+textarea {
+  width: 100%;
+  min-width: 0;
+  padding: var(--space-2) var(--space-3);
+  font: inherit;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-input-border);
+  border-radius: var(--radius-sm);
+  resize: vertical;
+}
+textarea:focus-visible {
+  border-color: var(--color-focus);
+}
+.periods,
+.period,
+.simulate {
+  display: grid;
+  gap: var(--space-3);
+  min-width: 0;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.periods legend,
+.period legend,
+.simulate legend {
+  padding: 0 var(--space-1);
+  font-weight: var(--font-weight-medium);
+}
+.period-times {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: var(--space-3);
+}
+.day-choice {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+}
+.day-choice label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: var(--tap-target);
+}
+.day-choice input {
+  width: 1.25rem;
+  min-height: 1.25rem;
+  margin: 0;
+}
+.hint {
+  margin: 0;
+  font-size: var(--font-size-sm);
+}
+.quote {
+  display: grid;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+.quote h3 {
+  margin: 0;
+}
+.quote p {
+  margin: 0;
+}
+.quote-sentence {
+  font-weight: var(--font-weight-medium);
+}
+.table-scroll {
+  overflow-x: auto;
+}
+.quote table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+.quote th,
+.quote td {
+  padding: var(--space-2);
+  text-align: left;
+  vertical-align: top;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.quote thead th {
+  border-top: 0;
+  color: var(--color-text-muted);
+  font-weight: var(--font-weight-medium);
+}
+.quote tfoot th,
+.quote tfoot td {
+  font-weight: var(--font-weight-bold);
+}
+.quote .num {
+  text-align: right;
+  white-space: nowrap;
+}
+.connector-tariffs {
+  flex-basis: 100%;
+  margin: 0;
+  padding-left: var(--space-5);
+}
+.pricing-station .command {
+  flex-basis: 100%;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     scroll-behavior: auto !important;

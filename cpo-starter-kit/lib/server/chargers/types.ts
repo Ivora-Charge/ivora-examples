@@ -102,6 +102,11 @@ export type ChargerChanges = Partial<
 /** What a sticker code leads to, for the public /c/<code> page. */
 export interface ResolvedCode {
   code: string;
+  /** Server-side only (the page's pricing lookup); never shown. */
+  operatorId: string;
+  stationId: number | null;
+  /** Ivora's connector resource ID, when known. */
+  connectorId: number | null;
   connectorNumber: number;
   chargerName: string;
   /** False once the charger was removed from the kit. */

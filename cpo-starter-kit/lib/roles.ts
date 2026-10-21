@@ -24,7 +24,7 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   owner:
     "Everything, including adding and removing owners. There is always at least one owner.",
   manager:
-    "Runs the network day to day: company details, brand and payments; removes chargers; invites, changes and removes technicians and viewers.",
+    "Runs the network day to day: company details, brand and payments; prices and tariffs; removes chargers; invites, changes and removes technicians and viewers.",
   technician:
     "Works on chargers: adds, tests and edits them, prints QR stickers, and starts, stops, resets and unlocks them from the Live view. Cannot remove chargers or change the team.",
   viewer:

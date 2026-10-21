@@ -50,6 +50,10 @@ const TABLES = [
   "cpo_live_commands",
   "cpo_ivora_events",
   "cpo_staff_tokens",
+  "cpo_tariffs",
+  "cpo_tariff_versions",
+  "cpo_station_pricing",
+  "cpo_connector_tariffs",
 ] as const;
 
 beforeAll(async () => {
@@ -993,6 +997,209 @@ describe("live commands", () => {
             /permission denied/,
           );
         }
+      });
+  });
+});
+
+describe("pricing", () => {
+  const DEF = JSON.stringify({ kind: "paid", currency: "USD" });
+  const call = <T = unknown>(sql: string, params: unknown[]) =>
+    as("service_role", null, () =>
+      pg.query<T & Record<string, unknown>>(sql, params),
+    );
+  const create = (actor: string, operator = operatorA, name = "Standard") =>
+    call<{ id: string }>("select cpo_create_tariff($1,$2,$3,$4::jsonb) as id", [
+      operator,
+      actor,
+      name,
+      DEF,
+    ]).then((r) => r.rows[0].id);
+  const addVersion = (actor: string, id: string, operator = operatorA) =>
+    call<{ v: number }>(
+      "select cpo_add_tariff_version($1,$2,$3,'Standard',$4::jsonb) as v",
+      [operator, actor, id, DEF],
+    ).then((r) => r.rows[0].v);
+  const record = (
+    id: string,
+    version: number,
+    ivoraId: number,
+    actor = OWNER_A,
+  ) =>
+    call("select cpo_record_tariff_version($1,$2,$3,$4,$5)", [
+      operatorA,
+      actor,
+      id,
+      version,
+      ivoraId,
+    ]);
+  const versions = async (id: string) =>
+    (
+      await pg.query<{
+        version: number;
+        ivora_tariff_id: string | null;
+        archived_at: string | null;
+      }>(
+        "select version, ivora_tariff_id, archived_at from cpo_tariff_versions where tariff_id=$1 order by version",
+        [id],
+      )
+    ).rows.map((r) => [
+      r.version,
+      r.ivora_tariff_id === null ? null : Number(r.ivora_tariff_id),
+      Boolean(r.archived_at),
+    ]);
+  const setStation = (
+    actor: string,
+    tariff: string | null,
+    priv: boolean,
+    connectors: unknown[] = [],
+    operator = operatorA,
+  ) =>
+    call("select cpo_set_station_pricing($1,$2,9101,$3,$4,$5::jsonb)", [
+      operator,
+      actor,
+      tariff,
+      priv,
+      JSON.stringify(connectors),
+    ]);
+
+  it("lets owners and managers create tariffs, and refuses everyone else", async () => {
+    const id = await create(OWNER_A);
+    expect(await versions(id)).toEqual([[1, null, false]]);
+    await expect(create(TECH_A)).rejects.toThrow(/cpo_not_allowed/);
+    await expect(create(OWNER_B)).rejects.toThrow(/cpo_not_allowed/);
+    await expect(create(OUTSIDER)).rejects.toThrow(/cpo_not_allowed/);
+    await expect(record(id, 1, 500, TECH_A)).rejects.toThrow(/cpo_not_allowed/);
+    await pg.query("update cpo_staff set role='manager' where user_id=$1", [
+      TECH_A,
+    ]);
+    try {
+      await record(id, 1, 500, TECH_A);
+    } finally {
+      await pg.query(
+        "update cpo_staff set role='technician' where user_id=$1",
+        [TECH_A],
+      );
+    }
+    expect(await versions(id)).toEqual([[1, 500, false]]);
+  });
+
+  it("adds versions one at a time and never gives a version a second Ivora tariff", async () => {
+    const id = await create(OWNER_A);
+    // Version 1 is unconfirmed: another save is refused until it is.
+    await expect(addVersion(OWNER_A, id)).rejects.toThrow(/cpo_tariff_busy/);
+    await record(id, 1, 600);
+    await record(id, 1, 600); // repeating it is harmless
+    await expect(record(id, 1, 601)).rejects.toThrow(/cpo_tariff_not_found/);
+    expect(await addVersion(OWNER_A, id)).toBe(2);
+    await expect(addVersion(OWNER_A, id)).rejects.toThrow(/cpo_tariff_busy/);
+    await record(id, 2, 602);
+    await call("select cpo_record_tariff_archived($1,$2,$3,1)", [
+      operatorA,
+      OWNER_A,
+      id,
+    ]);
+    expect(await versions(id)).toEqual([
+      [1, 600, true],
+      [2, 602, false],
+    ]);
+    // Another operator's owner can't add to it.
+    await expect(addVersion(OWNER_B, id, operatorB)).rejects.toThrow(
+      /cpo_tariff_not_found/,
+    );
+  });
+
+  it("drops only unconfirmed versions, and a tariff left with none", async () => {
+    const id = await create(OWNER_A);
+    await call("select cpo_drop_tariff_version($1,$2,$3,1)", [
+      operatorA,
+      OWNER_A,
+      id,
+    ]);
+    expect(
+      (await pg.query("select 1 from cpo_tariffs where id=$1", [id])).rows,
+    ).toEqual([]);
+    const kept = await create(OWNER_A);
+    await record(kept, 1, 700);
+    await call("select cpo_drop_tariff_version($1,$2,$3,1)", [
+      operatorA,
+      OWNER_A,
+      kept,
+    ]);
+    expect(await versions(kept)).toEqual([[1, 700, false]]);
+  });
+
+  it("assigns only confirmed tariffs of the same operator, in one statement", async () => {
+    const live = await create(OWNER_A);
+    await record(live, 1, 800);
+    const pending = await create(OWNER_A);
+    await expect(setStation(OWNER_A, pending, false)).rejects.toThrow(
+      /cpo_tariff_not_ready/,
+    );
+    await expect(
+      setStation(OWNER_A, live, false, [
+        { connector_id: 91012, tariff_id: pending },
+      ]),
+    ).rejects.toThrow(/cpo_tariff_not_ready/);
+    await expect(setStation(TECH_A, live, false)).rejects.toThrow(
+      /cpo_not_allowed/,
+    );
+    // Operator B can't point its station at operator A's tariff.
+    await expect(
+      setStation(OWNER_B, live, false, [], operatorB),
+    ).rejects.toThrow(/cpo_tariff_not_ready/);
+    await setStation(OWNER_A, live, true, [
+      { connector_id: 91012, tariff_id: live },
+    ]);
+    const rows = async () => ({
+      station: (
+        await pg.query(
+          "select tariff_id, private from cpo_station_pricing where operator_id=$1",
+          [operatorA],
+        )
+      ).rows,
+      connectors: (
+        await pg.query<{ connector_id: string; tariff_id: string }>(
+          "select connector_id, tariff_id from cpo_connector_tariffs where operator_id=$1",
+          [operatorA],
+        )
+      ).rows.map((r) => ({ ...r, connector_id: Number(r.connector_id) })),
+    });
+    expect(await rows()).toEqual({
+      station: [{ tariff_id: live, private: true }],
+      connectors: [{ connector_id: 91012, tariff_id: live }],
+    });
+    // The whole station is replaced: no tariff, not private, no overrides.
+    await setStation(OWNER_A, null, false);
+    expect(await rows()).toEqual({ station: [], connectors: [] });
+    // A tariff in use can't be deleted from under a station.
+    await setStation(OWNER_A, live, false);
+    await expect(
+      pg.query("delete from cpo_tariffs where id=$1", [live]),
+    ).rejects.toThrow(/foreign key/);
+  });
+
+  it("is not readable or writable from the browser, even by an owner", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        for (const t of [
+          "cpo_tariffs",
+          "cpo_tariff_versions",
+          "cpo_station_pricing",
+          "cpo_connector_tariffs",
+        ]) {
+          await expect(pg.query(`select * from ${t}`)).rejects.toThrow(
+            /permission denied/,
+          );
+          await expect(pg.query(`delete from ${t}`)).rejects.toThrow(
+            /permission denied/,
+          );
+        }
+        await expect(
+          pg.query("select cpo_create_tariff($1,$2,'x','{}'::jsonb)", [
+            operatorA,
+            OWNER_A,
+          ]),
+        ).rejects.toThrow(/permission denied/);
       });
   });
 });

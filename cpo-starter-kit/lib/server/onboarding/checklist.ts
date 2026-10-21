@@ -12,12 +12,14 @@ export interface ChecklistItem {
 
 /**
  * The home page's setup checklist. `chargers` is the number of chargers in the Ivora
- * project (null when it could not be read).
+ * project (null when it could not be read); `prices` the number of tariffs live in
+ * Ivora and how many chargers have one.
  */
 export function setupChecklist(
   o: Onboarding,
   stripe: StripeResult,
   chargers: number | null,
+  prices: { tariffs: number; assigned: number } = { tariffs: 0, assigned: 0 },
 ): ChecklistItem[] {
   const stripeState = stripe.ok ? stripe.view.state : null;
   return [
@@ -62,8 +64,12 @@ export function setupChecklist(
     {
       key: "price",
       label: "First price",
-      state: "soon",
-      detail: "Setting prices comes with the Pricing section.",
+      state: prices.tariffs && prices.assigned ? "done" : "todo",
+      detail: !prices.tariffs
+        ? "Create a tariff: price per kWh, time-of-use, idle fee, or free."
+        : !prices.assigned
+          ? "Assign your tariff to a charger."
+          : `${prices.tariffs} ${prices.tariffs === 1 ? "tariff" : "tariffs"}, on ${prices.assigned} ${prices.assigned === 1 ? "charger" : "chargers"}.`,
       href: "/pricing",
     },
   ];

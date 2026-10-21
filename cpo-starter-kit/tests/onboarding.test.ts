@@ -499,30 +499,39 @@ describe("Stripe status", () => {
 });
 
 describe("setup checklist", () => {
-  it("follows company, brand, Stripe and chargers; pricing comes later", async () => {
+  it("follows company, brand, Stripe, chargers and prices", async () => {
     const { d, store } = deps();
-    const items = async (chargers: number | null) =>
+    const items = async (
+      chargers: number | null,
+      prices = { tariffs: 0, assigned: 0 },
+    ) =>
       setupChecklist(
         await loadOnboarding(d, owner),
         await loadStripe(d),
         chargers,
+        prices,
       ).map((i) => [i.key, i.state]);
     expect(await items(null)).toEqual([
       ["company", "todo"],
       ["brand", "todo"],
       ["stripe", "todo"],
       ["charger", "todo"],
-      ["price", "soon"],
+      ["price", "todo"],
     ]);
     await saveCompany(d, owner, COMPANY);
     await saveBrand(d, owner, { primaryColor: "#17613a", logo: null });
     await store.setDemoStripe!("ready");
-    expect(await items(3)).toEqual([
+    // A tariff alone is not enough: a charger needs it.
+    expect((await items(3, { tariffs: 1, assigned: 0 }))[4]).toEqual([
+      "price",
+      "todo",
+    ]);
+    expect(await items(3, { tariffs: 1, assigned: 2 })).toEqual([
       ["company", "done"],
       ["brand", "done"],
       ["stripe", "done"],
       ["charger", "done"],
-      ["price", "soon"],
+      ["price", "done"],
     ]);
   });
 });

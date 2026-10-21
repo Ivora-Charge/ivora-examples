@@ -12,6 +12,16 @@ import { resetDemoLiveForTests } from "@/lib/server/live/demo-cookie";
 import { loadLive, loadStation, sendCommand } from "@/lib/server/live/service";
 import type { Staff } from "@/lib/server/team/types";
 import {
+  createDemoPricingStore,
+  memoryDemoPricing,
+} from "@/lib/server/pricing/demo";
+import {
+  loadPricing,
+  previewTariff,
+  saveTariff,
+  setStationPricing,
+} from "@/lib/server/pricing/service";
+import {
   createDemoOnboardingStore,
   memoryDemoOnboarding,
 } from "@/lib/server/onboarding/demo";
@@ -203,6 +213,59 @@ describe("demo mode", () => {
       const stripe = await loadStripe(d);
       expect(stripe.ok && stripe.view.state).toBe(s);
     }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs pricing end to end (tariff, preview, new version, assignment) without any network call", async () => {
+    const onboarding = createDemoOnboardingStore(memoryDemoOnboarding());
+    const d = {
+      store: createDemoPricingStore(memoryDemoPricing()),
+      ivora: getIvora(),
+      company: onboarding,
+    };
+    expect(d.ivora.mode).toBe("demo");
+    const owner = {
+      userId: "demo-owner",
+      email: "demo-owner@example.com",
+      role: "owner" as const,
+      operatorId: "demo-operator",
+      operatorName: "Sample Operator",
+      demo: true,
+    };
+    const form = {
+      name: "Sample: Night",
+      kind: "paid",
+      timeZone: "UTC",
+      energy: "0.30",
+      idleFee: "0.25",
+      periods: [
+        { start: "22:00", end: "06:00", price: "0.20", days: ["SATURDAY"] },
+      ],
+    };
+    const sim = {
+      date: "2026-10-24",
+      start: "23:00",
+      end: "01:00",
+      energyKwh: "10",
+      idleMinutes: "20",
+    };
+    const q = await previewTariff(d, owner, form, sim);
+    // 23:00-24:00 Saturday at 0.20, 00:00-01:00 Sunday at the base 0.30, then 10
+    // billed idle minutes (20 less the default 10-minute grace) at 0.25.
+    expect(q).toMatchObject({ total: "$5.00", demo: true });
+    const { id, result } = await saveTariff(d, owner, form);
+    expect(result).toMatchObject({ state: "saved", version: 1 });
+    const again = await saveTariff(d, owner, { ...form, energy: "0.32" }, id);
+    expect(again.result).toMatchObject({ state: "saved", version: 2 });
+    await setStationPricing(d, owner, {
+      stationId: "9101",
+      tariffId: id,
+      private: false,
+    });
+    const view = await loadPricing(d, owner);
+    expect(
+      view.stations.find((s) => s.stationId === 9101)?.connectors[0],
+    ).toMatchObject({ tariffName: "Sample: Night", source: "station" });
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
