@@ -17,6 +17,7 @@ const LIVE = {
   PUBLIC_BASE_URL: "https://emsp.example.test",
   SUPABASE_URL: "https://db.example.test",
   SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
+  OCPI_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
 const VARS = [...Object.keys(LIVE), "DEMO_MODE"];
 

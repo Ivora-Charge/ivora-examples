@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { brand, cssVariables } from "@/brand";
 import { isDemo } from "@/lib/server/demo";
@@ -40,6 +41,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <header className="topbar">
           <span className="brand">{brand.name}</span>
           <span className="muted">Admin</span>
+          <nav aria-label="Admin" className="nav">
+            <Link href="/">Overview</Link>
+            <Link href="/admin/peers">CPO peers</Link>
+          </nav>
         </header>
         <main id="main" tabIndex={-1}>
           {children}

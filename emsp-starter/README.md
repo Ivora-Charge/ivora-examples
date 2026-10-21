@@ -1,6 +1,6 @@
 # eMSP Starter
 
-> **In progress.** This is part 1 of 13: the scaffold. The server and the driver app have an app shell, a demo mode and brand tokens; the database has its migration baseline. OCPI modules, the mock CPO, payments and the driver flows arrive in later parts.
+> **In progress.** This is part 2 of 13. The server and the driver app have an app shell, a demo mode and brand tokens. The server speaks the OCPI 2.2.1 versions and credentials modules with any number of CPO peers, in both directions, tested against a built-in mock CPO. Locations, sessions, payments and the driver flows arrive in later parts.
 
 For charging networks that want to run **their own driver app and payments**, connected over **OCPI 2.2.1** to any CPO platform. You run the eMSP (e-Mobility Service Provider) side: drivers, tokens, sessions, CDRs and payments. Each CPO you partner with is an OCPI peer. Ivora is one possible CPO peer among many; nothing here depends on it.
 
@@ -45,8 +45,9 @@ Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its READ
 
 ## Parts
 
-1. **Scaffold** (this part): app shells, demo mode, brand tokens, Supabase baseline, CI.
-2. to 13. OCPI versions and credentials, locations and tariffs, tokens and real-time authorization, sessions and commands, CDRs, payments, the optional live-data adapter, the driver flows and the admin web. Each part updates this README.
+1. **Scaffold**: app shells, demo mode, brand tokens, Supabase baseline, CI.
+2. **OCPI core** (this part): versions and credentials in both directions, multiple CPO peers with token rotation, the OCPI client and server middleware, the mock CPO.
+3. to 13. Locations and tariffs, tokens and real-time authorization, sessions and commands, CDRs, payments, the optional live-data adapter, the driver flows and the admin web. Each part updates this README.
 
 ## License
 

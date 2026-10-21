@@ -23,7 +23,11 @@ export const LIVE_REQUIRED = [
   "PUBLIC_BASE_URL",
   "SUPABASE_URL",
   "SUPABASE_SERVICE_ROLE_KEY",
+  "OCPI_TOKEN_ENCRYPTION_KEY",
 ] as const;
+
+/** Shortest ADMIN_SECRET accepted; a shorter one leaves the admin actions disabled. */
+export const ADMIN_SECRET_MIN_LENGTH = 32;
 
 /**
  * Server-side settings, read on every call so tests and restarts see the current
@@ -52,7 +56,35 @@ export const config = {
   get supabaseServiceRoleKey(): string {
     return env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   },
+  /**
+   * 32-byte key (base64) that encrypts the tokens CPO peers give us, at rest. Secret.
+   * Undefined when unset or not 32 bytes.
+   */
+  get tokenEncryptionKey(): Buffer | undefined {
+    const raw = env("OCPI_TOKEN_ENCRYPTION_KEY");
+    if (!raw || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(raw)) return undefined;
+    const key = Buffer.from(raw, "base64");
+    return key.length === 32 ? key : undefined;
+  },
+  /**
+   * Temporary gate for the admin actions until admin sign-in lands. Secret. Undefined
+   * when unset or shorter than ADMIN_SECRET_MIN_LENGTH, which disables the actions.
+   */
+  get adminSecret(): string | undefined {
+    const v = env("ADMIN_SECRET");
+    return v && v.length >= ADMIN_SECRET_MIN_LENGTH ? v : undefined;
+  },
 };
+
+/** Where CPO peers reach this eMSP's OCPI endpoints. */
+export function ocpiUrls() {
+  const base = `${config.publicBaseUrl}/ocpi`;
+  return {
+    versions: `${base}/versions`,
+    details: `${base}/${OCPI_VERSION}`,
+    credentials: `${base}/${OCPI_VERSION}/credentials`,
+  };
+}
 
 /** Names (never values) of live-mode variables that are unset. */
 export function missingForLive(): string[] {
@@ -81,6 +113,8 @@ export function configErrors(): string[] {
     } catch {}
     if (!ok) errors.push("SUPABASE_URL must be an https:// URL");
   }
+  if (env("OCPI_TOKEN_ENCRYPTION_KEY") && !config.tokenEncryptionKey)
+    errors.push("OCPI_TOKEN_ENCRYPTION_KEY must be 32 bytes, base64-encoded");
   return errors;
 }
 

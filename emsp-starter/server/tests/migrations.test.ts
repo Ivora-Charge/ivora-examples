@@ -153,3 +153,82 @@ describe("migrations on PGlite", () => {
     ).rejects.toThrow(/check constraint/);
   });
 });
+
+describe("OCPI peer registry tables", () => {
+  const PEER = `insert into public.emsp_ocpi_peers (label, direction)
+                values ('CPO', 'outbound') returning id`;
+
+  it("keeps peers and issued tokens away from anon and authenticated", async () => {
+    for (const db_ of [db, legacy])
+      for (const role of ["anon", "authenticated"] as const)
+        await asRole(db_, role, async () => {
+          for (const table of ["emsp_ocpi_peers", "emsp_ocpi_issued_tokens"])
+            await expect(
+              db_.query(`select * from public.${table}`),
+            ).rejects.toThrow(/permission denied/);
+        });
+  });
+
+  it("lets the service role insert, read and update, but never delete", async () => {
+    await asRole(db, "service_role", async () => {
+      const { rows } = await db.query<{ id: string }>(PEER);
+      const id = rows[0].id;
+      await db.query(
+        `insert into public.emsp_ocpi_issued_tokens (token_hash, peer_id, scope)
+         values ($1, $2, 'registration')`,
+        ["a".repeat(64), id],
+      );
+      await db.query(
+        "update public.emsp_ocpi_issued_tokens set revoked_at = now() where peer_id = $1",
+        [id],
+      );
+      await db.query(
+        `update public.emsp_ocpi_peers set status = 'registered', registered_at = now(),
+           token_ciphertext = 'v1:a:b:c' where id = $1`,
+        [id],
+      );
+      await expect(
+        db.query("delete from public.emsp_ocpi_issued_tokens"),
+      ).rejects.toThrow(/permission denied/);
+      await expect(
+        db.query("delete from public.emsp_ocpi_peers"),
+      ).rejects.toThrow(/permission denied/);
+    });
+  });
+
+  it("stores only token hashes and encrypted tokens", async () => {
+    const { rows } = await db.query<{ id: string }>(PEER);
+    const id = rows[0].id;
+    await expect(
+      db.query(
+        `insert into public.emsp_ocpi_issued_tokens (token_hash, peer_id, scope)
+         values ('a-plain-token', $1, 'full')`,
+        [id],
+      ),
+    ).rejects.toThrow(/check constraint/);
+    await expect(
+      db.query(
+        "update public.emsp_ocpi_peers set token_ciphertext = 'plain' where id = $1",
+        [id],
+      ),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  it("rejects malformed peers", async () => {
+    const bad = [
+      "insert into public.emsp_ocpi_peers (label, direction) values ('', 'outbound')",
+      "insert into public.emsp_ocpi_peers (label, direction) values ('x', 'sideways')",
+      "insert into public.emsp_ocpi_peers (label, direction, versions_url) values ('x', 'outbound', 'http://cpo.example.test')",
+      "insert into public.emsp_ocpi_peers (label, direction, status) values ('x', 'outbound', 'registered')",
+    ];
+    for (const sql of bad)
+      await expect(db.query(sql)).rejects.toThrow(/check constraint/);
+    await expect(
+      db.query(
+        `insert into public.emsp_ocpi_issued_tokens (token_hash, peer_id, scope)
+         values ($1, gen_random_uuid(), 'full')`,
+        ["b".repeat(64)],
+      ),
+    ).rejects.toThrow(/foreign key/);
+  });
+});
