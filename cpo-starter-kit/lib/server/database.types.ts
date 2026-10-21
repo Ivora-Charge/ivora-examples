@@ -260,6 +260,15 @@ export type Database = {
         };
         Returns: number;
       };
+      cpo_claim_charger_test: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_id: string;
+          p_test: Json;
+        };
+        Returns: number;
+      };
       cpo_add_sticker_codes: {
         Args: {
           p_operator_id: string;

@@ -22,15 +22,18 @@ create table if not exists public.cpo_chargers (
   -- Shown in the kit and on stickers; the kit's own, never sent to Ivora.
   label text check (char_length(label) between 1 and 80),
   location_id bigint check (location_id > 0),
-  -- A site still to be created in Ivora (name and address), kept so a retry creates
-  -- it with the same Idempotency-Key. Cleared once the location exists.
+  -- A site to create in Ivora (name and address), kept so a retry creates it with the
+  -- same Idempotency-Key. Kept once the location exists too, as the note that this
+  -- record created it: if Ivora then refuses the station, the record (and its
+  -- location_id) stays, so a retry reuses the site instead of creating another.
   new_site jsonb check (new_site is null or jsonb_typeof(new_site) = 'object'),
   connectors smallint not null default 1 check (connectors between 1 and 8),
   connection_url text check (char_length(connection_url) <= 300),
   -- When Ivora confirmed the charger password the kit set. The password itself is
   -- shown once and never stored.
   password_set_at timestamptz,
-  -- Counters that go into the Idempotency-Key of the next password, test and edit.
+  -- Counters that go into the Idempotency-Key of the next password, test and edit
+  -- (test_runs is counted by cpo_claim_charger_test).
   credential_sets integer not null default 0 check (credential_sets >= 0),
   test_runs integer not null default 0 check (test_runs >= 0),
   edits integer not null default 0 check (edits >= 0),
@@ -136,7 +139,7 @@ $$;
 revoke all on function public.cpo_update_charger(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
 grant execute on function public.cpo_update_charger(uuid, uuid, uuid, jsonb) to service_role;
 
--- The next number for an Idempotency-Key (credentials, test or edit), counted in one
+-- The next number for an Idempotency-Key (credentials or edit), counted in one
 -- statement so two people never get the same one.
 create or replace function public.cpo_next_charger_seq(
   p_operator_id uuid, p_actor_id uuid, p_id uuid, p_kind text
@@ -146,16 +149,15 @@ declare
   v_next integer;
 begin
   perform public.cpo_lock_charger_actor(p_operator_id, p_actor_id, false);
-  if p_kind not in ('credentials', 'test', 'edit') then
+  if p_kind not in ('credentials', 'edit') then
     raise exception 'cpo_invalid' using errcode = 'P0001';
   end if;
   update public.cpo_chargers set
     credential_sets = credential_sets + case when p_kind = 'credentials' then 1 else 0 end,
-    test_runs = test_runs + case when p_kind = 'test' then 1 else 0 end,
     edits = edits + case when p_kind = 'edit' then 1 else 0 end,
     updated_at = now()
   where id = p_id and operator_id = p_operator_id and removed_at is null
-  returning case p_kind when 'credentials' then credential_sets when 'test' then test_runs else edits end
+  returning case p_kind when 'credentials' then credential_sets else edits end
   into v_next;
   if v_next is null then
     raise exception 'cpo_charger_not_found' using errcode = 'P0001';
@@ -165,6 +167,43 @@ end;
 $$;
 revoke all on function public.cpo_next_charger_seq(uuid, uuid, uuid, text) from public, anon, authenticated;
 grant execute on function public.cpo_next_charger_seq(uuid, uuid, uuid, text) to service_role;
+
+-- Claims the remote test: unless a test is already running on the charger, counts the
+-- next attempt (it goes into the start command's Idempotency-Key) and records p_test
+-- as that attempt, in one statement. Of two starts at the same moment (a double click,
+-- two tabs) the second waits for the first's row lock, then sees its running test and
+-- gets cpo_charger_busy, so only one start command is ever sent.
+create or replace function public.cpo_claim_charger_test(
+  p_operator_id uuid, p_actor_id uuid, p_id uuid, p_test jsonb
+)
+returns integer language plpgsql security definer set search_path = '' as $$
+declare
+  v_attempt integer;
+begin
+  perform public.cpo_lock_charger_actor(p_operator_id, p_actor_id, false);
+  if jsonb_typeof(p_test) is distinct from 'object' then
+    raise exception 'cpo_invalid' using errcode = 'P0001';
+  end if;
+  update public.cpo_chargers set
+    test_runs = test_runs + 1,
+    remote_test = p_test || jsonb_build_object('attempt', test_runs + 1),
+    updated_at = now()
+  where id = p_id and operator_id = p_operator_id and removed_at is null
+    and coalesce(remote_test->>'phase', '') not in ('starting', 'charging', 'stopping')
+  returning test_runs into v_attempt;
+  if v_attempt is null then
+    perform 1 from public.cpo_chargers
+      where id = p_id and operator_id = p_operator_id and removed_at is null;
+    if found then
+      raise exception 'cpo_charger_busy' using errcode = 'P0001';
+    end if;
+    raise exception 'cpo_charger_not_found' using errcode = 'P0001';
+  end if;
+  return v_attempt;
+end;
+$$;
+revoke all on function public.cpo_claim_charger_test(uuid, uuid, uuid, jsonb) from public, anon, authenticated;
+grant execute on function public.cpo_claim_charger_test(uuid, uuid, uuid, jsonb) to service_role;
 
 -- Sticker codes for connectors that have none yet: [{code, connector_number,
 -- connector_id}]. A connector that already has a code keeps it; a code that is

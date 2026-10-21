@@ -23,6 +23,13 @@ export interface ConnectionTest {
   passed: boolean;
 }
 
+/** A test in one of these phases may have started the charger. */
+export const RUNNING_PHASES: readonly RemoteTest["phase"][] = [
+  "starting",
+  "charging",
+  "stopping",
+];
+
 /** The optional remote start and stop test. */
 export interface RemoteTest {
   attempt: number;
@@ -117,11 +124,21 @@ export interface ChargerStore {
   nextSeq(
     actor: Staff,
     id: string,
-    kind: "credentials" | "test" | "edit",
+    kind: "credentials" | "edit",
+  ): Promise<number>;
+  /**
+   * Claims the remote test in one atomic step: unless a test is running on the
+   * charger (ChargerError "busy"), counts the next attempt and records `test` as it.
+   * Returns the attempt, which goes into the start command's Idempotency-Key.
+   */
+  claimTest(
+    actor: Staff,
+    id: string,
+    test: Omit<RemoteTest, "attempt">,
   ): Promise<number>;
   /** Adds codes for connectors that have none; a taken code is skipped. */
   addCodes(actor: Staff, id: string, codes: StickerCode[]): Promise<void>;
-  /** Managers and owners only. */
+  /** Managers and owners only, except for a record Ivora never registered. */
   remove(actor: Staff, id: string): Promise<void>;
   resolveCode(code: string): Promise<ResolvedCode | null>;
 }
@@ -150,6 +167,12 @@ export const notAllowed = (what = "work on chargers") =>
   new ChargerError(
     "not_allowed",
     `Your role can't ${what}. If your role just changed, reload the page.`,
+  );
+
+export const testBusy = () =>
+  new ChargerError(
+    "busy",
+    "A test is already running on this charger. Check it or stop it first.",
   );
 
 export const notFound = () =>

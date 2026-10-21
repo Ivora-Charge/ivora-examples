@@ -7,6 +7,8 @@ import {
   ChargerError,
   notAllowed,
   notFound,
+  RUNNING_PHASES,
+  testBusy,
   type ChargerRecord,
   type ChargerStore,
 } from "./types";
@@ -145,15 +147,22 @@ const toRecord = ({ seq: _seq, ...r }: DemoRecord): ChargerRecord => r;
 export function createDemoChargerStore(
   cookie: DemoChargersCookie,
 ): ChargerStore {
-  const update = async <T>(
+  // One change at a time, like the database functions' row locks: a change reads the
+  // state only after the previous one has saved it.
+  let queue: Promise<unknown> = Promise.resolve();
+  const update = <T>(
     actor: { role: Role },
     change: (s: DemoChargersState) => T,
   ): Promise<T> => {
-    if (!atLeast(actor.role, "technician")) throw notAllowed();
-    const s = await cookie.load();
-    const r = change(s);
-    await cookie.save(s);
-    return r;
+    const run = queue.then(async () => {
+      if (!atLeast(actor.role, "technician")) throw notAllowed();
+      const s = await cookie.load();
+      const r = change(s);
+      await cookie.save(s);
+      return r;
+    });
+    queue = run.catch(() => undefined);
+    return run;
   };
   const live = (s: DemoChargersState, id: string) => {
     const r = s.records.find((x) => x.id === id && !x.removedAt);
@@ -230,6 +239,16 @@ export function createDemoChargerStore(
         const r = live(s, id);
         r.seq[kind] += 1;
         return r.seq[kind];
+      });
+    },
+    claimTest(actor, id, test) {
+      return update(actor, (s) => {
+        const r = live(s, id);
+        if (r.remoteTest && RUNNING_PHASES.includes(r.remoteTest.phase))
+          throw testBusy();
+        r.seq.test += 1;
+        r.remoteTest = { ...test, attempt: r.seq.test };
+        return r.seq.test;
       });
     },
     async addCodes(actor, id, codes) {

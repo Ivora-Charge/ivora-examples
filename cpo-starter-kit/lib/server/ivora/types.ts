@@ -107,6 +107,8 @@ export interface Transaction {
   /** The API may report null while the state is unknown. */
   active: boolean | null;
   connector_number?: number | null;
+  /** The ID token the session started with; the API masks it to its last 4 characters behind ****. */
+  id_token?: string | null;
   started_at: string | null;
   ended_at: string | null;
   energy_wh?: number | null;

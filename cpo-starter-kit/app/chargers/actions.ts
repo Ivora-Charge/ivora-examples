@@ -168,6 +168,8 @@ function describeTest(t: RemoteTest): ActionState {
     case "failed":
       return { error: `Remote test failed. ${t.error ?? ""}`.trim() };
     case "starting":
+      // An uncertain start: the test stays open so Check and Stop still work.
+      if (t.error) return { error: t.error };
       return {
         ok: "Start sent. Waiting for the charger to report the session: check again in a few seconds.",
       };

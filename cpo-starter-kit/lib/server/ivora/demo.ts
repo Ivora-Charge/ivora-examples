@@ -102,6 +102,7 @@ const SAMPLE_TRANSACTIONS: Transaction[] = [
     id: 9201,
     station_id: 9102,
     connector_id: 91021,
+    id_token: "****B2C3",
     active: true,
     started_at: "2026-01-01T08:00:00Z",
     ended_at: null,
@@ -111,6 +112,7 @@ const SAMPLE_TRANSACTIONS: Transaction[] = [
     id: 9202,
     station_id: 9101,
     connector_id: 91011,
+    id_token: "****9F04",
     active: false,
     started_at: "2025-12-31T17:10:00Z",
     ended_at: "2025-12-31T19:40:00Z",
@@ -238,6 +240,8 @@ const fleetSchema = z.object({
         station_id: z.number().int(),
         connector_id: z.number().int(),
         connector_number: z.number().int(),
+        /** Masked like the API's (****TEST); missing in older demo cookies. */
+        id_token: z.string().max(12).nullable().optional(),
         started_at: z.number(),
         ended_at: z.number().nullable(),
       }),
@@ -296,6 +300,9 @@ export function memoryDemoFleet(
 
 const ISO = (ms: number) => new Date(ms).toISOString();
 
+/** The API shows only an ID token's last 4 characters. */
+export const maskToken = (token: string) => `****${token.slice(-4)}`;
+
 function demoTransaction(
   t: DemoFleet["transactions"][number],
   now: number,
@@ -306,6 +313,7 @@ function demoTransaction(
     station_id: t.station_id,
     connector_id: t.connector_id,
     connector_number: t.connector_number,
+    id_token: t.id_token ?? null,
     active: t.ended_at === null,
     started_at: ISO(t.started_at),
     ended_at: t.ended_at === null ? null : ISO(t.ended_at),
@@ -543,6 +551,7 @@ export function createDemoClient(
             station_id: stationId,
             connector_id: c.id,
             connector_number: c.number ?? 1,
+            id_token: maskToken(command.token),
             started_at: now(),
             ended_at: null,
           });

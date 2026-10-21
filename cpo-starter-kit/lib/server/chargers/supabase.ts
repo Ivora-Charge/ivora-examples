@@ -6,6 +6,7 @@ import {
   ChargerError,
   notAllowed,
   notFound,
+  testBusy,
   type ChargerChanges,
   type ChargerRecord,
   type ChargerStore,
@@ -21,6 +22,7 @@ function check<R extends { error: DbError }>(r: R): R {
   const m = r.error.message;
   if (m.includes("cpo_not_allowed")) throw notAllowed();
   if (m.includes("cpo_charger_not_found")) throw notFound();
+  if (m.includes("cpo_charger_busy")) throw testBusy();
   if (m.includes("cpo_charger_exists"))
     throw new ChargerError("exists", "This charger is already in the kit.");
   // Not the message: it can quote values. The Postgres code is enough to debug.
@@ -128,6 +130,14 @@ export function createSupabaseChargerStore(): ChargerStore {
         p_actor_id: actor.userId,
         p_id: id,
         p_kind: kind,
+      })) as number;
+    },
+    async claimTest(actor, id, test) {
+      return (await rpc("cpo_claim_charger_test", {
+        p_operator_id: actor.operatorId,
+        p_actor_id: actor.userId,
+        p_id: id,
+        p_test: test as unknown as Json,
       })) as number;
     },
     async addCodes(actor, id, codes) {

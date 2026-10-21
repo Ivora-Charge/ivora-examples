@@ -192,7 +192,8 @@ describe("row level security", () => {
           `select cpo_lock_charger_actor('${operatorA}','${OWNER_A}',false)`,
           `select cpo_create_charger('${operatorA}','${OWNER_A}','X-1-ABC',null,1,null,1,null,null)`,
           `select cpo_update_charger('${operatorA}','${OWNER_A}','${OWNER_A}','{}')`,
-          `select cpo_next_charger_seq('${operatorA}','${OWNER_A}','${OWNER_A}','test')`,
+          `select cpo_next_charger_seq('${operatorA}','${OWNER_A}','${OWNER_A}','edit')`,
+          `select cpo_claim_charger_test('${operatorA}','${OWNER_A}','${OWNER_A}','{}')`,
           `select cpo_add_sticker_codes('${operatorA}','${OWNER_A}','${OWNER_A}','[]')`,
           `select cpo_remove_charger('${operatorA}','${OWNER_A}','${OWNER_A}')`,
         ])
@@ -688,12 +689,56 @@ describe("chargers", () => {
     const all = await Promise.all([next(), next(), next()]);
     expect(all.sort()).toEqual([1, 2, 3]);
     await expect(
+      svc("select cpo_next_charger_seq($1,$2,$3,'test')", [
+        operatorA,
+        TECH_A,
+        id,
+      ]),
+    ).rejects.toThrow(/cpo_invalid/);
+    await expect(
       svc("select cpo_next_charger_seq($1,$2,$3,'other')", [
         operatorA,
         TECH_A,
         id,
       ]),
     ).rejects.toThrow(/cpo_invalid/);
+  });
+
+  it("claims the remote test once until it has finished", async () => {
+    const id = await create(TECH_A, "DB-TEST-01", 303);
+    const claim = (actor: string, phase = "starting") =>
+      svc<{ n: number }>("select cpo_claim_charger_test($1,$2,$3,$4) as n", [
+        operatorA,
+        actor,
+        id,
+        JSON.stringify({ phase, connectorNumber: 1, attempt: 99 }),
+      ]).then((r) => r.rows[0].n);
+    expect(await claim(TECH_A)).toBe(1);
+    // The attempt is the database's count, not the caller's.
+    expect(await row(id)).toMatchObject({
+      remote_test: { phase: "starting", attempt: 1 },
+    });
+    for (const phase of ["starting", "charging", "stopping"]) {
+      await update(TECH_A, id, { remote_test: { phase, attempt: 1 } });
+      await expect(claim(TECH_A)).rejects.toThrow(/cpo_charger_busy/);
+    }
+    await update(TECH_A, id, { remote_test: { phase: "failed", attempt: 1 } });
+    expect(await claim(OWNER_A)).toBe(2);
+    await update(TECH_A, id, { remote_test: { phase: "passed", attempt: 2 } });
+    await pg.query("update cpo_staff set role='viewer' where user_id=$1", [
+      TECH_A,
+    ]);
+    try {
+      await expect(claim(TECH_A)).rejects.toThrow(/cpo_not_allowed/);
+    } finally {
+      await pg.query(
+        "update cpo_staff set role='technician' where user_id=$1",
+        [TECH_A],
+      );
+    }
+    await expect(claim(OWNER_B)).rejects.toThrow(/cpo_not_allowed/);
+    await remove(OWNER_A, id);
+    await expect(claim(OWNER_A)).rejects.toThrow(/cpo_charger_not_found/);
   });
 
   it("lets only managers remove a registered charger, and keeps its codes", async () => {

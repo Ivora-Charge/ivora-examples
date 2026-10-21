@@ -20,6 +20,8 @@ import {
   ChargerError,
   notAllowed,
   notFound,
+  RUNNING_PHASES,
+  testBusy,
   type ChargerRecord,
   type ChargerStore,
   type ConnectionTest,
@@ -42,6 +44,8 @@ export interface ChargerDeps {
 
 /** The ID tag a remote test session starts with. It authorizes no payment. */
 export const TEST_TOKEN = "CPO-KIT-TEST";
+/** How the API shows it on a session: the last 4 characters behind ****. */
+const TEST_TOKEN_MASKED = `****${TEST_TOKEN.slice(-4)}`;
 /** A last OCPP message older than this fails the heartbeat check (Ivora asks for 60 s). */
 export const HEARTBEAT_FRESH_SECONDS = 300;
 /** A test whose session the charger has not reported by then fails. */
@@ -399,12 +403,9 @@ export async function finishAdding(
       if (definitelyFailed(e)) await d.store.remove(actor, r.id);
       throw e;
     }
+    // newSite stays on the record: it notes that this record created the site.
     r.locationId = location.id;
-    r.newSite = null;
-    await d.store.update(actor, r.id, {
-      locationId: r.locationId,
-      newSite: null,
-    });
+    await d.store.update(actor, r.id, { locationId: r.locationId });
   }
   if (r.stationId === null) {
     let station: Station;
@@ -419,9 +420,20 @@ export async function finishAdding(
         idempotencyKey("charger", r.id, "create"),
       );
     } catch (e) {
-      // Refused outright (for example the name is taken): nothing exists in Ivora
-      // under this record, so it goes, and the form can be sent again.
-      if (definitelyFailed(e)) await d.store.remove(actor, r.id);
+      if (definitelyFailed(e)) {
+        // Refused outright (for example the name is taken). With a site the kit
+        // created for it, the record stays with that site's ID, so a retry reuses
+        // the site instead of creating another. Otherwise nothing exists in Ivora
+        // under this record: it goes, and the form can be sent again.
+        if (r.newSite) {
+          logIvora("charger create", e);
+          throw new ChargerError(
+            "not_ready",
+            `${describeError(e)} The new site "${r.newSite.name}" was created in Ivora and stays on this unfinished charger, so trying again reuses it. If the name was the problem, remove this unfinished charger and add it again at that site.`,
+          );
+        }
+        await d.store.remove(actor, r.id);
+      }
       throw e;
     }
     r.stationId = station.id;
@@ -555,11 +567,16 @@ export async function testConnection(
 }
 
 const running = (t: RemoteTest | null) =>
-  t?.phase === "starting" || t?.phase === "charging" || t?.phase === "stopping";
+  Boolean(t && RUNNING_PHASES.includes(t.phase));
+
+const UNCERTAIN_START =
+  "Ivora did not confirm the start, so the charger may have started. Check the test again: it finds the session if there is one, and you can stop it.";
 
 /**
  * The remote test: starts a session on one connector with an operator command (no
- * payment), so the charger switches on. The caller must have confirmed that.
+ * payment), so the charger switches on. The caller must have confirmed that. It runs
+ * only on an Available connector, and the test is claimed in the same database
+ * statement that counts its attempt, so of two starts at once only one is sent.
  */
 export async function startTest(
   d: ChargerDeps,
@@ -577,11 +594,7 @@ export async function startTest(
   const r = await ensureRecord(d, actor, key);
   if (!r.stationId)
     throw new ChargerError("not_ready", "Finish adding the charger first.");
-  if (running(r.remoteTest))
-    throw new ChargerError(
-      "busy",
-      "A test is already running on this charger. Check it or stop it first.",
-    );
+  if (running(r.remoteTest)) throw testBusy();
   const s = await d.ivora.getStation(r.stationId);
   if (!s.online)
     throw new ChargerError(
@@ -590,9 +603,14 @@ export async function startTest(
     );
   const c = s.connectors.find((x, i) => (x.number ?? i + 1) === number);
   if (!c) throw new ChargerError("invalid", "Choose a connector.");
-  const attempt = await d.store.nextSeq(actor, r.id, "test");
-  const test: RemoteTest = {
-    attempt,
+  // Never next to a driver: a connector in use, reserved or with a vehicle waiting
+  // is not touched.
+  if (c.status !== "Available")
+    throw new ChargerError(
+      "not_ready",
+      `Connector ${number} is ${c.status ?? "in an unknown state"}, not Available. The test runs only on a free connector.`,
+    );
+  const claimed: Omit<RemoteTest, "attempt"> = {
     phase: "starting",
     connectorNumber: number,
     connectorId: c.id,
@@ -603,25 +621,38 @@ export async function startTest(
     finishedAt: null,
     error: null,
   };
+  const attempt = await d.store.claimTest(actor, r.id, claimed);
+  const test: RemoteTest = { ...claimed, attempt };
+  let op: Operation | null = null;
   try {
-    const op = await settle(
-      d,
-      await d.ivora.sendCommand(
-        r.stationId,
-        {
-          action: "start",
-          connector_id: c.id,
-          token: TEST_TOKEN,
-          token_type: "Central",
-        },
-        idempotencyKey("charger", r.id, `test-${attempt}-start`),
-      ),
+    op = await d.ivora.sendCommand(
+      r.stationId,
+      {
+        action: "start",
+        connector_id: c.id,
+        token: TEST_TOKEN,
+        token_type: "Central",
+      },
+      idempotencyKey("charger", r.id, `test-${attempt}-start`),
     );
-    applyAnswer(test, op, "start");
   } catch (e) {
     logIvora("test start", e);
-    test.phase = "failed";
-    test.error = describeError(e);
+    // Only a definite refusal fails the test. A timeout, outcome_unknown or a
+    // request still in progress may have reached the charger: the test stays
+    // "starting", so checking finds the session (or times out) and Stop can stop it.
+    if (definitelyFailed(e)) {
+      test.phase = "failed";
+      test.error = describeError(e);
+    } else test.error = UNCERTAIN_START;
+  }
+  if (op) {
+    try {
+      op = await settle(d, op);
+    } catch (e) {
+      // Sent: checking reads the operation again.
+      logIvora("test start", e);
+    }
+    applyAnswer(test, op, "start");
   }
   await d.store.update(actor, r.id, { remoteTest: test });
   return running(test) ? checkTest(d, actor, r.id) : test;
@@ -638,7 +669,7 @@ function applyAnswer(t: RemoteTest, op: Operation, what: "start" | "stop") {
   const answer = chargerStatus(op);
   if (answer && answer !== "Accepted") {
     t.phase = "failed";
-    t.error = `The charger answered ${answer} to the ${what}. ${what === "start" ? "Check the connector is free (some chargers need a vehicle plugged in)." : "Stop the session at the charger."}`;
+    t.error = `The charger answered ${answer} to the ${what}. ${what === "start" ? "Check the connector is free and the charger accepts remote starts." : "Stop the session at the charger."}`;
   }
 }
 
@@ -657,11 +688,14 @@ export async function checkTest(
     applyAnswer(t, op, t.phase === "stopping" ? "stop" : "start");
   }
   if (running(t)) {
-    const tx = await findTransaction(d, r.stationId, t);
+    const tx = await findTestSession(d, r.stationId, t);
     if (tx) {
       t.transactionId = tx.id;
       t.energyWh = tx.energy_wh ?? 0;
-      if (t.phase === "starting") t.phase = "charging";
+      if (t.phase === "starting") {
+        t.phase = "charging";
+        t.error = null;
+      }
       // Started and stopped cleanly: the charger accepted the remote start and stop
       // and reported the session. Energy is 0 if no vehicle was plugged in.
       if (tx.active === false || (tx.active === null && tx.ended_at)) {
@@ -671,34 +705,42 @@ export async function checkTest(
     } else if (nowOf(d) - Date.parse(t.requestedAt) > TEST_TIMEOUT_MS) {
       t.phase = "failed";
       t.error =
-        "The charger did not report a session within 2 minutes. Check it accepts remote starts (some need a vehicle plugged in).";
+        "The charger did not report a test session within 2 minutes. Check it accepts remote starts; if it did start, stop it at the charger.";
     }
   }
   await d.store.update(actor, r.id, { remoteTest: t });
   return t;
 }
 
-async function findTransaction(
+/**
+ * The test's own session, and never a driver's: started with the test token, on the
+ * test's connector, no earlier than the test was requested.
+ */
+function isTestSession(x: Transaction, t: RemoteTest): boolean {
+  return (
+    (x.id_token === TEST_TOKEN || x.id_token === TEST_TOKEN_MASKED) &&
+    (x.connector_id == null || x.connector_id === t.connectorId) &&
+    Date.parse(x.started_at ?? "") >= Date.parse(t.requestedAt)
+  );
+}
+
+async function findTestSession(
   d: ChargerDeps,
   stationId: number,
   t: RemoteTest,
 ): Promise<Transaction | null> {
-  if (t.transactionId) return d.ivora.getTransaction(t.transactionId);
-  const since = Date.parse(t.requestedAt) - 60_000;
+  if (t.transactionId) {
+    const tx = await d.ivora.getTransaction(t.transactionId);
+    return isTestSession(tx, t) ? tx : null;
+  }
   const list = await d.ivora.listTransactions({
     station_id: stationId,
     limit: 10,
   });
-  return (
-    list.find(
-      (x) =>
-        (x.connector_id == null || x.connector_id === t.connectorId) &&
-        Date.parse(x.started_at ?? "") >= since,
-    ) ?? null
-  );
+  return list.find((x) => isTestSession(x, t)) ?? null;
 }
 
-/** Stops the test session (`stop` command with its transaction). */
+/** Stops the test session (`stop` command with its transaction), and only that. */
 export async function stopTest(
   d: ChargerDeps,
   actor: Staff,
@@ -710,7 +752,7 @@ export async function stopTest(
   if (!t.transactionId)
     throw new ChargerError(
       "not_ready",
-      "The charger has not reported the session yet. Wait a moment and check again.",
+      "The charger has not reported the test session yet. Wait a moment and check again.",
     );
   if (t.phase !== "stopping") {
     try {

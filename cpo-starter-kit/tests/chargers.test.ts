@@ -152,12 +152,15 @@ function fakeIvora() {
           action: string;
           connector_id?: number;
           transaction_id?: number;
+          token?: string;
         };
         if (b.action === "start")
           transactions.push({
-            id: 900,
+            id: 900 + transactions.length,
             station_id: station.id,
             connector_id: b.connector_id!,
+            // The API shows the last 4 characters only.
+            id_token: `****${b.token!.slice(-4)}`,
             active: true,
             started_at: new Date(s.clock).toISOString(),
             ended_at: null,
@@ -236,6 +239,12 @@ const ADD = {
 
 const writes = (calls: Call[]) => calls.filter((c) => c.method !== "GET");
 
+/** The charger connects; its connectors are free. */
+function goOnline(api: ReturnType<typeof fakeIvora>) {
+  api.stations[0].online = true;
+  for (const c of api.stations[0].connectors) c.status = "Available";
+}
+
 describe("chargers (live API mocked)", () => {
   const saved = { ...process.env };
   beforeEach(() => {
@@ -289,7 +298,8 @@ describe("chargers (live API mocked)", () => {
     expect(r.charger).toMatchObject({
       stationId: 70,
       locationId: 6,
-      newSite: null,
+      // Kept as the note that this record created the site.
+      newSite: { name: "North Depot" },
     });
     expect(r.charger.passwordSetAt).not.toBeNull();
   });
@@ -458,7 +468,7 @@ describe("chargers (live API mocked)", () => {
   it("starts and stops a test session only once confirmed", async () => {
     const { d, api } = liveDeps();
     const { charger } = await addCharger(d, technician, { ...ADD, site: "5" });
-    api.stations[0].online = true;
+    goOnline(api);
     await expect(
       startTest(d, technician, charger.id, {
         connector: "2",
@@ -500,6 +510,244 @@ describe("chargers (live API mocked)", () => {
     await expect(checkTest(d, technician, charger.id)).rejects.toMatchObject({
       code: "not_ready",
     });
+  });
+
+  it.each([
+    [
+      "503 outcome_unknown",
+      {
+        status: 503,
+        body: { error: { code: "outcome_unknown", message: "m" } },
+      },
+    ],
+    [
+      "409 request_in_progress",
+      {
+        status: 409,
+        body: { error: { code: "request_in_progress", message: "m" } },
+      },
+    ],
+    ["a lost connection", "network"],
+  ] as const)(
+    "keeps an uncertain start (%s) open, finds its session and stops it",
+    async (_name, reply) => {
+      const { d, api } = liveDeps();
+      const { charger } = await addCharger(d, technician, {
+        ...ADD,
+        site: "5",
+      });
+      goOnline(api);
+      // The start reaches the charger, but its answer is lost.
+      let reached = false;
+      api.state.override = (c) => {
+        if (!c.path.endsWith("/commands")) return;
+        if (!reached) {
+          reached = true;
+          api.transactions.push({
+            id: 950,
+            station_id: 70,
+            connector_id: 700,
+            id_token: "****TEST",
+            active: true,
+            started_at: new Date(api.state.clock + 1_000).toISOString(),
+            ended_at: null,
+            energy_wh: 0,
+          });
+        }
+        if (reply === "network") throw new TypeError("fetch failed");
+        return reply;
+      };
+      let t = await startTest(d, technician, charger.id, {
+        connector: "1",
+        confirmed: true,
+      });
+      // Found straight away by the check the start ends with.
+      expect(t).toMatchObject({
+        phase: "charging",
+        transactionId: 950,
+        error: null,
+      });
+      // No second start while it runs, under any key.
+      await expect(
+        startTest(d, technician, charger.id, {
+          connector: "2",
+          confirmed: true,
+        }),
+      ).rejects.toMatchObject({ code: "busy" });
+      const starts = () =>
+        api.calls.filter(
+          (c) => c.path.endsWith("/commands") && c.body?.action === "start",
+        );
+      expect(new Set(starts().map((c) => c.key))).toEqual(
+        new Set([`cpo-charger-${charger.id}-test-1-start`]),
+      );
+
+      api.state.override = null;
+      t = await stopTest(d, technician, charger.id);
+      expect(api.calls.find((c) => c.body?.action === "stop")).toMatchObject({
+        body: { action: "stop", transaction_id: 950 },
+      });
+      expect(t.phase).toBe("passed");
+    },
+  );
+
+  it("keeps an uncertain start open until its session appears or it times out", async () => {
+    const { d, api } = liveDeps();
+    const { charger } = await addCharger(d, technician, { ...ADD, site: "5" });
+    goOnline(api);
+    api.state.override = (c) =>
+      c.path.endsWith("/commands")
+        ? {
+            status: 503,
+            body: { error: { code: "outcome_unknown", message: "m" } },
+          }
+        : undefined;
+    let t = await startTest(d, technician, charger.id, {
+      connector: "1",
+      confirmed: true,
+    });
+    expect(t.phase).toBe("starting");
+    expect(t.error).toMatch(/may have started/);
+    // Stop has nothing to stop yet, and sends nothing.
+    await expect(stopTest(d, technician, charger.id)).rejects.toMatchObject({
+      code: "not_ready",
+    });
+    api.state.override = null;
+    api.state.clock += 3 * 60_000;
+    t = await checkTest(d, technician, charger.id);
+    expect(t.phase).toBe("failed");
+    expect(api.calls.filter((c) => c.body?.action === "stop")).toHaveLength(0);
+  });
+
+  it("fails a test the API refused outright, and a new one gets a new key", async () => {
+    const { d, api } = liveDeps();
+    const { charger } = await addCharger(d, technician, { ...ADD, site: "5" });
+    goOnline(api);
+    api.state.override = (c) =>
+      c.path.endsWith("/commands")
+        ? {
+            status: 409,
+            body: { error: { code: "station_offline", message: "m" } },
+          }
+        : undefined;
+    const t = await startTest(d, technician, charger.id, {
+      connector: "1",
+      confirmed: true,
+    });
+    expect(t).toMatchObject({ phase: "failed", attempt: 1 });
+    api.state.override = null;
+    const again = await startTest(d, technician, charger.id, {
+      connector: "1",
+      confirmed: true,
+    });
+    expect(again).toMatchObject({ phase: "charging", attempt: 2 });
+    expect(
+      api.calls.filter((c) => c.path.endsWith("/commands")).map((c) => c.key),
+    ).toEqual([
+      `cpo-charger-${charger.id}-test-1-start`,
+      `cpo-charger-${charger.id}-test-2-start`,
+    ]);
+  });
+
+  it("never adopts or stops a driver's session", async () => {
+    const { d, api } = liveDeps();
+    const { charger } = await addCharger(d, technician, { ...ADD, site: "5" });
+    goOnline(api);
+    const driver = (id: number, connector: number | null, at: number) => ({
+      id,
+      station_id: 70,
+      connector_id: connector,
+      id_token: "****B2C3",
+      active: true,
+      started_at: new Date(at).toISOString(),
+      ended_at: null,
+      energy_wh: 4_000,
+    });
+
+    // A connector in use is never started on.
+    api.stations[0].connectors[0].status = "Charging";
+    api.transactions.push(driver(960, 700, T0 - 60_000));
+    await expect(
+      startTest(d, technician, charger.id, { connector: "1", confirmed: true }),
+    ).rejects.toMatchObject({ code: "not_ready" });
+    expect(api.calls.some((c) => c.path.endsWith("/commands"))).toBe(false);
+
+    // The start on a free connector is lost, and meanwhile a driver starts a session
+    // on the same connector (and one without a connector), after the request.
+    api.stations[0].connectors[0].status = "Available";
+    api.transactions.length = 0;
+    api.state.override = (c) =>
+      c.path.endsWith("/commands")
+        ? {
+            status: 503,
+            body: { error: { code: "outcome_unknown", message: "m" } },
+          }
+        : undefined;
+    let t = await startTest(d, technician, charger.id, {
+      connector: "1",
+      confirmed: true,
+    });
+    api.state.override = null;
+    api.transactions.push(
+      driver(961, 700, T0 + 2_000),
+      driver(962, null, T0 + 3_000),
+      // A test-token session from before this test is not this test's either.
+      { ...driver(963, 700, T0 - 1_000), id_token: "****TEST" },
+    );
+    t = await checkTest(d, technician, charger.id);
+    expect(t).toMatchObject({ phase: "starting", transactionId: null });
+    await expect(stopTest(d, technician, charger.id)).rejects.toMatchObject({
+      code: "not_ready",
+    });
+    api.state.clock += 3 * 60_000;
+    t = await checkTest(d, technician, charger.id);
+    expect(t).toMatchObject({ phase: "failed", transactionId: null });
+    expect(api.calls.filter((c) => c.body?.action === "stop")).toHaveLength(0);
+  });
+
+  it("sends one start when two arrive at the same moment", async () => {
+    const { d, api } = liveDeps();
+    const { charger } = await addCharger(d, technician, { ...ADD, site: "5" });
+    goOnline(api);
+    const start = () =>
+      startTest(d, technician, charger.id, { connector: "1", confirmed: true });
+    const results = await Promise.allSettled([start(), start()]);
+    expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
+    const lost = results.find((r) => r.status === "rejected");
+    expect(lost && lost.reason).toMatchObject({ code: "busy" });
+    expect(api.calls.filter((c) => c.path.endsWith("/commands"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps the new site's ID when the station is refused, and reuses it", async () => {
+    const { d, api } = liveDeps();
+    let refuse = true;
+    api.state.override = (c) =>
+      refuse && c.method === "POST" && c.path.endsWith("/stations")
+        ? {
+            status: 422,
+            body: { error: { code: "validation_error", message: "m" } },
+          }
+        : undefined;
+    const e = await addCharger(d, technician, ADD).catch((x) => x);
+    expect(e).toBeInstanceOf(ChargerError);
+    expect(e.message).toMatch(/North Depot" was created in Ivora and stays/);
+    const [r] = await d.store.list(OPERATOR);
+    expect(r).toMatchObject({
+      removedAt: null,
+      stationId: null,
+      locationId: 6,
+    });
+
+    refuse = false;
+    const done = await finishAdding(d, technician, r.id);
+    expect(done.charger).toMatchObject({ stationId: 70, locationId: 6 });
+    expect(
+      api.calls.filter(
+        (c) => c.method === "POST" && c.path.endsWith("/locations"),
+      ),
+    ).toHaveLength(1);
   });
 
   it("keeps viewers read-only and lets only managers remove registered chargers", async () => {
