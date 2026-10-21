@@ -164,6 +164,12 @@ export const externalSessionSchema = z.object({
 });
 export type ExternalSession = z.infer<typeof externalSessionSchema>;
 
+/** Pages of 100 read by listAllSessions() before it stops. */
+export const SESSION_LIST_MAX_PAGES = 100;
+/** The most sessions one full listing reads (README: Limits). */
+export const SESSION_LIST_CEILING = SESSION_LIST_MAX_PAGES * 100;
+export type SessionList = { sessions: ExternalSession[]; truncated: boolean };
+
 export const settlementReportSchema = z.object({
   kind: z.enum(["authorization", "capture", "refund", "release"]),
   operation_reference: z.string(),
@@ -392,9 +398,12 @@ export class IvoraClient {
   /**
    * Every session in the project, page by page. Cursors order by opaque
    * session ID, not time, so a newer session can be on any page: read them
-   * all. Stops after `maxPages` pages (10,000 sessions by default).
+   * all. Stops after `maxPages` pages (SESSION_LIST_CEILING sessions by
+   * default) and says so with `truncated`, so callers can warn the operator.
    */
-  async listAllSessions(maxPages = 100): Promise<ExternalSession[]> {
+  async listAllSessions(
+    maxPages = SESSION_LIST_MAX_PAGES,
+  ): Promise<SessionList> {
     const all: ExternalSession[] = [];
     let after = "";
     for (let page = 0; page < maxPages; page++) {
@@ -409,11 +418,12 @@ export class IvoraClient {
         }),
       );
       all.push(...result.data);
-      if (!result.next_cursor || !result.data.length) return all;
+      if (!result.next_cursor || !result.data.length)
+        return { sessions: all, truncated: false };
       after = result.next_cursor;
     }
     console.warn("[forecourt] session list truncated", { maxPages });
-    return all;
+    return { sessions: all, truncated: true };
   }
 
   getSession(id: string) {

@@ -5,31 +5,54 @@ import {
   demoAuthorize,
   demoConsole,
   demoCounter,
+  demoDueEvents,
   demoGiveChange,
   demoMarkPaid,
   demoPrepayQuote,
   demoSaleById,
+  demoSales,
   demoStop,
   demoUnplug,
   DEMO_STORE_COOKIE,
   encodeDemoStore,
   type DemoStore,
 } from "../demo-store";
+import { DEMO_SITE_NAME } from "../demo";
+import {
+  POS_EVENT_HEADER,
+  POS_SIGNATURE_HEADER,
+  sessionDueBody,
+  signPosBody,
+  verifyPosSignature,
+  type PosStatus,
+} from "../pos";
+import { isEmailAddress, receiptEmail } from "../receipt-email";
 import type { Settings } from "../settings";
 import type { DriverSale, PaymentMethod, SaleTerms, SaleView } from "../store";
 import { driverSale, SaleError } from "../store";
-import { liveStoreDeps } from "./services";
+import { deliverReceipt, type EmailResult } from "./mailer";
+import { posMarkPaid, posSales, type MarkPaidInput } from "./pos";
+import {
+  DEMO_POS_API_SECRET,
+  DEMO_POS_WEBHOOK_SECRET,
+  liveStoreDeps,
+  receiptMailer,
+} from "./services";
+import { UserError } from "./sessions";
 import {
   authorizeSale,
   consoleState,
   counterState,
   giveChange,
+  isClosedSession,
   markSalePaid,
   prepayQuote,
+  recentSales,
   saleById,
   stopSale,
   type ConsoleState,
   type CounterState,
+  type SimulatedPos,
 } from "./store";
 
 // One entry point per cashier action. Demo mode answers from
@@ -68,13 +91,55 @@ async function demoAction(
   return result.view;
 }
 
+/** `known`: sale IDs the console has shown, looked up directly if this instance hasn't indexed them. */
 export async function cashierConsole(
   settings: Settings,
+  known: string[] = [],
   now = Date.now(),
 ): Promise<ConsoleState> {
-  if (settings.demo)
-    return demoConsole(await loadDemo(now, true), now, settings);
-  return consoleState(liveStoreDeps(settings));
+  if (settings.demo) {
+    const store = await loadDemo(now, true);
+    return {
+      ...demoConsole(store, now, settings),
+      truncated: false,
+      pos: simulatedPos(store, now, settings),
+    };
+  }
+  return consoleState(liveStoreDeps(settings), known);
+}
+
+/**
+ * The demo's simulated POS: the session_due webhooks the live app would send
+ * now, signed and checked exactly as a POS would. Nothing is sent anywhere.
+ */
+function simulatedPos(
+  store: DemoStore,
+  now: number,
+  settings: Settings,
+): SimulatedPos {
+  const t = Math.floor(now / 1000);
+  return {
+    url: "https://pos.example.com/forecourt/webhook",
+    apiSecret: DEMO_POS_API_SECRET,
+    deliveries: demoDueEvents(store, now, settings).map((event) => {
+      const body = sessionDueBody(event);
+      const signature = signPosBody(DEMO_POS_WEBHOOK_SECRET, body, t);
+      return {
+        eventId: event.id,
+        signature: `${POS_SIGNATURE_HEADER}: ${signature}`,
+        verified:
+          verifyPosSignature(DEMO_POS_WEBHOOK_SECRET, signature, body, now) ===
+          "ok",
+        body: JSON.stringify(JSON.parse(body), null, 2),
+        sale: event.sale,
+        label: event.charger.label,
+        amountDueCents: event.amountDueCents,
+        changeDueCents: event.changeDueCents,
+        currency: event.currency,
+        header: `${POS_EVENT_HEADER}: ${event.id}`,
+      };
+    }),
+  };
 }
 
 /** The public driver screen's state: only what the driver needs. */
@@ -194,4 +259,80 @@ export async function sale(id: string, settings: Settings, now = Date.now()) {
   if (settings.demo)
     return demoSaleById(await loadDemo(now, false), id, now, settings);
   return saleById(id, liveStoreDeps(settings));
+}
+
+/** POST /api/pos/mark-paid: the same markSalePaid() as the console, idempotent by sale ID. */
+export function posPay(
+  input: MarkPaidInput,
+  settings: Settings,
+  now = Date.now(),
+) {
+  return posMarkPaid(input, (i) =>
+    saleAction(i.sale, { action: "paid", ...i }, settings, now),
+  );
+}
+
+/** Most sales GET /api/pos/sessions reads per call. */
+export const POS_LIST_LIMIT = 50;
+
+/** GET /api/pos/sessions: recent in-store sales with this status, newest first. */
+export async function posList(
+  status: PosStatus,
+  limit: number,
+  settings: Settings,
+  now = Date.now(),
+) {
+  if (settings.demo)
+    return posSales(
+      demoSales(await loadDemo(now, false), now, settings),
+      status,
+    ).slice(0, limit);
+  // A closed session never charges again. An open one is re-read from Ivora,
+  // since it may have finished since this instance indexed it.
+  const views = await recentSales(
+    liveStoreDeps(settings),
+    (s) => status !== "charging" || !isClosedSession(s),
+    POS_LIST_LIMIT,
+  );
+  return posSales(views, status).slice(0, limit);
+}
+
+/**
+ * Email the store receipt to an address the cashier typed. The address is
+ * used for this send only: never stored, logged or put in a URL. Demo mode
+ * never sends; it returns the email that would be sent.
+ */
+export async function emailReceipt(
+  saleId: string,
+  to: string,
+  requestId: string,
+  settings: Settings,
+  now = Date.now(),
+): Promise<EmailResult> {
+  if (!settings.emailReceipts)
+    throw new UserError(
+      404,
+      "email_off",
+      "Emailed receipts are off. Set RESEND_API_KEY and RECEIPT_EMAIL_FROM.",
+    );
+  if (!isEmailAddress(to))
+    throw new UserError(400, "invalid_email", "Check the email address.");
+  const view = await sale(saleId, settings, now);
+  if (view.phase !== "done")
+    throw new UserError(
+      409,
+      "receipt_not_ready",
+      "Email the receipt when charging has ended.",
+    );
+  const email = receiptEmail(view, to, {
+    siteName: settings.demo
+      ? DEMO_SITE_NAME
+      : process.env.SITE_NAME || "EV charging",
+    timeZone: settings.siteTimeZone,
+  });
+  return deliverReceipt(email, `forecourt:store:${saleId}:email:${requestId}`, {
+    demo: settings.demo,
+    mailer: settings.demo ? null : receiptMailer(settings),
+    sale: saleId,
+  });
 }

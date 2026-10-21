@@ -6,6 +6,7 @@ import {
   decodeSaleId,
   encodeSaleId,
   endReports,
+  IN_USE_STATUSES,
   paidReport,
   MAX_STOP_ATTEMPTS,
   PLUGGED_STATUSES,
@@ -13,6 +14,7 @@ import {
   READY_STATUSES,
   saleAmounts,
   saleBill,
+  saleDueEvent,
   saleFromReference,
   saleKey,
   startReports,
@@ -35,6 +37,7 @@ import { priceBreakdown, type Tariff } from "../tariff";
 import type { Connector, ExternalSession, IvoraClient, Station } from "./ivora";
 import { IvoraError, isRetryLater, type Operation } from "./ivora";
 import type { SaleEvents } from "./sale-events";
+import { SessionIndex } from "./session-index";
 import {
   APPLICATION_PREFIX,
   breakdownOf,
@@ -180,26 +183,45 @@ function tariff(deps: StoreDeps, id: number) {
   return t;
 }
 
-/** How long one instance reuses the session list (console polls, meter samples). */
-export const SESSION_LIST_TTL_MS = 5000;
-const sessionLists = new WeakMap<
-  StoreApi,
-  { at: number; list: Promise<ExternalSession[]> }
->();
+const indexes = new WeakMap<StoreApi, SessionIndex>();
 
-/** Every session, paged (cursors aren't time-ordered), reused briefly per instance. */
-function allSessions(deps: StoreDeps) {
-  const cached = sessionLists.get(deps.ivora);
-  const now = deps.now();
-  if (cached && now - cached.at < SESSION_LIST_TTL_MS) return cached.list;
-  const list = deps.ivora.listAllSessions();
-  sessionLists.set(deps.ivora, { at: now, list });
-  list.catch(() => sessionLists.delete(deps.ivora));
-  return list;
+/** This instance's index of open and recent sessions (src/lib/server/session-index.ts). */
+export function sessionIndex(deps: StoreDeps) {
+  let index = indexes.get(deps.ivora);
+  if (!index)
+    indexes.set(deps.ivora, (index = new SessionIndex(deps.ivora, deps.now)));
+  return index;
 }
 
-/** A new sale must show on the next read. */
-const forgetSessions = (deps: StoreDeps) => sessionLists.delete(deps.ivora);
+/** Most sales the console may ask about by ID on one poll. */
+export const MAX_KNOWN_SALES = 24;
+
+/** In use, or just finished: a session should be open on this connector. */
+const BUSY_STATUSES = new Set([...IN_USE_STATUSES, "Finishing"]);
+
+/** Connectors that look busy with no open session in the index: someone else started them. */
+function unexplained(stations: Station[], sessions: ExternalSession[]) {
+  const open = new Set(
+    sessions
+      .filter((s) => !CLOSED.has(s.status))
+      .map((s) => s.bill.connector_id),
+  );
+  return stations.some(
+    (station) =>
+      station.online &&
+      station.connectors.some(
+        (c) =>
+          c.number !== null &&
+          BUSY_STATUSES.has(c.status ?? "") &&
+          !open.has(c.id),
+      ),
+  );
+}
+
+async function emitDue(deps: StoreDeps, view: SaleView) {
+  const event = saleDueEvent(view);
+  if (event) await deps.events?.emit(event);
+}
 
 async function send(
   deps: StoreDeps,
@@ -276,7 +298,15 @@ async function canceled(
           await deps.ivora.listSettlementReports(session.id),
         )
       : null;
-  return { ...view, phase: "canceled", canStop: false, amounts, message };
+  const done: SaleView = {
+    ...view,
+    phase: "canceled",
+    canStop: false,
+    amounts,
+    message,
+  };
+  await emitDue(deps, done);
+  return done;
 }
 
 export type StopState = "sent" | StopProblem;
@@ -496,23 +526,7 @@ export async function progressSale(
     amounts,
     message: null,
   };
-  if (amounts.outstandingCents > 0)
-    await deps.events?.emit({
-      id: `${sale}:due`,
-      type: "sale.due",
-      sale,
-      charger: {
-        code: charger.code,
-        connector: charger.connector,
-        label: charger.label,
-      },
-      mode: terms.mode,
-      amountDueCents: amounts.outstandingCents,
-      currency: saleBillView.currency,
-      energyWh: done.energyWh,
-      startedAt: done.startedAt,
-      endedAt: done.endedAt,
-    });
+  await emitDue(deps, done);
   return done;
 }
 
@@ -530,6 +544,7 @@ async function findSale(sale: string, deps: StoreDeps) {
   if (!terms) throw notFound();
   const session = await deps.ivora.findSession(storeReference(sale));
   if (!session) throw notFound();
+  sessionIndex(deps).put(session);
   return { terms, session };
 }
 
@@ -545,6 +560,7 @@ export async function reconcileStoreSession(
   deps: StoreDeps,
 ) {
   const fresh = await deps.ivora.getSession(session.id);
+  sessionIndex(deps).put(fresh);
   return progressSale(fresh, await chargerOf(fresh, deps), deps);
 }
 
@@ -563,18 +579,33 @@ export async function onMeterSample(
   sample: MeterSample,
   deps: StoreDeps,
 ): Promise<SaleView[]> {
-  const open = (await allSessions(deps)).filter((s) => {
-    const sale = saleFromReference(s.application_reference);
-    return (
-      sale !== null &&
-      decodeSaleId(sale)?.mode === "prepay" &&
-      !CLOSED.has(s.status) &&
-      (sample.stationId === null || s.bill.station_id === sample.stationId)
+  const index = sessionIndex(deps);
+  const here = (sessions: ExternalSession[]) =>
+    sessions.filter(
+      (s) =>
+        !CLOSED.has(s.status) &&
+        (sample.stationId === null || s.bill.station_id === sample.stationId),
     );
+  let open = here((await index.read()).sessions);
+  const tx = sample.transactionId;
+  if (tx !== null && !open.some((s) => s.usage?.transaction_id === tx)) {
+    // Sessions that hadn't started when they were indexed: read their transaction.
+    for (const s of open.filter((x) => !x.usage?.transaction_id))
+      index.put(await deps.ivora.getSession(s.id));
+    open = here((await index.read()).sessions);
+    // Still unknown: a session this instance hasn't seen, such as a sale
+    // authorised on another instance. Rescan, at most every INDEX_RESCAN_MS.
+    if (!open.some((s) => s.usage?.transaction_id === tx))
+      open = here((await index.read({ rescan: true })).sessions);
+  }
+  const prepaid = open.filter((s) => {
+    const sale = saleFromReference(s.application_reference);
+    return sale !== null && decodeSaleId(sale)?.mode === "prepay";
   });
   const views: SaleView[] = [];
-  for (const s of open) {
+  for (const s of prepaid) {
     const fresh = await deps.ivora.getSession(s.id);
+    index.put(fresh);
     const tx = fresh.usage?.transaction_id ?? null;
     if (
       sample.transactionId !== null &&
@@ -648,14 +679,17 @@ export async function authorizeSale(
       },
       saleKey(sale, "create"),
     );
-    forgetSessions(deps);
   }
+  // A new sale shows on this instance's next read without a rescan.
+  sessionIndex(deps).put(session);
   // Prepay: record the amount the store took before the charger may start.
   for (const report of startReports(sale, input.terms))
     await send(deps, session, sale, report);
   if (session.status === "prepared" && !session.start_operation)
     await ivora.startSession(session.id, saleKey(sale, "start"));
-  return progressSale(await ivora.getSession(session.id), charger, deps);
+  const fresh = await ivora.getSession(session.id);
+  sessionIndex(deps).put(fresh);
+  return progressSale(fresh, charger, deps);
 }
 
 /** The cashier pressed stop. Before charging starts, the session is canceled instead. */
@@ -754,19 +788,68 @@ export type ConsoleState = {
   unpaid: SaleView[];
   graceMinutes: number;
   pollMs: number;
+  /**
+   * The last full session listing stopped at its ceiling
+   * (SESSION_LIST_CEILING): a sale may be missing from the console.
+   */
+  truncated: boolean;
+  /** Demo only: the simulated POS and the session_due webhooks it received. */
+  pos: SimulatedPos | null;
+};
+
+/** What the demo's simulated POS shows: each signed delivery, as the POS would receive it. */
+export type SimulatedPos = {
+  url: string;
+  /** The demo POS's bearer token for /api/pos/mark-paid. Demo only; never a real secret. */
+  apiSecret: string;
+  deliveries: {
+    eventId: string;
+    signature: string;
+    verified: boolean;
+    body: string;
+    sale: string;
+    label: string;
+    amountDueCents: number;
+    changeDueCents: number;
+    currency: string;
+    /** The event ID header, as sent. */
+    header: string;
+  }[];
 };
 
 const latestFirst = (a: ExternalSession, b: ExternalSession) =>
   b.created_at.localeCompare(a.created_at);
 
-/** Every charger as a tile, like fuel pumps. Moves active sales forward as it reads them. */
-export async function consoleState(deps: StoreDeps): Promise<ConsoleState> {
+/**
+ * Every charger as a tile, like fuel pumps. Moves active sales forward as it
+ * reads them. `known` are sale IDs the console has already shown: they are
+ * looked up by application_reference when this instance hasn't indexed them
+ * (for example, a sale authorised through another instance).
+ */
+export async function consoleState(
+  deps: StoreDeps,
+  known: string[] = [],
+): Promise<ConsoleState> {
   const { ivora } = deps;
   const now = deps.now();
-  const [stations, sessions] = await Promise.all([
+  const index = sessionIndex(deps);
+  const [stations, first] = await Promise.all([
     ivora.listStations(),
-    allSessions(deps),
+    index.read(),
   ]);
+  let list = first;
+  const indexed = new Set(list.sessions.map((s) => s.application_reference));
+  const missing = [...new Set(known)]
+    .filter((sale) => decodeSaleId(sale) && !indexed.has(storeReference(sale)))
+    .slice(0, MAX_KNOWN_SALES);
+  for (const sale of missing) {
+    const found = await ivora.findSession(storeReference(sale));
+    if (found) index.put(found);
+  }
+  if (missing.length) list = await index.read();
+  if (unexplained(stations, list.sessions))
+    list = await index.read({ rescan: true });
+  const sessions = list.sessions;
   const recent = sessions
     .filter((s) => now - Date.parse(s.created_at) < UNPAID_WINDOW_MS)
     .sort(latestFirst);
@@ -784,9 +867,11 @@ export async function consoleState(deps: StoreDeps): Promise<ConsoleState> {
           const latest = here.find(isStore) ?? null;
           let sale: SaleView | null = null;
           if (latest) {
-            const fresh = CLOSED.has(latest.status)
-              ? latest
-              : await ivora.getSession(latest.id);
+            let fresh = latest;
+            if (!CLOSED.has(latest.status)) {
+              fresh = await ivora.getSession(latest.id);
+              index.put(fresh);
+            }
             sale = await progressSale(fresh, charger, deps);
             const ended = Date.parse(
               sale.amounts?.settledAt ?? sale.endedAt ?? latest.created_at,
@@ -821,12 +906,21 @@ export async function consoleState(deps: StoreDeps): Promise<ConsoleState> {
         }),
     ),
   );
-  // Older unpaid sales: captured less than the bill and not on a tile.
-  const candidates = recent
+  // Older unpaid sales: captured less than the bill and not on a tile. One
+  // still open in the index may have ended since: read it again.
+  const older = await Promise.all(
+    recent
+      .filter((s) => isStore(s) && !shown.has(s.id) && s.status !== "canceled")
+      .map(async (s) => {
+        if (s.status === "completed") return s;
+        const fresh = await ivora.getSession(s.id);
+        index.put(fresh);
+        return fresh;
+      }),
+  );
+  const candidates = older
     .filter(
       (s) =>
-        isStore(s) &&
-        !shown.has(s.id) &&
         s.status === "completed" &&
         (s.settlement?.captured_minor ?? 0) < (s.bill.total_minor ?? 0),
     )
@@ -856,6 +950,8 @@ export async function consoleState(deps: StoreDeps): Promise<ConsoleState> {
     unpaid,
     graceMinutes: deps.settings.idleGraceMinutes,
     pollMs: 4000,
+    truncated: list.truncated,
+    pos: null,
   };
 }
 
@@ -890,8 +986,20 @@ export async function counterState(
     );
   const charger = chargerRef(station, connector);
   const now = deps.now();
+  const index = sessionIndex(deps);
+  let { sessions } = await index.read();
+  const openHere = (list: ExternalSession[]) =>
+    list.some(
+      (s) => s.bill.connector_id === connector.id && !CLOSED.has(s.status),
+    );
+  if (
+    station.online &&
+    BUSY_STATUSES.has(connector.status ?? "") &&
+    !openHere(sessions)
+  )
+    ({ sessions } = await index.read({ rescan: true }));
   const latest =
-    (await allSessions(deps))
+    sessions
       .filter(
         (s) =>
           isStore(s) &&
@@ -901,15 +1009,12 @@ export async function counterState(
               PAID_DISPLAY_MS),
       )
       .sort(latestFirst)[0] ?? null;
-  const sale = latest
-    ? await progressSale(
-        CLOSED.has(latest.status)
-          ? latest
-          : await deps.ivora.getSession(latest.id),
-        charger,
-        deps,
-      )
-    : null;
+  let fresh = latest;
+  if (latest && !CLOSED.has(latest.status)) {
+    fresh = await deps.ivora.getSession(latest.id);
+    index.put(fresh);
+  }
+  const sale = fresh ? await progressSale(fresh, charger, deps) : null;
   return {
     demo: false,
     code: charger.code,
@@ -923,3 +1028,41 @@ export async function counterState(
     pollMs: 4000,
   };
 }
+
+/** Recent in-store sales for the POS sessions list, newest first. */
+export async function recentSales(
+  deps: StoreDeps,
+  filter: (s: ExternalSession) => boolean,
+  limit: number,
+): Promise<SaleView[]> {
+  const index = sessionIndex(deps);
+  const stations = new Map<number, Promise<Station>>();
+  const stationOf = (id: number) => {
+    let p = stations.get(id);
+    if (!p) stations.set(id, (p = deps.ivora.getStation(id)));
+    return p;
+  };
+  const picked = (await index.read()).sessions
+    .filter((s) => isStore(s) && filter(s))
+    .sort(latestFirst)
+    .slice(0, limit);
+  const views: SaleView[] = [];
+  for (const s of picked) {
+    let fresh = s;
+    if (!CLOSED.has(s.status)) {
+      fresh = await deps.ivora.getSession(s.id);
+      index.put(fresh);
+    }
+    const station = await stationOf(fresh.bill.station_id);
+    const connector = station.connectors.find(
+      (c) => c.id === fresh.bill.connector_id,
+    );
+    if (connector)
+      views.push(
+        await progressSale(fresh, chargerRef(station, connector), deps),
+      );
+  }
+  return views;
+}
+
+export const isClosedSession = (s: ExternalSession) => CLOSED.has(s.status);

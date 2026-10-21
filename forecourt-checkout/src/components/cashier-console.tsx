@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { formatCents } from "@/lib/money";
-import type { ConsoleState } from "@/lib/server/store";
+import type { ConsoleState, SimulatedPos } from "@/lib/server/store";
 import {
   parseDollars,
   parseKwh,
@@ -42,14 +42,30 @@ const asError = (e: unknown): ErrorInfo =>
         message: "Check the connection and try again.",
       };
 
+/** Most sale IDs the console sends back on a poll (MAX_KNOWN_SALES on the server). */
+const MAX_KNOWN = 24;
+
 export function CashierConsole({ initial }: { initial: ConsoleState | null }) {
   const [state, setState] = useState<ConsoleState | null>(initial);
   const [error, setError] = useState<ErrorInfo | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
+  // Sales this console has shown or started. Each poll names them, so a
+  // server instance that hasn't seen a sale yet looks it up by reference.
+  const known = useRef<string[]>([]);
+  const remember = (sales: string[]) => {
+    known.current = [...new Set([...sales, ...known.current])].slice(
+      0,
+      MAX_KNOWN,
+    );
+  };
 
-  const poll = useCallback(async () => {
+  const poll = useCallback(async (sale?: string) => {
+    if (typeof sale === "string") remember([sale]);
+    const query = known.current.length
+      ? `?sales=${encodeURIComponent(known.current.join(","))}`
+      : "";
     try {
-      const response = await fetch("/api/cashier/state", {
+      const response = await fetch(`/api/cashier/state${query}`, {
         cache: "no-store",
       });
       const body = await response.json();
@@ -62,7 +78,12 @@ export function CashierConsole({ initial }: { initial: ConsoleState | null }) {
         return;
       }
       setError(null);
-      setState(body as ConsoleState);
+      const next = body as ConsoleState;
+      remember([
+        ...next.tiles.flatMap((t) => (t.sale ? [t.sale.sale] : [])),
+        ...next.unpaid.map((v) => v.sale),
+      ]);
+      setState(next);
     } catch {
       // Offline for a moment; the next poll retries.
     }
@@ -71,7 +92,7 @@ export function CashierConsole({ initial }: { initial: ConsoleState | null }) {
   const pollMs = state?.pollMs ?? 3000;
   useEffect(() => {
     void poll();
-    const timer = setInterval(poll, pollMs);
+    const timer = setInterval(() => void poll(), pollMs);
     const onVisible = () => {
       if (document.visibilityState === "visible") void poll();
     };
@@ -94,6 +115,13 @@ export function CashierConsole({ initial }: { initial: ConsoleState | null }) {
   return (
     <>
       {error ? <ErrorBox info={error} title="Could not refresh" /> : null}
+      {state.truncated ? (
+        <div className="notice bad" role="alert" data-testid="truncated">
+          This Ivora project has more charging sessions than the console reads
+          (10,000). A sale may be missing here: check the charger itself before
+          starting another, and see Limits in the README.
+        </div>
+      ) : null}
       <div className="pumps" role="list" aria-label="Chargers">
         {state.tiles.map((t) => (
           <TileButton
@@ -128,7 +156,112 @@ export function CashierConsole({ initial }: { initial: ConsoleState | null }) {
           ))}
         </section>
       ) : null}
+      {state.pos ? <SimulatedPosPanel pos={state.pos} refresh={poll} /> : null}
     </>
+  );
+}
+
+/**
+ * Demo only: a store POS as the integration would see it. It shows the signed
+ * session_due webhooks the live app would send, and pays through
+ * /api/pos/mark-paid with a bearer token, like a real POS.
+ */
+function SimulatedPosPanel({
+  pos,
+  refresh,
+}: {
+  pos: SimulatedPos;
+  refresh: (sale?: string) => Promise<void>;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState<ErrorInfo | null>(null);
+  const [last, setLast] = useState<string | null>(null);
+
+  async function pay(
+    d: SimulatedPos["deliveries"][number],
+    method: PaymentMethod,
+  ) {
+    setBusy(d.eventId);
+    setError(null);
+    try {
+      const response = await fetch("/api/pos/mark-paid", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${pos.apiSecret}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          sale_id: d.sale,
+          amount_minor: d.amountDueCents,
+          method,
+          pos_reference: "SIM-2001",
+        }),
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) throw body;
+      setLast(JSON.stringify(body, null, 2));
+      await refresh();
+    } catch (e) {
+      setError(asError(e));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <section className="card" aria-label="Simulated POS">
+      <h2>Simulated POS (demo)</h2>
+      <p className="muted" style={{ marginTop: 0 }}>
+        What a store POS integration receives: a signed <code>session_due</code>{" "}
+        webhook to <code>{pos.url}</code> for each sale the counter must settle.
+        Demo mode sends nothing; this panel shows each webhook and pays through{" "}
+        <code>POST /api/pos/mark-paid</code>, as a POS would.
+      </p>
+      {pos.deliveries.length === 0 ? (
+        <p className="muted">No sales due at the counter.</p>
+      ) : null}
+      {pos.deliveries.map((d) => {
+        const money = (c: number) => formatCents(c, d.currency);
+        return (
+          <div key={d.eventId} className="pos-event" data-testid="pos-event">
+            <div>
+              <strong>{d.label}</strong> · <code>session_due</code> ·{" "}
+              {d.verified ? "signature verified" : "signature invalid"}
+            </div>
+            <div>
+              {d.amountDueCents > 0
+                ? `Due ${money(d.amountDueCents)}`
+                : `Change to hand back ${money(d.changeDueCents)} (at the console)`}
+            </div>
+            <details>
+              <summary>Webhook received</summary>
+              <pre>{`POST ${pos.url}\n${d.header}\n${d.signature}\n\n${d.body}`}</pre>
+            </details>
+            {d.amountDueCents > 0 ? (
+              <div className="row">
+                {(["cash", "card"] as const).map((m) => (
+                  <button
+                    key={m}
+                    className="secondary"
+                    disabled={busy !== null}
+                    onClick={() => pay(d, m)}
+                  >
+                    POS: {d.label} paid {money(d.amountDueCents)} ({m})
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        );
+      })}
+      {last ? (
+        <details open>
+          <summary>Last mark-paid answer</summary>
+          <pre data-testid="pos-result">{last}</pre>
+        </details>
+      ) : null}
+      {error ? <ErrorBox info={error} /> : null}
+    </section>
   );
 }
 
@@ -200,7 +333,7 @@ function TilePanel({
 }: {
   tile: Tile;
   graceMinutes: number;
-  refresh: () => Promise<void>;
+  refresh: (sale?: string) => Promise<void>;
   close: () => void;
 }) {
   const v = tile.sale;
@@ -264,7 +397,7 @@ function Postpay({
   refresh,
 }: {
   tile: Tile;
-  refresh: () => Promise<void>;
+  refresh: (sale?: string) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorInfo | null>(null);
@@ -273,14 +406,14 @@ function Postpay({
     setBusy(true);
     setError(null);
     try {
-      await call("/api/cashier/sales", {
+      const view = (await call("/api/cashier/sales", {
         code: tile.code,
         connector: tile.connector,
         mode: "postpay",
         requestId: ids.get(`${tile.key}|postpay`),
-      });
+      })) as SaleView;
       ids.done();
-      await refresh();
+      await refresh(view.sale);
     } catch (e) {
       setError(asError(e));
     } finally {
@@ -307,7 +440,7 @@ function Prepay({
   refresh,
 }: {
   tile: Tile;
-  refresh: () => Promise<void>;
+  refresh: (sale?: string) => Promise<void>;
 }) {
   const [amount, setAmount] = useState("");
   const [kwh, setKwh] = useState("");
@@ -346,17 +479,17 @@ function Prepay({
     setBusy(true);
     setError(null);
     try {
-      await call("/api/cashier/sales", {
+      const view = (await call("/api/cashier/sales", {
         code: tile.code,
         connector: tile.connector,
         mode: "prepay",
         prepaidCents: cents,
         limitWh,
         requestId: ids.get(`${tile.key}|prepay|${cents}|${limitWh ?? 0}`),
-      });
+      })) as SaleView;
       ids.done();
       setConfirming(false);
-      await refresh();
+      await refresh(view.sale);
     } catch (e) {
       setError(asError(e));
     } finally {
@@ -457,7 +590,7 @@ function SalePanel({
 }: {
   view: SaleView;
   graceMinutes: number;
-  refresh: () => Promise<void>;
+  refresh: (sale?: string) => Promise<void>;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorInfo | null>(null);
@@ -654,7 +787,7 @@ function PaymentActions({
   refresh,
 }: {
   view: SaleView;
-  refresh: () => Promise<void>;
+  refresh: (sale?: string) => Promise<void>;
 }) {
   const a = view.amounts!;
   const [method, setMethod] = useState<PaymentMethod>("cash");

@@ -61,7 +61,7 @@ export async function overview(
   if (settings.demo) return demoOverview(settings, from);
   const ivora = ivoraClient(settings);
   const deps = liveDeps(settings);
-  const [stats, sessions, stations] = await Promise.all([
+  const [stats, { sessions }, stations] = await Promise.all([
     ivora.stats({
       from,
       to: new Date(now).toISOString(),

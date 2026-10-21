@@ -1,26 +1,18 @@
 import "server-only";
+import type { SaleDueEvent } from "../store";
 import { RecentIds } from "../webhook";
 
-// The seam for point-of-sale integrations. When an in-store sale has a final
-// bill with money still to collect, the app emits `sale.due`. Nothing listens
-// yet; a POS integration subscribes with saleEvents.on() and forwards the event
-// (for example as a signed webhook). The event ID is stable per sale, so a
-// listener can de-duplicate: a sale can be seen as due more than once (every
-// poll, webhook and sweep re-reads it), and each server instance emits it once.
+// The in-process seam for point-of-sale integrations. When an in-store sale
+// finishes with something for the counter to do (money to collect or change
+// to hand back), the app emits `sale.due` (see saleDueEvent() in
+// src/lib/store.ts). The signed `session_due` webhook
+// (src/lib/server/pos-webhook.ts) is wired next to this in services.ts, with
+// its own retries; other in-process listeners can subscribe with
+// saleEvents.on(). The event ID is stable per sale, so a listener can
+// de-duplicate: a sale can be seen as due more than once (every poll, webhook
+// and sweep re-reads it), and each server instance emits it here once.
 
-export type SaleDueEvent = {
-  /** Stable per sale: `<sale ID>:due`. */
-  id: string;
-  type: "sale.due";
-  sale: string;
-  charger: { code: string; connector: number; label: string };
-  mode: "prepay" | "postpay";
-  amountDueCents: number;
-  currency: string;
-  energyWh: number;
-  startedAt: string | null;
-  endedAt: string | null;
-};
+export type { SaleDueEvent };
 
 type Listener = (event: SaleDueEvent) => void | Promise<void>;
 

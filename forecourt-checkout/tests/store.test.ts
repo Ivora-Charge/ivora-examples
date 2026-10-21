@@ -20,6 +20,9 @@ import {
 } from "@/lib/store";
 import type { Quote } from "@/lib/tariff";
 import { meterSampleFromEvent } from "@/lib/webhook";
+import { sessionDuePayload, verifyPosSignature } from "@/lib/pos";
+import { posMarkPaid, posSales, type MarkPaid } from "@/lib/server/pos";
+import { PosOutbox } from "@/lib/server/pos-webhook";
 import {
   IvoraError,
   type ExternalSession,
@@ -27,17 +30,19 @@ import {
   type Station,
 } from "@/lib/server/ivora";
 import type { SaleDueEvent } from "@/lib/server/sale-events";
+import { INDEX_RESCAN_MS, INDEX_TTL_MS } from "@/lib/server/session-index";
 import {
   authorizeSale,
   consoleState,
+  counterState,
   giveChange,
   markSalePaid,
   PREPARED_TIMEOUT_MS,
   progressSale,
+  recentSales,
   saleById,
   onMeterSample,
   saleIdFor,
-  SESSION_LIST_TTL_MS,
   stopSale,
   type StoreApi,
   type StoreDeps,
@@ -453,9 +458,18 @@ class FakeIvora implements StoreApi {
   async getSession(id: string) {
     return structuredClone(this.sessions.get(id)!);
   }
+  /** The listing stopped at its page ceiling. */
+  truncated = false;
+  /** Sessions a listing doesn't return (created through another instance, say). */
+  hidden = new Set<string>();
   async listAllSessions() {
     this.calls.push({ action: "list" });
-    return [...this.sessions.values()].map((s) => structuredClone(s));
+    return {
+      sessions: [...this.sessions.values()]
+        .filter((s) => !this.hidden.has(s.id))
+        .map((s) => structuredClone(s)),
+      truncated: this.truncated,
+    };
   }
   async startSession(id: string, key: string) {
     this.calls.push({ action: "start", key });
@@ -703,6 +717,16 @@ describe("prepay: from the POS to change", () => {
     ]);
     await saleById(sale, deps); // repeated reads never record twice
     expect(ivora.reportsOf()).toHaveLength(2);
+    // Nothing to collect, but change to hand back: the counter is told, the
+    // same event every time it is read.
+    expect(events.length).toBeGreaterThan(0);
+    for (const e of events)
+      expect(e).toEqual({
+        ...events[0],
+        amountDueCents: 0,
+        changeDueCents: 388,
+      });
+    expect(events[0]).toMatchObject({ id: `${sale}:due`, mode: "prepay" });
     const after = await giveChange(sale, deps);
     expect(after.amounts).toMatchObject({ changeGiven: true, status: "paid" });
     await giveChange(sale, deps);
@@ -715,7 +739,9 @@ describe("prepay: from the POS to change", () => {
       ["capture", `${sale}:capture`, 1612],
       ["release", `${sale}:change`, 0],
     ]);
-    expect(events).toEqual([]); // nothing to collect
+    const told = events.length;
+    await saleById(sale, deps);
+    expect(events).toHaveLength(told); // settled: nothing more for the counter
   });
 
   it("never charges or records an overrun until the cashier marks it paid", async () => {
@@ -992,7 +1018,7 @@ describe("prepaid stop with no console or driver screen open", () => {
     expect(ivora.keys("stop")).toHaveLength(1);
   });
 
-  it("leaves pay-after sales alone and reuses the session list briefly", async () => {
+  it("leaves pay-after sales alone and reuses the session index", async () => {
     await authorize(POSTPAY);
     ivora.charging(30_500, 5000, 150_000);
     expect(
@@ -1000,7 +1026,10 @@ describe("prepaid stop with no console or driver screen open", () => {
     ).toEqual([]);
     await onMeterSample({ transactionId: 21, stationId: 7 }, deps);
     expect(ivora.keys("list")).toHaveLength(1);
-    now += SESSION_LIST_TTL_MS;
+    now += INDEX_TTL_MS - 1;
+    await onMeterSample({ transactionId: 21, stationId: 7 }, deps);
+    expect(ivora.keys("list")).toHaveLength(1);
+    now += 1;
     await onMeterSample({ transactionId: 21, stationId: 7 }, deps);
     expect(ivora.keys("list")).toHaveLength(2);
     expect(ivora.keys("stop")).toEqual([]);
@@ -1157,5 +1186,299 @@ describe("webhook meter samples", () => {
     expect(
       meterSampleFromEvent({ type: "bill.finalized", data: {} }),
     ).toBeNull();
+  });
+});
+
+// --- Part B: the session index, the POS endpoints and the session_due webhook
+
+/** A second server instance: same Ivora project, its own in-memory index. */
+const otherInstance = (): StoreDeps => ({
+  ...deps,
+  ivora: Object.create(ivora) as FakeIvora,
+});
+
+describe("the session index", () => {
+  it("doesn't page through the session list on every console poll", async () => {
+    for (let i = 0; i < 5; i++) {
+      await consoleState(deps);
+      now += 4000;
+    }
+    await authorize(POSTPAY);
+    await consoleState(deps);
+    expect(ivora.keys("list")).toHaveLength(1);
+    expect((await consoleState(deps)).tiles[0].state).toBe("starting");
+    now = T0 + INDEX_TTL_MS;
+    await consoleState(deps);
+    expect(ivora.keys("list")).toHaveLength(2);
+  });
+
+  it("looks up a sale the console names, when this instance hasn't indexed it", async () => {
+    expect((await consoleState(deps)).tiles[0].state).toBe("plugged_in");
+    // Authorised through another instance; this one's index doesn't know it.
+    await authorizeSale(
+      { code: "PUMP-3", connector: 1, terms: POSTPAY, requestId: REQ },
+      otherInstance(),
+    );
+    const sale = saleIdFor(POSTPAY, REQ);
+    ivora.hidden.add(ivora.only().id);
+    const named = await consoleState(deps, [sale, "not-a-sale"]);
+    expect(named.tiles[0]).toMatchObject({
+      state: "starting",
+      canPostpay: false,
+    });
+    expect(named.tiles[0].sale?.sale).toBe(sale);
+    expect(ivora.keys("list")).toHaveLength(1);
+  });
+
+  it("rescans soon, not every poll, when a connector is busy with no known session", async () => {
+    await consoleState(deps);
+    await authorizeSale(
+      { code: "PUMP-3", connector: 1, terms: POSTPAY, requestId: REQ },
+      otherInstance(),
+    );
+    ivora.charging(5_000, 300);
+    ivora.station = station("Charging");
+    await consoleState(deps); // just scanned: not yet
+    expect(ivora.keys("list")).toHaveLength(1);
+    now += INDEX_RESCAN_MS;
+    const tile = (await consoleState(deps)).tiles[0];
+    expect(tile).toMatchObject({ state: "charging", warning: null });
+    expect(ivora.keys("list")).toHaveLength(2);
+    now += 1000;
+    await counterState("PUMP-3", 1, deps);
+    expect(ivora.keys("list")).toHaveLength(2);
+  });
+
+  it("stops a prepaid sale from another instance when its meter sample arrives", async () => {
+    await onMeterSample({ transactionId: null, stationId: 7 }, deps);
+    await authorizeSale(
+      { code: "PUMP-3", connector: 1, terms: PREPAY, requestId: REQ },
+      otherInstance(),
+    );
+    ivora.charging(30_500, 1847, 150_000);
+    now += INDEX_RESCAN_MS;
+    const [view] = await onMeterSample(
+      { transactionId: 21, stationId: 7 },
+      deps,
+    );
+    expect(view).toMatchObject({ stopping: true, limitReached: "amount" });
+    expect(ivora.keys("list")).toHaveLength(2);
+  });
+
+  it("shows the console when the listing stopped at its ceiling", async () => {
+    expect((await consoleState(deps)).truncated).toBe(false);
+    ivora.truncated = true;
+    now += INDEX_TTL_MS;
+    expect((await consoleState(deps)).truncated).toBe(true);
+  });
+});
+
+/** The production wiring: posPay() hands POS input to the console's markSalePaid(). */
+const markPaid: MarkPaid = (i) => markSalePaid(i, deps);
+
+async function postpayDone() {
+  await authorize(POSTPAY);
+  ivora.charging(36_000, 1800);
+  ivora.ended(2340, quote(1620, 18)); // 1940 due after idle grace
+  return saleIdFor(POSTPAY, REQ);
+}
+
+describe("POS mark-paid", () => {
+  it("records the same settlement report as the console, once", async () => {
+    const sale = await postpayDone();
+    const input = {
+      sale_id: sale,
+      amount_minor: 1940,
+      method: "card" as const,
+      pos_reference: "R-77",
+    };
+    const first = await posMarkPaid(input, markPaid);
+    expect(first).toEqual({
+      sale_id: sale,
+      status: "paid",
+      amount_minor: 1940,
+      method: "card",
+      pos_reference: "R-77",
+      currency: "USD",
+    });
+    expect(ivora.reportsOf()).toEqual([
+      {
+        kind: "capture",
+        operation_reference: `${sale}:paid:card:R-77`,
+        amount_minor: 1940,
+        outcome: "succeeded",
+      },
+    ]);
+    expect(ivora.keys("report:capture")).toEqual([
+      `forecourt:store:${sale}:report:paid`,
+    ]);
+    // A repeat with the same values returns the original result.
+    expect(await posMarkPaid(input, markPaid)).toEqual(first);
+    expect(ivora.reportsOf()).toHaveLength(1);
+  });
+
+  it("answers 409 to the same sale with different values", async () => {
+    const sale = await postpayDone();
+    const input = {
+      sale_id: sale,
+      amount_minor: 1940,
+      method: "cash" as const,
+      pos_reference: null,
+    };
+    await posMarkPaid(input, markPaid);
+    for (const other of [
+      { ...input, method: "card" as const },
+      { ...input, pos_reference: "R-1" },
+      { ...input, amount_minor: 1000 },
+    ])
+      await expect(posMarkPaid(other, markPaid)).rejects.toMatchObject({
+        status: 409,
+        code: "idempotency_conflict",
+      });
+    expect(ivora.reportsOf()).toHaveLength(1);
+  });
+
+  it("checks the amount against the final bill and refuses an unfinished session", async () => {
+    await authorize(POSTPAY);
+    const sale = saleIdFor(POSTPAY, REQ);
+    const input = {
+      sale_id: sale,
+      amount_minor: 1940,
+      method: "cash" as const,
+      pos_reference: null,
+    };
+    ivora.charging(20_000, 1200);
+    await expect(posMarkPaid(input, markPaid)).rejects.toMatchObject({
+      status: 409,
+      code: "session_not_finished",
+    });
+    ivora.charging(36_000, 1800);
+    ivora.ended(2340, quote(1620, 18));
+    for (const amount of [2340, 1939, 0])
+      await expect(
+        posMarkPaid({ ...input, amount_minor: amount }, markPaid),
+      ).rejects.toMatchObject({ status: 422, code: "amount_mismatch" });
+    await expect(
+      posMarkPaid({ ...input, sale_id: "post-000000000000" }, markPaid),
+    ).rejects.toMatchObject({ status: 404 });
+    expect(ivora.reportsOf()).toEqual([]);
+  });
+
+  it("collects a prepaid overrun as the extra, and nothing when nothing is due", async () => {
+    await authorize(PREPAY);
+    const sale = saleIdFor(PREPAY, REQ);
+    ivora.charging(36_000, 1800);
+    ivora.ended(2690, quote(1890, 20)); // 290 over the prepaid amount
+    const input = {
+      sale_id: sale,
+      amount_minor: 290,
+      method: "cash" as const,
+      pos_reference: null,
+    };
+    expect(await posMarkPaid(input, markPaid)).toMatchObject({
+      amount_minor: 290,
+    });
+    expect(ivora.reportsOf().at(-1)?.operation_reference).toBe(
+      `${sale}:extra:cash`,
+    );
+  });
+
+  it("lists sales by status for GET /api/pos/sessions", async () => {
+    const sale = await postpayDone();
+    // As posList() reads them for due and paid: every recent sale, open ones
+    // re-read (this one is still "starting" in the index).
+    const all = () => true;
+    const due = posSales(await recentSales(deps, all, 50), "due");
+    expect(due).toMatchObject([
+      {
+        sale_id: sale,
+        status: "due",
+        charger_code: "PUMP-3",
+        amount_due_minor: 1940,
+        energy_kwh: "36.000",
+        payments: [],
+      },
+    ]);
+    await markSalePaid(
+      { sale, amountCents: 1940, method: "card", posReference: "R-9" },
+      deps,
+    );
+    const views = await recentSales(deps, all, 50);
+    expect(posSales(views, "due")).toEqual([]);
+    expect(posSales(views, "paid")).toMatchObject([
+      {
+        sale_id: sale,
+        amount_due_minor: 0,
+        payments: [
+          { method: "card", pos_reference: "R-9", amount_minor: 1940 },
+        ],
+      },
+    ]);
+  });
+});
+
+describe("the session_due webhook", () => {
+  it("is sent once, signed, when a postpay sale finishes, and not after it's paid", async () => {
+    const sent: { headers: Record<string, string>; body: string }[] = [];
+    const box = new PosOutbox({
+      url: "https://pos.example.com/hook",
+      secret: "pos_whsec",
+      now: () => now,
+      fetch: (async (_url: string, init: RequestInit) => {
+        sent.push({
+          headers: init.headers as Record<string, string>,
+          body: init.body as string,
+        });
+        return new Response(null, { status: 204 });
+      }) as unknown as typeof fetch,
+    });
+    deps.events = { emit: async (e) => box.offer(e) };
+    const sale = await postpayDone();
+    for (let i = 0; i < 3; i++) await saleById(sale, deps);
+    await consoleState(deps);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toHaveLength(1);
+    const [only] = sent;
+    expect(
+      verifyPosSignature(
+        "pos_whsec",
+        only.headers["Forecourt-Signature"],
+        only.body,
+        now,
+      ),
+    ).toBe("ok");
+    const body = JSON.parse(only.body);
+    expect(body).toEqual(
+      sessionDuePayload({
+        id: `${sale}:due`,
+        type: "sale.due",
+        sale,
+        charger: { code: "PUMP-3", connector: 1, label: "Charger 3" },
+        mode: "postpay",
+        amountDueCents: 1940,
+        changeDueCents: 0,
+        currency: "USD",
+        energyWh: 36_000,
+        startedAt: new Date(T0).toISOString(),
+        endedAt: new Date(T0 + 1800_000).toISOString(),
+      }),
+    );
+    expect(only.body).not.toMatch(/card|email|name/i);
+  });
+
+  it("says nothing while charging, or for a sale settled at the counter", async () => {
+    await authorize(POSTPAY);
+    const sale = saleIdFor(POSTPAY, REQ);
+    ivora.charging(20_000, 1200);
+    await saleById(sale, deps);
+    expect(events).toEqual([]);
+    ivora.ended(900, quote(900, 0));
+    await markSalePaid(
+      { sale, amountCents: 900, method: "cash", posReference: null },
+      deps,
+    );
+    const told = events.length;
+    await saleById(sale, deps);
+    expect(events).toHaveLength(told);
   });
 });

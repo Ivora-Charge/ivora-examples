@@ -3,10 +3,12 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 export const SIGNATURE_TOLERANCE_SECONDS = 5 * 60;
 
 /**
- * Ivora signs deliveries with `Ivora-Signature: t=<unix seconds>,v1=<hex>`,
- * where v1 is HMAC-SHA256 of `<t>.<raw body>` with the endpoint's secret.
+ * The signature scheme Ivora uses, and this app uses for its own POS webhook:
+ * a `t=<unix seconds>,v1=<hex>` header, where v1 is HMAC-SHA256 of
+ * `<t>.<raw body>` with the endpoint's secret. Compared in constant time;
+ * timestamps more than five minutes away are refused as stale.
  */
-export function verifyIvoraSignature(
+export function verifySignature(
   secret: string,
   header: string | null,
   body: string,
@@ -32,11 +34,17 @@ export function verifyIvoraSignature(
   return "ok";
 }
 
-/** Test helper and documentation of the scheme. */
-export function signIvoraBody(secret: string, body: string, t: number) {
+/** Signs a raw body: `t=<t>,v1=<hex HMAC-SHA256 of "<t>.<body>">`. */
+export function signPayload(secret: string, body: string, t: number) {
   const v1 = createHmac("sha256", secret).update(`${t}.${body}`).digest("hex");
   return `t=${t},v1=${v1}`;
 }
+
+/** Ivora signs deliveries with `Ivora-Signature`, in the scheme above. */
+export const verifyIvoraSignature = verifySignature;
+
+/** Test helper and documentation of the scheme. */
+export const signIvoraBody = signPayload;
 
 /** Ivora session ID carried by a charging session or bill event, if any. */
 export function sessionIdFromEvent(event: {

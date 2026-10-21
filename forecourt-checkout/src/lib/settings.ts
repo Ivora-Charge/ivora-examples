@@ -23,6 +23,13 @@ export type Settings = {
   stripeConnectedAccount: string;
   /** Drivers may pay at the counter: on in demo mode, or when CASHIER_PASSWORD is set. */
   payInStore: boolean;
+  /**
+   * Where the signed `session_due` webhook goes (pay in store); empty when
+   * off. Always empty in demo mode, which never sends it.
+   */
+  posWebhookUrl: string;
+  /** Emailed store receipts: previewed in demo mode, sent when an email provider is set up. */
+  emailReceipts: boolean;
 };
 
 /** Live mode needs all of these. Any missing one keeps the app in demo mode. */
@@ -65,6 +72,7 @@ export function readSettings(
     if (url.protocol !== "https:" && url.hostname !== "localhost")
       throw new Error("PUBLIC_BASE_URL must use HTTPS.");
   }
+  const posWebhookUrl = demo ? "" : webhookUrl(env.POS_WEBHOOK_URL);
   return {
     demo,
     missing: env.DEMO_MODE === "1" ? ["DEMO_MODE=1"] : [...missing],
@@ -86,5 +94,30 @@ export function readSettings(
     publicBaseUrl,
     stripeConnectedAccount: env.STRIPE_CONNECTED_ACCOUNT_ID?.trim() ?? "",
     payInStore: demo || Boolean(env.CASHIER_PASSWORD?.trim()),
+    posWebhookUrl,
+    emailReceipts:
+      demo ||
+      (Boolean(env.RESEND_API_KEY?.trim()) &&
+        Boolean(env.RECEIPT_EMAIL_FROM?.trim())),
   };
+}
+
+/** POS_WEBHOOK_URL: HTTPS (plain HTTP only for localhost), with no credentials in it. */
+function webhookUrl(raw: string | undefined) {
+  const value = raw?.trim() ?? "";
+  if (!value) return "";
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("POS_WEBHOOK_URL must be a URL.");
+  }
+  const local = url.hostname === "localhost" || url.hostname === "127.0.0.1";
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local))
+    throw new Error("POS_WEBHOOK_URL must use HTTPS.");
+  if (url.username || url.password)
+    throw new Error(
+      "POS_WEBHOOK_URL must not contain credentials; the webhook is signed with POS_WEBHOOK_SECRET.",
+    );
+  return url.toString();
 }

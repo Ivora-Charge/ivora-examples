@@ -424,3 +424,20 @@ label.choice input {
     padding: 0;
   }
 }
+
+/* The demo's simulated POS. */
+.pos-event + .pos-event {
+  border-top: 1px solid var(--line);
+  margin-top: 0.75rem;
+  padding-top: 0.75rem;
+}
+.pos-event pre,
+.email-preview {
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 0.8rem;
+  background: var(--line);
+  padding: 0.5rem;
+  border-radius: 6px;
+}
