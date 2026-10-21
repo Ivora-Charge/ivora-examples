@@ -1,38 +1,55 @@
-import { cookies } from "next/headers";
-import { SESSION_COOKIE, authorized, gate } from "@/lib/server/auth";
 import { isDemo } from "@/lib/server/config";
-import { resolveQrBase } from "@/lib/urls";
-import { brand } from "../../brand/brand";
-import Login from "./login";
-import Wizard from "./wizard";
+import { brand, landing } from "../../brand/brand";
+import DemoBanner from "./demo-banner";
 
-export default async function Page() {
+const ICONS = [
+  // plug
+  "M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4",
+  // pulse
+  "M2 12h5l3-8 4 16 3-8h5",
+  // checklist
+  "M4 6l2 2 3-3M12 7h8M4 13l2 2 3-3M12 14h8M4 20l2 2 3-3M12 21h8",
+];
+
+export default function Landing() {
   const demo = isDemo();
-  const g = gate();
-  const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  const qr = resolveQrBase({ demo, requestOrigin: "http://localhost" });
   return (
     <main id="main">
-      {demo && (
-        <p className="banner">
-          DEMO MODE: simulated charger and sample data. No charger commands,
-          payments or other requests are sent anywhere.
+      {demo && <DemoBanner />}
+      <section className="hero">
+        <p className="eyebrow">{brand.tagline}</p>
+        <h1>{landing.headline}</h1>
+        <p className="lead">{landing.who}</p>
+        <a className="button big" href="/commission">
+          {demo ? "Try the demo" : "Open the app"}
+        </a>
+        <p className="muted">
+          {demo
+            ? "Runs offline with a simulated charger. Nothing is sent anywhere."
+            : "Sign in with the operator password."}
         </p>
-      )}
-      <h1>Commission a charger</h1>
-      <p className="lead">{brand.lead}</p>
-      {g.mode === "missing" ? (
-        <section>
-          <h2>Setup needed</h2>
-          <p role="alert" className="error">
-            {g.reason} Live mode stays off until it is set; see the README.
-          </p>
-        </section>
-      ) : authorized(token) ? (
-        <Wizard demo={demo} qrProblem={qr.ok ? null : qr.reason} />
-      ) : (
-        <Login />
-      )}
+      </section>
+      <h2 className="sr">How it works</h2>
+      <ol className="flows">
+        {landing.flows.map((f, i) => (
+          <li key={f.title}>
+            <svg viewBox="0 0 24 24" width="32" height="32" aria-hidden="true">
+              <path
+                d={ICONS[i]}
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            <h3>
+              {i + 1}. {f.title}
+            </h3>
+            <p>{f.text}</p>
+          </li>
+        ))}
+      </ol>
     </main>
   );
 }
