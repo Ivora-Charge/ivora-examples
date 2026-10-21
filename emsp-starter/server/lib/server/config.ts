@@ -1,0 +1,94 @@
+import "server-only";
+
+/** OCPI version this eMSP implements. */
+export const OCPI_VERSION = "2.2.1";
+
+/** Identity used in demo mode, when EMSP_COUNTRY_CODE / EMSP_PARTY_ID are unset. */
+export const DEMO_PARTY = { countryCode: "ZZ", partyId: "DMO" } as const;
+
+/** An empty value counts as unset, so `FOO=` in .env behaves like a missing variable. */
+function env(name: string): string | undefined {
+  const v = process.env[name]?.trim();
+  return v ? v : undefined;
+}
+
+/**
+ * Variables live mode needs. If any is missing, the server runs in demo mode.
+ * OCPI peer credentials are not here: they are exchanged with each CPO through the
+ * OCPI credentials module and stored in the database.
+ */
+export const LIVE_REQUIRED = [
+  "EMSP_COUNTRY_CODE",
+  "EMSP_PARTY_ID",
+  "PUBLIC_BASE_URL",
+  "SUPABASE_URL",
+  "SUPABASE_SERVICE_ROLE_KEY",
+] as const;
+
+/**
+ * Server-side settings, read on every call so tests and restarts see the current
+ * environment. Secrets (`supabaseServiceRoleKey`) must never be logged, returned from
+ * an API or passed to a client component; use `publicSummary()` for anything shown.
+ */
+export const config = {
+  /** ISO 3166-1 alpha-2 country code of this eMSP, upper case. */
+  get countryCode(): string {
+    return env("EMSP_COUNTRY_CODE")?.toUpperCase() ?? DEMO_PARTY.countryCode;
+  },
+  /** OCPI party ID of this eMSP (3 characters), upper case. */
+  get partyId(): string {
+    return env("EMSP_PARTY_ID")?.toUpperCase() ?? DEMO_PARTY.partyId;
+  },
+  /** HTTPS origin this server is reached at, used for the OCPI versions URL. */
+  get publicBaseUrl(): string {
+    return (env("PUBLIC_BASE_URL") ?? "http://localhost:3000").replace(
+      /\/+$/,
+      "",
+    );
+  },
+  get supabaseUrl(): string {
+    return env("SUPABASE_URL") ?? "";
+  },
+  get supabaseServiceRoleKey(): string {
+    return env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  },
+};
+
+/** Names (never values) of live-mode variables that are unset. */
+export function missingForLive(): string[] {
+  return LIVE_REQUIRED.filter((name) => !env(name));
+}
+
+/** Problems with the values that are set. Messages name variables, never values. */
+export function configErrors(): string[] {
+  const errors: string[] = [];
+  if (env("EMSP_COUNTRY_CODE") && !/^[A-Z]{2}$/.test(config.countryCode))
+    errors.push("EMSP_COUNTRY_CODE must be a 2-letter ISO 3166-1 code");
+  if (env("EMSP_PARTY_ID") && !/^[A-Z0-9]{3}$/.test(config.partyId))
+    errors.push("EMSP_PARTY_ID must be 3 letters or digits");
+  if (env("PUBLIC_BASE_URL")) {
+    let url: URL | undefined;
+    try {
+      url = new URL(config.publicBaseUrl);
+    } catch {}
+    if (url?.protocol !== "https:")
+      errors.push("PUBLIC_BASE_URL must be an https:// origin");
+  }
+  if (env("SUPABASE_URL")) {
+    let ok = false;
+    try {
+      ok = new URL(config.supabaseUrl).protocol === "https:";
+    } catch {}
+    if (!ok) errors.push("SUPABASE_URL must be an https:// URL");
+  }
+  return errors;
+}
+
+/** Safe to show in the admin web and return from the API: no secrets. */
+export function publicSummary() {
+  return {
+    ocpiVersion: OCPI_VERSION,
+    countryCode: config.countryCode,
+    partyId: config.partyId,
+  };
+}
