@@ -1,8 +1,8 @@
+import Link from "next/link";
 import { configErrors, missingForLive } from "@/lib/server/config";
 import { getStatus } from "@/lib/server/status";
 
 const COMING = [
-  "CPO peers and OCPI credentials",
   "Locations and tariffs",
   "Drivers and tokens",
   "Sessions and CDRs",
@@ -55,6 +55,13 @@ export default function Overview() {
               ))}
             </div>
           )}
+      </section>
+      <section className="card" aria-labelledby="peers">
+        <h2 id="peers">CPO peers</h2>
+        <p>
+          Connect to CPOs over the OCPI credentials module:{" "}
+          <Link href="/admin/peers">manage CPO peers</Link>.
+        </p>
       </section>
       <section className="card" aria-labelledby="coming">
         <h2 id="coming">Coming soon</h2>
