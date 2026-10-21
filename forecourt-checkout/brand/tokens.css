@@ -1,0 +1,45 @@
+/*
+ * Fillbay brand tokens: the only place for colour, type, radius and spacing.
+ * Colours are light-dark(<light>, <dark>). The page follows the system
+ * setting; the header toggle sets data-theme="light" or "dark" on <html>.
+ * tests/contrast.test.ts checks every text pair against WCAG AA (4.5:1).
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Colour */
+  --bg: light-dark(#fff4c2, #0c1016); /* page: butter / night forecourt */
+  --surface: light-dark(#ffffff, #1a212b); /* price-sign panels, inputs */
+  --ink: light-dark(#101828, #f8f5e6); /* text */
+  --muted: light-dark(#47505f, #b4bcc8); /* labels, secondary text */
+  --accent: light-dark(#ffc700, #ffd60a); /* fill only: primary, canopy band */
+  --on-accent: light-dark(#101828, #101828); /* text on accent */
+  --ok: light-dark(#0a6a32, #4ade80); /* ready, paid */
+  --danger: light-dark(#b3261e, #ff8f85); /* errors, move your car */
+  --on-danger: light-dark(#ffffff, #101828); /* text on danger */
+  --pump: light-dark(#0b0f14, #000000); /* lit pump board */
+  --pump-ink: light-dark(#ffd60a, #ffd60a); /* digits on the board */
+  --line: color-mix(in srgb, var(--ink) 16%, transparent); /* hairlines */
+  --tint: color-mix(in srgb, var(--ink) 6%, transparent); /* tracks, code */
+
+  /* Type (families come from brand/fonts.ts through next/font) */
+  --font-body: var(--font-atkinson), sans-serif;
+  --font-head: var(--font-archivo), var(--font-body);
+  --text-label: 0.8rem; /* caps labels */
+  --text-body: 1.125rem; /* 18px body */
+  --text-title: 1.5rem; /* section titles */
+  --text-price: clamp(2.25rem, 9vw, 3rem); /* prices, countdown */
+  --text-board: clamp(3rem, 14vw, 5.5rem); /* charger numbers */
+
+  /* Shape and space */
+  --radius: 14px;
+  --stripe: 6px; /* canopy band on panels */
+  --target: 44px;
+  --space: 16px;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}
