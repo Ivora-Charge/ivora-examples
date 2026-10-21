@@ -3,6 +3,7 @@ import { createHash, createHmac } from "node:crypto";
 import { cookies } from "next/headers";
 import type { Settings } from "../settings";
 import { signToken, verifyToken } from "../tokens";
+import { trustedClient } from "./client";
 import { cashierPassword, signingSecret } from "./services";
 
 export const OPERATOR_COOKIE = "fc_operator";
@@ -119,6 +120,17 @@ export async function isGuestOf(settings: Settings, sessionId: string) {
   return verifyToken(signingSecret(settings), "guest", value) === sessionId;
 }
 
+/**
+ * The client address for login limits: trustedClient(), or one shared bucket
+ * per role when no trusted source gives it, so guessing stays limited.
+ */
+export function loginClient(
+  headers: Headers,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return trustedClient(headers, env) ?? "shared";
+}
+
 // Best-effort brute-force brake per server instance and login page (key it by
 // role and client); put a WAF rule in front for more.
 const attempts = new Map<string, { count: number; since: number }>();
@@ -133,15 +145,22 @@ export function loginAllowed(key: string, now = Date.now()) {
 }
 
 // The public driver screen polls every few seconds; this caps one client at
-// 60 reads a minute per instance.
+// 60 reads a minute per instance. Without a trusted client address (null),
+// every driver would share one key, so that case gets a site-wide cap far above
+// normal polling instead: it only brakes a flood.
+export const COUNTER_READS_PER_CLIENT = 60;
+export const COUNTER_READS_WITHOUT_CLIENT = 6000;
 const reads = new Map<string, { count: number; since: number }>();
-export function counterAllowed(client: string, now = Date.now()) {
-  const entry = reads.get(client);
+export function counterAllowed(client: string | null, now = Date.now()) {
+  const key = client ?? "";
+  const limit =
+    client === null ? COUNTER_READS_WITHOUT_CLIENT : COUNTER_READS_PER_CLIENT;
+  const entry = reads.get(key);
   if (!entry || now - entry.since > 60 * 1000) {
-    reads.set(client, { count: 1, since: now });
+    reads.set(key, { count: 1, since: now });
     if (reads.size > 5000) reads.delete(reads.keys().next().value!);
     return true;
   }
   entry.count += 1;
-  return entry.count <= 60;
+  return entry.count <= limit;
 }
