@@ -45,6 +45,8 @@ const TABLES = [
   "cpo_invites",
   "cpo_rate_limits",
   "cpo_company_profiles",
+  "cpo_chargers",
+  "cpo_sticker_codes",
 ] as const;
 
 beforeAll(async () => {
@@ -187,6 +189,13 @@ describe("row level security", () => {
           `select cpo_save_brand('${operatorA}','${OWNER_A}','#000000')`,
           `select cpo_record_branding('${operatorA}','${OWNER_A}',null,null,false)`,
           `select cpo_lock_onboarding_actor('${operatorA}','${OWNER_A}')`,
+          `select cpo_lock_charger_actor('${operatorA}','${OWNER_A}',false)`,
+          `select cpo_create_charger('${operatorA}','${OWNER_A}','X-1-ABC',null,1,null,1,null,null)`,
+          `select cpo_update_charger('${operatorA}','${OWNER_A}','${OWNER_A}','{}')`,
+          `select cpo_next_charger_seq('${operatorA}','${OWNER_A}','${OWNER_A}','edit')`,
+          `select cpo_claim_charger_test('${operatorA}','${OWNER_A}','${OWNER_A}','{}')`,
+          `select cpo_add_sticker_codes('${operatorA}','${OWNER_A}','${OWNER_A}','[]')`,
+          `select cpo_remove_charger('${operatorA}','${OWNER_A}','${OWNER_A}')`,
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -590,6 +599,209 @@ describe("company profile", () => {
         await expect(
           pg.query("update cpo_company_profiles set name='x'"),
         ).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("chargers", () => {
+  const svc = <T>(sql: string, params: unknown[]) =>
+    as("service_role", null, () => pg.query<T>(sql, params));
+  const create = (
+    actor: string,
+    name: string,
+    station: number | null = null,
+    operator = operatorA,
+  ) =>
+    svc<{ id: string }>(
+      "select cpo_create_charger($1,$2,$3,null,5,null,2,$4,null) as id",
+      [operator, actor, name, station],
+    ).then((r) => r.rows[0].id);
+  const update = (actor: string, id: string, changes: object) =>
+    svc("select cpo_update_charger($1,$2,$3,$4)", [
+      operatorA,
+      actor,
+      id,
+      JSON.stringify(changes),
+    ]);
+  const remove = (actor: string, id: string) =>
+    svc("select cpo_remove_charger($1,$2,$3)", [operatorA, actor, id]);
+  const row = async (id: string) =>
+    (
+      await pg.query<{
+        station_id: number | null;
+        label: string | null;
+        remote_test: unknown;
+        removed_at: string | null;
+      }>("select * from cpo_chargers where id=$1", [id])
+    ).rows[0];
+
+  it("lets technicians and above add and update, and refuses everyone else", async () => {
+    const id = await create(TECH_A, "DB-TECH-01");
+    await update(TECH_A, id, {
+      station_id: 101,
+      label: "Bay 1",
+      remote_test: { phase: "passed" },
+    });
+    expect(await row(id)).toMatchObject({
+      station_id: 101,
+      label: "Bay 1",
+      remote_test: { phase: "passed" },
+    });
+    // A JSON null clears; keys left out stay.
+    await update(OWNER_A, id, { label: null });
+    expect(await row(id)).toMatchObject({ label: null, station_id: 101 });
+    await expect(create(OWNER_B, "DB-B-01")).rejects.toThrow(/cpo_not_allowed/);
+    await expect(create(OUTSIDER, "DB-X-01")).rejects.toThrow(
+      /cpo_not_allowed/,
+    );
+    await expect(update(OWNER_B, id, { label: "x" })).rejects.toThrow(
+      /cpo_not_allowed/,
+    );
+    await pg.query("update cpo_staff set role='viewer' where user_id=$1", [
+      TECH_A,
+    ]);
+    try {
+      await expect(create(TECH_A, "DB-VIEW-01")).rejects.toThrow(
+        /cpo_not_allowed/,
+      );
+    } finally {
+      await pg.query(
+        "update cpo_staff set role='technician' where user_id=$1",
+        [TECH_A],
+      );
+    }
+    await expect(create(TECH_A, "bad name")).rejects.toThrow(
+      /check constraint/,
+    );
+  });
+
+  it("keeps one active record per station and counts keys atomically", async () => {
+    await create(TECH_A, "DB-ONE-01", 202);
+    await expect(create(TECH_A, "DB-ONE-02", 202)).rejects.toThrow(
+      /cpo_charger_exists/,
+    );
+    const id = await create(TECH_A, "DB-SEQ-01");
+    const next = () =>
+      svc<{ n: number }>(
+        "select cpo_next_charger_seq($1,$2,$3,'credentials') as n",
+        [operatorA, TECH_A, id],
+      ).then((r) => r.rows[0].n);
+    const all = await Promise.all([next(), next(), next()]);
+    expect(all.sort()).toEqual([1, 2, 3]);
+    await expect(
+      svc("select cpo_next_charger_seq($1,$2,$3,'test')", [
+        operatorA,
+        TECH_A,
+        id,
+      ]),
+    ).rejects.toThrow(/cpo_invalid/);
+    await expect(
+      svc("select cpo_next_charger_seq($1,$2,$3,'other')", [
+        operatorA,
+        TECH_A,
+        id,
+      ]),
+    ).rejects.toThrow(/cpo_invalid/);
+  });
+
+  it("claims the remote test once until it has finished", async () => {
+    const id = await create(TECH_A, "DB-TEST-01", 303);
+    const claim = (actor: string, phase = "starting") =>
+      svc<{ n: number }>("select cpo_claim_charger_test($1,$2,$3,$4) as n", [
+        operatorA,
+        actor,
+        id,
+        JSON.stringify({ phase, connectorNumber: 1, attempt: 99 }),
+      ]).then((r) => r.rows[0].n);
+    expect(await claim(TECH_A)).toBe(1);
+    // The attempt is the database's count, not the caller's.
+    expect(await row(id)).toMatchObject({
+      remote_test: { phase: "starting", attempt: 1 },
+    });
+    for (const phase of ["starting", "charging", "stopping"]) {
+      await update(TECH_A, id, { remote_test: { phase, attempt: 1 } });
+      await expect(claim(TECH_A)).rejects.toThrow(/cpo_charger_busy/);
+    }
+    await update(TECH_A, id, { remote_test: { phase: "failed", attempt: 1 } });
+    expect(await claim(OWNER_A)).toBe(2);
+    await update(TECH_A, id, { remote_test: { phase: "passed", attempt: 2 } });
+    await pg.query("update cpo_staff set role='viewer' where user_id=$1", [
+      TECH_A,
+    ]);
+    try {
+      await expect(claim(TECH_A)).rejects.toThrow(/cpo_not_allowed/);
+    } finally {
+      await pg.query(
+        "update cpo_staff set role='technician' where user_id=$1",
+        [TECH_A],
+      );
+    }
+    await expect(claim(OWNER_B)).rejects.toThrow(/cpo_not_allowed/);
+    await remove(OWNER_A, id);
+    await expect(claim(OWNER_A)).rejects.toThrow(/cpo_charger_not_found/);
+  });
+
+  it("lets only managers remove a registered charger, and keeps its codes", async () => {
+    const pending = await create(TECH_A, "DB-PEND-01");
+    // Never registered in Ivora: the technician may discard it.
+    await remove(TECH_A, pending);
+    expect((await row(pending)).removed_at).not.toBeNull();
+    await expect(update(TECH_A, pending, { label: "x" })).rejects.toThrow(
+      /cpo_charger_not_found/,
+    );
+
+    const id = await create(TECH_A, "DB-REG-01", 303);
+    await svc("select cpo_add_sticker_codes($1,$2,$3,$4)", [
+      operatorA,
+      TECH_A,
+      id,
+      JSON.stringify([
+        { code: "ABCD2345", connector_number: 1, connector_id: 9 },
+        { code: "ABCD2346", connector_number: 1, connector_id: 9 },
+        { code: "ABCD2347", connector_number: 2, connector_id: null },
+      ]),
+    ]);
+    const codes = await pg.query<{ code: string }>(
+      "select code from cpo_sticker_codes where charger_id=$1 order by code",
+      [id],
+    );
+    // One code per connector: the second for connector 1 is skipped.
+    expect(codes.rows.map((r) => r.code)).toEqual(["ABCD2345", "ABCD2347"]);
+    await expect(
+      svc("select cpo_add_sticker_codes($1,$2,$3,$4)", [
+        operatorA,
+        TECH_A,
+        id,
+        JSON.stringify([
+          { code: "abc", connector_number: 3, connector_id: null },
+        ]),
+      ]),
+    ).rejects.toThrow(/check constraint/);
+    await expect(remove(TECH_A, id)).rejects.toThrow(/cpo_not_allowed/);
+    await remove(OWNER_A, id);
+    expect((await row(id)).removed_at).not.toBeNull();
+    expect(
+      (
+        await pg.query("select 1 from cpo_sticker_codes where charger_id=$1", [
+          id,
+        ])
+      ).rows,
+    ).toHaveLength(2);
+    // The station can be taken over again by a new record.
+    await create(TECH_A, "DB-REG-01", 303);
+  });
+
+  it("is not readable or writable from the browser, even by an owner", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        for (const t of ["cpo_chargers", "cpo_sticker_codes"]) {
+          await expect(pg.query(`select * from ${t}`)).rejects.toThrow(
+            /permission denied/,
+          );
+          await expect(pg.query(`delete from ${t}`)).rejects.toThrow(
+            /permission denied/,
+          );
+        }
       });
   });
 });

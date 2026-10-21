@@ -2,7 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
-import { checkBrandColor, describeBrandCheck } from "@/lib/brand-colors";
+import {
+  checkBrandColor,
+  describeBrandCheck,
+  describeDriverColor,
+} from "@/lib/brand-colors";
 import { actionError } from "@/lib/server/action-errors";
 import { requireRole } from "@/lib/server/auth";
 import { isDemo } from "@/lib/server/env";
@@ -97,8 +101,10 @@ export async function saveBrandAction(
     else if (isDemo()) parts.push("Demo: nothing was sent to Ivora.");
     let check = "";
     try {
-      if (color)
-        check = ` In this app: ${describeBrandCheck(checkBrandColor(color))}`;
+      if (color) {
+        const c = checkBrandColor(color);
+        check = ` ${describeDriverColor(c)} In this app: ${describeBrandCheck(c)}`;
+      }
     } catch {
       // Cleared or invalid colour: saveBrand already said so.
     }

@@ -3,8 +3,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { config as settings, isDemo } from "@/lib/server/env";
 import { authCookieOptions } from "@/lib/server/supabase";
 
-/** Pages anyone may open: everything else needs a signed-in staff member. */
-const PUBLIC = ["/login", "/setup", "/invite", "/auth/"];
+/**
+ * Pages anyone may open: everything else needs a signed-in staff member. /c/ is where
+ * QR stickers lead drivers.
+ */
+const PUBLIC = ["/login", "/setup", "/invite", "/auth/", "/c/"];
 
 /**
  * Refreshes the Supabase session cookies on each request (server components cannot

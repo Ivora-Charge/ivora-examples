@@ -10,6 +10,11 @@ export interface ActionState {
   path?: string;
   /** Demo mode: the email that would have been sent. */
   preview?: { to: string; subject: string; text: string };
+  /**
+   * A new charger password with what the charger needs to connect. Shown once, in the
+   * response to the action that set it; never stored or logged.
+   */
+  secret?: { password: string; connectionUrl: string; username: string };
   invite?: {
     email: string;
     role: string;

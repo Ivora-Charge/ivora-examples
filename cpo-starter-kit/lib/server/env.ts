@@ -40,6 +40,19 @@ export const config = {
     }
     return DEFAULT_DASHBOARD_URL;
   },
+  /**
+   * Where the "connect Stripe" link goes: the dashboard plus IVORA_DASHBOARD_STRIPE_PATH
+   * when set (a path such as /projects/{tenant_id}/settings, with {tenant_id} filled
+   * in), else the dashboard home. Only a plain path is used, never another host.
+   */
+  get stripeSettingsUrl() {
+    const path = env("IVORA_DASHBOARD_STRIPE_PATH");
+    if (!path || !/^\/[A-Za-z0-9/_.~{}-]*$/.test(path) || path.startsWith("//"))
+      return this.dashboardUrl;
+    const tenant = /^\d+$/.test(this.tenantId) ? this.tenantId : "";
+    if (path.includes("{tenant_id}") && !tenant) return this.dashboardUrl;
+    return `${this.dashboardUrl}${path.replaceAll("{tenant_id}", tenant)}`;
+  },
   get supabaseUrl() {
     return env("SUPABASE_URL") ?? "";
   },

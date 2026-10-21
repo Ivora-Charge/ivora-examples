@@ -53,10 +53,10 @@ export function setupChecklist(
     {
       key: "charger",
       label: "First charger",
-      state: chargers ? "done" : "soon",
+      state: chargers ? "done" : "todo",
       detail: chargers
         ? `${chargers} ${chargers === 1 ? "charger" : "chargers"} in your Ivora project.`
-        : "Adding chargers comes with the Chargers section.",
+        : "Add a charger, connect it and run the connection test.",
       href: "/chargers",
     },
     {

@@ -189,4 +189,52 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
     const owners = await a`select 1 from cpo_staff where role = 'owner'`;
     expect(owners).toHaveLength(1);
   });
+  it("sends one remote test start when two claims race", async () => {
+    await reset();
+    const [{ id }] = await a<
+      { id: string }[]
+    >`select cpo_create_charger(${operator}, ${TECH}, 'RACE-01', null, 5, null, 1, 77, null) as id`;
+    // An object, as the app's rpc sends it: a JSON.stringify'd string would arrive
+    // as a jsonb string and the function would refuse it.
+    const test = { phase: "starting", connectorNumber: 1 };
+    const claim = (c: postgres.Sql | postgres.TransactionSql) =>
+      c`select cpo_claim_charger_test(${operator}, ${TECH}, ${id}, ${c.json(test)}::jsonb) as n`;
+    // The first claim holds its row lock in an open transaction; the second waits
+    // for it, then sees the running test.
+    const secondPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let claimed!: () => void;
+    let claimFailed!: (e: unknown) => void;
+    const hasClaimed = new Promise<void>((resolve, reject) => {
+      claimed = resolve;
+      claimFailed = reject;
+    });
+    const first = a.begin(async (tx) => {
+      try {
+        await claim(tx);
+      } catch (e) {
+        // Fail fast instead of waiting for the test timeout.
+        claimFailed(e);
+        throw e;
+      }
+      claimed();
+      await released;
+    });
+    // If the claim fails, `first` rejects too; keep that from going unhandled.
+    first.catch(() => undefined);
+    await hasClaimed;
+    const second = Promise.resolve(claim(b)).then(
+      () => null,
+      (e: Error) => e,
+    );
+    await waitingForLock(secondPid);
+    release();
+    await first;
+    expect(String(await second)).toMatch(/cpo_charger_busy/);
+    const [r] =
+      await a`select test_runs, remote_test from cpo_chargers where id = ${id}`;
+    expect(r.test_runs).toBe(1);
+    expect(r.remote_test).toMatchObject({ phase: "starting", attempt: 1 });
+  });
 });

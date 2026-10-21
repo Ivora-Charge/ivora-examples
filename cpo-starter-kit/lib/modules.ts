@@ -27,8 +27,9 @@ export const MODULES: Module[] = [
     slug: "chargers",
     href: "/chargers",
     label: "Chargers",
-    summary: "Every charger and connector, its status, and remote actions.",
-    status: "coming-soon",
+    summary:
+      "Add and test chargers, set their connection password and print QR stickers.",
+    status: "ready",
   },
   {
     slug: "live",

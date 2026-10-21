@@ -23,6 +23,12 @@ export const KIT_COLORS: Record<
 
 /** WCAG AA for text, and the 3:1 the focus ring needs (implied by 4.5). */
 export const AA_TEXT = 4.5;
+/**
+ * Ivora's driver pages fill buttons and headings with the brand colour on white. WCAG
+ * asks 3:1 for such shapes and large text, so a lighter colour goes to the driver
+ * pages as a darker shade of itself (see driverPageColor).
+ */
+export const DRIVER_MIN_CONTRAST = 3;
 
 export const HEX_COLOR = /^#[0-9a-f]{6}$/;
 
@@ -79,6 +85,24 @@ export interface BrandCheck {
   dark: ModeCheck;
   /** Against white: Ivora's driver pages use the colour for buttons and headings. */
   driverContrast: number;
+  /** What the driver pages get: the colour, or a darker shade when it is below 3:1. */
+  driverColor: string;
+}
+
+/**
+ * The colour sent to Ivora's driver pages: the brand colour when it reaches 3:1 on
+ * white, otherwise the lightest darker shade of it (mixed with black, same hue) that
+ * does. The operator sees which one in the brand form.
+ */
+export function driverPageColor(color: string): string {
+  const c = normalizeHex(color);
+  if (!c) throw new Error("Brand colour must be #rrggbb");
+  if (contrast(c, "#ffffff") >= DRIVER_MIN_CONTRAST) return c;
+  for (let p = 0.99; p > 0; p -= 0.01) {
+    const shade = mix(c, p, "#000000");
+    if (contrast(shade, "#ffffff") >= DRIVER_MIN_CONTRAST) return shade;
+  }
+  return "#000000";
 }
 
 function checkMode(color: string, mode: Mode): ModeCheck {
@@ -118,6 +142,7 @@ export function checkBrandColor(color: string): BrandCheck {
     light: checkMode(c, "light"),
     dark: checkMode(c, "dark"),
     driverContrast: contrast(c, "#ffffff"),
+    driverColor: driverPageColor(c),
   };
 }
 
@@ -137,6 +162,14 @@ export function brandThemeCss(color: string | null | undefined): string | null {
   const primary = `light-dark(${pick("light", c, KIT_COLORS.primary.light)}, ${pick("dark", c, KIT_COLORS.primary.dark)})`;
   const onPrimary = `light-dark(${pick("light", check.light.onPrimary, KIT_COLORS.onPrimary.light)}, ${pick("dark", check.dark.onPrimary, KIT_COLORS.onPrimary.dark)})`;
   return `html:root{--color-primary:${primary};--color-on-primary:${onPrimary}}`;
+}
+
+/** One line for the operator about the driver pages. */
+export function describeDriverColor(check: BrandCheck): string {
+  const ratio = (n: number) => `${n.toFixed(1)}:1`;
+  if (check.driverColor === check.color)
+    return `Driver pages: ${ratio(check.driverContrast)} on white.`;
+  return `Driver pages: ${check.color} is only ${ratio(check.driverContrast)} on white (they need ${DRIVER_MIN_CONTRAST}:1), so they use the darker shade ${check.driverColor} (${ratio(contrast(check.driverColor, "#ffffff"))}).`;
 }
 
 /** One line for the operator: where the colour is used, and why not elsewhere. */

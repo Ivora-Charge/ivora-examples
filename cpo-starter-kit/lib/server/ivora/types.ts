@@ -26,10 +26,12 @@ export interface Location {
 }
 
 export interface LocationInput {
+  /** 2 to 80 characters. */
   name: string;
   address?: string;
   city?: string;
   postal_code?: string;
+  /** Three letters (ISO 3166-1 alpha-3), for example USA. */
   country?: string;
   /** Derived from our own record, so a retry finds the record instead of duplicating it. */
   external_reference: string;
@@ -50,10 +52,53 @@ export interface Station {
   protocol?: string | null;
   vendor?: string | null;
   model?: string | null;
+  /** Time of the charger's most recent OCPP message (heartbeats included). */
   last_seen?: string | null;
   external_reference?: string | null;
+  /** The OCPP WebSocket URL the charger connects to. */
+  connection_url?: string | null;
+  /** The Basic authentication username the charger sends (its name). */
+  username?: string | null;
   connectors: Connector[];
 }
+
+/** `POST /stations`. Registration does not connect hardware; set credentials next. */
+export interface StationInput {
+  /** Globally unique OCPP connection name: ^[a-zA-Z0-9][a-zA-Z0-9_-]{2,35}$. */
+  name: string;
+  location_id: number;
+  /** 1 to 8. */
+  connectors: number;
+  /** Derived from our own record, so a retry finds the record instead of duplicating it. */
+  external_reference: string;
+}
+
+/** `PATCH /stations/{id}`: only the supplied fields change. */
+export interface StationUpdate {
+  /** Move the station to another location of this tenant. */
+  location_id?: number;
+}
+
+/**
+ * What a command, credentials change or station edit returns (`202`). `succeeded`
+ * means the core sent it; `result.charger_status` carries the charger's own answer.
+ */
+export interface Operation {
+  id: string;
+  status: "dispatching" | "succeeded" | "rejected" | "unknown";
+  result: Record<string, unknown> | null;
+}
+
+/** The two commands the kit sends: a remote start and stop test. */
+export type CommandInput =
+  | {
+      action: "start";
+      /** Connector resource ID from the station, not the OCPP connector number. */
+      connector_id: number;
+      token: string;
+      token_type: "Central";
+    }
+  | { action: "stop"; transaction_id: number };
 
 export interface Transaction {
   id: number;
@@ -61,6 +106,9 @@ export interface Transaction {
   connector_id: number | null;
   /** The API may report null while the state is unknown. */
   active: boolean | null;
+  connector_number?: number | null;
+  /** The ID token the session started with; the API masks it to its last 4 characters behind ****. */
+  id_token?: string | null;
   started_at: string | null;
   ended_at: string | null;
   energy_wh?: number | null;
@@ -133,10 +181,39 @@ export interface IvoraClient {
   listStations(o?: ListOptions): Promise<Station[]>;
   listAllStations(): Promise<Listed<Station>>;
   getStation(stationId: number): Promise<Station>;
+  /** Adopts the station by external_reference when the create may already have happened. */
+  createStation(input: StationInput, key: string): Promise<Station>;
+  updateStation(
+    stationId: number,
+    input: StationUpdate,
+    key: string,
+  ): Promise<Operation>;
+  /**
+   * Deletes a station that never charged (a connected one is disconnected first).
+   * One with charging history answers 409 station_has_history and stays in Ivora.
+   */
+  deleteStation(stationId: number, key: string): Promise<void>;
+  /**
+   * Sets the OCPP connection password. Offline stations store it for their next
+   * connection; a connected OCPP 1.6 station answers station_online.
+   */
+  setCredentials(
+    stationId: number,
+    password: string,
+    key: string,
+  ): Promise<Operation>;
+  sendCommand(
+    stationId: number,
+    command: CommandInput,
+    key: string,
+  ): Promise<Operation>;
+  /** Reads an operation without sending it again. */
+  getOperation(operationId: string): Promise<Operation>;
   listTransactions(o?: {
     limit?: number;
     station_id?: number;
   }): Promise<Transaction[]>;
+  getTransaction(transactionId: number): Promise<Transaction>;
   /** Replaces name, colour and support contacts; keeps the logo. */
   putBranding(input: BrandingInput, key: string): Promise<Branding>;
   /** Needs the branding to be set first. */

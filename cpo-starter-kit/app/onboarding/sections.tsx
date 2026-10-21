@@ -174,7 +174,7 @@ export function PaymentsSection({
         <p>
           Stripe is connected in your Ivora dashboard, not in this app: open{" "}
           <a
-            href={config.dashboardUrl}
+            href={config.stripeSettingsUrl}
             target="_blank"
             rel="noopener noreferrer"
           >

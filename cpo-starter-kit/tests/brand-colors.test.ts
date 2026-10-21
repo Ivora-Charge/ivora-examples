@@ -5,6 +5,8 @@ import {
   checkBrandColor,
   contrast,
   describeBrandCheck,
+  describeDriverColor,
+  driverPageColor,
   KIT_COLORS,
   mix,
   normalizeHex,
@@ -108,6 +110,35 @@ describe("brand colour theming", () => {
           contrast(k("text"), mix(hex, 0.08, k("surface"))),
         ).toBeGreaterThanOrEqual(4.5);
       }
+    }
+  });
+
+  it("never sends the driver pages a colour below 3:1 on white", () => {
+    // Yellow is about 1.1:1 on white: the driver pages get a darker shade of it.
+    const shade = driverPageColor("#ffff00");
+    expect(contrast("#ffff00", "#ffffff")).toBeLessThan(1.2);
+    expect(contrast(shade, "#ffffff")).toBeGreaterThanOrEqual(3);
+    expect(contrast(shade, "#ffffff")).toBeLessThan(3.2); // as light as allowed
+    const [r, g, b] = [1, 3, 5].map((i) => parseInt(shade.slice(i, i + 2), 16));
+    expect(r).toBe(g); // same hue
+    expect(b).toBe(0);
+    const check = checkBrandColor("#FFFF00");
+    expect(check.driverColor).toBe(shade);
+    expect(describeDriverColor(check)).toMatch(
+      new RegExp(`only 1\\.1:1 on white .*darker shade ${shade}`),
+    );
+    // A readable colour goes as it is.
+    expect(driverPageColor("#17613a")).toBe("#17613a");
+    expect(describeDriverColor(checkBrandColor("#17613a"))).toMatch(
+      /^Driver pages: \d+\.\d:1 on white\.$/,
+    );
+    for (let i = 0; i < 4096; i += 11) {
+      const hex = `#${[(i >> 8) & 15, (i >> 4) & 15, i & 15]
+        .map((n) => (n * 17).toString(16).padStart(2, "0"))
+        .join("")}`;
+      expect(contrast(driverPageColor(hex), "#ffffff")).toBeGreaterThanOrEqual(
+        3,
+      );
     }
   });
 });
