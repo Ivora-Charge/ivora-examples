@@ -30,6 +30,8 @@ export type Connector = {
   number: number;
   /** Stable sticker code, assigned once and never derived from an ID. */
   code?: string;
+  /** OCPP status from the last refresh, when the API reports one. */
+  status?: string | null;
 };
 
 export type BootInfo = {

@@ -10,7 +10,12 @@ import type {
 export type StationSnapshot = {
   state: ConnectionState;
   boot: BootInfo | null;
-  connectors: { resourceId: string; number: number }[];
+  connectors: {
+    resourceId: string;
+    number: number;
+    /** OCPP connector status when the API reports one. */
+    status: string | null;
+  }[];
 };
 
 export type TransactionSnapshot = {
@@ -19,6 +24,9 @@ export type TransactionSnapshot = {
   startedAt: string | null;
   endedAt: string | null;
   energyWh: number;
+  connectorResourceId: string | null;
+  /** The API's masked token value (last four characters), if any. */
+  idToken: string | null;
 };
 
 /**
@@ -45,12 +53,20 @@ export interface Backend {
     connectorResourceId: string,
     key: string,
   ): Promise<void>;
-  /** The newest transaction on the connector that started after `since`. */
+  /**
+   * The newest session that this kit's test token started on the connector at
+   * or after `since`. A session from any other token is never returned.
+   */
   findTransaction(
     stationId: string,
     connectorResourceId: string,
     since: string,
   ): Promise<TransactionSnapshot | null>;
+  /** Whether any session, whoever started it, is active on the connector. */
+  hasActiveTransaction(
+    stationId: string,
+    connectorResourceId: string,
+  ): Promise<boolean>;
   getTransaction(transactionId: string): Promise<TransactionSnapshot>;
   stopCharging(
     stationId: string,

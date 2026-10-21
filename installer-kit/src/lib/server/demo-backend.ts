@@ -34,6 +34,8 @@ function snapshot(s: DemoStation, now = Date.now()): TransactionSnapshot {
   const end = tx.endedAt ? Date.parse(tx.endedAt) : now;
   return {
     transactionId: tx.id,
+    connectorResourceId: tx.connector,
+    idToken: "****TEST",
     active: !tx.endedAt,
     startedAt: tx.startedAt,
     endedAt: tx.endedAt ?? null,
@@ -84,6 +86,7 @@ export const demoBackend: Backend = {
       connectors: Array.from({ length: s.connectors }, (_, i) => ({
         resourceId: `${stationId}-c${i + 1}`,
         number: i + 1,
+        status: null,
       })),
     };
   },
@@ -102,6 +105,11 @@ export const demoBackend: Backend = {
   async findTransaction(stationId) {
     const s = station(stationId);
     return s.tx ? snapshot(s) : null;
+  },
+
+  async hasActiveTransaction(stationId, connector) {
+    const tx = station(stationId).tx;
+    return !!tx && !tx.endedAt && tx.connector === connector;
   },
 
   async getTransaction(transactionId) {

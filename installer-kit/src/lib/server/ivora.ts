@@ -22,7 +22,11 @@ const stationSchema = z.object({
   connection_url: z.string(),
   username: nullableString,
   connectors: z.array(
-    z.object({ id: z.number(), number: z.number().nullable() }),
+    z.object({
+      id: z.number(),
+      number: z.number().nullable(),
+      status: nullableString,
+    }),
   ),
 });
 
@@ -43,6 +47,7 @@ type Operation = z.infer<typeof operationSchema>;
 const transactionSchema = z.object({
   id: z.number(),
   connector_id: z.number().nullable().optional(),
+  id_token: nullableString,
   active: z.boolean().nullable(),
   started_at: nullableString,
   ended_at: nullableString,
@@ -182,6 +187,8 @@ export class IvoraClient {
         typeof error?.message === "string"
           ? error.message
           : "The request was rejected.",
+        null,
+        true,
       );
     }
     return op;
@@ -239,6 +246,8 @@ function chargerStatus(op: Operation) {
 
 function toTransaction(t: z.infer<typeof transactionSchema>) {
   return {
+    connectorResourceId: t.connector_id == null ? null : String(t.connector_id),
+    idToken: t.id_token ?? null,
     transactionId: String(t.id),
     // The API may report null while a transaction's state is unknown; fall
     // back to whether it has ended.
@@ -254,6 +263,10 @@ function toTransaction(t: z.infer<typeof transactionSchema>) {
 
 // Operator test sessions present this ID tag; it never authorizes payment.
 export const TEST_ID_TAG = "INSTALLER-TEST";
+
+/** The API shows only the last four characters of a token, behind asterisks. */
+const isTestToken = (idToken: string | null | undefined) =>
+  !!idToken && idToken.toUpperCase().endsWith(TEST_ID_TAG.slice(-4));
 
 export function liveBackend(client: IvoraClient): Backend {
   return {
@@ -349,6 +362,7 @@ export function liveBackend(client: IvoraClient): Backend {
         connectors: s.connectors.map((c, i) => ({
           resourceId: String(c.id),
           number: c.number ?? i + 1,
+          status: c.status ?? null,
         })),
       };
     },
@@ -380,14 +394,34 @@ export function liveBackend(client: IvoraClient): Backend {
         `transactions?station_id=${encodeURIComponent(stationId)}&limit=10`,
         page(transactionSchema),
       );
-      const after = Date.parse(since) - 60_000;
-      const match = res.data.find(
+      const from = Date.parse(since);
+      const match = res.data
+        .filter(
+          (t) =>
+            String(t.connector_id) === connectorResourceId &&
+            isTestToken(t.id_token) &&
+            Date.parse(t.started_at ?? "") >= from,
+        )
+        .sort(
+          (a, b) =>
+            Date.parse(b.started_at ?? "") - Date.parse(a.started_at ?? ""),
+        )[0];
+      return match ? toTransaction(match) : null;
+    },
+
+    async hasActiveTransaction(stationId, connectorResourceId) {
+      const res = await client.request(
+        "GET",
+        `transactions?station_id=${encodeURIComponent(stationId)}&limit=10`,
+        page(transactionSchema),
+      );
+      return res.data.some(
         (t) =>
+          // A session that reports no connector might be on this one.
           (t.connector_id == null ||
             String(t.connector_id) === connectorResourceId) &&
-          Date.parse(t.started_at ?? "") >= after,
+          toTransaction(t).active,
       );
-      return match ? toTransaction(match) : null;
     },
 
     async getTransaction(transactionId) {
