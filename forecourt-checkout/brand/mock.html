@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kerbly: charger page (brief mock)</title>
+    <style>
+      @font-face {
+        font-family: "Archivo Black";
+        src: url(fonts/archivo-black-latin-400-normal.woff2) format("woff2");
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: "Atkinson Hyperlegible";
+        src: url(fonts/atkinson-hyperlegible-latin-400-normal.woff2)
+          format("woff2");
+        font-weight: 400;
+      }
+      @font-face {
+        font-family: "Atkinson Hyperlegible";
+        src: url(fonts/atkinson-hyperlegible-latin-700-normal.woff2)
+          format("woff2");
+        font-weight: 700;
+      }
+      :root,
+      [data-theme="light"] {
+        --bg: #fff4c2;
+        --surface: #ffffff;
+        --ink: #101828;
+        --muted: #47505f;
+        --accent: #ffc700;
+        --on-accent: #101828;
+        --ok: #0a6a32;
+        --danger: #b3261e;
+        --pump: #0b0f14;
+        --pump-ink: #ffd60a;
+        --line: #101828;
+        --shadow: #101828;
+      }
+      [data-theme="dark"] {
+        --bg: #0c1016;
+        --surface: #1a212b;
+        --ink: #f8f5e6;
+        --muted: #b4bcc8;
+        --accent: #ffd60a;
+        --on-accent: #101828;
+        --ok: #4ade80;
+        --danger: #ff8f85;
+        --pump: #000000;
+        --pump-ink: #ffd60a;
+        --line: #f8f5e6;
+        --shadow: #ffd60a;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          400 1.125rem/1.45 "Atkinson Hyperlegible",
+          sans-serif;
+        overflow-x: hidden;
+      }
+      .demo {
+        background: var(--ink);
+        color: var(--bg);
+        text-align: center;
+        padding: 0.5rem 1rem;
+        font-weight: 700;
+        font-size: 0.95rem;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 1rem 1.25rem;
+        max-width: 1120px;
+        margin: 0 auto;
+      }
+      header svg {
+        width: 44px;
+        height: 44px;
+        color: var(--ink);
+      }
+      .brand {
+        font:
+          400 1.6rem "Archivo Black",
+          sans-serif;
+        letter-spacing: -0.01em;
+      }
+      .site {
+        margin-left: auto;
+        color: var(--muted);
+        font-weight: 700;
+      }
+      main {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 0 1.25rem 3rem;
+        display: grid;
+        gap: 1.25rem;
+        grid-template-columns: 1fr;
+      }
+      @media (min-width: 900px) {
+        main {
+          grid-template-columns: 1.1fr 1fr;
+          align-items: start;
+        }
+        .wide {
+          grid-column: 1/-1;
+        }
+      }
+      .card {
+        background: var(--surface);
+        border: 3px solid var(--line);
+        border-radius: 18px;
+        padding: 1.25rem;
+        box-shadow: 6px 6px 0 var(--shadow);
+      }
+      .board {
+        background: var(--pump);
+        color: var(--pump-ink);
+        border-radius: 18px;
+        border: 3px solid var(--line);
+        box-shadow: 6px 6px 0 var(--shadow);
+        padding: 1.25rem;
+      }
+      .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 1rem;
+      }
+      .lbl {
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        font-size: 0.8rem;
+        opacity: 0.9;
+      }
+      .num {
+        font:
+          400 clamp(5rem, 22vw, 9rem)/0.9 "Archivo Black",
+          sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      .state {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: var(--accent);
+        color: var(--on-accent);
+        font:
+          400 1.5rem "Archivo Black",
+          sans-serif;
+        padding: 0.4rem 1rem;
+        border-radius: 999px;
+        text-transform: uppercase;
+      }
+      .state i {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--ok);
+        box-shadow: 0 0 0 3px var(--on-accent);
+      }
+      .price {
+        font:
+          400 clamp(3rem, 12vw, 4.5rem)/1 "Archivo Black",
+          sans-serif;
+        font-variant-numeric: tabular-nums;
+      }
+      .price small {
+        font:
+          700 1.125rem "Atkinson Hyperlegible",
+          sans-serif;
+        color: var(--muted);
+      }
+      h2 {
+        font:
+          400 1.5rem/1.15 "Archivo Black",
+          sans-serif;
+        margin: 0 0 0.75rem;
+      }
+      .muted {
+        color: var(--muted);
+      }
+      dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 0.5rem 1rem;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        text-align: right;
+        white-space: nowrap;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .pay {
+        display: grid;
+        gap: 0.9rem;
+      }
+      .btn {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        min-height: 68px;
+        padding: 0.75rem 1.1rem;
+        border-radius: 14px;
+        border: 3px solid var(--line);
+        font:
+          400 1.35rem "Archivo Black",
+          sans-serif;
+        text-align: left;
+        cursor: pointer;
+        width: 100%;
+      }
+      .btn small {
+        display: block;
+        font:
+          400 0.95rem "Atkinson Hyperlegible",
+          sans-serif;
+        opacity: 0.85;
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--on-accent);
+        box-shadow: 4px 4px 0 var(--shadow);
+      }
+      .btn.alt {
+        background: var(--surface);
+        color: var(--ink);
+      }
+      .btn:focus-visible {
+        outline: 4px solid var(--ink);
+        outline-offset: 3px;
+      }
+      .how {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 0.5rem;
+        text-align: center;
+      }
+      .how b {
+        display: grid;
+        place-items: center;
+        width: 40px;
+        height: 40px;
+        margin: 0 auto 0.25rem;
+        border-radius: 50%;
+        background: var(--accent);
+        color: var(--on-accent);
+        font: 400 1.1rem "Archivo Black";
+      }
+      .how span {
+        font-size: 0.95rem;
+        font-weight: 700;
+      }
+      @media (max-width: 520px) {
+        .how span {
+          font-size: 0.85rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="demo" role="status">
+      Demo mode: sample data only. No card is charged and no charger receives a
+      command.
+    </div>
+    <header>
+      <svg viewBox="0 0 64 64" aria-hidden="true">
+        <rect width="64" height="64" rx="14" fill="var(--accent)" />
+        <path
+          d="M17 12h10v16l13-16h13L38 31l16 21H41L27 33v19H17z"
+          fill="currentColor"
+        />
+        <rect x="44" y="9" width="4" height="9" rx="1.5" fill="currentColor" />
+        <rect x="51" y="9" width="4" height="9" rx="1.5" fill="currentColor" />
+      </svg>
+      <span class="brand">Kerbly</span>
+      <span class="site">Riverside Fuel &amp; Shop</span>
+    </header>
+    <main>
+      <section class="board" aria-label="Charger 3">
+        <div class="row">
+          <span class="lbl">Charger</span
+          ><span class="state"><i></i>Ready</span>
+        </div>
+        <div class="num" aria-label="Charger number 3">3</div>
+        <div class="row">
+          <span class="lbl">Connector A · CCS · 150 kW</span>
+        </div>
+      </section>
+      <section class="card">
+        <div class="lbl muted">Price</div>
+        <div class="price">$0.42 <small>per kWh</small></div>
+        <dl style="margin-top: 1rem">
+          <dt>Idle fee after 10 min</dt>
+          <dd>$0.40 / min</dd>
+          <dt>Card hold, released after</dt>
+          <dd>$25.00</dd>
+          <dt>Estimate for 20 kWh</dt>
+          <dd>$8.40</dd>
+        </dl>
+      </section>
+      <section class="card wide">
+        <h2>How do you want to pay?</h2>
+        <div class="pay">
+          <button class="btn primary">
+            <span>Pay here<small>Card, Apple Pay or Google Pay</small></span
+            ><span aria-hidden="true">→</span>
+          </button>
+          <button class="btn alt">
+            <span
+              >Pay in store<small
+                >Tell the cashier your charger number</small
+              ></span
+            ><span aria-hidden="true">→</span>
+          </button>
+        </div>
+        <div class="how" style="margin-top: 1.25rem">
+          <div><b>1</b><span>Plug in</span></div>
+          <div><b>2</b><span>Pay</span></div>
+          <div><b>3</b><span>Charge</span></div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
