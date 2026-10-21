@@ -1,4 +1,6 @@
 import { createHash, timingSafeEqual } from "node:crypto";
+import { expireCommands } from "@/lib/commands/manage";
+import { commandStore } from "@/lib/commands/registry";
 import { locationStore } from "@/lib/locations/registry";
 import { syncAllPeers } from "@/lib/locations/sync";
 import { peerStore } from "@/lib/ocpi/registry";
@@ -27,10 +29,13 @@ function authorised(header: string | null): boolean {
  *
  * 1. Tokens: marks tokens past their expiry as expired and pushes that, then retries
  *    the token pushes peers missed (at most 100 of each per call).
- * 2. The pull of every registered peer's tariffs and locations. Each call pulls at most
+ * 2. Commands: ends the commands past their deadline (at most 100 per call), so a
+ *    driver's start that never got an answer times out and releases its payment hold
+ *    even when the app stops asking. The app's own reads end them too.
+ * 3. The pull of every registered peer's tariffs and locations. Each call pulls at most
  *    20 pages per peer and module; a larger pull resumes on the next call.
  *
- * A failure of one job does not stop the other.
+ * A failure of one job does not stop the others.
  */
 export async function GET(request: Request) {
   if (!config.cronSecret)
@@ -62,6 +67,19 @@ export async function GET(request: Request) {
     ok = false;
     failed("token jobs", e);
   }
+  let commands: number | undefined;
+  try {
+    commands = await expireCommands({
+      commands: commandStore(),
+      peers: peerStore(),
+      tokens: tokenStore(),
+      locations: locationStore(),
+      actor: "cron",
+    });
+  } catch (e) {
+    ok = false;
+    failed("command timeouts", e);
+  }
   let results: unknown;
   try {
     results = await syncAllPeers(
@@ -74,8 +92,13 @@ export async function GET(request: Request) {
   }
   return Response.json(
     ok
-      ? { mode: "live", results, tokens }
-      : { error: "Something went wrong", results, tokens },
+      ? { mode: "live", results, tokens, commands: { ended: commands } }
+      : {
+          error: "Something went wrong",
+          results,
+          tokens,
+          commands: { ended: commands },
+        },
     { status: ok ? 200 : 500, headers: NO_STORE },
   );
 }
