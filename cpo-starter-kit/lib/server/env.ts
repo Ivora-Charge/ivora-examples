@@ -53,6 +53,40 @@ export const config = {
     if (path.includes("{tenant_id}") && !tenant) return this.dashboardUrl;
     return `${this.dashboardUrl}${path.replaceAll("{tenant_id}", tenant)}`;
   },
+  /**
+   * Signing secret of this deployment's Ivora webhook endpoint, printed once by
+   * `npm run ivora:webhook -- register`. Without it the endpoint refuses deliveries
+   * and the Live view relies on polling.
+   */
+  get webhookSecret() {
+    return env("IVORA_WEBHOOK_SECRET") ?? "";
+  },
+  /**
+   * Map tiles for the Live view: an https URL template with {z}, {x} and {y}, needing
+   * no API key. Defaults to OpenStreetMap's; MAP_TILE_URL=off shows no tiles.
+   */
+  get mapTiles(): { url: string; attribution: string; link: string } | null {
+    const url = env("MAP_TILE_URL");
+    if (url?.toLowerCase() === "off") return null;
+    if (!url)
+      return {
+        url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png",
+        attribution: "© OpenStreetMap contributors",
+        link: "https://www.openstreetmap.org/copyright",
+      };
+    if (
+      !/^https:\/\/[^\s"'<>]+$/.test(url) ||
+      !["{z}", "{x}", "{y}"].every((p) => url.includes(p))
+    )
+      return null;
+    return {
+      url,
+      attribution: (env("MAP_TILE_ATTRIBUTION") ?? "").slice(0, 200),
+      link: /^https:\/\/[^\s"'<>]+$/.test(env("MAP_TILE_ATTRIBUTION_URL") ?? "")
+        ? env("MAP_TILE_ATTRIBUTION_URL")!
+        : "",
+    };
+  },
   get supabaseUrl() {
     return env("SUPABASE_URL") ?? "";
   },

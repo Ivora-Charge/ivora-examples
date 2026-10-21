@@ -22,6 +22,9 @@ export interface Location {
   city?: string | null;
   postal_code?: string | null;
   country?: string | null;
+  /** WGS 84 degrees, when set: the Live map places the site with them. */
+  latitude?: number | null;
+  longitude?: number | null;
   external_reference?: string | null;
 }
 
@@ -60,6 +63,31 @@ export interface Station {
   /** The Basic authentication username the charger sends (its name). */
   username?: string | null;
   connectors: Connector[];
+  /** The station's own position, if set; else its location's applies. */
+  latitude?: number | null;
+  longitude?: number | null;
+  /** Faults still open, from the charger's status notifications; history at /faults. */
+  open_faults?: Fault[] | null;
+}
+
+/**
+ * A fault from the charger's status notifications (an OCPP 1.6 errorCode other than
+ * NoError, or status Faulted). Open until a later notification clears it.
+ */
+export interface Fault {
+  /** fault_id in station.fault_opened and station.fault_cleared events. */
+  id: string;
+  station_id: number;
+  /** Connector resource ID; null when reported for the whole station. */
+  connector_id: number | null;
+  open: boolean;
+  /** OCPP 1.6 errorCode; null for an OCPP 2.x Faulted status without one. */
+  error_code: string | null;
+  info?: string | null;
+  vendor_error_code?: string | null;
+  ocpp_status?: string | null;
+  opened_at: string;
+  cleared_at: string | null;
 }
 
 /** `POST /stations`. Registration does not connect hardware; set credentials next. */
@@ -89,16 +117,41 @@ export interface Operation {
   result: Record<string, unknown> | null;
 }
 
-/** The two commands the kit sends: a remote start and stop test. */
+/**
+ * The commands the kit sends: remote start and stop (the charger test and the Live
+ * view), reset and unlock (the Live view). Connector IDs are resource IDs from the
+ * station, never OCPP connector numbers.
+ */
 export type CommandInput =
   | {
       action: "start";
-      /** Connector resource ID from the station, not the OCPP connector number. */
       connector_id: number;
       token: string;
       token_type: "Central";
     }
-  | { action: "stop"; transaction_id: number };
+  | { action: "stop"; transaction_id: number }
+  | { action: "reset"; mode: "soft" | "hard" }
+  | { action: "unlock"; connector_id: number };
+
+/** An ID token in the operator's Ivora token list (`/tokens`). */
+export interface TokenRecord {
+  id: number;
+  id_token: string;
+  type?: string | null;
+  status: "Accepted" | "Blocked" | "Expired" | (string & {});
+  label?: string | null;
+  external_reference?: string | null;
+}
+
+/** `POST /tokens`: registers an ID token, found again by its external_reference. */
+export interface TokenInput {
+  id_token: string;
+  type: "Central";
+  status: "Accepted";
+  label: string;
+  /** Derived from our own record, so a retry finds the token instead of duplicating it. */
+  external_reference: string;
+}
 
 export interface Transaction {
   id: number;
@@ -214,6 +267,15 @@ export interface IvoraClient {
     station_id?: number;
   }): Promise<Transaction[]>;
   getTransaction(transactionId: number): Promise<Transaction>;
+  /** The token with this external_reference, if any (`GET /tokens`). */
+  findToken(externalReference: string): Promise<TokenRecord | null>;
+  /** Adopts the token by external_reference when the create may already have happened. */
+  createToken(input: TokenInput, key: string): Promise<TokenRecord>;
+  /** Open and recent faults of one station, newest first (cleared ones kept 90 days). */
+  listFaults(
+    stationId: number,
+    o?: { limit?: number; open?: boolean },
+  ): Promise<Fault[]>;
   /** Replaces name, colour and support contacts; keeps the logo. */
   putBranding(input: BrandingInput, key: string): Promise<Branding>;
   /** Needs the branding to be set first. */

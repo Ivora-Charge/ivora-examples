@@ -7,6 +7,10 @@ import {
 import { createLiveClient } from "@/lib/server/ivora/live";
 import { isDemo } from "@/lib/server/env";
 import { loadOverview } from "@/lib/server/overview";
+import { getLive } from "@/lib/server/live";
+import { resetDemoLiveForTests } from "@/lib/server/live/demo-cookie";
+import { loadLive, loadStation, sendCommand } from "@/lib/server/live/service";
+import type { Staff } from "@/lib/server/team/types";
 import {
   createDemoOnboardingStore,
   memoryDemoOnboarding,
@@ -40,6 +44,7 @@ describe("demo mode", () => {
   beforeEach(() => {
     for (const k of VARS) delete process.env[k];
     resetIvoraForTests();
+    resetDemoLiveForTests();
     // Demo mode must never reach the network: any fetch fails the test.
     fetchSpy = vi.fn(() => {
       throw new Error("demo mode must not call fetch");
@@ -198,6 +203,91 @@ describe("demo mode", () => {
       const stripe = await loadStripe(d);
       expect(stripe.ok && stripe.view.state).toBe(s);
     }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs the Live view end to end (map, faults, stop, unlock, reset) without any network call", async () => {
+    const d = getLive();
+    expect(d.store.mode).toBe("demo");
+    expect(d.ivora.mode).toBe("demo");
+    const tech: Staff = {
+      userId: "00000000-0000-4000-8000-0000000000d1",
+      email: "demo-tech@example.com",
+      role: "technician",
+      operatorId: "demo",
+      operatorName: "Demo",
+      demo: true,
+    };
+    const r = await loadLive(d, tech);
+    if (!r.ok) throw new Error(r.error);
+    // Sample sites sit at made-up coordinates; one open sample fault, one session.
+    expect(r.live.points.length).toBeGreaterThan(0);
+    expect(r.live.faults).toMatchObject([
+      { stationName: "DEMO-HARBOUR-02", errorCode: "GroundFailure" },
+    ]);
+    const [session] = r.live.sessions;
+    expect(session).toMatchObject({ stationName: "DEMO-HARBOUR-02" });
+    const detail = await loadStation(d, tech, session.stationId);
+    expect(detail.ok && detail.detail?.faults.length).toBeGreaterThan(0);
+
+    const rid = (n: number) => `50000000-0000-4000-8000-00000000000${n}`;
+    // Stop the sample session: it needs the session named.
+    await expect(
+      sendCommand(d, tech, {
+        requestId: rid(1),
+        stationId: session.stationId,
+        action: "stop",
+        transactionId: session.id,
+        confirmed: true,
+        sessions: [],
+      }),
+    ).rejects.toMatchObject({ code: "confirm" });
+    const stop = await sendCommand(d, tech, {
+      requestId: rid(2),
+      stationId: session.stationId,
+      action: "stop",
+      transactionId: session.id,
+      confirmed: true,
+      sessions: [session.id],
+    });
+    expect(stop.phase).toBe("accepted");
+    const after = await loadLive(d, tech);
+    expect(after.ok && after.live.sessions).toEqual([]);
+    expect(after.ok && after.live.commands[0].observed).toBe(
+      `Session ${session.id} ended.`,
+    );
+    // A reset clears the sample fault once the charger is back.
+    const reset = await sendCommand(d, tech, {
+      requestId: rid(3),
+      stationId: session.stationId,
+      action: "reset",
+      mode: "soft",
+      confirmed: true,
+      sessions: [],
+    });
+    expect(reset.phase).toBe("accepted");
+    const cleared = await loadStation(d, tech, session.stationId);
+    expect(cleared.ok && cleared.detail?.faults.every((f) => !f.open)).toBe(
+      true,
+    );
+    // A remote start registers the demo staff token (in the cookie) and its session
+    // is labelled as a staff session.
+    const start = await sendCommand(d, tech, {
+      requestId: rid(4),
+      stationId: 9101,
+      action: "start",
+      connectorId: 91011,
+      confirmed: true,
+      sessions: [],
+    });
+    expect(start.phase).toBe("accepted");
+    const started = await loadLive(d, tech);
+    expect(started.ok && started.live.sessions).toMatchObject([
+      { stationId: 9101, staff: true },
+    ]);
+    expect(started.ok && started.live.commands[0].observed).toMatch(
+      /^Session \d+ started\.$/,
+    );
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 

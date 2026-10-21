@@ -47,6 +47,9 @@ const TABLES = [
   "cpo_company_profiles",
   "cpo_chargers",
   "cpo_sticker_codes",
+  "cpo_live_commands",
+  "cpo_ivora_events",
+  "cpo_staff_tokens",
 ] as const;
 
 beforeAll(async () => {
@@ -196,6 +199,9 @@ describe("row level security", () => {
           `select cpo_claim_charger_test('${operatorA}','${OWNER_A}','${OWNER_A}','{}')`,
           `select cpo_add_sticker_codes('${operatorA}','${OWNER_A}','${OWNER_A}','[]')`,
           `select cpo_remove_charger('${operatorA}','${OWNER_A}','${OWNER_A}')`,
+          `select cpo_claim_live_command('${operatorA}','${OWNER_A}','${OWNER_A}',1,'reset',null,null,'soft','{}')`,
+          `select cpo_record_live_command('${operatorA}','${OWNER_A}','{}')`,
+          "select cpo_record_ivora_event('evt_x','webhook.test',null)",
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -795,6 +801,191 @@ describe("chargers", () => {
     for (const role of ["anon", "authenticated"] as const)
       await as(role, OWNER_A, async () => {
         for (const t of ["cpo_chargers", "cpo_sticker_codes"]) {
+          await expect(pg.query(`select * from ${t}`)).rejects.toThrow(
+            /permission denied/,
+          );
+          await expect(pg.query(`delete from ${t}`)).rejects.toThrow(
+            /permission denied/,
+          );
+        }
+      });
+  });
+});
+
+describe("live commands", () => {
+  const svc = <T>(sql: string, params: unknown[]) =>
+    as("service_role", null, () => pg.query<T>(sql, params));
+  let n = 0;
+  const rid = () => `30000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
+  const claim = (
+    actor: string,
+    o: {
+      request?: string;
+      station?: number;
+      action?: string;
+      connector?: number | null;
+      transaction?: number | null;
+      mode?: string | null;
+      sessions?: number[];
+      operator?: string;
+    } = {},
+  ) =>
+    svc<{ r: { id: string; created: boolean } }>(
+      "select cpo_claim_live_command($1,$2,$3,$4,$5,$6,$7,$8,$9) as r",
+      [
+        o.operator ?? operatorA,
+        actor,
+        o.request ?? rid(),
+        o.station ?? 501,
+        o.action ?? "reset",
+        o.connector ?? null,
+        o.transaction ?? null,
+        o.mode === undefined ? "soft" : o.mode,
+        o.sessions ?? [],
+      ],
+    ).then((r) => r.rows[0].r);
+  const record = (id: string, changes: object) =>
+    svc<{ ok: boolean }>("select cpo_record_live_command($1,$2,$3) as ok", [
+      operatorA,
+      id,
+      JSON.stringify(changes),
+    ]).then((r) => r.rows[0].ok);
+  const row = async (id: string) =>
+    (
+      await pg.query<{
+        phase: string;
+        operation_id: string | null;
+        error: string | null;
+        finished_at: string | null;
+        confirmed_sessions: number[];
+        requested_by: string;
+      }>("select * from cpo_live_commands where id=$1", [id])
+    ).rows[0];
+
+  it("lets technicians and above claim a command, and refuses everyone else", async () => {
+    const c = await claim(TECH_A, { station: 500, sessions: [91, 92] });
+    expect(c.created).toBe(true);
+    expect(await row(c.id)).toMatchObject({
+      phase: "pending",
+      confirmed_sessions: [91, 92],
+      requested_by: TECH_A,
+    });
+    await record(c.id, { phase: "accepted" });
+    await expect(claim(OWNER_B, { station: 500 })).rejects.toThrow(
+      /cpo_not_allowed/,
+    );
+    await expect(claim(OUTSIDER, { station: 500 })).rejects.toThrow(
+      /cpo_not_allowed/,
+    );
+    await pg.query("update cpo_staff set role='viewer' where user_id=$1", [
+      TECH_A,
+    ]);
+    try {
+      await expect(claim(TECH_A, { station: 500 })).rejects.toThrow(
+        /cpo_not_allowed/,
+      );
+    } finally {
+      await pg.query(
+        "update cpo_staff set role='technician' where user_id=$1",
+        [TECH_A],
+      );
+    }
+    // Each action needs its own target.
+    await expect(
+      claim(TECH_A, { station: 500, action: "start", mode: null }),
+    ).rejects.toThrow(/check constraint/);
+    await expect(
+      claim(TECH_A, { station: 500, action: "explode" }),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  it("makes one command per tap and keeps one pending per charger", async () => {
+    const request = rid();
+    const first = await claim(TECH_A, { request, station: 502 });
+    // The same tap again returns the same command, not a new one.
+    expect(await claim(OWNER_A, { request, station: 502 })).toEqual({
+      id: first.id,
+      created: false,
+    });
+    // ... but not for a different command.
+    await expect(
+      claim(TECH_A, { request, station: 502, mode: "hard" }),
+    ).rejects.toThrow(/cpo_invalid/);
+    // Another tap on the same charger waits until the first is answered.
+    await expect(claim(OWNER_A, { station: 502 })).rejects.toThrow(
+      /cpo_command_busy/,
+    );
+    expect((await claim(OWNER_A, { station: 503 })).created).toBe(true);
+    expect(await record(first.id, { phase: "failed", error: "x" })).toBe(true);
+    expect((await claim(OWNER_A, { station: 502 })).created).toBe(true);
+    const all = await pg.query(
+      "select 1 from cpo_live_commands where station_id=502",
+    );
+    expect(all.rows).toHaveLength(2);
+  });
+
+  it("records answers only while pending, and never reopens a final command", async () => {
+    const c = await claim(TECH_A, { station: 504 });
+    expect(await record(c.id, { operation_id: "op_1" })).toBe(true);
+    expect(await row(c.id)).toMatchObject({
+      phase: "pending",
+      operation_id: "op_1",
+      finished_at: null,
+    });
+    expect(await record(c.id, { phase: "accepted", error: null })).toBe(true);
+    expect((await row(c.id)).finished_at).not.toBeNull();
+    // A late or repeated report changes nothing.
+    expect(await record(c.id, { phase: "failed", error: "late" })).toBe(false);
+    expect(await record(c.id, { phase: "pending" })).toBe(false);
+    expect(await row(c.id)).toMatchObject({ phase: "accepted", error: null });
+    await expect(record(c.id, { phase: "done" })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    // Another operator's ID changes nothing either.
+    const other = await svc<{ ok: boolean }>(
+      "select cpo_record_live_command($1,$2,$3) as ok",
+      [operatorB, c.id, JSON.stringify({ phase: "failed" })],
+    );
+    expect(other.rows[0].ok).toBe(false);
+  });
+
+  it("closes a command left pending for 15 minutes as unknown, never resending it", async () => {
+    const c = await claim(TECH_A, { station: 505 });
+    await pg.query(
+      "update cpo_live_commands set requested_at = now() - interval '16 minutes' where id=$1",
+      [c.id],
+    );
+    expect((await claim(TECH_A, { station: 505 })).created).toBe(true);
+    expect(await row(c.id)).toMatchObject({ phase: "unknown" });
+    expect((await row(c.id)).error).toMatch(/within 15 minutes/);
+  });
+
+  it("stores each webhook event once and purges old ones", async () => {
+    const put = (id: string) =>
+      svc<{ fresh: boolean }>(
+        "select cpo_record_ivora_event($1,'station.connected',7) as fresh",
+        [id],
+      ).then((r) => r.rows[0].fresh);
+    expect(await put("evt_1")).toBe(true);
+    expect(await put("evt_1")).toBe(false);
+    await pg.query(
+      "update cpo_ivora_events set received_at = now() - interval '8 days' where id='evt_1'",
+    );
+    expect(await put("evt_2")).toBe(true);
+    const left = await pg.query<{ id: string }>(
+      "select id from cpo_ivora_events order by id",
+    );
+    expect(left.rows.map((r) => r.id)).toEqual(["evt_2"]);
+  });
+
+  it("is not readable or writable from the browser, even by an owner", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        for (const t of [
+          "cpo_live_commands",
+          "cpo_ivora_events",
+          "cpo_staff_tokens",
+        ]) {
           await expect(pg.query(`select * from ${t}`)).rejects.toThrow(
             /permission denied/,
           );

@@ -149,6 +149,65 @@ export type Database = {
         Update: { [_ in never]: never };
         Relationships: [];
       };
+      cpo_live_commands: {
+        Row: {
+          id: string;
+          operator_id: string;
+          request_id: string;
+          station_id: number;
+          action: string;
+          connector_id: number | null;
+          transaction_id: number | null;
+          mode: string | null;
+          phase: string;
+          operation_id: string | null;
+          charger_status: string | null;
+          error: string | null;
+          confirmed_sessions: number[];
+          requested_by: string | null;
+          requested_at: Timestamp;
+          updated_at: Timestamp;
+          finished_at: Timestamp | null;
+        };
+        // Written only through cpo_claim_live_command and cpo_record_live_command.
+        Insert: { operator_id: string; request_id: string };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
+      cpo_ivora_events: {
+        Row: {
+          id: string;
+          type: string;
+          station_id: number | null;
+          received_at: Timestamp;
+          processed_at: Timestamp | null;
+        };
+        // Inserted only through cpo_record_ivora_event.
+        Insert: { id: string; type: string };
+        Update: { processed_at?: Timestamp | null };
+        Relationships: [];
+      };
+      cpo_staff_tokens: {
+        Row: {
+          operator_id: string;
+          id_token: string;
+          token_id: number | null;
+          created_at: Timestamp;
+          registered_at: Timestamp | null;
+        };
+        Insert: {
+          operator_id: string;
+          id_token: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Update: {
+          id_token?: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -281,6 +340,28 @@ export type Database = {
       cpo_remove_charger: {
         Args: { p_operator_id: string; p_actor_id: string; p_id: string };
         Returns: undefined;
+      };
+      cpo_claim_live_command: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_request_id: string;
+          p_station_id: number;
+          p_action: string;
+          p_connector_id: number | null;
+          p_transaction_id: number | null;
+          p_mode: string | null;
+          p_confirmed_sessions: number[];
+        };
+        Returns: Json;
+      };
+      cpo_record_live_command: {
+        Args: { p_operator_id: string; p_id: string; p_changes: Json };
+        Returns: boolean;
+      };
+      cpo_record_ivora_event: {
+        Args: { p_id: string; p_type: string; p_station_id: number | null };
+        Returns: boolean;
       };
     };
     Enums: { [_ in never]: never };
