@@ -653,3 +653,183 @@ label.choice input {
   padding: 0.5rem;
   border-radius: 6px;
 }
+
+/* Landing page */
+.landing section {
+  margin: 1.5rem 0;
+}
+.hero {
+  display: grid;
+  gap: 1.25rem;
+  align-items: center;
+}
+.hero h1 {
+  font-size: clamp(2rem, 8vw, 3.5rem);
+  margin: 0.25rem 0 0.75rem;
+}
+.eyebrow {
+  margin: 0;
+  font-size: var(--text-label);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.lead {
+  font-size: 1.25rem;
+  margin: 0 0 1rem;
+}
+.hero-board {
+  text-align: center;
+  margin: 0;
+}
+.hero-board .row {
+  justify-content: center;
+}
+.digits {
+  font-family: var(--font-head);
+  font-size: var(--text-board);
+  line-height: 1.1;
+  text-shadow: 0 0 24px color-mix(in srgb, var(--pump-ink) 50%, transparent);
+}
+.steps {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.75rem;
+}
+.steps .card {
+  margin: 0;
+}
+.step-no {
+  display: inline-grid;
+  place-items: center;
+  width: var(--target);
+  height: var(--target);
+  border-radius: 50%;
+  background: var(--pump);
+  color: var(--pump-ink);
+  font-family: var(--font-head);
+  font-size: 1.4rem;
+}
+.landing h3 {
+  font-family: var(--font-head);
+  font-weight: 400;
+  margin: 0.5rem 0 0.25rem;
+}
+.wide-cols {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+.wide-cols .card {
+  margin: 0;
+}
+.charger-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.charger-list li {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  min-height: var(--target);
+  border-bottom: 1px solid var(--line);
+}
+.charger-list a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--target);
+}
+@media (min-width: 820px) {
+  .hero {
+    grid-template-columns: 1.3fr 1fr;
+  }
+}
+
+/* Loading and empty states */
+.skeleton {
+  background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--ink) 10%, transparent),
+      transparent
+    )
+    var(--tint);
+  background-size: 200% 100%;
+  border-radius: var(--radius);
+  animation: shimmer 1.4s linear infinite;
+}
+.board-skel {
+  height: 150px;
+  margin: 0.75rem 0;
+}
+.card-skel {
+  height: 120px;
+  margin: 0.75rem 0;
+}
+.pump-skel {
+  height: 132px;
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
+}
+.empty {
+  text-align: center;
+  padding: 1.25rem 0.5rem;
+}
+.empty p {
+  margin: 0.25rem 0;
+}
+
+/* Motion: states ease in, and everything holds still when asked to. */
+.meter > span {
+  transition: width 0.4s ease;
+}
+.pill.warn {
+  animation: glow 2s ease-in-out infinite;
+}
+@keyframes glow {
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+}
+button.pump {
+  transition:
+    transform 0.12s,
+    box-shadow 0.12s;
+}
+button.pump:hover {
+  box-shadow: 0 3px 8px var(--line);
+}
+button.pump:active {
+  transform: translateY(1px);
+}
+input:hover {
+  border-color: var(--muted);
+}
+.table-scroll {
+  max-width: 100%;
+}
+@media (max-width: 480px) {
+  .brandbar .home span {
+    font-size: 1.3rem;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+.pumps > [role="listitem"] > button.pump {
+  width: 100%;
+  height: 100%;
+}

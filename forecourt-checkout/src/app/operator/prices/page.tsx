@@ -143,7 +143,12 @@ export default async function Prices({
       <section className="card">
         <h2>Connectors and QR codes</h2>
         {data.qrProblem ? <p className="notice">{data.qrProblem}</p> : null}
-        <div className="table-scroll">
+        <div
+          className="table-scroll"
+          tabIndex={0}
+          role="region"
+          aria-label="Table, scrolls sideways"
+        >
           <table>
             <thead>
               <tr>
