@@ -7,6 +7,7 @@ import {
   encodeSaleId,
   endReports,
   paidReport,
+  MAX_STOP_ATTEMPTS,
   PLUGGED_STATUSES,
   prepayStop,
   READY_STATUSES,
@@ -15,6 +16,8 @@ import {
   saleFromReference,
   saleKey,
   startReports,
+  stopKey,
+  STOP_PROBLEM_TEXT,
   STORE_MERCHANT,
   STORE_PROCESSOR,
   storeReference,
@@ -25,11 +28,12 @@ import {
   type SaleReport,
   type SaleTerms,
   type SaleView,
+  type StopProblem,
   type Tile,
 } from "../store";
 import { priceBreakdown, type Tariff } from "../tariff";
 import type { Connector, ExternalSession, IvoraClient, Station } from "./ivora";
-import { IvoraError } from "./ivora";
+import { IvoraError, isRetryLater, type Operation } from "./ivora";
 import type { SaleEvents } from "./sale-events";
 import {
   APPLICATION_PREFIX,
@@ -58,7 +62,7 @@ export type StoreApi = Pick<
   | "createSession"
   | "findSession"
   | "getSession"
-  | "listSessions"
+  | "listAllSessions"
   | "startSession"
   | "stopSession"
   | "cancelSession"
@@ -153,6 +157,7 @@ function baseView(sale: string, terms: SaleTerms, c: ChargerRef): SaleView {
     startedAt: null,
     endedAt: null,
     stopping: false,
+    stopProblem: null,
     limitReached: null,
     canStop: true,
     bill: null,
@@ -174,6 +179,27 @@ function tariff(deps: StoreDeps, id: number) {
   }
   return t;
 }
+
+/** How long one instance reuses the session list (console polls, meter samples). */
+export const SESSION_LIST_TTL_MS = 5000;
+const sessionLists = new WeakMap<
+  StoreApi,
+  { at: number; list: Promise<ExternalSession[]> }
+>();
+
+/** Every session, paged (cursors aren't time-ordered), reused briefly per instance. */
+function allSessions(deps: StoreDeps) {
+  const cached = sessionLists.get(deps.ivora);
+  const now = deps.now();
+  if (cached && now - cached.at < SESSION_LIST_TTL_MS) return cached.list;
+  const list = deps.ivora.listAllSessions();
+  sessionLists.set(deps.ivora, { at: now, list });
+  list.catch(() => sessionLists.delete(deps.ivora));
+  return list;
+}
+
+/** A new sale must show on the next read. */
+const forgetSessions = (deps: StoreDeps) => sessionLists.delete(deps.ivora);
 
 async function send(
   deps: StoreDeps,
@@ -253,6 +279,63 @@ async function canceled(
   return { ...view, phase: "canceled", canStop: false, amounts, message };
 }
 
+export type StopState = "sent" | StopProblem;
+
+const isNewer = (a: Operation, b: Operation) =>
+  a.id !== b.id && Date.parse(a.created_at) >= Date.parse(b.created_at);
+
+/**
+ * Make sure a stop is on its way. With no stop yet it sends one. A rejected
+ * stop is retried with the next key ("stop-2", "stop-3"), at most
+ * MAX_STOP_ATTEMPTS in all. Keys are replayed in order first: Ivora answers
+ * a used key from its record without sending anything, so this finds where
+ * the attempts got to without a database. An unknown outcome is never resent
+ * with a new key, and neither is a request whose answer was lost: the next
+ * check retries that same key.
+ */
+export async function requestStop(
+  session: ExternalSession,
+  sale: string,
+  deps: StoreDeps,
+): Promise<StopState> {
+  const latest = session.stop_operation;
+  if (latest?.status === "unknown") return "unconfirmed";
+  if (latest && latest.status !== "rejected") return "sent";
+  for (let attempt = 1; attempt <= MAX_STOP_ATTEMPTS; attempt++) {
+    let op: Operation;
+    try {
+      op = await deps.ivora.stopSession(session.id, stopKey(sale, attempt));
+    } catch (error) {
+      // Not known whether it went out: retry this same key next time.
+      if (isRetryLater(error) || !(error instanceof IvoraError)) throw error;
+      // Ivora refused another attempt (for example: a rejected stop needs
+      // reconciling first). Nothing more this app can do from here.
+      if (error.status >= 400 && error.status < 500) {
+        deps.log?.("stop refused", { sale, attempt, code: error.code });
+        return "failed";
+      }
+      throw error;
+    }
+    // A replay of an older attempt, or the rejected latest one: try the next key.
+    if (latest && !isNewer(op, latest)) continue;
+    if (op.status === "unknown") return "unconfirmed";
+    if (op.status !== "rejected") return "sent";
+  }
+  deps.log?.("stop failed", { sale, attempts: MAX_STOP_ATTEMPTS });
+  return "failed";
+}
+
+function stopProblemView(view: SaleView, problem: StopProblem): SaleView {
+  return {
+    ...view,
+    phase: "charging",
+    stopping: false,
+    stopProblem: problem,
+    canStop: true,
+    message: STOP_PROBLEM_TEXT[problem],
+  };
+}
+
 /** Bring one in-store sale forward and describe it. Safe to call any number of times. */
 export async function progressSale(
   session: ExternalSession,
@@ -317,10 +400,11 @@ export async function progressSale(
   };
 
   if (usage.active) {
+    let limitReached: SaleView["limitReached"] = null;
     if (terms.mode === "prepay" && terms.prepaidCents) {
-      const b = charger.tariffId
-        ? priceBreakdown(await tariff(deps, charger.tariffId))
-        : null;
+      // Price the headroom from the tariff snapshotted for this session.
+      const tariffId = session.bill.tariff_id ?? charger.tariffId;
+      const b = tariffId ? priceBreakdown(await tariff(deps, tariffId)) : null;
       const decision = prepayStop({
         prepaidCents: terms.prepaidCents,
         limitWh: terms.limitWh,
@@ -331,29 +415,27 @@ export async function progressSale(
         timePerHour: b?.timePerHour ?? 0,
         idlePerHour: b?.idlePerHour ?? 0,
       });
-      if (decision.stop && !session.stop_operation)
-        await ivora.stopSession(session.id, saleKey(sale, "stop"));
-      if (decision.stop)
-        return {
-          ...live,
-          phase: "charging",
-          stopping: true,
-          canStop: false,
-          limitReached: decision.reason,
-          message:
-            decision.reason === "energy"
-              ? "Stopping: the prepaid energy is used."
-              : "Stopping: the prepaid amount is nearly used.",
-        };
+      if (decision.stop) limitReached = decision.reason;
     }
-    if (session.stop_operation)
-      return {
+    if (limitReached || session.stop_operation) {
+      const state = await requestStop(session, sale, deps);
+      const stopping: SaleView = {
         ...live,
         phase: "charging",
         stopping: true,
         canStop: false,
-        message: "Stopping the charger…",
+        limitReached,
+        message:
+          limitReached === "energy"
+            ? "Stopping: the prepaid energy is used."
+            : limitReached === "amount"
+              ? "Stopping: the prepaid amount is nearly used."
+              : "Stopping the charger…",
       };
+      return state === "sent"
+        ? stopping
+        : stopProblemView({ ...stopping, limitReached }, state);
+    }
     const idle =
       IDLE_STATUSES.has(charger.status) ||
       (usage.power_w != null && usage.power_w < IDLE_POWER_W);
@@ -466,6 +548,45 @@ export async function reconcileStoreSession(
   return progressSale(fresh, await chargerOf(fresh, deps), deps);
 }
 
+/** A meter.sampled webhook: which transaction, on which station, if the event says. */
+export type MeterSample = {
+  transactionId: number | null;
+  stationId: number | null;
+};
+
+/**
+ * A meter.sampled webhook arrived: run the prepaid stop check for the
+ * prepaid sales charging there. This is what stops a prepaid sale at its
+ * limit when no console or driver screen is open; the sweep is a backstop.
+ */
+export async function onMeterSample(
+  sample: MeterSample,
+  deps: StoreDeps,
+): Promise<SaleView[]> {
+  const open = (await allSessions(deps)).filter((s) => {
+    const sale = saleFromReference(s.application_reference);
+    return (
+      sale !== null &&
+      decodeSaleId(sale)?.mode === "prepay" &&
+      !CLOSED.has(s.status) &&
+      (sample.stationId === null || s.bill.station_id === sample.stationId)
+    );
+  });
+  const views: SaleView[] = [];
+  for (const s of open) {
+    const fresh = await deps.ivora.getSession(s.id);
+    const tx = fresh.usage?.transaction_id ?? null;
+    if (
+      sample.transactionId !== null &&
+      tx !== null &&
+      tx !== sample.transactionId
+    )
+      continue;
+    views.push(await progressSale(fresh, await chargerOf(fresh, deps), deps));
+  }
+  return views;
+}
+
 export type AuthorizeInput = {
   code: string;
   connector: number;
@@ -527,6 +648,7 @@ export async function authorizeSale(
       },
       saleKey(sale, "create"),
     );
+    forgetSessions(deps);
   }
   // Prepay: record the amount the store took before the charger may start.
   for (const report of startReports(sale, input.terms))
@@ -548,8 +670,7 @@ export async function stopSale(sale: string, deps: StoreDeps) {
       "Canceled before charging.",
     );
     if (view.phase === "starting") return view;
-  } else if (session.usage?.active && !session.stop_operation)
-    await deps.ivora.stopSession(session.id, saleKey(sale, "stop"));
+  } else if (session.usage?.active) await requestStop(session, sale, deps);
   return progressSale(await deps.ivora.getSession(session.id), charger, deps);
 }
 
@@ -644,7 +765,7 @@ export async function consoleState(deps: StoreDeps): Promise<ConsoleState> {
   const now = deps.now();
   const [stations, sessions] = await Promise.all([
     ivora.listStations(),
-    ivora.listSessions(100),
+    allSessions(deps),
   ]);
   const recent = sessions
     .filter((s) => now - Date.parse(s.created_at) < UNPAID_WINDOW_MS)
@@ -770,7 +891,7 @@ export async function counterState(
   const charger = chargerRef(station, connector);
   const now = deps.now();
   const latest =
-    (await deps.ivora.listSessions(100))
+    (await allSessions(deps))
       .filter(
         (s) =>
           isStore(s) &&

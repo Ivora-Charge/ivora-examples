@@ -7,9 +7,10 @@ import {
   settings,
 } from "@/lib/server/services";
 import { APPLICATION_PREFIX, reconcile } from "@/lib/server/sessions";
-import { reconcileStoreSession } from "@/lib/server/store";
+import { onMeterSample, reconcileStoreSession } from "@/lib/server/store";
 import { STORE_PREFIX } from "@/lib/store";
 import {
+  meterSampleFromEvent,
   RecentIds,
   sessionIdFromEvent,
   verifyIvoraSignature,
@@ -23,6 +24,7 @@ const eventSchema = z.object({
   type: z.string(),
   tenant_id: z.number(),
   resource_id: z.string().nullable().optional(),
+  station_id: z.number().nullable().optional(),
   data: z.record(z.string(), z.unknown()).default({}),
 });
 
@@ -59,6 +61,22 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unknown_tenant" }, { status: 400 });
   if (!seen.add(request.headers.get("ivora-event-id") ?? event.id))
     return NextResponse.json({ received: true, duplicate: true });
+  // Pay in store: meter samples drive the prepaid stop check while charging.
+  const sample = meterSampleFromEvent(event);
+  if (sample) {
+    if (s.payInStore)
+      after(async () => {
+        try {
+          await onMeterSample(sample, liveStoreDeps(s));
+        } catch (error) {
+          console.warn(
+            "[forecourt] meter sample check failed",
+            error instanceof Error ? error.name : "unknown",
+          );
+        }
+      });
+    return NextResponse.json({ received: true }, { status: 202 });
+  }
   const ivoraSession = sessionIdFromEvent(event);
   if (!ivoraSession) return NextResponse.json({ received: true });
   // Acknowledge now; read the current state from the API afterwards.

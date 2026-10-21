@@ -1,8 +1,9 @@
 import "server-only";
+import { createHmac } from "node:crypto";
 import { cookies } from "next/headers";
 import type { Settings } from "../settings";
 import { signToken, verifyToken } from "../tokens";
-import { signingSecret } from "./services";
+import { cashierPassword, signingSecret } from "./services";
 
 export const OPERATOR_COOKIE = "fc_operator";
 export const GUEST_COOKIE = "fc_guest";
@@ -26,6 +27,17 @@ export async function isOperator(settings: Settings) {
 }
 
 /**
+ * Names the current CASHIER_PASSWORD without revealing it, so changing the
+ * password signs every cashier out.
+ */
+function cashierKeyId(settings: Settings) {
+  return createHmac("sha256", signingSecret(settings))
+    .update(`cashier-password\n${cashierPassword(settings)}`)
+    .digest("base64url")
+    .slice(0, 16);
+}
+
+/**
  * The cashier role: authorise, stop and mark paid on the console. A cashier
  * cookie never opens the operator pages; an operator may use the console.
  */
@@ -33,7 +45,7 @@ export function cashierToken(settings: Settings, now = Date.now()) {
   return signToken(
     signingSecret(settings),
     "cashier",
-    "store",
+    `store-${cashierKeyId(settings)}`,
     now + CASHIER_TTL_MS,
   );
 }
@@ -43,7 +55,7 @@ export async function isCashier(settings: Settings) {
   const secret = signingSecret(settings);
   return (
     verifyToken(secret, "cashier", jar.get(CASHIER_COOKIE)?.value) ===
-      "store" ||
+      `store-${cashierKeyId(settings)}` ||
     verifyToken(secret, "operator", jar.get(OPERATOR_COOKIE)?.value) === "site"
   );
 }
@@ -97,4 +109,18 @@ export function loginAllowed(key: string, now = Date.now()) {
   }
   entry.count += 1;
   return entry.count <= 10;
+}
+
+// The public driver screen polls every few seconds; this caps one client at
+// 60 reads a minute per instance.
+const reads = new Map<string, { count: number; since: number }>();
+export function counterAllowed(client: string, now = Date.now()) {
+  const entry = reads.get(client);
+  if (!entry || now - entry.since > 60 * 1000) {
+    reads.set(client, { count: 1, since: now });
+    if (reads.size > 5000) reads.delete(reads.keys().next().value!);
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= 60;
 }

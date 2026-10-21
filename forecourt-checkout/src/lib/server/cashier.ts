@@ -16,8 +16,8 @@ import {
   type DemoStore,
 } from "../demo-store";
 import type { Settings } from "../settings";
-import type { PaymentMethod, SaleTerms, SaleView } from "../store";
-import { SaleError } from "../store";
+import type { DriverSale, PaymentMethod, SaleTerms, SaleView } from "../store";
+import { driverSale, SaleError } from "../store";
 import { liveStoreDeps } from "./services";
 import {
   authorizeSale,
@@ -77,21 +77,44 @@ export async function cashierConsole(
   return consoleState(liveStoreDeps(settings));
 }
 
+/** The public driver screen's state: only what the driver needs. */
+export type DriverCounter = Omit<CounterState, "sale"> & {
+  sale: DriverSale | null;
+};
+
+const toDriver = (c: CounterState): DriverCounter => ({
+  ...c,
+  sale: c.sale && driverSale(c.sale),
+});
+
+/** One answer per charger is reused this long, so a public page can't drive Ivora calls. */
+export const COUNTER_CACHE_MS = 5000;
+const counterCache = new Map<
+  string,
+  { at: number; state: Promise<DriverCounter> }
+>();
+
 export async function counter(
   code: string,
   connector: number,
   settings: Settings,
   now = Date.now(),
-): Promise<CounterState> {
+): Promise<DriverCounter> {
   if (settings.demo)
-    return demoCounter(
-      await loadDemo(now, true),
-      code,
-      connector,
-      now,
-      settings,
+    return toDriver(
+      demoCounter(await loadDemo(now, true), code, connector, now, settings),
     );
-  return counterState(code, connector, liveStoreDeps(settings));
+  const key = `${code}/${connector}`;
+  const hit = counterCache.get(key);
+  if (hit && now - hit.at < COUNTER_CACHE_MS) return hit.state;
+  const state = counterState(code, connector, liveStoreDeps(settings)).then(
+    toDriver,
+  );
+  counterCache.set(key, { at: now, state });
+  state.catch(() => counterCache.delete(key));
+  if (counterCache.size > 500)
+    counterCache.delete(counterCache.keys().next().value!);
+  return state;
 }
 
 export async function authorize(

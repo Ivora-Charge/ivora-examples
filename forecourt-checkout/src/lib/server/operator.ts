@@ -67,7 +67,7 @@ export async function overview(
       to: new Date(now).toISOString(),
       timeZone: settings.siteTimeZone,
     }),
-    ivora.listSessions(100),
+    ivora.listAllSessions(),
     ivora.listStations(),
   ]);
   const names = new Map(stations.map((s) => [s.id, s.name]));

@@ -316,6 +316,7 @@ export function demoSaleView(
     startedAt: null,
     endedAt: null,
     stopping: false,
+    stopProblem: null,
     limitReached: null,
     canStop: true,
     bill: null,

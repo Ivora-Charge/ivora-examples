@@ -110,8 +110,10 @@ export function chargerLabel(code: string, connector: number, connectors = 1) {
 
 // --- Prepay: stop before the prepaid amount runs out --------------------------
 
-/** How far ahead the headroom looks: polling, webhook and charger latency. */
+/** How far ahead the money headroom looks: meter samples, webhook and charger latency. */
 export const STOP_LOOKAHEAD_SECONDS = 60;
+/** How far ahead a kWh sale's energy limit looks: one 30 s meter sample interval. */
+export const ENERGY_LOOKAHEAD_SECONDS = 30;
 export const MIN_HEADROOM_CENTS = 50;
 /** At least 5% of the prepaid amount is kept back. */
 export const MIN_HEADROOM_BPS = 500;
@@ -129,6 +131,11 @@ export type StopDecision = {
  * keeps back the cost of the next minute at the recent power (energy at the
  * tariff's per-kWh price, plus the higher of the time and idle rates), with a
  * floor of 50 cents or 5% of the prepaid amount, whichever is more.
+ *
+ * A kWh sale (limitWh set) stops on energy: the next 30 seconds' energy at
+ * the recent power, at least 1% of the limit. Its prepaid amount is the quote for
+ * that energy, so money only acts as a safety cap there, keeping back just the
+ * next minute's cost, without the 50 cent / 5% floor.
  * Prices are in hundredths of a cent, as priceBreakdown() returns them.
  */
 export function prepayStop(input: {
@@ -156,22 +163,25 @@ export function prepayStop(input: {
   const projectedCents = Number(
     ceilDiv(energyHundredths + timeHundredths, 100n),
   );
-  const headroomCents = Math.max(
-    MIN_HEADROOM_CENTS,
-    Math.ceil((input.prepaidCents * MIN_HEADROOM_BPS) / 10_000),
-    projectedCents,
-  );
+  const byEnergy = input.limitWh !== null;
+  const headroomCents = byEnergy
+    ? Math.max(1, projectedCents)
+    : Math.max(
+        MIN_HEADROOM_CENTS,
+        Math.ceil((input.prepaidCents * MIN_HEADROOM_BPS) / 10_000),
+        projectedCents,
+      );
   const stopAtCents = Math.max(0, input.prepaidCents - headroomCents);
-  if ((input.estimatedCents ?? 0) >= stopAtCents)
-    return { stop: true, reason: "amount", stopAtCents, headroomCents };
   if (input.limitWh !== null) {
     const headroomWh = Math.max(
       Math.ceil(input.limitWh / 100),
-      Number(ceilDiv(power * L, 3600n)),
+      Number(ceilDiv(power * BigInt(ENERGY_LOOKAHEAD_SECONDS), 3600n)),
     );
     if (input.energyWh >= input.limitWh - headroomWh)
       return { stop: true, reason: "energy", stopAtCents, headroomCents };
   }
+  if ((input.estimatedCents ?? 0) >= stopAtCents)
+    return { stop: true, reason: "amount", stopAtCents, headroomCents };
   return { stop: false, reason: null, stopAtCents, headroomCents };
 }
 
@@ -259,7 +269,10 @@ export const isPosReference = (v: string) => POS_REFERENCE.test(v);
 
 /** Operation references: one stable ID per distinct financial operation. */
 export const operationRef = {
+  /** The amount the store took before the start (authorization). */
   prepaid: (sale: string) => sale,
+  /** The part of it the session used: a distinct operation, so its own ID. */
+  covered: (sale: string) => `${sale}:capture`,
   paid: (sale: string, method: PaymentMethod, pos: string | null) =>
     `${sale}:paid:${method}${pos ? `:${pos}` : ""}`,
   extra: (sale: string, method: PaymentMethod, pos: string | null) =>
@@ -269,7 +282,7 @@ export const operationRef = {
 
 function paymentOf(sale: string, r: SaleReport): StorePayment | null {
   if (r.kind !== "capture" || r.outcome !== "succeeded") return null;
-  if (r.operation_reference === sale)
+  if (r.operation_reference === operationRef.covered(sale))
     return {
       step: "prepaid",
       method: null,
@@ -314,6 +327,7 @@ export function saleAmounts(
         (r) =>
           r.outcome === "succeeded" &&
           r.operation_reference.startsWith(`${sale}:`) &&
+          r.operation_reference !== operationRef.covered(sale) &&
           r.created_at,
       )
       .map((r) => r.created_at!)
@@ -404,7 +418,7 @@ export function endReports(
     {
       step: "capture",
       kind: "capture",
-      operation_reference: operationRef.prepaid(sale),
+      operation_reference: operationRef.covered(sale),
       amount_minor: amounts.coveredCents,
     },
   ];
@@ -508,6 +522,12 @@ export type SaleView = {
   endedAt: string | null;
   /** A stop has been sent: by the cashier or at the prepaid limit. */
   stopping: boolean;
+  /**
+   * A stop that didn't take: "failed" after every attempt was rejected,
+   * "unconfirmed" when Ivora can't tell whether it reached the charger. Either
+   * way the cashier must stop it at the charger.
+   */
+  stopProblem: StopProblem | null;
   limitReached: "amount" | "energy" | null;
   canStop: boolean;
   bill: SaleBill | null;
@@ -517,6 +537,74 @@ export type SaleView = {
   message: string | null;
   error: { code: string; message: string; requestId: string | null } | null;
 };
+
+export type StopProblem = "failed" | "unconfirmed";
+
+export const STOP_PROBLEM_TEXT: Record<StopProblem, string> = {
+  failed: "Stop failed: stop it at the charger.",
+  unconfirmed:
+    "Stop not confirmed: check the charger and stop it there if it is still charging.",
+};
+
+// --- Stop attempts ------------------------------------------------------------
+
+/** Rejected stops are retried with a new key, at most this many attempts in all. */
+export const MAX_STOP_ATTEMPTS = 3;
+
+/** "stop", then "stop-2", "stop-3": one idempotency key per attempt. */
+export const stopKey = (sale: string, attempt: number) =>
+  saleKey(sale, attempt === 1 ? "stop" : `stop-${attempt}`);
+
+// --- What the driver's screen gets --------------------------------------------
+
+/**
+ * The public "pay at the counter" screen gets only what the driver needs:
+ * status, energy, time, and the amount due or change. No payments, methods or
+ * POS references.
+ */
+export type DriverSale = {
+  phase: SalePhase;
+  currency: string;
+  energyWh: number;
+  powerW: number | null;
+  runningCents: number | null;
+  prepaidCents: number | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  message: string | null;
+  amounts: {
+    dueCents: number;
+    outstandingCents: number;
+    overrunCents: number;
+    changeCents: number;
+    changeGiven: boolean;
+    status: SaleAmounts["status"];
+  } | null;
+};
+
+export function driverSale(v: SaleView): DriverSale {
+  const a = v.amounts;
+  return {
+    phase: v.phase,
+    currency: v.currency,
+    energyWh: v.energyWh,
+    powerW: v.powerW,
+    runningCents: v.runningCents,
+    prepaidCents: v.terms.prepaidCents,
+    startedAt: v.startedAt,
+    endedAt: v.endedAt,
+    // A failed stop is for the cashier; the driver sees "please see the cashier".
+    message: v.stopProblem ? "Please see the cashier." : v.message,
+    amounts: a && {
+      dueCents: a.dueCents,
+      outstandingCents: a.outstandingCents,
+      overrunCents: a.overrunCents,
+      changeCents: a.changeCents,
+      changeGiven: a.changeGiven,
+      status: a.status,
+    },
+  };
+}
 
 export type TileState =
   | "available"

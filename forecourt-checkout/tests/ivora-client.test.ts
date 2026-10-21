@@ -164,4 +164,37 @@ describe("Ivora client", () => {
         }),
     ).toThrow();
   });
+
+  it("pages through every session, since cursors aren't time-ordered", async () => {
+    const session = (id: string) => ({
+      id,
+      application_reference: `forecourt:${id}`,
+      payment_reference: id,
+      created_at: "2026-10-19T12:00:00Z",
+      status: "charging",
+      bill: {
+        id: `bill_${id}`,
+        station_id: 7,
+        connector_id: 71,
+        status: "open",
+        hold_minor: 0,
+        currency: "USD",
+        total_minor: null,
+        transaction_id: null,
+      },
+      usage: null,
+      start_operation: null,
+      stop_operation: null,
+    });
+    const { c, calls } = client([
+      json({ data: [session("ecs_b")], next_cursor: "ecs_b" }),
+      json({ data: [session("ecs_a")], next_cursor: null }),
+    ]);
+    const all = await c.listAllSessions();
+    expect(all.map((s) => s.id)).toEqual(["ecs_b", "ecs_a"]);
+    expect(calls.map((x) => new URL(x.url).search)).toEqual([
+      "?limit=100",
+      "?limit=100&after=ecs_b",
+    ]);
+  });
 });

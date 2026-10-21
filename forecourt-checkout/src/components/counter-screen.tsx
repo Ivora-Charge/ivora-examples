@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { formatCents } from "@/lib/money";
-import type { CounterState } from "@/lib/server/store";
+import type { DriverCounter } from "@/lib/server/cashier";
 import { whToKwhText, wToKwText } from "@/lib/units";
 import { ErrorBox, type ErrorInfo } from "./error-box";
 
@@ -13,7 +13,7 @@ export function CounterScreen(props: {
   connector: number;
   label: string;
 }) {
-  const [state, setState] = useState<CounterState | null>(null);
+  const [state, setState] = useState<DriverCounter | null>(null);
   const [error, setError] = useState<ErrorInfo | null>(null);
 
   const poll = useCallback(async () => {
@@ -24,11 +24,13 @@ export function CounterScreen(props: {
       );
       const body = await response.json();
       if (!response.ok) {
-        if (!(body as { retry?: boolean }).retry) setError(body as ErrorInfo);
+        // Busy or rate-limited: keep the last state, the next poll retries.
+        if (!(body as { retry?: boolean }).retry && response.status !== 429)
+          setError(body as ErrorInfo);
         return;
       }
       setError(null);
-      setState(body as CounterState);
+      setState(body as DriverCounter);
     } catch {
       // Offline for a moment; the next poll retries.
     }
@@ -45,7 +47,7 @@ export function CounterScreen(props: {
   const money = (c: number | null) =>
     c === null ? "—" : formatCents(c, v?.currency ?? "USD");
   const a = v?.amounts ?? null;
-  const prepaid = v?.terms.prepaidCents ?? null;
+  const prepaid = v?.prepaidCents ?? null;
 
   return (
     <>

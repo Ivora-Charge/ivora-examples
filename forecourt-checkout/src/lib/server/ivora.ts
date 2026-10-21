@@ -124,6 +124,8 @@ export const billSchema = z.object({
   id: z.string(),
   station_id: z.number(),
   connector_id: z.number(),
+  /** The tariff snapshotted when the session was created. */
+  tariff_id: z.number().optional(),
   status: z.enum(["open", "final"]),
   hold_minor: z.number().int(),
   currency: z.string(),
@@ -385,6 +387,33 @@ export class IvoraClient {
       `charging-sessions?limit=${limit}`,
       z.object({ data: z.array(externalSessionSchema) }),
     ).then((page) => page.data);
+  }
+
+  /**
+   * Every session in the project, page by page. Cursors order by opaque
+   * session ID, not time, so a newer session can be on any page: read them
+   * all. Stops after `maxPages` pages (10,000 sessions by default).
+   */
+  async listAllSessions(maxPages = 100): Promise<ExternalSession[]> {
+    const all: ExternalSession[] = [];
+    let after = "";
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({ limit: "100" });
+      if (after) params.set("after", after);
+      const result = await this.request(
+        "GET",
+        `charging-sessions?${params}`,
+        z.object({
+          data: z.array(externalSessionSchema),
+          next_cursor: z.string().nullable().optional(),
+        }),
+      );
+      all.push(...result.data);
+      if (!result.next_cursor || !result.data.length) return all;
+      after = result.next_cursor;
+    }
+    console.warn("[forecourt] session list truncated", { maxPages });
+    return all;
   }
 
   getSession(id: string) {

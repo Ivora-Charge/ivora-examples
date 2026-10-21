@@ -43,7 +43,7 @@ export async function GET(request: Request) {
   const s = settings();
   if (s.demo) return NextResponse.json({ demo: true, reconciled: 0 });
   const since = new Date(Date.now() - WINDOW_MS).toISOString();
-  const sessions = await ivoraClient(s).listSessions(100);
+  const sessions = await ivoraClient(s).listAllSessions();
   const open = sessions.filter(
     (x) =>
       x.application_reference.startsWith(APPLICATION_PREFIX) &&

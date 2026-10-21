@@ -55,4 +55,28 @@ describe("cashier and operator roles", () => {
     expect(loginAllowed("operator:1.2.3.4", T0)).toBe(true);
     expect(loginAllowed("cashier:1.2.3.4", T0 + 16 * 60_000)).toBe(true);
   });
+
+  it("signs cashiers out when CASHIER_PASSWORD changes", async () => {
+    vi.stubEnv("DEMO_MODE", "1");
+    vi.stubEnv("CASHIER_PASSWORD", "first-password");
+    const { cashierRequest } = await import("@/lib/server/cashier-guard");
+    const auth = await import("@/lib/server/auth");
+    const { settings: read } = await import("@/lib/server/services");
+    jar.clear();
+    jar.set(auth.CASHIER_COOKIE, auth.cashierToken(read()));
+    await expect(cashierRequest(post())).resolves.toBeTruthy();
+    vi.stubEnv("CASHIER_PASSWORD", "second-password");
+    await expect(cashierRequest(post())).rejects.toMatchObject({ status: 401 });
+    jar.clear();
+    vi.unstubAllEnvs();
+  });
+
+  it("caps how often one client reads the driver's screen", async () => {
+    const { counterAllowed } = await import("@/lib/server/auth");
+    for (let i = 0; i < 60; i++)
+      expect(counterAllowed("5.6.7.8", T0)).toBe(true);
+    expect(counterAllowed("5.6.7.8", T0)).toBe(false);
+    expect(counterAllowed("5.6.7.9", T0)).toBe(true);
+    expect(counterAllowed("5.6.7.8", T0 + 61_000)).toBe(true);
+  });
 });

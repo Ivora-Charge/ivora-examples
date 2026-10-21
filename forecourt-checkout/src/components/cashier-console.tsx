@@ -182,6 +182,12 @@ function TileButton({
         </span>
       ) : null}
       {tile.warning ? <span className="pump-warn">⚠ Check charger</span> : null}
+      {v?.stopProblem ? (
+        <span className="pump-warn">
+          ⚠ {v.stopProblem === "failed" ? "Stop failed" : "Stop not confirmed"}:
+          stop it at the charger
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -427,8 +433,9 @@ function Prepay({
       </div>
       {limitWh ? (
         <p className="muted" style={{ margin: 0 }}>
-          Stops at {whToKwhText(limitWh)} kWh or the prepaid amount, whichever
-          comes first.
+          Stops at about {whToKwhText(limitWh)} kWh (up to half a minute of
+          charging early). The amount only acts as a safety cap; anything unused
+          is handed back as change.
         </p>
       ) : null}
       <button
@@ -514,7 +521,13 @@ function SalePanel({
           Used {money(over)} more than prepaid.
         </div>
       ) : null}
-      {view.message ? <p style={{ margin: 0 }}>{view.message}</p> : null}
+      {view.stopProblem ? (
+        <div className="notice bad" role="alert" data-testid="stop-problem">
+          <strong>{view.message}</strong>
+        </div>
+      ) : view.message ? (
+        <p style={{ margin: 0 }}>{view.message}</p>
+      ) : null}
       {view.phase === "finished" ? (
         <p className="muted" style={{ margin: 0 }}>
           Idle fees apply after {graceMinutes} free minutes.

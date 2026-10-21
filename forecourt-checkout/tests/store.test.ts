@@ -4,6 +4,7 @@ import { readSettings } from "@/lib/settings";
 import {
   chargerLabel,
   decodeSaleId,
+  driverSale,
   encodeSaleId,
   endReports,
   paidReport,
@@ -18,7 +19,13 @@ import {
   type SaleTerms,
 } from "@/lib/store";
 import type { Quote } from "@/lib/tariff";
-import type { ExternalSession, Station } from "@/lib/server/ivora";
+import { meterSampleFromEvent } from "@/lib/webhook";
+import {
+  IvoraError,
+  type ExternalSession,
+  type Operation,
+  type Station,
+} from "@/lib/server/ivora";
 import type { SaleDueEvent } from "@/lib/server/sale-events";
 import {
   authorizeSale,
@@ -28,7 +35,9 @@ import {
   PREPARED_TIMEOUT_MS,
   progressSale,
   saleById,
+  onMeterSample,
   saleIdFor,
+  SESSION_LIST_TTL_MS,
   stopSale,
   type StoreApi,
   type StoreDeps,
@@ -133,19 +142,32 @@ describe("prepay stop headroom", () => {
     });
   });
 
-  it("stops before an energy limit too", () => {
-    const limited = {
+  it("stops a kWh sale on energy, with money only as a safety cap", () => {
+    // 20 kWh quoted at $9.00 + time: the sale is about energy, not the amount.
+    const kwhSale = {
       ...base,
+      prepaidCents: 1000,
       limitWh: 20_000,
       powerW: 60_000,
-      estimatedCents: 500,
     };
-    // 60 kW for 60 s = 1000 Wh of headroom (more than 1% of 20 kWh).
-    expect(prepayStop({ ...limited, energyWh: 18_999 }).stop).toBe(false);
-    expect(prepayStop({ ...limited, energyWh: 19_000 })).toMatchObject({
-      stop: true,
-      reason: "energy",
+    // 60 kW for 30 s = 500 Wh of energy headroom (more than 1% of 20 kWh).
+    expect(
+      prepayStop({ ...kwhSale, energyWh: 19_499, estimatedCents: 900 }).stop,
+    ).toBe(false);
+    expect(
+      prepayStop({ ...kwhSale, energyWh: 19_500, estimatedCents: 900 }),
+    ).toMatchObject({ stop: true, reason: "energy" });
+    // The 50c / 5% floor would have stopped it at $9.50, about 2 kWh early;
+    // the cap keeps back only the next minute (45c energy + 40c idle = 85c).
+    const capped = prepayStop({
+      ...kwhSale,
+      energyWh: 17_000,
+      estimatedCents: 914,
     });
+    expect(capped).toMatchObject({ stop: false, headroomCents: 85 });
+    expect(
+      prepayStop({ ...kwhSale, energyWh: 17_000, estimatedCents: 915 }),
+    ).toMatchObject({ stop: true, reason: "amount" });
   });
 });
 
@@ -205,7 +227,7 @@ describe("what the counter owes or is owed", () => {
   it("shows an overrun as extra due, never as collected", () => {
     const covered: SaleReport = {
       kind: "capture",
-      operation_reference: sale,
+      operation_reference: `${sale}:capture`,
       outcome: "succeeded",
       amount_minor: 2000,
     };
@@ -282,7 +304,8 @@ describe("settlement report sequence rules", () => {
       {
         step: "capture",
         kind: "capture",
-        operation_reference: pre,
+        // A distinct operation from the authorization: its own reference.
+        operation_reference: `${pre}:capture`,
         amount_minor: 2000,
       },
     ]);
@@ -364,6 +387,11 @@ class FakeIvora implements StoreApi {
   reports = new Map<string, SaleReport[]>();
   calls: { action: string; key?: string; body?: unknown }[] = [];
   now = () => T0;
+  /** Ivora refuses any stop after a rejected one (needs reconciling). */
+  refuseRetry = false;
+  loseNextStop = false;
+  /** Stop operations by idempotency key: a used key replays its record. */
+  stops = new Map<string, Operation>();
 
   async findStationByCode(code: string) {
     return code === "PUMP-3" ? structuredClone(this.station) : null;
@@ -401,6 +429,7 @@ class FakeIvora implements StoreApi {
         station_id: 7,
         connector_id: 71,
         status: "open",
+        tariff_id: body.tariff_id,
         hold_minor: 0,
         currency: "USD",
         energy_wh: null,
@@ -424,7 +453,8 @@ class FakeIvora implements StoreApi {
   async getSession(id: string) {
     return structuredClone(this.sessions.get(id)!);
   }
-  async listSessions() {
+  async listAllSessions() {
+    this.calls.push({ action: "list" });
     return [...this.sessions.values()].map((s) => structuredClone(s));
   }
   async startSession(id: string, key: string) {
@@ -442,18 +472,26 @@ class FakeIvora implements StoreApi {
     return op;
   }
   async stopSession(id: string, key: string) {
+    const replay = this.stops.get(key);
+    if (replay) return structuredClone(replay);
+    if (this.loseNextStop) {
+      // Sent, but the answer was lost: the outcome of this key is unknown.
+      this.loseNextStop = false;
+      throw new IvoraError(503, "outcome_unknown", "Retry with the same key.");
+    }
+    const session = this.sessions.get(id)!;
+    if (this.refuseRetry && session.stop_operation?.status === "rejected")
+      throw new IvoraError(409, "stop_needs_reconciliation", "Refused.");
     this.calls.push({ action: "stop", key });
-    const op = {
-      id: "op_stop",
-      status: "dispatching" as const,
+    const op: Operation = {
+      id: `op_stop_${this.stops.size + 1}`,
+      status: "dispatching",
       result: null,
-      created_at: new Date(this.now()).toISOString(),
+      created_at: new Date(this.now() + this.stops.size).toISOString(),
     };
-    Object.assign(this.sessions.get(id)!, {
-      status: "stopping",
-      stop_operation: op,
-    });
-    return op;
+    this.stops.set(key, op);
+    Object.assign(session, { status: "stopping", stop_operation: op });
+    return structuredClone(op);
   }
   async cancelSession(id: string, key: string) {
     this.calls.push({ action: "cancel", key });
@@ -474,27 +512,40 @@ class FakeIvora implements StoreApi {
     key?: string,
   ) {
     this.calls.push({ action: `report:${report.kind}`, key, body: report });
-    // Idempotency: the same key replays; settlement rules as documented.
+    // As the API documents: deduplicated by operation reference alone. Reuse is
+    // only for an outcome update of the same operation; a different kind or
+    // amount under an existing reference is refused, never silently merged.
     const list = this.reports.get(id) ?? [];
-    if (
-      !list.some(
-        (r) =>
-          r.operation_reference === report.operation_reference &&
-          r.kind === report.kind,
-      )
-    ) {
-      const s = this.sessions.get(id)!;
-      const captured = list
-        .filter((r) => r.kind === "capture")
-        .reduce((t, r) => t + r.amount_minor, 0);
+    const same = list.find(
+      (r) => r.operation_reference === report.operation_reference,
+    );
+    if (same) {
       if (
-        report.kind === "capture" &&
-        s.bill.total_minor !== null &&
-        captured + report.amount_minor > s.bill.total_minor
+        same.kind !== report.kind ||
+        same.amount_minor !== report.amount_minor
       )
-        throw new Error("captures cannot exceed the final bill");
-      list.push({ ...report, outcome: "succeeded" });
+        throw new IvoraError(
+          409,
+          "settlement_conflict",
+          "Terminal results and amounts cannot change.",
+        );
+      return {};
     }
+    const s = this.sessions.get(id)!;
+    const captured = list
+      .filter((r) => r.kind === "capture")
+      .reduce((t, r) => t + r.amount_minor, 0);
+    if (
+      report.kind === "capture" &&
+      (s.bill.status !== "final" ||
+        captured + report.amount_minor > (s.bill.total_minor ?? 0))
+    )
+      throw new IvoraError(
+        409,
+        "capture_exceeds_bill",
+        "Successful captures cannot exceed the final bill.",
+      );
+    list.push({ ...report, outcome: "succeeded" });
     this.reports.set(id, list);
     return {};
   }
@@ -539,6 +590,10 @@ class FakeIvora implements StoreApi {
         cost_breakdown: breakdown,
       },
     });
+  }
+  /** The charger answered the latest stop (Ivora's record of its key changes too). */
+  settleStop(status: Operation["status"]) {
+    this.only().stop_operation!.status = status;
   }
   keys(action: string) {
     return this.calls.filter((c) => c.action === action).map((c) => c.key);
@@ -644,7 +699,7 @@ describe("prepay: from the POS to change", () => {
         .map((r) => [r.kind, r.operation_reference, r.amount_minor]),
     ).toEqual([
       ["authorization", sale, 2000],
-      ["capture", sale, 1612],
+      ["capture", `${sale}:capture`, 1612],
     ]);
     await saleById(sale, deps); // repeated reads never record twice
     expect(ivora.reportsOf()).toHaveLength(2);
@@ -657,7 +712,7 @@ describe("prepay: from the POS to change", () => {
         .map((r) => [r.kind, r.operation_reference, r.amount_minor]),
     ).toEqual([
       ["authorization", sale, 2000],
-      ["capture", sale, 1612],
+      ["capture", `${sale}:capture`, 1612],
       ["release", `${sale}:change`, 0],
     ]);
     expect(events).toEqual([]); // nothing to collect
@@ -680,7 +735,7 @@ describe("prepay: from the POS to change", () => {
     expect(ivora.reportsOf().filter((r) => r.kind === "capture")).toEqual([
       {
         kind: "capture",
-        operation_reference: sale,
+        operation_reference: `${sale}:capture`,
         amount_minor: 2000,
         outcome: "succeeded",
       },
@@ -907,5 +962,200 @@ describe("console tiles", () => {
       deps,
     );
     expect((await consoleState(deps)).tiles[0].state).toBe("paid");
+  });
+});
+
+describe("prepaid stop with no console or driver screen open", () => {
+  it("stops when meter samples cross the limit", async () => {
+    await authorize(PREPAY);
+    const sale = saleIdFor(PREPAY, REQ);
+    const sample = { transactionId: 21, stationId: 7 };
+    ivora.charging(20_000, 1200, 150_000);
+    expect(await onMeterSample(sample, deps)).toMatchObject([
+      { sale, stopping: false },
+    ]);
+    expect(ivora.keys("stop")).toEqual([]);
+    // Samples for another transaction or station don't touch this sale.
+    ivora.charging(30_500, 1847, 150_000);
+    expect(
+      await onMeterSample({ transactionId: 99, stationId: 7 }, deps),
+    ).toEqual([]);
+    expect(
+      await onMeterSample({ transactionId: 21, stationId: 8 }, deps),
+    ).toEqual([]);
+    expect(ivora.keys("stop")).toEqual([]);
+    // Only the webhook runs here: no saleById, consoleState or counterState.
+    const [view] = await onMeterSample(sample, deps);
+    expect(view).toMatchObject({ stopping: true, limitReached: "amount" });
+    expect(ivora.keys("stop")).toEqual([`forecourt:store:${sale}:stop`]);
+    await onMeterSample(sample, deps);
+    expect(ivora.keys("stop")).toHaveLength(1);
+  });
+
+  it("leaves pay-after sales alone and reuses the session list briefly", async () => {
+    await authorize(POSTPAY);
+    ivora.charging(30_500, 5000, 150_000);
+    expect(
+      await onMeterSample({ transactionId: 21, stationId: 7 }, deps),
+    ).toEqual([]);
+    await onMeterSample({ transactionId: 21, stationId: 7 }, deps);
+    expect(ivora.keys("list")).toHaveLength(1);
+    now += SESSION_LIST_TTL_MS;
+    await onMeterSample({ transactionId: 21, stationId: 7 }, deps);
+    expect(ivora.keys("list")).toHaveLength(2);
+    expect(ivora.keys("stop")).toEqual([]);
+  });
+});
+
+describe("a stop that doesn't take", () => {
+  async function overLimit() {
+    await authorize(PREPAY);
+    const sale = saleIdFor(PREPAY, REQ);
+    ivora.charging(30_500, 1847, 150_000);
+    expect(await saleById(sale, deps)).toMatchObject({ stopping: true });
+    return sale;
+  }
+
+  it("retries a rejected stop with a new key, then shows the cashier it failed", async () => {
+    const sale = await overLimit();
+    const key = (n: string) => `forecourt:store:${sale}:${n}`;
+    ivora.settleStop("rejected");
+    expect(await saleById(sale, deps)).toMatchObject({
+      stopping: true,
+      stopProblem: null,
+    });
+    expect(ivora.keys("stop")).toEqual([key("stop"), key("stop-2")]);
+    ivora.settleStop("rejected");
+    await saleById(sale, deps);
+    expect(ivora.keys("stop")).toEqual([
+      key("stop"),
+      key("stop-2"),
+      key("stop-3"),
+    ]);
+    // The $20 sale keeps charging past its limit: never "Stopping…" now.
+    ivora.settleStop("rejected");
+    ivora.charging(41_000, 2600, 150_000);
+    const failed = await saleById(sale, deps);
+    expect(failed).toMatchObject({
+      phase: "charging",
+      stopping: false,
+      stopProblem: "failed",
+      canStop: true,
+      message: "Stop failed: stop it at the charger.",
+    });
+    // Bounded: reads and the cashier's stop button send nothing more.
+    await saleById(sale, deps);
+    await stopSale(sale, deps);
+    expect(ivora.keys("stop")).toHaveLength(3);
+    const tile = (await consoleState(deps)).tiles[0];
+    expect(tile.sale?.stopProblem).toBe("failed");
+    expect(driverSale(failed).message).toBe("Please see the cashier.");
+  });
+
+  it("never resends a stop with an unknown outcome under a new key", async () => {
+    const sale = await overLimit();
+    ivora.settleStop("unknown");
+    expect(await saleById(sale, deps)).toMatchObject({
+      stopping: false,
+      stopProblem: "unconfirmed",
+    });
+    await stopSale(sale, deps);
+    expect(ivora.keys("stop")).toEqual([`forecourt:store:${sale}:stop`]);
+  });
+
+  it("retries a lost answer with the same key, not the next one", async () => {
+    const sale = await overLimit();
+    ivora.settleStop("rejected");
+    ivora.loseNextStop = true;
+    await expect(saleById(sale, deps)).rejects.toMatchObject({
+      code: "outcome_unknown",
+    });
+    await saleById(sale, deps);
+    expect(ivora.keys("stop")).toEqual([
+      `forecourt:store:${sale}:stop`,
+      `forecourt:store:${sale}:stop-2`,
+    ]);
+  });
+
+  it("shows a failed stop when Ivora refuses another attempt", async () => {
+    const sale = await overLimit();
+    ivora.refuseRetry = true;
+    ivora.settleStop("rejected");
+    expect(await saleById(sale, deps)).toMatchObject({
+      stopProblem: "failed",
+    });
+    expect(ivora.keys("stop")).toHaveLength(1);
+  });
+});
+
+describe("settlement references", () => {
+  it("gives the prepay capture its own reference; the API refuses a reused one", async () => {
+    await authorize(PREPAY);
+    const sale = saleIdFor(PREPAY, REQ);
+    ivora.charging(30_000, 1500);
+    ivora.ended(1612, quote(1612, 0));
+    const id = ivora.only().id;
+    // What the earlier version sent: a capture under the authorization's reference.
+    await expect(
+      ivora.reportSettlement(id, {
+        kind: "capture",
+        operation_reference: sale,
+        amount_minor: 1612,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    const done = await saleById(sale, deps);
+    expect(done.amounts).toMatchObject({
+      prepaidRecorded: true,
+      changeCents: 388,
+    });
+    expect(
+      ivora.reportsOf().map((r) => [r.kind, r.operation_reference]),
+    ).toEqual([
+      ["authorization", sale],
+      ["capture", `${sale}:capture`],
+    ]);
+  });
+});
+
+describe("the driver's screen", () => {
+  it("gets status and amounts, never payments or POS references", async () => {
+    await authorize(POSTPAY);
+    const sale = saleIdFor(POSTPAY, REQ);
+    ivora.charging(36_000, 1800);
+    ivora.ended(2340, quote(1620, 18));
+    const paid = await markSalePaid(
+      { sale, amountCents: 1940, method: "card", posReference: "POS-1042" },
+      deps,
+    );
+    const driver = driverSale(paid);
+    expect(driver).toMatchObject({
+      phase: "done",
+      energyWh: 36_000,
+      amounts: { dueCents: 1940, outstandingCents: 0, status: "paid" },
+    });
+    const text = JSON.stringify(driver);
+    expect(text).not.toContain("POS-1042");
+    expect(text).not.toContain("payments");
+    expect(text).not.toContain(sale);
+  });
+});
+
+describe("webhook meter samples", () => {
+  it("reads the transaction and station of a meter.sampled event only", () => {
+    expect(
+      meterSampleFromEvent({
+        type: "meter.sampled",
+        resource_id: "31",
+        station_id: 7,
+        data: { transaction_id: 31, energy_wh: 6941 },
+      }),
+    ).toEqual({ transactionId: 31, stationId: 7 });
+    expect(meterSampleFromEvent({ type: "meter.sampled", data: {} })).toEqual({
+      transactionId: null,
+      stationId: null,
+    });
+    expect(
+      meterSampleFromEvent({ type: "bill.finalized", data: {} }),
+    ).toBeNull();
   });
 });
