@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overview · Your charging network</title>
+    <style>
+      @font-face {
+        font-family: Manrope;
+        font-weight: 400;
+        src: url(fonts/manrope-latin-400-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Manrope;
+        font-weight: 600;
+        src: url(fonts/manrope-latin-600-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Manrope;
+        font-weight: 800;
+        src: url(fonts/manrope-latin-800-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Fraunces;
+        font-weight: 600;
+        src: url(fonts/fraunces-latin-600-normal.woff2) format("woff2");
+      }
+      :root {
+        --bg: #f6f5fa;
+        --surface: #ffffff;
+        --ink: #17151f;
+        --muted: #5a5670;
+        --accent: #5b3fd9;
+        --on-accent: #ffffff;
+        --ok: #17703f;
+        --warn: #9a4a06;
+        --danger: #b3261e;
+        --line: color-mix(in srgb, var(--ink) 11%, transparent);
+        --tint: color-mix(in srgb, var(--accent) 9%, var(--surface));
+        --radius: 12px;
+        --shadow:
+          0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent),
+          0 6px 20px -12px color-mix(in srgb, var(--ink) 18%, transparent);
+        --font-ui: Manrope, system-ui, sans-serif;
+        --font-num: Fraunces, Georgia, serif;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f0e15;
+          --surface: #181722;
+          --ink: #eeecf6;
+          --muted: #a29fb8;
+          --accent: #a593ff;
+          --on-accent: #14102b;
+          --ok: #5fd39a;
+          --warn: #f2b25c;
+          --danger: #ff8f85;
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 400 15px/1.5 var(--font-ui);
+        font-feature-settings: "tnum";
+      }
+      .demo {
+        margin: 0;
+        padding: 8px 20px;
+        font-size: 13px;
+        background: var(--tint);
+        border-bottom: 1px solid var(--line);
+        color: var(--ink);
+      }
+      .demo b {
+        margin-right: 8px;
+        padding: 1px 9px;
+        border-radius: 99px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .shell {
+        display: grid;
+        grid-template-columns: 248px 1fr;
+        min-height: calc(100vh - 38px);
+      }
+      aside {
+        padding: 20px 14px;
+        border-right: 1px solid var(--line);
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 8px;
+        font: 600 21px var(--font-num);
+        letter-spacing: -0.01em;
+      }
+      .brand svg {
+        width: 32px;
+        height: 32px;
+        color: var(--accent);
+      }
+      .ws {
+        display: flex;
+        flex-direction: column;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--bg);
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .ws small {
+        font-weight: 400;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      nav h2 {
+        margin: 0 0 6px 10px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 800;
+      }
+      nav ul {
+        list-style: none;
+        margin: 0 0 16px;
+        padding: 0;
+      }
+      nav a {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 40px;
+        padding: 0 10px;
+        border-radius: 9px;
+        color: var(--ink);
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      nav a i {
+        width: 18px;
+        height: 18px;
+        border: 2px solid currentColor;
+        border-radius: 5px;
+        opacity: 0.55;
+      }
+      nav a[aria-current] {
+        background: var(--tint);
+        color: var(--accent);
+      }
+      nav a[aria-current] i {
+        opacity: 1;
+      }
+      nav a em {
+        margin-left: auto;
+        font-style: normal;
+        font-size: 11px;
+        color: var(--muted);
+        font-weight: 400;
+      }
+      main {
+        padding: 28px 36px 48px;
+        max-width: 1180px;
+      }
+      .head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 22px;
+      }
+      h1 {
+        margin: 0;
+        font: 600 34px/1.1 var(--font-num);
+        letter-spacing: -0.02em;
+      }
+      .head p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .seg {
+        display: inline-flex;
+        padding: 3px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+      }
+      .seg button {
+        min-height: 36px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 8px;
+        background: none;
+        font: 600 13px var(--font-ui);
+        color: var(--muted);
+      }
+      .seg button[aria-pressed="true"] {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 18px 20px;
+      }
+      .kpi small {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .kpi strong {
+        display: block;
+        margin: 4px 0 2px;
+        font: 600 34px/1.1 var(--font-num);
+        letter-spacing: -0.02em;
+      }
+      .kpi span {
+        font-size: 12px;
+        color: var(--ok);
+        font-weight: 600;
+      }
+      .kpi svg {
+        display: block;
+        width: 100%;
+        height: 28px;
+        margin-top: 8px;
+        color: var(--accent);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.7fr 1fr;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      h2.t {
+        margin: 0 0 14px;
+        font-size: 15px;
+        font-weight: 800;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      h2.t a {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--accent);
+        text-decoration: none;
+      }
+      .bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 12px;
+        height: 150px;
+        border-bottom: 1px solid var(--line);
+      }
+      .bars div {
+        flex: 1;
+        border-radius: 6px 6px 0 0;
+        background: color-mix(in srgb, var(--accent) 35%, var(--surface));
+      }
+      .bars div.hi {
+        background: var(--accent);
+      }
+      .days {
+        display: flex;
+        gap: 12px;
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .days span {
+        flex: 1;
+        text-align: center;
+      }
+      .steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      .steps li {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        font-size: 14px;
+      }
+      .steps b {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        border: 2px solid var(--line);
+        color: var(--muted);
+      }
+      .steps li.done b {
+        background: var(--ok);
+        border-color: var(--ok);
+        color: var(--surface);
+      }
+      .steps small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .bar {
+        height: 6px;
+        border-radius: 9px;
+        background: var(--line);
+        margin: 0 0 14px;
+      }
+      .bar i {
+        display: block;
+        width: 50%;
+        height: 100%;
+        border-radius: 9px;
+        background: var(--accent);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th {
+        padding: 0 12px 10px 0;
+        text-align: left;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 800;
+        border-bottom: 1px solid var(--line);
+      }
+      td {
+        padding: 13px 12px 13px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      tr:last-child td {
+        border: 0;
+      }
+      td:first-child {
+        font-weight: 600;
+      }
+      td small {
+        display: block;
+        font-weight: 400;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 10px;
+        border-radius: 99px;
+        font-size: 12px;
+        font-weight: 800;
+        background: color-mix(in srgb, var(--c) 14%, var(--surface));
+        color: var(--c);
+      }
+      .pill::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .pill.ok {
+        --c: var(--ok);
+      }
+      .pill.chg {
+        --c: var(--accent);
+      }
+      .pill.off {
+        --c: var(--danger);
+      }
+      .pill.off::before {
+        border-radius: 2px;
+      }
+      .tabbar {
+        display: none;
+      }
+      @media (max-width: 899px) {
+        .shell {
+          display: block;
+        }
+        aside {
+          flex-direction: row;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 16px;
+          border: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        aside nav,
+        .ws {
+          display: none;
+        }
+        .menu {
+          min-height: 44px;
+          padding: 0 16px;
+          border: 1px solid var(--line);
+          border-radius: 10px;
+          background: var(--surface);
+          color: var(--ink);
+          font: 600 14px var(--font-ui);
+        }
+        main {
+          padding: 20px 16px 24px;
+        }
+        h1 {
+          font-size: 28px;
+        }
+        .kpis {
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+        .kpi strong {
+          font-size: 28px;
+        }
+        .card {
+          padding: 14px 16px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .seg {
+          width: 100%;
+        }
+        .seg button {
+          flex: 1;
+        }
+        table,
+        thead,
+        tbody,
+        tr,
+        td {
+          display: block;
+        }
+        thead {
+          display: none;
+        }
+        tr {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          padding: 12px 0;
+          border-bottom: 1px solid var(--line);
+        }
+        tr:last-child {
+          border: 0;
+        }
+        td {
+          padding: 0;
+          border: 0;
+        }
+        td:nth-child(3),
+        td:nth-child(4) {
+          display: none;
+        }
+        td:nth-child(2) {
+          grid-column: 1;
+        }
+        td:nth-child(5) {
+          grid-row: 1;
+          grid-column: 2;
+        }
+        .tabbar {
+          display: flex;
+          position: sticky;
+          bottom: 0;
+          background: var(--surface);
+          border-top: 1px solid var(--line);
+          padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+        }
+        .tabbar a {
+          flex: 1;
+          min-height: 48px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 2px;
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--muted);
+          text-decoration: none;
+        }
+        .tabbar a[aria-current] {
+          color: var(--accent);
+        }
+      }
+      @media (min-width: 900px) {
+        .menu {
+          display: none;
+        }
+      }
+      @media (min-width: 900px) and (max-width: 1199px) {
+        .kpis {
+          grid-template-columns: 1fr 1fr;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <p class="demo" role="status">
+      <b>Demo</b>Sample data only. Nothing is sent to Ivora, chargers, payment
+      providers or email.
+    </p>
+    <div class="shell">
+      <aside>
+        <div class="brand">
+          <svg viewBox="0 0 48 48" aria-hidden="true">
+            <rect width="48" height="48" rx="12" fill="currentColor" />
+            <path
+              d="M33.5 17.5A12.5 12.5 0 1 0 33.5 30.5"
+              fill="none"
+              stroke="var(--on-accent)"
+              stroke-width="5"
+              stroke-linecap="round"
+            />
+            <circle cx="35" cy="24" r="3.4" fill="var(--on-accent)" /></svg
+          >Currant
+        </div>
+        <button class="menu">Menu</button>
+        <div class="ws">
+          Your charging network<small
+            >Placeholder brand: replace in brand/</small
+          >
+        </div>
+        <nav aria-label="Main">
+          <h2>Run</h2>
+          <ul>
+            <li>
+              <a href="#" aria-current="page"><i></i>Overview</a>
+            </li>
+            <li>
+              <a href="#"><i></i>Live<em>3</em></a>
+            </li>
+            <li>
+              <a href="#"><i></i>Chargers</a>
+            </li>
+          </ul>
+          <h2>Money</h2>
+          <ul>
+            <li>
+              <a href="#"><i></i>Pricing</a>
+            </li>
+            <li>
+              <a href="#"><i></i>Reports</a>
+            </li>
+          </ul>
+          <h2>Workspace</h2>
+          <ul>
+            <li>
+              <a href="#"><i></i>Onboarding</a>
+            </li>
+            <li>
+              <a href="#"><i></i>Team</a>
+            </li>
+            <li>
+              <a href="#"><i></i>Settings</a>
+            </li>
+          </ul>
+        </nav>
+      </aside>
+      <main>
+        <div class="head">
+          <div>
+            <h1>Overview</h1>
+            <p>Sample Site network · updated 2 minutes ago</p>
+          </div>
+          <div class="seg" role="group" aria-label="Range">
+            <button aria-pressed="false">Today</button
+            ><button aria-pressed="true">7 days</button
+            ><button aria-pressed="false">30 days</button>
+          </div>
+        </div>
+        <section class="kpis" aria-label="Network summary">
+          <div class="card kpi">
+            <small>Charging now</small><strong>3</strong
+            ><span>of 11 connectors</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 22 L14 18 L28 20 L43 11 L57 14 L71 6 L85 9 L100 3"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+          <div class="card kpi">
+            <small>Chargers online</small><strong>5 / 6</strong
+            ><span>1 offline since 09:12</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 8 L20 8 L40 8 L60 8 L80 8 L100 20"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+          <div class="card kpi">
+            <small>Energy, 7 days</small><strong>1,284 kWh</strong
+            ><span>+12% on last week</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 20 L16 15 L33 17 L50 9 L66 12 L83 5 L100 7"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+          <div class="card kpi">
+            <small>Sessions, 7 days</small><strong>162</strong
+            ><span>+9 on last week</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 14 L16 18 L33 12 L50 15 L66 8 L83 11 L100 4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+        </section>
+        <div class="grid">
+          <section class="card" aria-labelledby="e">
+            <h2 class="t" id="e">
+              Energy delivered <a href="#">Open reports</a>
+            </h2>
+            <div
+              class="bars"
+              role="img"
+              aria-label="Energy per day, Monday to Sunday, peaking on Saturday"
+            >
+              <div style="height: 52%"></div>
+              <div style="height: 61%"></div>
+              <div style="height: 48%"></div>
+              <div style="height: 70%"></div>
+              <div style="height: 82%"></div>
+              <div class="hi" style="height: 100%"></div>
+              <div style="height: 74%"></div>
+            </div>
+            <div class="days">
+              <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span
+              ><span>Fri</span><span>Sat</span><span>Sun</span>
+            </div>
+          </section>
+          <section class="card" aria-labelledby="s">
+            <h2 class="t" id="s">
+              Set up your network
+              <span
+                style="font-weight: 600; font-size: 13px; color: var(--muted)"
+                >2 of 4</span
+              >
+            </h2>
+            <div class="bar"><i></i></div>
+            <ol class="steps">
+              <li class="done"><b>✓</b><span>Connect Ivora</span></li>
+              <li class="done"><b>✓</b><span>Add your first site</span></li>
+              <li>
+                <b>3</b
+                ><span
+                  >Connect a charger<small>Takes about 5 minutes</small></span
+                >
+              </li>
+              <li>
+                <b>4</b
+                ><span
+                  >Make it yours<small
+                    >Replace the placeholder name and logo</small
+                  ></span
+                >
+              </li>
+            </ol>
+          </section>
+        </div>
+        <section class="card" aria-labelledby="c">
+          <h2 class="t" id="c">Chargers <a href="#">View all</a></h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Charger</th>
+                <th>Site</th>
+                <th>Connectors</th>
+                <th>Power now</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>DEMO-001<small>AC 22 kW</small></td>
+                <td>Sample Site: Harbour Street</td>
+                <td>2</td>
+                <td>11.0 kW</td>
+                <td><span class="pill chg">Charging</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-002<small>AC 22 kW</small></td>
+                <td>Sample Site: Harbour Street</td>
+                <td>2</td>
+                <td>7.4 kW</td>
+                <td><span class="pill chg">Charging</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-003<small>DC 60 kW</small></td>
+                <td>Sample Site: Market Car Park</td>
+                <td>2</td>
+                <td>0 kW</td>
+                <td><span class="pill ok">Available</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-004<small>DC 60 kW</small></td>
+                <td>Sample Site: Market Car Park</td>
+                <td>2</td>
+                <td>41.8 kW</td>
+                <td><span class="pill chg">Charging</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-005<small>AC 7 kW</small></td>
+                <td>Sample Site: Depot Gate</td>
+                <td>1</td>
+                <td>0 kW</td>
+                <td><span class="pill off">Offline</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+    <nav class="tabbar" aria-label="Quick">
+      <a href="#" aria-current="page">Overview</a><a href="#">Live</a
+      ><a href="#">Chargers</a><a href="#">Reports</a><a href="#">More</a>
+    </nav>
+  </body>
+</html>
