@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("demo: site, charger, connection, test, config, price and hand-over", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/commission");
   await expect(page.getByText(/DEMO MODE/)).toBeVisible();
 
   // 1. Site
@@ -42,6 +42,7 @@ test("demo: site, charger, connection, test, config, price and hand-over", async
   await page.waitForTimeout(1500);
   await page.getByRole("button", { name: "Stop test session" }).click();
   await expect(page.getByText(/^Passed/)).toBeVisible();
+  await expect(page.getByText("Test session (not billed).")).toBeVisible();
   await page.getByRole("button", { name: "Read configuration" }).click();
   await expect(page.getByText("300 s")).toBeVisible();
   await page.getByLabel("Seconds").fill("120");
@@ -62,6 +63,19 @@ test("demo: site, charger, connection, test, config, price and hand-over", async
   expect(pdf.headers()["content-type"]).toBe("application/pdf");
   const report = await page.request.get(`/api/chargers/${charger.id}/report`);
   expect((await report.body()).subarray(0, 5).toString()).toBe("%PDF-");
+
+  // Mark in service: recorded with its time; a stale test start is refused.
+  await page.getByRole("button", { name: "Mark in service" }).click();
+  await expect(page.getByText(/In service since 20/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Start test session" }),
+  ).toBeDisabled();
+  const stale = await page.request.post(`/api/chargers/${charger.id}/test`, {
+    data: { action: "start", connector: 1 },
+    headers: { origin: new URL(page.url()).origin },
+  });
+  expect(stale.status()).toBe(409);
+  expect((await stale.json()).error).toBe("in_service");
 
   // README screenshot of the finished demo (wizard state lives in the page).
   if (process.env.SCREENSHOT) {

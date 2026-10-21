@@ -85,6 +85,11 @@ export interface Session {
    * these, not from what it planned.
    */
   sent?: SentProfile[];
+  /**
+   * Baseline on: what the charger's baseline let a new transaction draw when this
+   * session was registered, W (counted until its own profile is in force).
+   */
+  startBaselineW?: number;
 }
 
 export interface SentProfile {
@@ -99,6 +104,40 @@ export interface SentProfile {
   profileId?: string;
   /** The charger accepted it. */
   confirmed: boolean;
+}
+
+/**
+ * A charger the depot has seen (live mode, baseline on). Its baseline is a
+ * `tx_default` profile that limits a session until its own session profile is in force.
+ */
+export interface Charger {
+  /** `st-<station ID>`. */
+  id: string;
+  stationId: number;
+  protocol?: string;
+  /**
+   * The station's connectors, from `GET /stations/{id}`: the baseline covers all of
+   * them. `maxW` is the connector rating (null when the station reports none). A
+   * connector seen once stays in the split.
+   */
+  connectors: { id: number; maxW: number | null }[];
+  /** Baseline profiles sent for this charger, counted like a session's. */
+  sent?: SentProfile[];
+  /** Number of the last baseline profile, for its idempotency key. */
+  seq?: number;
+  /** Random part of the idempotency keys, so they stay unique if the store is reset. */
+  keyId: string;
+  /** Each connector's share of the cap in the last plan, W. */
+  shareW?: number;
+  /** The cap and connector total that share was planned for. */
+  plan?: string;
+  /**
+   * The charger rejected its baseline, or does not support it, under `plan`, at
+   * `at`. It is not sent again until the plan changes or an hour has passed;
+   * meanwhile the charger counts as having no baseline (its connectors are reserved
+   * at their rating). An offline station or a dispatch error is not a refusal.
+   */
+  refused?: { plan?: string; why: string; at?: string };
 }
 
 export interface Transaction {
@@ -120,4 +159,6 @@ export interface Settings {
   siteCapKw: number;
   centsPerKwh: number;
   currency: string;
+  /** Live mode: keep a per-charger baseline profile (BASELINE_PROFILE). */
+  baselineProfile?: boolean;
 }

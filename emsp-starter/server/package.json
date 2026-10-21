@@ -1,0 +1,39 @@
+{
+  "name": "emsp-starter-server",
+  "version": "0.1.0",
+  "private": true,
+  "license": "Apache-2.0",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "check:migrations": "node ../../tools/check-migrations supabase/migrations",
+    "brand:sync": "node scripts/sync-brand.mjs",
+    "db:migrate": "node --env-file=.env.local scripts/migrate.mjs"
+  },
+  "dependencies": {
+    "next": "^16.4.2",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "server-only": "^0.0.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "@playwright/test": "~1.63.0",
+    "@types/node": "^26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "postgres": "^3.4.9",
+    "prettier": "^3.9.10",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5"
+  }
+}

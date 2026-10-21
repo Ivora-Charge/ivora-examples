@@ -274,7 +274,7 @@ describe("Ivora client", () => {
     expect(await backend.getStation("7")).toEqual({
       state: "booted",
       boot: { vendor: "Acme", model: "AC-7", firmware: null },
-      connectors: [{ resourceId: "701", number: 1 }],
+      connectors: [{ resourceId: "701", number: 1, status: null }],
     });
   });
 
@@ -313,8 +313,9 @@ describe("Ivora client", () => {
     const tx = {
       id: 9001,
       connector_id: 701,
+      id_token: "****TEST",
       active: false,
-      started_at: "2026-10-19T12:00:00Z",
+      started_at: "2026-10-19T12:00:20Z",
       ended_at: "2026-10-19T12:01:00Z",
       energy_kwh: "0.425",
     };
@@ -334,6 +335,67 @@ describe("Ivora client", () => {
     });
     expect(calls[0].url).toContain("/v1/tenants/42/transactions?station_id=7");
     expect((await backend.getTransaction("9001")).energyWh).toBe(425);
+  });
+
+  it("adopts only a test-token session on the connector, never a driver's", async () => {
+    const base = {
+      connector_id: 701,
+      active: true,
+      ended_at: null,
+      energy_kwh: "0",
+    };
+    const rows = [
+      {
+        ...base,
+        id: 1,
+        id_token: "****9999",
+        started_at: "2026-10-19T12:00:30Z",
+      },
+      { ...base, id: 2, id_token: null, started_at: "2026-10-19T12:00:30Z" },
+      {
+        ...base,
+        id: 3,
+        id_token: "****TEST",
+        started_at: "2026-10-19T11:59:59Z",
+      },
+      {
+        ...base,
+        id: 4,
+        id_token: "****TEST",
+        connector_id: 702,
+        started_at: "2026-10-19T12:00:30Z",
+      },
+    ];
+    const { backend } = fakeApi([
+      { status: 200, body: { data: rows } },
+      { status: 200, body: { data: rows } },
+      { status: 200, body: { data: rows } },
+    ]);
+    const since = "2026-10-19T12:00:00Z";
+    expect(await backend.findTransaction("7", "701", since)).toBeNull();
+    // Anyone's active session makes the connector busy.
+    expect(await backend.hasActiveTransaction("7", "701")).toBe(true);
+    const mine = { ...rows[0], id: 5, id_token: "****TEST" };
+    const again = fakeApi([{ status: 200, body: { data: [...rows, mine] } }]);
+    expect(
+      await again.backend.findTransaction("7", "701", since),
+    ).toMatchObject({ transactionId: "5" });
+  });
+
+  it("accepts a transaction with active: null", async () => {
+    const tx = {
+      id: 9002,
+      connector_id: 701,
+      active: null,
+      started_at: "2026-10-19T12:00:00Z",
+      ended_at: null,
+      energy_kwh: "0.1",
+    };
+    const { backend } = fakeApi([{ status: 200, body: tx }]);
+    expect(await backend.getTransaction("9002")).toMatchObject({
+      transactionId: "9002",
+      active: true,
+    });
   });
 
   it("refreshes, then reads configuration back", async () => {

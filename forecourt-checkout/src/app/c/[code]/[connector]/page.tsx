@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ErrorBox } from "@/components/error-box";
 import { PayButton } from "@/components/pay-button";
 import { formatCents } from "@/lib/money";
@@ -48,18 +49,20 @@ export default async function Charger({
   const c = page.connector;
   return (
     <main>
-      <p className="muted" style={{ marginBottom: 0 }}>
-        {page.name}
-      </p>
-      <h1>
-        {c.label}{" "}
-        {c.maxPowerW ? (
-          <span className="muted">
-            up to {Math.round(c.maxPowerW / 1000)} kW
-          </span>
-        ) : null}
-      </h1>
-      {statusPill(c.status, c.available)}
+      <header className="board">
+        <p className="muted" style={{ marginBottom: 0 }}>
+          {page.name}
+        </p>
+        <h1>
+          {c.label}{" "}
+          {c.maxPowerW ? (
+            <span className="muted">
+              up to {Math.round(c.maxPowerW / 1000)} kW
+            </span>
+          ) : null}
+        </h1>
+        {statusPill(c.status, c.available)}
+      </header>
 
       <section className="card">
         <h2>Prices</h2>
@@ -119,7 +122,10 @@ export default async function Charger({
         </p>
       </section>
 
-      <section className="card stack">
+      <section className="card stack" aria-label="Pay here by card">
+        {page.payInStore ? (
+          <h2 style={{ margin: 0 }}>Pay here by card</h2>
+        ) : null}
         <p style={{ margin: 0 }}>
           We place a{" "}
           <strong>{formatCents(page.holdCents, page.currency)}</strong> hold on
@@ -139,6 +145,22 @@ export default async function Charger({
             : "Card, Apple Pay or Google Pay, through Stripe."}
         </p>
       </section>
+
+      {page.payInStore ? (
+        <section className="card stack" aria-label="Pay at the counter">
+          <h2 style={{ margin: 0 }}>Pay at the counter</h2>
+          <p style={{ margin: 0 }}>
+            Pay cash or card in the store, like fuel. Tell the cashier{" "}
+            <strong>{page.label}</strong>.
+          </p>
+          <Link
+            className="button secondary block"
+            href={`/c/${encodeURIComponent(page.code)}/${c.number}/counter`}
+          >
+            Pay at the counter: tell the cashier {page.label}
+          </Link>
+        </section>
+      ) : null}
     </main>
   );
 }

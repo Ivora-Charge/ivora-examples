@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { inflateSync } from "node:zlib";
 import { PDFDocument } from "pdf-lib";
 import {
   PASSWORD_PATTERN,
@@ -8,7 +9,7 @@ import {
   maskSecret,
 } from "@/lib/credentials";
 import { pdfText, reportPdf, stickerPdf } from "@/lib/pdf";
-import type { Charger, Site } from "@/lib/types";
+import { TEST_SESSION_LABEL, type Charger, type Site } from "@/lib/types";
 
 describe("credentials", () => {
   it("generates strong passwords the API accepts", () => {
@@ -120,6 +121,38 @@ describe("PDFs", () => {
       await reportPdf({ charger: bare, site, stickerBase: null }),
     );
     expect(doc.getPageCount()).toBe(1);
+  });
+
+  it("labels the test session and shows the in-service time", async () => {
+    const text = async (c: Charger) => {
+      const bytes = await reportPdf({ charger: c, site, stickerBase: null });
+      const doc = await PDFDocument.load(bytes);
+      const out: string[] = [];
+      for (const ref of doc.context.enumerateIndirectObjects()) {
+        const [, obj] = ref;
+        const contents = (obj as { contents?: Uint8Array }).contents;
+        if (!contents) continue;
+        try {
+          out.push(Buffer.from(inflateSync(contents)).toString("latin1"));
+        } catch {
+          // Not a compressed stream (fonts, metadata).
+        }
+      }
+      return out.join("\n");
+    };
+    // The standard fonts write strings as hex.
+    const shown = (t: string, v: string) =>
+      expect(t).toContain(
+        `<${Buffer.from(v).toString("hex").toUpperCase()}> Tj`,
+      );
+    const before = await text(charger);
+    shown(before, TEST_SESSION_LABEL);
+    shown(before, "Not yet");
+    const after = await text({
+      ...charger,
+      inServiceAt: "2026-10-19T13:00:00.000Z",
+    });
+    shown(after, "2026-10-19T13:00:00.000Z");
   });
 
   it("replaces characters the standard fonts cannot encode", () => {

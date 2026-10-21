@@ -47,6 +47,11 @@ export const config = {
   get replanIntervalSeconds() {
     return num("REPLAN_INTERVAL_SECONDS", 60);
   },
+  /** Opt-in: a per-charger baseline profile that covers the plug-in gap (live mode only). */
+  get baselineProfile() {
+    const v = env("BASELINE_PROFILE");
+    return v === "1" || v === "true";
+  },
   get centsPerKwh() {
     return Math.round(num("TARIFF_CENTS_PER_KWH", 28));
   },

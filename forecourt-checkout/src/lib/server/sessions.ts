@@ -10,6 +10,7 @@ import {
 } from "../tariff";
 import { idleFeeTiming } from "../idle";
 import { buildReceipt, type SessionView } from "../view";
+import { chargerLabel } from "../store";
 import type { Bill, ExternalSession, IvoraClient, Station } from "./ivora";
 import { IvoraError } from "./ivora";
 
@@ -80,6 +81,8 @@ export function holdFor(tariff: Tariff, settings: Settings) {
 export type ChargerPage = {
   demo: boolean;
   code: string;
+  /** "Charger 3": what the driver tells the cashier. */
+  label: string;
   name: string;
   connector: {
     number: number;
@@ -101,6 +104,8 @@ export type ChargerPage = {
   currency: string;
   graceMinutes: number;
   idlePerMinuteCents: number;
+  /** The site also takes payment at the counter. */
+  payInStore: boolean;
 };
 
 function connectorLabel(c: Station["connectors"][number]) {
@@ -155,6 +160,11 @@ export async function loadChargerPage(
   return chargerPage({
     demo: false,
     code,
+    label: chargerLabel(
+      code,
+      connectorNumber,
+      station.connectors.filter((c) => c.number !== null).length,
+    ),
     name: station.name,
     connector: {
       number: connectorNumber,
@@ -172,6 +182,7 @@ export async function loadChargerPage(
 export function chargerPage(input: {
   demo: boolean;
   code: string;
+  label: string;
   name: string;
   connector: ChargerPage["connector"];
   tariff: Tariff;
@@ -182,6 +193,7 @@ export function chargerPage(input: {
   return {
     demo: input.demo,
     code: input.code,
+    label: input.label,
     name: input.name,
     connector: input.connector,
     prices: priceLines(b),
@@ -197,6 +209,7 @@ export function chargerPage(input: {
     currency: input.tariff.currency,
     graceMinutes: input.settings.idleGraceMinutes,
     idlePerMinuteCents: Math.round(b.idlePerHour / 100 / 60),
+    payInStore: input.settings.payInStore,
   };
 }
 
@@ -344,7 +357,7 @@ async function releaseHold(
 }
 
 /** Bills on simple tariffs may carry no breakdown: show one energy line. */
-function breakdownOf(bill: Bill): Quote {
+export function breakdownOf(bill: Bill): Quote {
   if (bill.cost_breakdown) return bill.cost_breakdown;
   const total = bill.total_minor ?? 0;
   const kwh = ((bill.energy_wh ?? 0) / 1000).toFixed(3);

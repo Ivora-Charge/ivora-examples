@@ -13,18 +13,25 @@ export type Answer =
   | "pending-later" // the charger applies it only when the answer arrives
   | "reject" // the charger answers Rejected
   | "offline" // 409 station_offline, nothing sent
+  | "offline-rejected" // 202, operation rejected with station_offline, nothing sent
   | "unknown-applied" // 503 outcome_unknown, but it was applied
-  | "unknown-lost"; // 503 outcome_unknown, nothing happened
+  | "unknown-lost" // 503 outcome_unknown, nothing happened
+  | "unsupported"; // 409 smart_charging_unsupported, nothing sent
 
 export interface StationProfile {
   id: string;
-  tx: number;
+  purpose: string;
+  station: number;
+  /** Undefined for a baseline (tx_default) profile. */
+  tx?: number;
   stack: number;
   startAt: number;
   periods: { start_offset_seconds: number; limit: number }[];
   state: "pending" | "accepted" | "rejected" | "cleared" | "replaced" | "ended";
   /** The charger is applying it. */
   installed: boolean;
+  /** Why it was rejected, as GET /charging-profiles/{id} reports it. */
+  error?: { code: string; message: string };
 }
 
 interface Reply {
@@ -35,10 +42,18 @@ interface Reply {
 export function fakeStation(opts: {
   protocol: "ocpp1.6" | "ocpp2.0.1";
   answer?: (c: Call) => Answer;
+  /** Called before every request, with the profiles as they were. */
+  beforeRequest?: (c: Call) => void;
   /** Called after every request, with the profiles as they are now. */
-  onChange?: () => void;
+  onChange?: (c: Call) => void;
+  /** Stations served by GET /stations/{id}: connector ID and rating (W, or null). */
+  stations?: Record<number, { id: number; maxW: number | null }[]>;
+  /** False makes GET /stations/{id} fail (503). */
+  stationLookup?: (station: number) => boolean;
 }) {
   const profiles: StationProfile[] = [];
+  /** Transactions started with startTx(): what governs them before their own profile. */
+  const txs = new Map<number, { station: number; startW: number }>();
   const replies = new Map<string, Reply>();
   /**
    * Charger answers the app has not heard yet. `applied`: the charger has already
@@ -55,11 +70,38 @@ export function fakeStation(opts: {
     status: 409,
     json: { error: { code: "station_offline", message: "offline" } },
   };
+  const unsupported: Reply = {
+    status: 409,
+    json: {
+      error: {
+        code: "smart_charging_unsupported",
+        message: "no smart charging",
+      },
+    },
+  };
+  const ratingW = (station: number, connectorId: number) => {
+    const conns = opts.stations?.[station] ?? [];
+    const w = (x: { maxW: number | null }) => x.maxW ?? 11000;
+    const c = conns.find((x) => x.id === connectorId);
+    return c ? w(c) : Math.max(0, ...conns.map(w));
+  };
+
+  const highest = (p: StationProfile) =>
+    Math.max(...p.periods.map((x) => x.limit));
+  /** Sent, not acted on by the charger yet: it may still be applied. */
+  const inFlight = (p: StationProfile) => !p.installed && p.state === "pending";
 
   function install(p: StationProfile) {
     if (opts.protocol === "ocpp1.6")
       for (const x of profiles)
-        if (x !== p && x.tx === p.tx && x.stack === p.stack && x.installed) {
+        if (
+          x !== p &&
+          x.purpose === p.purpose &&
+          x.station === p.station &&
+          x.tx === p.tx &&
+          x.stack === p.stack &&
+          x.installed
+        ) {
           x.installed = false;
           x.state = "replaced";
         }
@@ -82,8 +124,11 @@ export function fakeStation(opts: {
   function setProfile(c: Call, a: Answer): Reply {
     catchUp();
     const body = JSON.parse(c.body!);
+    const station = Number(c.url.match(/\/stations\/(\d+)\//)?.[1]);
     const live = profiles.filter(
       (x) =>
+        x.purpose === body.purpose &&
+        x.station === station &&
         x.tx === body.transaction_id &&
         x.stack === body.stack_level &&
         (x.state === "pending" || x.state === "accepted"),
@@ -100,9 +145,11 @@ export function fakeStation(opts: {
       };
     const p: StationProfile = {
       id: `chp_${++n}`,
+      purpose: body.purpose,
+      station,
       tx: body.transaction_id,
       stack: body.stack_level,
-      startAt: Date.parse(body.start_at),
+      startAt: Date.parse(body.start_at ?? "1970-01-01T00:00:00Z"),
       periods: body.periods,
       state: "pending",
       installed: false,
@@ -147,8 +194,9 @@ export function fakeStation(opts: {
   }
 
   const api = fakeFetch((c) => {
+    opts.beforeRequest?.(c);
     const reply = route(c);
-    opts.onChange?.();
+    opts.onChange?.(c);
     return reply;
   });
 
@@ -159,6 +207,21 @@ export function fakeStation(opts: {
     if (c.method === "POST" && /\/charging-profiles$/.test(path)) {
       const a = answer(c);
       if (a === "offline") return offline;
+      if (a === "offline-rejected") {
+        const r: Reply = {
+          status: 202,
+          json: {
+            id: `op_offline_${++n}`,
+            status: "rejected",
+            result: {
+              error: { code: "station_offline", message: "station offline" },
+            },
+          },
+        };
+        if (key) replies.set(key, r);
+        return r;
+      }
+      if (a === "unsupported") return unsupported;
       if (a === "unknown-lost") return unknown;
       const r = setProfile(c, a);
       if (key && r.status !== 422) replies.set(key, r);
@@ -167,7 +230,8 @@ export function fakeStation(opts: {
     const del = path.match(/\/charging-profiles\/([^/]+)$/);
     if (c.method === "DELETE" && del) {
       const a = answer(c);
-      if (a === "offline") return offline;
+      if (a === "offline" || a === "offline-rejected" || a === "unsupported")
+        return offline;
       if (a === "unknown-lost") return unknown;
       const r = clearProfile(decodeURIComponent(del[1]));
       if (key) replies.set(key, r);
@@ -176,8 +240,32 @@ export function fakeStation(opts: {
     if (c.method === "GET" && del) {
       const p = profiles.find((x) => x.id === decodeURIComponent(del[1]));
       return p
-        ? { json: { id: p.id, status: p.state, stack_level: p.stack } }
+        ? {
+            json: {
+              id: p.id,
+              status: p.state,
+              stack_level: p.stack,
+              error: p.error ?? null,
+            },
+          }
         : { status: 404, json: { error: { code: "not_found", message: "" } } };
+    }
+    const st = path.match(/^\/stations\/(\d+)$/);
+    if (c.method === "GET" && st && opts.stations?.[Number(st[1])]) {
+      const id = Number(st[1]);
+      if (opts.stationLookup && !opts.stationLookup(id)) return unknown;
+      return {
+        json: {
+          id,
+          name: `station-${id}`,
+          protocol: opts.protocol,
+          connectors: opts.stations[id].map((x, i) => ({
+            id: x.id,
+            number: i + 1,
+            max_power_w: x.maxW,
+          })),
+        },
+      };
     }
     if (c.method === "POST" && /\/composite-schedule$/.test(path))
       return {
@@ -207,8 +295,36 @@ export function fakeStation(opts: {
       else if (p.state === "pending") p.state = "accepted";
       return m;
     },
+    /**
+     * What a new transaction on this station may draw before its own session profile
+     * is in force: the installed tx_default profile of the highest stack level.
+     */
+    baselineW(station: number): number | undefined {
+      const base = profiles.filter(
+        (p) =>
+          p.purpose === "tx_default" && p.station === station && p.installed,
+      );
+      if (base.length === 0) return undefined;
+      return base.reduce((a, b) => (b.stack >= a.stack ? b : a)).periods[0]
+        .limit;
+    },
+    /**
+     * A vehicle plugs in: the charger applies the tx_default profile in force now to
+     * this transaction (OCPP: for new transactions), or its own default, the
+     * connector rating, when there is none.
+     */
+    startTx(tx: number, station: number, connectorId: number) {
+      txs.set(tx, {
+        station,
+        startW: Math.min(
+          this.baselineW(station) ?? Infinity,
+          ratingW(station, connectorId),
+        ),
+      });
+    },
     /** The session ended: the charger drops its session profiles. */
     endTx(tx: number) {
+      txs.delete(tx);
       for (const p of profiles)
         if (p.tx === tx) {
           p.installed = false;
@@ -216,12 +332,60 @@ export function fakeStation(opts: {
             p.state = "ended";
         }
     },
+    /** What a vehicle plugging into this connector now may draw, W. */
+    idleW(station: number, connectorId: number) {
+      return Math.min(
+        this.baselineW(station) ?? Infinity,
+        ratingW(station, connectorId),
+      );
+    },
     /**
      * What the charger lets this transaction draw at `at`, W: the installed profile
-     * with the highest stack level (the latest at equal levels). Undefined when it
-     * applies none (the charger's own default).
+     * with the highest stack level (the latest at equal levels). Without one, what
+     * governed it at startTx(); for a transaction not started that way, the current
+     * baseline (undefined when there is none: the charger's own default).
      */
-    limitW(tx: number, at: number): number | undefined {
+    limitW(tx: number, at: number, station = 12): number | undefined {
+      return (
+        this.ownLimitW(tx, at) ?? txs.get(tx)?.startW ?? this.baselineW(station)
+      );
+    },
+    /**
+     * The most this transaction may draw now or once the answers in flight land, W:
+     * its own installed profile (else what governed it at startTx(), when `covered`),
+     * and any of its profiles the charger has not acted on yet. Highest period.
+     */
+    worstTxW(tx: number, covered: boolean): number {
+      const mine = profiles.filter((p) => p.tx === tx);
+      const installed = mine.filter((p) => p.installed);
+      const now = installed.length
+        ? highest(installed.reduce((a, b) => (b.stack >= a.stack ? b : a)))
+        : covered
+          ? (txs.get(tx)?.startW ?? 0)
+          : 0;
+      return Math.max(now, ...mine.filter(inFlight).map(highest));
+    },
+    /** The baseline in force or in flight at this station, W; undefined when there is none. */
+    worstBaselineW(station: number): number | undefined {
+      const mine = profiles.filter(
+        (p) => p.purpose === "tx_default" && p.station === station,
+      );
+      const w = [
+        this.baselineW(station),
+        ...mine.filter(inFlight).map(highest),
+      ];
+      const known = w.filter((x) => x !== undefined);
+      return known.length ? Math.max(...known) : undefined;
+    },
+    /** What a vehicle plugging into this idle connector may draw, in flight included, W. */
+    worstIdleW(station: number, connectorId: number) {
+      return Math.min(
+        this.worstBaselineW(station) ?? Infinity,
+        ratingW(station, connectorId),
+      );
+    },
+    /** The transaction's own installed profile at `at`, W; undefined when it has none. */
+    ownLimitW(tx: number, at: number): number | undefined {
       const mine = profiles.filter((p) => p.tx === tx && p.installed);
       if (mine.length === 0) return undefined;
       const top = mine.reduce((a, b) => (b.stack >= a.stack ? b : a));

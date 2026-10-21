@@ -16,7 +16,7 @@ export default async function Sticker({
   const { code } = await params;
   const found = isStickerCode(code) ? resolveStickerCode(code) : null;
   return (
-    <main>
+    <main id="main">
       {found?.charger.demo && (
         <p className="banner">Demo sticker: simulated charger.</p>
       )}

@@ -1,0 +1,904 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overview · Ampleaf</title>
+    <style>
+      @font-face {
+        font-family: Manrope;
+        font-weight: 400;
+        src: url(fonts/manrope-latin-400-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Manrope;
+        font-weight: 600;
+        src: url(fonts/manrope-latin-600-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Manrope;
+        font-weight: 800;
+        src: url(fonts/manrope-latin-800-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: Fraunces;
+        font-weight: 600;
+        src: url(fonts/fraunces-latin-600-normal.woff2) format("woff2");
+      }
+      :root {
+        --bg: #f2f5ec;
+        --surface: #ffffff;
+        --ink: #10241a;
+        --muted: #4a5e52;
+        --primary: #17613a;
+        --on-primary: #ffffff;
+        --accent: #c5f24a;
+        --on-accent: #10241a;
+        --ok: #0b6b5c;
+        --warn: #8a4b00;
+        --danger: #b3261e;
+        --line: color-mix(in srgb, var(--ink) 11%, transparent);
+        --tint: color-mix(in srgb, var(--primary) 8%, var(--surface));
+        --radius: 12px;
+        --leaf: 18px 3px 18px 3px;
+        --shadow:
+          0 1px 2px color-mix(in srgb, var(--ink) 8%, transparent),
+          0 6px 20px -12px color-mix(in srgb, var(--ink) 18%, transparent);
+        --font-ui: Manrope, system-ui, sans-serif;
+        --font-num: Fraunces, Georgia, serif;
+        color-scheme: light;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0b130e;
+          --surface: #132019;
+          --ink: #e7f1e9;
+          --muted: #9bb2a3;
+          --primary: #6fd394;
+          --on-primary: #06200f;
+          --accent: #c9f55a;
+          --on-accent: #10241a;
+          --ok: #5ed6bf;
+          --warn: #f2b25c;
+          --danger: #ff8f85;
+          color-scheme: dark;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 400 15px/1.5 var(--font-ui);
+        font-feature-settings: "tnum";
+      }
+      .demo {
+        margin: 0;
+        padding: 8px 20px;
+        font-size: 13px;
+        background: var(--tint);
+        border-bottom: 1px solid var(--line);
+        color: var(--ink);
+      }
+      .demo b {
+        margin-right: 8px;
+        padding: 1px 9px;
+        border-radius: 8px 2px 8px 2px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font-size: 12px;
+        font-weight: 800;
+      }
+      .shell {
+        display: grid;
+        grid-template-columns: 248px 1fr;
+        min-height: calc(100vh - 38px);
+      }
+      aside {
+        padding: 20px 14px;
+        border-right: 1px solid var(--line);
+        background: var(--surface);
+        display: flex;
+        flex-direction: column;
+        gap: 20px;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 8px;
+        font: 600 23px var(--font-num);
+        letter-spacing: -0.02em;
+      }
+      .brand svg {
+        width: 34px;
+        height: 34px;
+        flex: none;
+      }
+      .ws {
+        display: flex;
+        flex-direction: column;
+        padding: 10px 12px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--bg);
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .ws small {
+        font-weight: 400;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      nav h2 {
+        margin: 0 0 6px 10px;
+        font-size: 11px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 800;
+      }
+      nav ul {
+        list-style: none;
+        margin: 0 0 16px;
+        padding: 0;
+      }
+      nav a {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 40px;
+        padding: 0 10px;
+        border-radius: 9px;
+        color: var(--ink);
+        text-decoration: none;
+        font-weight: 600;
+        font-size: 14px;
+      }
+      .ic {
+        width: 20px;
+        height: 20px;
+        flex: none;
+        fill: none;
+        stroke: currentColor;
+        stroke-width: 2;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      nav a .ic {
+        color: var(--muted);
+      }
+      nav a[aria-current] {
+        background: var(--accent);
+        color: var(--on-accent);
+        border-radius: var(--leaf);
+      }
+      nav a[aria-current] .ic {
+        color: var(--on-accent);
+      }
+      nav a em {
+        margin-left: auto;
+        font-style: normal;
+        font-size: 11px;
+        color: var(--muted);
+        font-weight: 400;
+      }
+      nav a[aria-current] em {
+        color: var(--on-accent);
+      }
+      main {
+        padding: 28px 36px 48px;
+        max-width: 1180px;
+      }
+      .head {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-end;
+        gap: 16px;
+        flex-wrap: wrap;
+        margin-bottom: 22px;
+      }
+      h1 {
+        margin: 0;
+        font: 600 34px/1.1 var(--font-num);
+        letter-spacing: -0.02em;
+      }
+      .head p {
+        margin: 6px 0 0;
+        color: var(--muted);
+      }
+      .seg {
+        display: inline-flex;
+        padding: 3px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--surface);
+      }
+      .seg button {
+        min-height: 36px;
+        padding: 0 14px;
+        border: 0;
+        border-radius: 8px;
+        background: none;
+        font: 600 13px var(--font-ui);
+        color: var(--muted);
+      }
+      .seg button[aria-pressed="true"] {
+        background: var(--primary);
+        color: var(--on-primary);
+        border-radius: 10px 2px 10px 2px;
+      }
+      .kpis {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
+        padding: 18px 20px;
+      }
+      .kpi small {
+        display: block;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .kpi strong {
+        display: block;
+        margin: 4px 0 2px;
+        font: 600 34px/1.1 var(--font-num);
+        letter-spacing: -0.02em;
+      }
+      .kpi span {
+        font-size: 12px;
+        color: var(--ok);
+        font-weight: 600;
+      }
+      .kpi svg {
+        display: block;
+        width: 100%;
+        height: 28px;
+        margin-top: 8px;
+        color: var(--primary);
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: 1.7fr 1fr;
+        gap: 14px;
+        margin-bottom: 14px;
+      }
+      h2.t {
+        margin: 0 0 14px;
+        font-size: 15px;
+        font-weight: 800;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      h2.t a {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--primary);
+        text-decoration: underline;
+        text-decoration-thickness: 1px;
+        text-underline-offset: 3px;
+      }
+      .bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 12px;
+        height: 150px;
+        margin-top: 30px;
+        border-bottom: 1px solid var(--line);
+      }
+      .bars div {
+        flex: 1;
+        position: relative;
+        border-radius: 8px 2px 0 0;
+        background: color-mix(in srgb, var(--primary) 30%, var(--surface));
+      }
+      .bars div.hi {
+        background: var(--primary);
+      }
+      .bars div.hi span {
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 50%;
+        translate: -50%;
+        padding: 1px 8px;
+        border-radius: 8px 2px 8px 2px;
+        background: var(--accent);
+        color: var(--on-accent);
+        font-size: 12px;
+        font-weight: 800;
+        white-space: nowrap;
+      }
+      .days {
+        display: flex;
+        gap: 12px;
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .days span {
+        flex: 1;
+        text-align: center;
+      }
+      .steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 10px;
+      }
+      .steps li {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        font-size: 14px;
+      }
+      .steps b {
+        flex: none;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        display: grid;
+        place-items: center;
+        font-size: 12px;
+        border: 2px solid var(--line);
+        color: var(--muted);
+      }
+      .steps li.done b {
+        background: var(--ok);
+        border-color: var(--ok);
+        color: var(--surface);
+      }
+      .steps small {
+        display: block;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .bar {
+        height: 6px;
+        border-radius: 9px;
+        background: var(--line);
+        margin: 0 0 14px;
+      }
+      .bar i {
+        display: block;
+        width: 50%;
+        height: 100%;
+        border-radius: 9px;
+        background: var(--primary);
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 14px;
+      }
+      th {
+        padding: 0 12px 10px 0;
+        text-align: left;
+        font-size: 12px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 800;
+        border-bottom: 1px solid var(--line);
+      }
+      td {
+        padding: 13px 12px 13px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      tr:last-child td {
+        border: 0;
+      }
+      td:first-child {
+        font-weight: 600;
+      }
+      td small {
+        display: block;
+        font-weight: 400;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 2px 10px;
+        border-radius: 99px;
+        font-size: 12px;
+        font-weight: 800;
+        background: color-mix(in srgb, var(--c) 14%, var(--surface));
+        color: var(--c);
+      }
+      .pill::before {
+        content: "";
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: currentColor;
+      }
+      .pill.ok {
+        --c: var(--ok);
+      }
+      .pill.chg {
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+      .pill.off {
+        --c: var(--danger);
+      }
+      .pill.off::before {
+        border-radius: 2px;
+      }
+      .tabbar {
+        display: none;
+      }
+      @media (max-width: 899px) {
+        .shell {
+          display: block;
+        }
+        aside {
+          flex-direction: row;
+          align-items: center;
+          justify-content: space-between;
+          padding: 10px 16px;
+          border: 0;
+          border-bottom: 1px solid var(--line);
+        }
+        aside nav,
+        .ws {
+          display: none;
+        }
+        .menu {
+          display: inline-flex;
+          align-items: center;
+          gap: 8px;
+          min-height: 44px;
+          padding: 0 16px;
+          border: 1px solid var(--line);
+          border-radius: 10px;
+          background: var(--surface);
+          color: var(--ink);
+          font: 600 14px var(--font-ui);
+        }
+        main {
+          padding: 20px 16px 24px;
+        }
+        h1 {
+          font-size: 28px;
+        }
+        .kpis {
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+        }
+        .kpi strong {
+          font-size: 28px;
+        }
+        .card {
+          padding: 14px 16px;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+        .seg {
+          width: 100%;
+        }
+        .seg button {
+          flex: 1;
+        }
+        table,
+        thead,
+        tbody,
+        tr,
+        td {
+          display: block;
+        }
+        thead {
+          display: none;
+        }
+        tr {
+          display: grid;
+          grid-template-columns: 1fr auto;
+          padding: 12px 0;
+          border-bottom: 1px solid var(--line);
+        }
+        tr:last-child {
+          border: 0;
+        }
+        td {
+          padding: 0;
+          border: 0;
+        }
+        td:nth-child(3),
+        td:nth-child(4) {
+          display: none;
+        }
+        td:nth-child(2) {
+          grid-column: 1;
+        }
+        td:nth-child(5) {
+          grid-row: 1;
+          grid-column: 2;
+        }
+        .tabbar {
+          display: flex;
+          position: sticky;
+          bottom: 0;
+          background: var(--surface);
+          border-top: 1px solid var(--line);
+          padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+        }
+        .tabbar a {
+          flex: 1;
+          min-height: 48px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          gap: 2px;
+          font-size: 11px;
+          font-weight: 600;
+          color: var(--muted);
+          text-decoration: none;
+        }
+        .tabbar a[aria-current] {
+          color: var(--on-accent);
+        }
+      }
+      @media (min-width: 900px) {
+        .menu {
+          display: none;
+        }
+      }
+      @media (min-width: 900px) and (max-width: 1199px) {
+        .kpis {
+          grid-template-columns: 1fr 1fr;
+        }
+        .grid {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- Icons: Lucide (ISC). Mark: original, see logo.svg. -->
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="mark" viewBox="0 0 48 48">
+        <path
+          d="M18 2H46V30A16 16 0 0 1 30 46H2V18A16 16 0 0 1 18 2Z"
+          fill="var(--primary)"
+        />
+        <g
+          fill="none"
+          stroke="var(--accent)"
+          stroke-width="4"
+          stroke-linecap="round"
+        >
+          <path d="M11 37 33 15" />
+          <path d="M18 30V22M25 23V14" />
+        </g>
+        <circle cx="35.5" cy="12.5" r="3.5" fill="var(--accent)" />
+      </symbol>
+      <symbol id="i-dash" viewBox="0 0 24 24">
+        <rect width="7" height="9" x="3" y="3" rx="1" />
+        <rect width="7" height="5" x="14" y="3" rx="1" />
+        <rect width="7" height="9" x="14" y="12" rx="1" />
+        <rect width="7" height="5" x="3" y="16" rx="1" />
+      </symbol>
+      <symbol id="i-live" viewBox="0 0 24 24">
+        <path
+          d="M22 12h-2.48a2 2 0 0 0-1.930 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"
+        />
+      </symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24">
+        <path
+          d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"
+        />
+        <path d="m2 22 3-3M7.5 13.5 10 11M10.5 16.5 13 14M18 3l-4 4h6l-4 4" />
+      </symbol>
+      <symbol id="i-tag" viewBox="0 0 24 24">
+        <path
+          d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.420z"
+        />
+        <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24">
+        <path d="M3 3v16a2 2 0 0 0 2 2h16M18 17V9M13 17V5M8 17v-3" />
+      </symbol>
+      <symbol id="i-checks" viewBox="0 0 24 24">
+        <path d="M13 5h8M13 12h8M13 19h8M3 17l2 2 4-4M3 7l2 2 4-4" />
+      </symbol>
+      <symbol id="i-users" viewBox="0 0 24 24">
+        <path
+          d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.128a4 4 0 0 1 0 7.744M22 21v-2a4 4 0 0 0-3-3.87"
+        />
+        <circle cx="9" cy="7" r="4" />
+      </symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24">
+        <path
+          d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"
+        />
+        <circle cx="12" cy="12" r="3" />
+      </symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24">
+        <path d="M4 5h16M4 12h16M4 19h16" />
+      </symbol>
+      <symbol id="i-more" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="1" />
+        <circle cx="19" cy="12" r="1" />
+        <circle cx="5" cy="12" r="1" />
+      </symbol>
+    </svg>
+    <p class="demo" role="status">
+      <b>Demo</b>Sample data only. Nothing is sent to Ivora, chargers, payment
+      providers or email.
+    </p>
+    <div class="shell">
+      <aside>
+        <div class="brand">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><use href="#mark" /></svg
+          >ampleaf
+        </div>
+        <button class="menu">
+          <svg class="ic"><use href="#i-menu" /></svg>Menu
+        </button>
+        <div class="ws">
+          Your charging network<small
+            >Placeholder brand: replace in brand/</small
+          >
+        </div>
+        <nav aria-label="Main">
+          <h2>Run</h2>
+          <ul>
+            <li>
+              <a href="#" aria-current="page"
+                ><svg class="ic"><use href="#i-dash" /></svg>Overview</a
+              >
+            </li>
+            <li>
+              <a href="#"
+                ><svg class="ic"><use href="#i-live" /></svg>Live<em>3</em></a
+              >
+            </li>
+            <li>
+              <a href="#"
+                ><svg class="ic"><use href="#i-plug" /></svg>Chargers</a
+              >
+            </li>
+          </ul>
+          <h2>Money</h2>
+          <ul>
+            <li>
+              <a href="#"
+                ><svg class="ic"><use href="#i-tag" /></svg>Pricing</a
+              >
+            </li>
+            <li>
+              <a href="#"
+                ><svg class="ic"><use href="#i-chart" /></svg>Reports</a
+              >
+            </li>
+          </ul>
+          <h2>Workspace</h2>
+          <ul>
+            <li>
+              <a href="#"
+                ><svg class="ic"><use href="#i-checks" /></svg>Onboarding</a
+              >
+            </li>
+            <li>
+              <a href="#"
+                ><svg class="ic"><use href="#i-users" /></svg>Team</a
+              >
+            </li>
+            <li>
+              <a href="#"
+                ><svg class="ic"><use href="#i-gear" /></svg>Settings</a
+              >
+            </li>
+          </ul>
+        </nav>
+      </aside>
+      <main>
+        <div class="head">
+          <div>
+            <h1>Overview</h1>
+            <p>Sample Site network · updated 2 minutes ago</p>
+          </div>
+          <div class="seg" role="group" aria-label="Range">
+            <button aria-pressed="false">Today</button
+            ><button aria-pressed="true">7 days</button
+            ><button aria-pressed="false">30 days</button>
+          </div>
+        </div>
+        <section class="kpis" aria-label="Network summary">
+          <div class="card kpi">
+            <small>Charging now</small><strong>3</strong
+            ><span>of 11 connectors</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 22 L14 18 L28 20 L43 11 L57 14 L71 6 L85 9 L100 3"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+          <div class="card kpi">
+            <small>Chargers online</small><strong>5 / 6</strong
+            ><span>1 offline since 09:12</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 8 L20 8 L40 8 L60 8 L80 8 L100 20"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+          <div class="card kpi">
+            <small>Energy, 7 days</small><strong>1,284 kWh</strong
+            ><span>+12% on last week</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 20 L16 15 L33 17 L50 9 L66 12 L83 5 L100 7"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+          <div class="card kpi">
+            <small>Sessions, 7 days</small><strong>162</strong
+            ><span>+9 on last week</span
+            ><svg viewBox="0 0 100 28" preserveAspectRatio="none">
+              <path
+                d="M0 14 L16 18 L33 12 L50 15 L66 8 L83 11 L100 4"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2.5"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                vector-effect="non-scaling-stroke"
+              />
+            </svg>
+          </div>
+        </section>
+        <div class="grid">
+          <section class="card" aria-labelledby="e">
+            <h2 class="t" id="e">
+              Energy delivered <a href="#">Open reports</a>
+            </h2>
+            <div
+              class="bars"
+              role="img"
+              aria-label="Energy per day, Monday to Sunday, peaking on Saturday"
+            >
+              <div style="height: 52%"></div>
+              <div style="height: 61%"></div>
+              <div style="height: 48%"></div>
+              <div style="height: 70%"></div>
+              <div style="height: 82%"></div>
+              <div class="hi" style="height: 100%"><span>241 kWh</span></div>
+              <div style="height: 74%"></div>
+            </div>
+            <div class="days">
+              <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span
+              ><span>Fri</span><span>Sat</span><span>Sun</span>
+            </div>
+          </section>
+          <section class="card" aria-labelledby="s">
+            <h2 class="t" id="s">
+              Set up your network
+              <span
+                style="font-weight: 600; font-size: 13px; color: var(--muted)"
+                >2 of 4</span
+              >
+            </h2>
+            <div class="bar"><i></i></div>
+            <ol class="steps">
+              <li class="done"><b>✓</b><span>Connect Ivora</span></li>
+              <li class="done"><b>✓</b><span>Add your first site</span></li>
+              <li>
+                <b>3</b
+                ><span
+                  >Connect a charger<small>Takes about 5 minutes</small></span
+                >
+              </li>
+              <li>
+                <b>4</b
+                ><span
+                  >Make it yours<small
+                    >Replace the placeholder name and logo</small
+                  ></span
+                >
+              </li>
+            </ol>
+          </section>
+        </div>
+        <section class="card" aria-labelledby="c">
+          <h2 class="t" id="c">Chargers <a href="#">View all</a></h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Charger</th>
+                <th>Site</th>
+                <th>Connectors</th>
+                <th>Power now</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td>DEMO-001<small>AC 22 kW</small></td>
+                <td>Sample Site: Harbour Street</td>
+                <td>2</td>
+                <td>11.0 kW</td>
+                <td><span class="pill chg">Charging</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-002<small>AC 22 kW</small></td>
+                <td>Sample Site: Harbour Street</td>
+                <td>2</td>
+                <td>7.4 kW</td>
+                <td><span class="pill chg">Charging</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-003<small>DC 60 kW</small></td>
+                <td>Sample Site: Market Car Park</td>
+                <td>2</td>
+                <td>0 kW</td>
+                <td><span class="pill ok">Available</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-004<small>DC 60 kW</small></td>
+                <td>Sample Site: Market Car Park</td>
+                <td>2</td>
+                <td>41.8 kW</td>
+                <td><span class="pill chg">Charging</span></td>
+              </tr>
+              <tr>
+                <td>DEMO-005<small>AC 7 kW</small></td>
+                <td>Sample Site: Depot Gate</td>
+                <td>1</td>
+                <td>0 kW</td>
+                <td><span class="pill off">Offline</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </main>
+    </div>
+    <nav class="tabbar" aria-label="Quick">
+      <a href="#" aria-current="page"
+        ><svg class="ic"><use href="#i-dash" /></svg>Overview</a
+      ><a href="#"
+        ><svg class="ic"><use href="#i-live" /></svg>Live</a
+      ><a href="#"
+        ><svg class="ic"><use href="#i-plug" /></svg>Chargers</a
+      ><a href="#"
+        ><svg class="ic"><use href="#i-chart" /></svg>Reports</a
+      ><a href="#"
+        ><svg class="ic"><use href="#i-more" /></svg>More</a
+      >
+    </nav>
+  </body>
+</html>

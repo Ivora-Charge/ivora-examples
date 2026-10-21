@@ -30,6 +30,8 @@ export type Connector = {
   number: number;
   /** Stable sticker code, assigned once and never derived from an ID. */
   code?: string;
+  /** OCPP status from the last refresh, when the API reports one. */
+  status?: string | null;
 };
 
 export type BootInfo = {
@@ -55,6 +57,12 @@ export type TestRun = {
   /** Error code when the test failed (API code or a local one). */
   errorCode?: string;
 };
+
+/**
+ * Sessions started with the INSTALLER-TEST token are commissioning tests,
+ * not customer sessions. Every record that shows one uses this label.
+ */
+export const TEST_SESSION_LABEL = "Test session (not billed)";
 
 export type ConfigKey = "HeartbeatInterval" | "MeterValueSampleInterval";
 
@@ -86,6 +94,8 @@ export type Charger = {
   test?: TestRun;
   config?: ConfigReadback;
   tariffCentsPerKwh?: number;
+  /** Set by "Mark in service"; no test session can start after it. */
+  inServiceAt?: string;
   /** Counters that make idempotency keys unique per record and action. */
   seq: { credentials: number; test: number; config: number };
 };

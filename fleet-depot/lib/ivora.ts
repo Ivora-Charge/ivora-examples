@@ -247,10 +247,12 @@ export function createIvora(o: ClientOptions) {
         key,
       }),
     getChargingProfile: (stationId: number, profileId: string) =>
-      call<{ id: string; status: string; stack_level?: number }>(
-        "GET",
-        `/stations/${stationId}/charging-profiles/${enc(profileId)}`,
-      ),
+      call<{
+        id: string;
+        status: string;
+        stack_level?: number;
+        error?: { code?: string; message?: string } | null;
+      }>("GET", `/stations/${stationId}/charging-profiles/${enc(profileId)}`),
     clearChargingProfile: (stationId: number, profileId: string, key: string) =>
       call<Operation>(
         "DELETE",

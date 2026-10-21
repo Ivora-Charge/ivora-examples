@@ -1,4 +1,4 @@
-# Installer kit
+# Lugline (installer kit)
 
 For installers and hardware sellers: connect a site's OCPP 1.6J charger to Ivora, prove it works, and hand the site QR stickers and a one-page commissioning report, in minutes and with no new hardware.
 
@@ -7,11 +7,34 @@ For installers and hardware sellers: connect a site's OCPP 1.6J charger to Ivora
 3. **Wait for connection:** live status from webhooks (`station.connected`, `station.booted`, `station.disconnected`) and polling every 2 seconds. Shows vendor, model, firmware and connectors once the charger boots, with troubleshooting hints for a wrong URL, a wrong password or no network.
 4. **Test:** remote start and stop of a short session on a chosen connector, with energy delivered (kWh). Reads the heartbeat and meter value intervals back from the charger, and can change either and read it back again.
 5. **Price (optional):** a per-kWh price in integer cents with a quote preview, recorded on the report.
-6. **Hand-over:** a printable QR sticker PDF per connector and a commissioning report PDF (charger details, test result, configuration, date).
+6. **Hand-over:** a printable QR sticker PDF per connector and a commissioning report PDF (charger details, test result, configuration, date, in-service time). **Mark in service** records the time on the charger; after that the kit refuses to start a test on it (`409 in_service`).
 
 This template collects no payments. For paid charging, see [forecourt-checkout](../forecourt-checkout) and [Squid](https://github.com/Ivora-Charge/squid).
 
-![Installer kit demo: site, charger credentials, connection, test, price and hand-over](docs/screenshot.png)
+| Light                                                                                    | Dark                                                                                   |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| ![Lugline demo after hand-over, desktop, light](docs/screens/handover-desktop-light.png) | ![Lugline demo after hand-over, desktop, dark](docs/screens/handover-desktop-dark.png) |
+
+More in [docs/screens](docs/screens): landing, site, connect, test and hand-over at 1440 px and 390 px, light and dark. Regenerate them with `npm run build && npm run screenshots`.
+
+The landing page is at `/` (copy in `brand/brand.ts`, `landing`); the wizard is at `/commission`. Accessibility is checked with axe in `e2e/a11y.spec.ts`.
+
+## Make it yours in 5 minutes
+
+The whole brand lives in [`brand/`](brand); components use only its tokens.
+
+1. **Name and copy:** `brand/brand.ts` (product name, tagline, lead, support line, connect hint). A rename is the one `name` line.
+2. **Colours, type scale, radius, spacing:** `brand/tokens.css`. Each colour is `light-dark(<light>, <dark>)`. Run `npm test`: `tests/contrast.test.ts` fails if a text pair drops below WCAG AA (4.5:1) in either mode.
+3. **Logo:** `brand/logo.svg` (standalone file) and `brand/Logo.tsx` (the same paths inline, so it follows `currentColor` and `--accent`). Keep both in step.
+4. **Fonts:** put woff2 files in `brand/fonts/` and point `brand/fonts.ts` at them. Use open-licensed fonts and keep their license files next to them.
+
+Light and dark follow the system setting; the header button switches and remembers the choice in the browser. The design brief and the approved mock are in `brand/BRIEF.md` and `brand/mock/`.
+
+### Fonts and icons
+
+- [Barlow and Barlow Condensed](https://github.com/jpt/barlow), Copyright 2017 The Barlow Project Authors, SIL Open Font License 1.1 (`brand/fonts/OFL-Barlow.txt`).
+- [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), Copyright 2020 The JetBrains Mono Project Authors, SIL Open Font License 1.1 (`brand/fonts/OFL-JetBrainsMono.txt`).
+- The Lugline mark and the theme icon are original SVGs, Apache-2.0 with this template.
 
 ## Run locally
 
@@ -89,7 +112,7 @@ All calls go from the server to `https://api.ivoracharge.com` ([OpenAPI](https:/
 - Every write sends an `Idempotency-Key` derived from this app's record and action (for example `<charger>:test:2:start`). Retries after `429`, `5xx`, a lost response, `request_in_progress` or `outcome_unknown` reuse the same key; other `4xx` errors are not retried. `429` waits for `Retry-After` when it is 10 seconds or less, otherwise the error goes back to the operator.
 - Locations and stations carry an `external_reference`, so an uncertain create is adopted instead of duplicated.
 - Errors show the API's code, message and request ID with a link to [Errors and statuses](https://ivoracharge.com/developers/guides/reference/errors).
-- The test session starts with the operator ID tag `INSTALLER-TEST`. A start is an operator command and authorizes no payment. Energy is 0 kWh if no vehicle is plugged in; the test passes when the charger accepts the remote start and stop and reports the transaction.
+- The test session starts with the operator ID tag `INSTALLER-TEST`. A start is an operator command and authorizes no payment. The kit labels these sessions "Test session (not billed)" in the wizard, the quote preview and the report. **These sessions appear in Ivora under the `INSTALLER-TEST` token: exclude that token from billing and revenue reports.** A commissioning tool runs before a charger is in service, so Mark in service (step 5) ends testing for that charger. Energy is 0 kWh if no vehicle is plugged in; the test passes when the charger accepts the remote start and stop and reports the transaction.
 - Units: OCPP 1.6 meter registers are Wh, session energy is shown in kWh (`src/lib/units.ts`), and money is integer cents.
 
 ## Limits and next steps

@@ -1,0 +1,65 @@
+name: cpo-starter-kit
+
+on:
+  pull_request:
+    paths:
+      - "cpo-starter-kit/**"
+      - "tools/check-migrations/**"
+      - ".github/workflows/cpo-starter-kit.yml"
+  push:
+    branches: [main, preproduction]
+    paths:
+      - "cpo-starter-kit/**"
+      - "tools/check-migrations/**"
+      - ".github/workflows/cpo-starter-kit.yml"
+
+permissions:
+  contents: read
+
+# One run per workflow and PR: a new push to a PR cancels its older run.
+# Pushes to branches (preproduction, main) are never cancelled, so every
+# merge commit is verified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: cpo-starter-kit
+    # A throwaway Postgres for the concurrent role-change tests (tests/concurrency.test.ts).
+    # It holds no data beyond the test run and is reachable only from this job.
+    services:
+      postgres:
+        # Pinned by digest, like the actions above; update tag and digest together.
+        image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cpo-starter-kit/package-lock.json
+      - run: npm ci
+      - run: npm run format:check
+      - run: npm run typecheck
+      # The 10-30 rule, with the shared checker in tools/check-migrations.
+      - run: npm run check:migrations
+      - run: npm test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e

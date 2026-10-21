@@ -1,5 +1,6 @@
 import "server-only";
 import {
+  DEMO_READY,
   DEMO_TARIFF,
   demoCharger,
   demoView,
@@ -9,6 +10,7 @@ import {
   unplugDemoSession,
 } from "../demo";
 import type { Settings } from "../settings";
+import { chargerLabel } from "../store";
 import { localQuote } from "../tariff";
 import { publicView, type SessionView } from "../view";
 import { liveDeps } from "./services";
@@ -46,13 +48,14 @@ export async function chargerFor(
   return chargerPage({
     demo: true,
     code,
+    label: chargerLabel(code, connector, charger.connectors.length),
     name: charger.name,
     connector: {
       number: c.number,
       label: `${c.label} · connector ${c.number}`,
       maxPowerW: c.maxPowerW,
-      status: c.status,
-      available: c.status === "Available",
+      status: charger.online ? c.status : "Offline",
+      available: charger.online && DEMO_READY.has(c.status),
     },
     tariff: DEMO_TARIFF,
     quote: localQuote(DEMO_TARIFF, {

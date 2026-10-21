@@ -86,6 +86,9 @@ export function SessionScreen({
     return (
       <main>
         <h1>Loading your session…</h1>
+        {error ? null : (
+          <div className="skeleton card-skel" aria-hidden="true" />
+        )}
         {error ? <ErrorBox info={error} /> : null}
       </main>
     );

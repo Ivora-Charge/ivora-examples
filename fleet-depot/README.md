@@ -2,7 +2,25 @@
 
 Depot charging for fleets (vans, buses, company cars) on the Ivora API. It is for operators who want every vehicle ready by its departure time, the site's power limit respected, and a monthly energy and cost figure per vehicle and per driver.
 
-![Demo: six simulated vehicles on their connectors within the 60 kW site cap](docs/screenshot.png)
+![Depot overview: departure timeline, site power against the 60 kW cap](docs/screens/overview-desktop-light.png)
+
+The UI ships as **Rotabay**, a calm operations console with tabular numbers and status shown by shape as well as colour. Screens in light and dark, desktop and phone, are in [`docs/screens/`](docs/screens).
+
+## Make it yours in 5 minutes
+
+The whole brand lives in [`brand/`](brand); components use only its tokens.
+
+1. **Name and copy:** `brand/brand.ts` (product name, tagline, support line). A rename is the one `name` line.
+2. **Colours, type scale, radius, spacing:** `brand/tokens.css`. Each colour is `light-dark(<light>, <dark>)`. Run `npm test`: `tests/contrast.test.ts` fails if a text pair drops below WCAG AA (4.5:1) in either mode.
+3. **Logo:** `brand/logo.svg` (standalone file) and `brand/Logo.tsx` (the same shapes inline, so it follows `currentColor` and `--accent`). Keep both in step.
+4. **Fonts:** put woff2 files in `brand/fonts/` and point `brand/fonts.ts` at them. Use open-licensed fonts and keep their license files next to them.
+
+Light and dark follow the system setting; the header button switches and remembers the choice in the browser. The design brief and the approved mock are `brand/BRIEF.md` and `brand/mock.html`.
+
+### Fonts and icons
+
+- [IBM Plex Sans, IBM Plex Sans Condensed and IBM Plex Mono](https://github.com/IBM/plex), Copyright 2017 IBM Corp., SIL Open Font License 1.1 (`brand/fonts/OFL-IBMPlex.txt`).
+- The Rotabay mark, the status shapes and the theme icon are original, Apache-2.0 with this template.
 
 ## Features
 
@@ -20,9 +38,20 @@ Depot charging for fleets (vans, buses, company cars) on the Ivora API. It is fo
   - **Lower limits first.** A replan sends every decrease before any increase. Increases wait until each decrease is accepted by its charger (by answer, webhook or a status read). If a decrease fails, is refused, or its outcome is unknown, the increases wait for the next replan.
   - **Counted until gone.** A profile counts at its limit until the charger rejects, replaces or clears it. On OCPP 2.x the app alternates between stack levels 1 and 2 and clears the old profile only after the new one is accepted, so a session is never left without a limit.
   - **Only what is free.** A vehicle that just plugged in gets at most the cap minus what the other sessions may still draw; it is raised once the others have made room.
+  - **Optional baseline** (`BASELINE_PROFILE=1`, live mode only, off by default): see [the plug-in gap](#the-plug-in-gap).
 - **Reports**: energy and cost per vehicle and per driver per month. They use Wh meter registers and the transaction's `energy_wh`, with the site tariff in integer cents (`TARIFF_CENTS_PER_KWH`). The CSV export is at `/api/reports?by=driver&format=csv&month=YYYY-MM` and guards against spreadsheet formula injection.
 - **Live board**: which vehicle is on which connector, the state of charge (the charger's `soc_percent` when it reports one, otherwise an estimate labelled "est."), ready-by status, and profile status with the composite schedule.
 - **Webhooks** arrive at `/api/webhooks`, verified with `Ivora-Signature` (see below).
+
+## Screens
+
+The landing page is at `/`; the console is at `/depot` with four tabs (Overview, Vehicles and cards, Sessions and cost, Settings) and a wall-display mode (Settings, or Esc to leave). The overview shows a departure timeline: one row per vehicle with energy delivered, the planned charge, a departure tick and a now line; on phones each row carries its own mini timeline labelled start, now and departure. Charts have text alternatives. The delivered bar is an estimate drawn back from now at the current power, because the state carries energy, not the plug-in time.
+
+Regenerate the screenshots in `docs/screens/` (light and dark, desktop 1440 px and phone 390 px) with `npm run build && npm run screenshots`.
+
+| Overview (dark, phone)                    | Wall display (dark)                             |
+| ----------------------------------------- | ----------------------------------------------- |
+| ![](docs/screens/overview-phone-dark.png) | ![](docs/screens/wall-display-desktop-dark.png) |
 
 ## Run locally
 
@@ -46,6 +75,7 @@ With no credentials it starts in **demo mode**, with a persistent "Demo" banner.
 | `OPERATOR_PASSWORD`                       | **Required in live mode.** Protects the dashboard and every API route except webhooks. Without it live mode refuses to run. |
 | `DATABASE_URL` / `SQLITE_PATH`            | Postgres connection string, or SQLite file (default `./data/depot.db`)                                                      |
 | `SITE_CAP_KW`                             | Depot limit in kW (default 60)                                                                                              |
+| `BASELINE_PROFILE`                        | Set to `1` (or `true`) to keep a per-charger baseline profile in live mode (default off; demo mode ignores it)              |
 | `DEFAULT_CONNECTOR_KW`                    | Power reserved for a session whose card matches no vehicle, when the station reports no rating (default 11)                 |
 | `REPLAN_INTERVAL_SECONDS`                 | Live mode replans on this timer as well as on events, to retry failed decreases and follow departures (default 60)          |
 | `TARIFF_CENTS_PER_KWH`, `TARIFF_CURRENCY` | Site tariff for reports (integer cents)                                                                                     |
@@ -106,12 +136,29 @@ All paths are under `/v1/tenants/{tenant_id}` and follow the [published OpenAPI]
 
 `tokens:write` can only be granted by a tenant admin. Setting profiles goes through the usage fee gate (`402 payment_method_required`).
 
+## The plug-in gap
+
+Set `BASELINE_PROFILE=1` (live mode only; off by default, and demo mode stays offline and ignores it) to keep a `tx_default` charging profile on every charger the app has seen. A charger applies it to each new transaction until that transaction's own `session` profile is in force, so a vehicle that just plugged in is limited from the start.
+
+- **Share.** The cap is divided equally over all connectors of all known chargers, in whole watts rounded down. The profile is sent without a connector, so it covers every connector of the station (and on OCPP 2.x applies to each EVSE separately), has no duration, and is relative to the start of each transaction (W).
+- **Connector count.** A charger is added only once `GET /stations/{id}` has answered with its connectors. If that read fails when a session starts, the charger is left out (no baseline, not in the split) and the read is retried on every replan (a station that keeps failing is logged once an hour). The app counts connectors, not EVSEs: on an OCPP 2.x station with several connectors per EVSE that gives a smaller share and a larger reserve than needed, never a larger one.
+- **When it is set.** A charger is added when the first session starts on it, and the baseline is re-checked on every replan, so a changed `SITE_CAP_KW` (read at start-up) or a new charger moves the shares. Chargers are never removed: a station that stays in the store keeps its connectors in the split.
+- **Same rules as session limits.** Baseline decreases go out first, and baseline increases wait until every decrease (session or baseline) is in force. A baseline counts at its limit until the charger rejects, replaces or clears it, and on OCPP 2.x the app alternates between stack levels 1 and 2. Every limit, session or baseline, is sized against the site's worst case as it stands just before the request: every session at the limit that may be in force for it, and every idle connector at the baseline that may be in force (its rating when none is). A baseline decrease never goes above a lower baseline that was sent and not answered yet (the charger may already apply it, so that would be a raise there); the raise waits for the answer. When a charger refuses its baseline during a replan, the cap is split again before anything else is sent.
+- **A baseline not in force yet** (sent but unanswered, or the charger offline) does not hold session increases back: they already count that charger's idle connectors at the old baseline, or at their rating when it has none.
+- **A charger that refuses it.** If the charger answers anything but Accepted, or the API answers `smart_charging_unsupported` or `charging_profile_unsupported`, that charger counts as having no baseline: its connectors are reserved at their rating (the cap is shared among the other chargers' connectors after that), and the baseline is sent again after an hour, or sooner when the cap or the set of connectors changes. A rejected _decrease_ of a baseline that is still in force is retried on every replan, like a session decrease.
+- **An offline charger is not a refusal.** When the profile never reached the charger (`station_offline` or another dispatch error, as an HTTP error or as a rejected operation, or a `charging_profile.rejected` webhook with such an error code), the charger keeps counting at its rating, or at the baseline that may still be in force, and the baseline is sent again on every replan until the charger answers. A connector without a reported rating counts at `DEFAULT_CONNECTOR_KW`.
+- **Cost.** Connectors without a session keep their baseline in reserve, so sessions are planned within the cap minus that reserve (and a plugged-in vehicle counts at least at its baseline until its own profile is accepted). With five known connectors and one vehicle plugged in, that vehicle gets the cap minus four shares. Without the baseline the same vehicle could get the whole cap.
+- **What is still open.** A charger has no baseline until its first session has started and its connectors are known, so its first plug-in is not covered. When a session ends, its connector falls back to the baseline: if the other sessions must be lowered to make room and the charger has not confirmed yet, a plug-in on that connector can exceed the cap by at most those pending decreases, until they land.
+- **Turning it off.** With `BASELINE_PROFILE` unset the app stops managing baselines, but the `tx_default` profiles it already set stay on the chargers until they are cleared (for example from the station's charging profiles in Ivora). They only lower what a new transaction may draw before its session profile, so leaving them is safe, but the reserve for idle connectors is gone and a vehicle may start at less than the app would now give it.
+
+The cap property test runs with the baseline on and off, on OCPP 1.6 and 2.0.1, with stations of one, two and three connectors. The cap also changes during the night. At every request and at the moment a vehicle plugs in, it checks that every plugged vehicle at the limit its station applies, plus (baseline on) every idle connector of a known charger at the baseline in force or its rating, stays within the cap plus the decreases still on their way. It also checks, by the stations' own state, that every session limit is sent within the cap minus what the rest of the site may draw, and that a baseline is raised only when the whole site stays within the cap. Once the stations answer, that worst case must be within the cap, and every night with the baseline on must include a plug-in on a known charger.
+
 ## Limits and next steps
 
 - **Sessions come from webhooks.** Ivora has no transaction start or stop event. A session starts with a transaction's first `meter.sampled`, and ends when its connector leaves Charging and the transaction reads inactive. If a delivery fails after it is acknowledged, the event is logged and not retried; a reconcile job reading `GET …/events?after=` would close that gap.
 - **Matching uses the last four characters** of the card. Keep those unique across drivers, or assign sessions by hand.
 - **One process per depot.** Planning is serialized with an in-process lock, not a database lock, and the replan timer runs in that process (started from `instrumentation.ts`). On a serverless host the timer only runs while an instance is alive, so prefer a long-running server for live mode.
-- **Before the first profile.** Between plug-in and the charger accepting the first session profile, a charger runs at its own default. To keep the depot under the cap in that window too, give each charger a `charger_max` or `tx_default` profile sized to its share of `SITE_CAP_KW` (this app does not set those for you).
+- **Before the first profile.** Between plug-in and the charger accepting the first session profile, a charger runs at its own default, so the site cap can be exceeded briefly. The optional baseline closes that gap; see [the plug-in gap](#the-plug-in-gap). A charger the app has not seen yet has no baseline until its first session starts and its connectors are known.
 - **The plan is one constant rate until done.** There is no time-of-use optimisation, and the tariff is a flat per-kWh price from the environment rather than read from Ivora tariffs.
 - **Reports bucket by UTC month.**
 - **Next:** server-side site load balancing once the Ivora API offers it, time-of-use windows, event-log reconciliation, and per-site time zones.

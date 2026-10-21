@@ -4,7 +4,7 @@ import { z } from "zod";
 import type { Backend } from "./backend";
 import { isDemo, liveConfig } from "./config";
 import { demoBackend } from "./demo-backend";
-import { HttpError } from "./errors";
+import { HttpError, IvoraError } from "./errors";
 import { publicError, type PublicError } from "./http";
 import { IvoraClient, liveBackend } from "./ivora";
 import { db } from "./store";
@@ -196,8 +196,10 @@ export async function refresh(id: string): Promise<Charger> {
     };
   for (const k of s.connectors) {
     const known = c.connectors.find((x) => x.number === k.number);
-    if (known) known.resourceId = k.resourceId;
-    else c.connectors.push({ ...k });
+    if (known) {
+      known.resourceId = k.resourceId;
+      known.status = k.status;
+    } else c.connectors.push({ ...k });
   }
   c.connectors.sort((x, y) => x.number - y.number);
   assignStickerCodes(c);
@@ -242,8 +244,16 @@ const inProgress = (t?: TestRun) =>
   t &&
   (t.phase === "starting" || t.phase === "charging" || t.phase === "stopping");
 
+const inServiceError = () =>
+  new HttpError(
+    409,
+    "in_service",
+    "This charger is in service, so test sessions are no longer allowed. Use a normal charging session instead.",
+  );
+
 export async function startTest(id: string, connectorNumber?: number) {
   const c = await refresh(id);
+  if (c.inServiceAt) throw inServiceError();
   if (c.state !== "booted")
     throw new HttpError(
       409,
@@ -260,6 +270,24 @@ export async function startTest(id: string, connectorNumber?: number) {
       "no_connector",
       "The charger reported no connectors.",
     );
+  // Free means nothing is charging there: no active session from anyone, and
+  // a status that is Available or Preparing (a plugged-in vehicle) if known.
+  const b = backend();
+  const status = connector.status?.toLowerCase();
+  if (
+    (status && status !== "available" && status !== "preparing") ||
+    (await b.hasActiveTransaction(c.stationId, connector.resourceId))
+  )
+    throw new HttpError(
+      409,
+      "connector_busy",
+      "That connector is not free. Wait until it is available, or pick another.",
+    );
+  // Nothing may be awaited between this check and setting the test, or two
+  // starts could both pass it, or one could start after Mark in service.
+  if (c.inServiceAt) throw inServiceError();
+  if (inProgress(c.test))
+    throw new HttpError(409, "test_running", "A test is already running.");
   const attempt = c.seq.test + 1;
   c.seq.test = attempt;
   const test: TestRun = {
@@ -271,18 +299,46 @@ export async function startTest(id: string, connectorNumber?: number) {
   };
   c.test = test;
   try {
-    await backend().startCharging(
+    await b.startCharging(
       c.stationId,
       connector.resourceId,
       `${c.id}:test:${attempt}:start`,
     );
   } catch (e) {
-    test.phase = "failed";
-    test.passed = false;
-    test.errorCode = publicError(e).body.error;
+    // Only a definite refusal ends the test. After a timeout, outcome_unknown
+    // or request_in_progress the command may have reached the charger, so the
+    // test stays at "starting": the refresh adopts the session or times out,
+    // and Stop can end it.
+    if (isRefusal(e)) {
+      test.phase = "failed";
+      test.passed = false;
+      test.errorCode = publicError(e).body.error;
+    }
     throw e;
   }
   return refresh(id);
+}
+
+/** The charger or Ivora answered that the start was not carried out. */
+function isRefusal(e: unknown) {
+  return (
+    (e instanceof IvoraError && e.refused) ||
+    (e instanceof HttpError && e.code === "start_not_accepted")
+  );
+}
+
+/** Record that the charger is handed over. Repeating it keeps the first time. */
+export function markInService(id: string): Charger {
+  const c = charger(id);
+  if (c.inServiceAt) return c;
+  if (inProgress(c.test))
+    throw new HttpError(
+      409,
+      "test_running",
+      "Stop the test session before marking the charger in service.",
+    );
+  c.inServiceAt = new Date().toISOString();
+  return c;
 }
 
 export async function stopTest(id: string) {

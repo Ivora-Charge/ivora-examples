@@ -18,6 +18,8 @@ export class IvoraError extends Error {
     public code: string,
     message: string,
     public requestId: string | null = null,
+    /** The charger or Ivora definitely refused the command. */
+    public refused = false,
   ) {
     super(message);
   }

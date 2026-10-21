@@ -124,6 +124,8 @@ export const billSchema = z.object({
   id: z.string(),
   station_id: z.number(),
   connector_id: z.number(),
+  /** The tariff snapshotted when the session was created. */
+  tariff_id: z.number().optional(),
   status: z.enum(["open", "final"]),
   hold_minor: z.number().int(),
   currency: z.string(),
@@ -161,6 +163,20 @@ export const externalSessionSchema = z.object({
     .optional(),
 });
 export type ExternalSession = z.infer<typeof externalSessionSchema>;
+
+/** Pages of 100 read by listAllSessions() before it stops. */
+export const SESSION_LIST_MAX_PAGES = 100;
+/** The most sessions one full listing reads (README: Limits). */
+export const SESSION_LIST_CEILING = SESSION_LIST_MAX_PAGES * 100;
+export type SessionList = { sessions: ExternalSession[]; truncated: boolean };
+
+export const settlementReportSchema = z.object({
+  kind: z.enum(["authorization", "capture", "refund", "release"]),
+  operation_reference: z.string(),
+  outcome: z.enum(["pending", "unknown", "succeeded", "failed"]),
+  amount_minor: z.number().int(),
+  created_at: z.string().optional(),
+});
 
 // Billed, not collected: captures are the payment provider's.
 const revenueLine = z.object({
@@ -379,6 +395,37 @@ export class IvoraClient {
     ).then((page) => page.data);
   }
 
+  /**
+   * Every session in the project, page by page. Cursors order by opaque
+   * session ID, not time, so a newer session can be on any page: read them
+   * all. Stops after `maxPages` pages (SESSION_LIST_CEILING sessions by
+   * default) and says so with `truncated`, so callers can warn the operator.
+   */
+  async listAllSessions(
+    maxPages = SESSION_LIST_MAX_PAGES,
+  ): Promise<SessionList> {
+    const all: ExternalSession[] = [];
+    let after = "";
+    for (let page = 0; page < maxPages; page++) {
+      const params = new URLSearchParams({ limit: "100" });
+      if (after) params.set("after", after);
+      const result = await this.request(
+        "GET",
+        `charging-sessions?${params}`,
+        z.object({
+          data: z.array(externalSessionSchema),
+          next_cursor: z.string().nullable().optional(),
+        }),
+      );
+      all.push(...result.data);
+      if (!result.next_cursor || !result.data.length)
+        return { sessions: all, truncated: false };
+      after = result.next_cursor;
+    }
+    console.warn("[forecourt] session list truncated", { maxPages });
+    return { sessions: all, truncated: true };
+  }
+
   getSession(id: string) {
     return this.request(
       "GET",
@@ -423,7 +470,11 @@ export class IvoraClient {
     );
   }
 
-  /** Optional audit trail of what the app did with the card. Reports never move money. */
+  /**
+   * Records what the app did with the money: the card hold, or a payment taken
+   * in store. Reports never move money. `idempotencyKey` defaults to one key
+   * per session and kind, which is what card payments use.
+   */
   reportSettlement(
     id: string,
     report: {
@@ -431,6 +482,7 @@ export class IvoraClient {
       operation_reference: string;
       amount_minor: number;
     },
+    idempotencyKey = `${id}:report:${report.kind}`,
   ) {
     return this.request(
       "POST",
@@ -438,9 +490,18 @@ export class IvoraClient {
       z.unknown(),
       {
         body: { ...report, outcome: "succeeded", currency: "USD" },
-        idempotencyKey: `${id}:report:${report.kind}`,
+        idempotencyKey,
       },
     );
+  }
+
+  /** The session's settlement audit trail, oldest first. */
+  listSettlementReports(id: string) {
+    return this.request(
+      "GET",
+      `charging-sessions/${encodeURIComponent(id)}/settlement-reports?limit=100`,
+      z.object({ data: z.array(settlementReportSchema) }),
+    ).then((page) => page.data);
   }
 
   stats(query: { from: string; to: string; timeZone: string }) {

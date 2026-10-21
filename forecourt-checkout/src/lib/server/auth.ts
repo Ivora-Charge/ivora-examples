@@ -1,12 +1,16 @@
 import "server-only";
+import { createHash, createHmac } from "node:crypto";
 import { cookies } from "next/headers";
 import type { Settings } from "../settings";
 import { signToken, verifyToken } from "../tokens";
-import { signingSecret } from "./services";
+import { trustedClient } from "./client";
+import { cashierPassword, signingSecret } from "./services";
 
 export const OPERATOR_COOKIE = "fc_operator";
 export const GUEST_COOKIE = "fc_guest";
+export const CASHIER_COOKIE = "fc_cashier";
 const OPERATOR_TTL_MS = 12 * 60 * 60 * 1000;
+const CASHIER_TTL_MS = 14 * 60 * 60 * 1000;
 const GUEST_TTL_MS = 2 * 24 * 60 * 60 * 1000;
 
 export function operatorToken(settings: Settings, now = Date.now()) {
@@ -23,6 +27,61 @@ export async function isOperator(settings: Settings) {
   return verifyToken(signingSecret(settings), "operator", value) === "site";
 }
 
+/**
+ * Names the current CASHIER_PASSWORD without revealing it, so changing the
+ * password signs every cashier out.
+ */
+function cashierKeyId(settings: Settings) {
+  return createHmac("sha256", signingSecret(settings))
+    .update(`cashier-password\n${cashierPassword(settings)}`)
+    .digest("base64url")
+    .slice(0, 16);
+}
+
+/**
+ * The cashier role: authorise, stop and mark paid on the console. A cashier
+ * cookie never opens the operator pages; an operator may use the console.
+ */
+export function cashierToken(settings: Settings, now = Date.now()) {
+  return signToken(
+    signingSecret(settings),
+    "cashier",
+    `store-${cashierKeyId(settings)}`,
+    now + CASHIER_TTL_MS,
+  );
+}
+
+export async function isCashier(settings: Settings) {
+  const jar = await cookies();
+  const secret = signingSecret(settings);
+  return (
+    verifyToken(secret, "cashier", jar.get(CASHIER_COOKIE)?.value) ===
+      `store-${cashierKeyId(settings)}` ||
+    verifyToken(secret, "operator", jar.get(OPERATOR_COOKIE)?.value) === "site"
+  );
+}
+
+/**
+ * Names the console's sign-in (each login gets its own signed cookie) without
+ * revealing the cookie, for per-cashier rate limits. Null when not signed in.
+ */
+export async function consoleLogin(settings: Settings) {
+  const jar = await cookies();
+  const secret = signingSecret(settings);
+  const cashier = jar.get(CASHIER_COOKIE)?.value;
+  const operator = jar.get(OPERATOR_COOKIE)?.value;
+  const value =
+    verifyToken(secret, "cashier", cashier) ===
+    `store-${cashierKeyId(settings)}`
+      ? `cashier:${cashier}`
+      : verifyToken(secret, "operator", operator) === "site"
+        ? `operator:${operator}`
+        : null;
+  return value
+    ? createHash("sha256").update(value).digest("base64url").slice(0, 16)
+    : null;
+}
+
 export function cookieOptions(maxAgeMs: number, secure: boolean) {
   return {
     httpOnly: true,
@@ -35,6 +94,9 @@ export function cookieOptions(maxAgeMs: number, secure: boolean) {
 
 export const operatorCookie = (settings: Settings) =>
   cookieOptions(OPERATOR_TTL_MS, !settings.demo);
+
+export const cashierCookie = (settings: Settings) =>
+  cookieOptions(CASHIER_TTL_MS, !settings.demo);
 
 /** Only the phone that paid may stop its session. */
 export function guestToken(
@@ -58,7 +120,19 @@ export async function isGuestOf(settings: Settings, sessionId: string) {
   return verifyToken(signingSecret(settings), "guest", value) === sessionId;
 }
 
-// Best-effort brute-force brake per server instance; put a WAF rule in front for more.
+/**
+ * The client address for login limits: trustedClient(), or one shared bucket
+ * per role when no trusted source gives it, so guessing stays limited.
+ */
+export function loginClient(
+  headers: Headers,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return trustedClient(headers, env) ?? "shared";
+}
+
+// Best-effort brute-force brake per server instance and login page (key it by
+// role and client); put a WAF rule in front for more.
 const attempts = new Map<string, { count: number; since: number }>();
 export function loginAllowed(key: string, now = Date.now()) {
   const entry = attempts.get(key);
@@ -68,4 +142,25 @@ export function loginAllowed(key: string, now = Date.now()) {
   }
   entry.count += 1;
   return entry.count <= 10;
+}
+
+// The public driver screen polls every few seconds; this caps one client at
+// 60 reads a minute per instance. Without a trusted client address (null),
+// every driver would share one key, so that case gets a site-wide cap far above
+// normal polling instead: it only brakes a flood.
+export const COUNTER_READS_PER_CLIENT = 60;
+export const COUNTER_READS_WITHOUT_CLIENT = 6000;
+const reads = new Map<string, { count: number; since: number }>();
+export function counterAllowed(client: string | null, now = Date.now()) {
+  const key = client ?? "";
+  const limit =
+    client === null ? COUNTER_READS_WITHOUT_CLIENT : COUNTER_READS_PER_CLIENT;
+  const entry = reads.get(key);
+  if (!entry || now - entry.since > 60 * 1000) {
+    reads.set(key, { count: 1, since: now });
+    if (reads.size > 5000) reads.delete(reads.keys().next().value!);
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= limit;
 }

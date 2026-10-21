@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Boltmark - brief mock</title>
+    <style>
+      @font-face {
+        font-family: "Barlow Condensed";
+        font-weight: 700;
+        src: url(fonts/barlow-condensed-latin-700-normal.woff2);
+      }
+      @font-face {
+        font-family: Barlow;
+        font-weight: 400;
+        src: url(fonts/barlow-latin-400-normal.woff2);
+      }
+      @font-face {
+        font-family: Barlow;
+        font-weight: 600;
+        src: url(fonts/barlow-latin-600-normal.woff2);
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-weight: 400;
+        src: url(fonts/jetbrains-mono-latin-400-normal.woff2);
+      }
+      @font-face {
+        font-family: "JetBrains Mono";
+        font-weight: 600;
+        src: url(fonts/jetbrains-mono-latin-600-normal.woff2);
+      }
+      :root {
+        --bg: #f3f0e6;
+        --surface: #fff;
+        --ink: #14181b;
+        --muted: #4a524f;
+        --accent: #b34700;
+        --on-accent: #fff;
+        --ok: #116b3a;
+        --danger: #b0200f;
+        --line: #14181b;
+        --r: 6px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0f1214;
+          --surface: #1a1f22;
+          --ink: #f2efe6;
+          --muted: #a9b1ac;
+          --accent: #ffa62b;
+          --on-accent: #14181b;
+          --ok: #4fd08a;
+          --danger: #ff8a78;
+          --line: #f2efe6;
+        }
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font:
+          400 17px/1.45 Barlow,
+          sans-serif;
+      }
+      .demo {
+        background: var(--ink);
+        color: var(--bg);
+        font: 600 14px Barlow;
+        padding: 8px 16px;
+        text-align: center;
+        letter-spacing: 0.02em;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 14px 20px;
+        border-bottom: 3px solid var(--line);
+      }
+      header svg {
+        width: 36px;
+        height: 36px;
+        color: var(--accent);
+        --on: var(--on-accent);
+      }
+      .name {
+        font: 700 26px "Barlow Condensed";
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .theme {
+        margin-left: auto;
+        min-height: 44px;
+        min-width: 44px;
+        border: 2px solid var(--line);
+        border-radius: var(--r);
+        background: none;
+        color: var(--ink);
+        font: 600 14px Barlow;
+      }
+      main {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 24px 20px 48px;
+        display: grid;
+        gap: 24px;
+        grid-template-columns: 260px 1fr;
+      }
+      @media (max-width: 800px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+      }
+      h1 {
+        font: 700 40px/1.05 "Barlow Condensed";
+        text-transform: uppercase;
+        margin: 0 0 6px;
+      }
+      h2 {
+        font: 700 24px "Barlow Condensed";
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        margin: 0 0 12px;
+      }
+      .lead {
+        color: var(--muted);
+        margin: 0;
+      }
+      ol.steps {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 8px;
+        align-content: start;
+      }
+      .steps li {
+        display: flex;
+        gap: 12px;
+        align-items: center;
+        min-height: 52px;
+        padding: 0 12px;
+        border: 2px solid var(--line);
+        border-radius: var(--r);
+        background: var(--surface);
+        font-weight: 600;
+      }
+      .steps b {
+        display: grid;
+        place-items: center;
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: 2px solid var(--line);
+        font: 600 14px "JetBrains Mono";
+      }
+      .steps .done b {
+        background: var(--ok);
+        border-color: var(--ok);
+        color: var(--surface);
+      }
+      .steps .now {
+        border-color: var(--accent);
+        box-shadow: 4px 4px 0 var(--accent);
+      }
+      .steps .now b {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+      .card {
+        background: var(--surface);
+        border: 2px solid var(--line);
+        border-radius: var(--r);
+        padding: 20px;
+        box-shadow: 6px 6px 0 var(--line);
+      }
+      .prog {
+        height: 10px;
+        border: 2px solid var(--line);
+        border-radius: 99px;
+        margin: 12px 0 20px;
+        overflow: hidden;
+      }
+      .prog i {
+        display: block;
+        height: 100%;
+        width: 50%;
+        background: var(--accent);
+      }
+      .field {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        align-items: end;
+        margin-bottom: 14px;
+      }
+      .field label {
+        grid-column: 1/-1;
+        font: 600 13px Barlow;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+      }
+      .field code {
+        display: flex;
+        align-items: center;
+        min-height: 48px;
+        padding: 0 12px;
+        border: 2px solid var(--line);
+        border-radius: var(--r);
+        background: var(--bg);
+        font: 400 15px "JetBrains Mono";
+        overflow-wrap: anywhere;
+        min-width: 0;
+      }
+      button.btn {
+        min-height: 48px;
+        padding: 0 18px;
+        border: 2px solid var(--line);
+        border-radius: var(--r);
+        background: var(--surface);
+        color: var(--ink);
+        font: 600 16px Barlow;
+      }
+      button.go {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+        font: 700 20px "Barlow Condensed";
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+        min-height: 56px;
+        width: 100%;
+        margin-top: 8px;
+      }
+      .live {
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        margin-top: 16px;
+        color: var(--ok);
+        font-weight: 600;
+      }
+      .live i {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: var(--ok);
+      }
+      .hint {
+        margin-top: 16px;
+        border-left: 6px solid var(--accent);
+        padding: 4px 12px;
+        color: var(--ink);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="demo">
+      DEMO MODE: simulated charger and sample data. Nothing is sent anywhere.
+    </div>
+    <header>
+      <svg viewBox="0 0 48 48" aria-hidden="true">
+        <rect width="48" height="48" rx="10" fill="currentColor" />
+        <path
+          d="M14 13h13a8 8 0 0 1 0 16H20v6h-6z"
+          fill="none"
+          stroke="var(--on)"
+          stroke-width="4"
+          stroke-linejoin="round"
+        />
+        <circle cx="31" cy="35" r="3" fill="var(--on)" /></svg
+      ><span class="name">Boltmark</span
+      ><button class="theme" type="button">Dark</button>
+    </header>
+    <main>
+      <ol class="steps" aria-label="Progress">
+        <li class="done"><b>1</b>Site</li>
+        <li class="now"><b>2</b>Connect charger</li>
+        <li><b>3</b>Test</li>
+        <li><b>4</b>Price</li>
+        <li><b>5</b>Hand over</li>
+      </ol>
+      <div>
+        <h1>Connect the charger</h1>
+        <p class="lead">
+          Step 2 of 5. Type these into the charger, then reboot it.
+        </p>
+        <div class="card" style="margin-top: 16px">
+          <h2>OCPP details</h2>
+          <div
+            class="prog"
+            role="progressbar"
+            aria-valuenow="2"
+            aria-valuemin="1"
+            aria-valuemax="5"
+          >
+            <i></i>
+          </div>
+          <div class="field">
+            <label>Connection URL</label
+            ><code>wss://ocpp.example.com/ws/ocpp16/acme-garage-01</code
+            ><button class="btn" type="button">Copy</button>
+          </div>
+          <div class="field">
+            <label>Charge point ID</label><code>acme-garage-01</code
+            ><button class="btn" type="button">Copy</button>
+          </div>
+          <div class="field">
+            <label>Password (shown once)</label><code>••••••••••••</code
+            ><button class="btn" type="button">Show</button>
+          </div>
+          <p class="hint">Plug in the charger. Then tap Test.</p>
+          <div class="live" role="status">
+            <i></i>Charger online. Boot received.
+          </div>
+          <button class="btn go" type="button">Next: test the charger</button>
+        </div>
+      </div>
+    </main>
+  </body>
+</html>

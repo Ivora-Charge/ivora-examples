@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { ZodError } from "zod";
 import { ERRORS_URL } from "../settings";
 import { IvoraError, isRetryLater } from "./ivora";
+import { SaleError } from "../store";
 import { UserError } from "./sessions";
 
 export type ApiError = {
@@ -16,7 +17,7 @@ export type ApiError = {
 /** Error details safe to show: the API's code and a link to the portal; never secrets or stack traces. */
 export function errorInfo(error: unknown): { body: ApiError; status: number } {
   const none = { requestId: null, docs: null, retry: false };
-  if (error instanceof UserError)
+  if (error instanceof UserError || error instanceof SaleError)
     return {
       body: { ...none, error: error.code, message: error.message },
       status: error.status,
