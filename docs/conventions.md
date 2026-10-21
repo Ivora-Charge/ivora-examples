@@ -10,6 +10,7 @@ If a template needs to break a convention, say why in its README and in the pull
 - One top-level folder per template, with its own `package.json`, `package-lock.json`, `README.md` and `.env.example`. Templates do not share code or dependencies with each other.
 - One workflow per template at `.github/workflows/<folder>.yml`, with a `paths` filter on that folder and on the workflow file itself.
 - npm scripts named `format:check`, `typecheck`, `test` and `build`. CI runs all four and each must pass locally first.
+- Every CI job sets `timeout-minutes` (15 is plenty for a template), and every workflow has a `concurrency` group that cancels superseded pull-request runs, as the existing workflows do.
 - Tests must not need real credentials or network access. Mock the Ivora API, payment providers and email at the HTTP or client boundary.
 
 ## API keys and tenant ID stay on the server
