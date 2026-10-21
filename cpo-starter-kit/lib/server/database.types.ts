@@ -213,6 +213,8 @@ export type Database = {
           id: string;
           operator_id: string;
           name: string;
+          revision: number;
+          last_version: number;
           created_by: string | null;
           created_at: Timestamp;
           updated_at: Timestamp;
@@ -223,7 +225,12 @@ export type Database = {
           name: string;
           created_by?: string | null;
         };
-        Update: { name?: string; updated_at?: Timestamp };
+        Update: {
+          name?: string;
+          revision?: number;
+          last_version?: number;
+          updated_at?: Timestamp;
+        };
         Relationships: [];
       };
       cpo_tariff_versions: {
@@ -233,6 +240,7 @@ export type Database = {
           version: number;
           definition: Json;
           ivora_tariff_id: number | null;
+          attempt: number;
           archived_at: Timestamp | null;
           created_by: string | null;
           created_at: Timestamp;
@@ -247,6 +255,7 @@ export type Database = {
         };
         Update: {
           ivora_tariff_id?: number | null;
+          attempt?: number;
           archived_at?: Timestamp | null;
         };
         Relationships: [];
@@ -257,6 +266,7 @@ export type Database = {
           station_id: number;
           tariff_id: string | null;
           private: boolean;
+          revision: number;
           updated_by: string | null;
           updated_at: Timestamp;
         };
@@ -267,7 +277,11 @@ export type Database = {
           private?: boolean;
           updated_by?: string | null;
         };
-        Update: { tariff_id?: string | null; private?: boolean };
+        Update: {
+          tariff_id?: string | null;
+          private?: boolean;
+          revision?: number;
+        };
         Relationships: [];
       };
       cpo_connector_tariffs: {
@@ -458,8 +472,18 @@ export type Database = {
           p_operator_id: string;
           p_actor_id: string;
           p_tariff_id: string;
+          p_expected_revision: number;
           p_name: string;
           p_definition: Json;
+        };
+        Returns: number;
+      };
+      cpo_next_tariff_attempt: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_tariff_id: string;
+          p_version: number;
         };
         Returns: number;
       };
@@ -496,6 +520,7 @@ export type Database = {
           p_operator_id: string;
           p_actor_id: string;
           p_station_id: number;
+          p_expected_revision: number;
           p_tariff_id: string | null;
           p_private: boolean;
           p_connectors: Json;

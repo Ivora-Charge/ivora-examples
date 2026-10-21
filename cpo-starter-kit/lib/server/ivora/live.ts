@@ -396,6 +396,17 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     createTariff(input, key) {
       return create<Tariff>("tariffs", input, key);
     },
+    // A lookup by external_reference returns its tariff even when archived.
+    async findTariff(externalReference) {
+      return (
+        (
+          await request<Page<Tariff>>(
+            "GET",
+            `tariffs${list({ external_reference: externalReference, limit: 1 })}`,
+          )
+        ).data[0] ?? null
+      );
+    },
     archiveTariff(tariffId, replacementTariffId, key) {
       return request<TariffArchived>(
         "DELETE",

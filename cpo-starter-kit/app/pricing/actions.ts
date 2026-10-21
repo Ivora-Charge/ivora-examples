@@ -7,6 +7,7 @@ import { actionError } from "@/lib/server/action-errors";
 import { requireRole } from "@/lib/server/auth";
 import { isDemo } from "@/lib/server/env";
 import {
+  discardPendingVersion,
   getPricing,
   previewTariff,
   publishTariff,
@@ -53,6 +54,8 @@ function tariffForm(form: FormData): TariffForm {
     idleFee: str(form, "idleFee"),
     idleGrace: str(form, "idleGrace"),
     driverText: str(form, "driverText"),
+    driverTextConfirmed: str(form, "driverTextConfirmed"),
+    revision: str(form, "revision"),
     periods,
   };
 }
@@ -126,7 +129,10 @@ export async function saveTariffAction(
   redirect(target);
 }
 
-/** Repeats the unconfirmed steps of a save (create, archive) with the same keys. */
+/**
+ * Repeats the unconfirmed steps of a save: looks the version up in Ivora, creates it
+ * again as a new attempt if Ivora doesn't have it, and archives older versions.
+ */
 export async function finishTariffAction(
   _prev: ActionState,
   form: FormData,
@@ -145,6 +151,32 @@ export async function finishTariffAction(
   }
 }
 
+/** Gives up on an unconfirmed version (Ivora is checked first). */
+export async function discardTariffAction(
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  let removed: boolean;
+  try {
+    const actor = await requireRole("manager");
+    const r = await discardPendingVersion(
+      getPricing(),
+      actor,
+      str(form, "tariffId") ?? "",
+    );
+    revalidatePath("/pricing", "layout");
+    revalidatePath("/");
+    removed = r.tariffRemoved;
+    if (!removed)
+      return {
+        ok: `Version ${r.version} is discarded. Drivers keep the current version.${demoNote()}`,
+      };
+  } catch (e) {
+    return actionError(e, "tariff discard");
+  }
+  redirect("/pricing");
+}
+
 /** A station's tariff, its connectors' tariffs and whether it is private. */
 export async function setStationPricingAction(
   _prev: ActionState,
@@ -158,6 +190,7 @@ export async function setStationPricingAction(
         connectors[k.slice("connector.".length)] = v;
     const { stationName } = await setStationPricing(getPricing(), actor, {
       stationId: str(form, "stationId"),
+      revision: str(form, "revision"),
       tariffId: str(form, "tariffId"),
       private: form.get("private") === "on",
       connectors,

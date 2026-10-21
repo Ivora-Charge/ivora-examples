@@ -50,5 +50,7 @@ export interface QuotePreview {
   currency: string;
   driverText: string;
   notes: string[];
+  /** Things to act on, for example a session that costs more than the card hold. */
+  warnings: string[];
   demo: boolean;
 }

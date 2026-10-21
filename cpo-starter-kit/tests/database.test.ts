@@ -1014,11 +1014,31 @@ describe("pricing", () => {
       name,
       DEF,
     ]).then((r) => r.rows[0].id);
-  const addVersion = (actor: string, id: string, operator = operatorA) =>
+  const revision = async (id: string) =>
+    (
+      await pg.query<{ revision: number }>(
+        "select revision from cpo_tariffs where id=$1",
+        [id],
+      )
+    ).rows[0]?.revision ?? 0;
+  /** A new version from an editor loaded now, or at `expected`. */
+  const addVersion = async (
+    actor: string,
+    id: string,
+    operator = operatorA,
+    expected?: number,
+  ) =>
     call<{ v: number }>(
-      "select cpo_add_tariff_version($1,$2,$3,'Standard',$4::jsonb) as v",
-      [operator, actor, id, DEF],
+      "select cpo_add_tariff_version($1,$2,$3,$4,'Standard',$5::jsonb) as v",
+      [operator, actor, id, expected ?? (await revision(id)), DEF],
     ).then((r) => r.rows[0].v);
+  const drop = (id: string, version: number) =>
+    call("select cpo_drop_tariff_version($1,$2,$3,$4)", [
+      operatorA,
+      OWNER_A,
+      id,
+      version,
+    ]);
   const record = (
     id: string,
     version: number,
@@ -1047,16 +1067,26 @@ describe("pricing", () => {
       r.ivora_tariff_id === null ? null : Number(r.ivora_tariff_id),
       Boolean(r.archived_at),
     ]);
-  const setStation = (
+  const stationRevision = async (operator = operatorA) =>
+    (
+      await pg.query<{ revision: number }>(
+        "select revision from cpo_station_pricing where operator_id=$1 and station_id=9101",
+        [operator],
+      )
+    ).rows[0]?.revision ?? 0;
+  /** A station save from a form loaded now, or at `expected`. */
+  const setStation = async (
     actor: string,
     tariff: string | null,
     priv: boolean,
     connectors: unknown[] = [],
     operator = operatorA,
+    expected?: number,
   ) =>
-    call("select cpo_set_station_pricing($1,$2,9101,$3,$4,$5::jsonb)", [
+    call("select cpo_set_station_pricing($1,$2,9101,$3,$4,$5,$6::jsonb)", [
       operator,
       actor,
+      expected ?? (await stationRevision(operator)),
       tariff,
       priv,
       JSON.stringify(connectors),
@@ -1108,23 +1138,66 @@ describe("pricing", () => {
     );
   });
 
+  it("refuses a version from an editor loaded before another change", async () => {
+    const id = await create(OWNER_A);
+    await record(id, 1, 650);
+    const opened = await revision(id);
+    expect(await addVersion(OWNER_A, id, operatorA, opened)).toBe(2);
+    await record(id, 2, 651);
+    // The second editor, loaded at the same revision, is refused.
+    await expect(addVersion(OWNER_A, id, operatorA, opened)).rejects.toThrow(
+      /cpo_tariff_changed/,
+    );
+    expect((await versions(id)).map((v) => v[0])).toEqual([1, 2]);
+    // A dropped version moves the revision too: the editor showed it.
+    const before = await revision(id);
+    expect(await addVersion(OWNER_A, id)).toBe(3);
+    await drop(id, 3);
+    await expect(
+      addVersion(OWNER_A, id, operatorA, before + 1),
+    ).rejects.toThrow(/cpo_tariff_changed/);
+  });
+
+  it("never reuses a version number, and counts create attempts", async () => {
+    const id = await create(OWNER_A);
+    await record(id, 1, 660);
+    expect(await addVersion(OWNER_A, id)).toBe(2);
+    await drop(id, 2);
+    // Number 2 is gone for good: its key and reference are never sent again.
+    expect(await addVersion(OWNER_A, id)).toBe(3);
+    const attempt = () =>
+      call<{ a: number }>("select cpo_next_tariff_attempt($1,$2,$3,3) as a", [
+        operatorA,
+        OWNER_A,
+        id,
+      ]).then((r) => r.rows[0].a);
+    expect(await attempt()).toBe(2);
+    expect(await attempt()).toBe(3);
+    await expect(
+      call("select cpo_next_tariff_attempt($1,$2,$3,3)", [
+        operatorA,
+        TECH_A,
+        id,
+      ]),
+    ).rejects.toThrow(/cpo_not_allowed/);
+    await record(id, 3, 661);
+    // A confirmed version takes no more attempts.
+    await expect(attempt()).rejects.toThrow(/cpo_tariff_not_found/);
+    expect(await versions(id)).toEqual([
+      [1, 660, false],
+      [3, 661, false],
+    ]);
+  });
+
   it("drops only unconfirmed versions, and a tariff left with none", async () => {
     const id = await create(OWNER_A);
-    await call("select cpo_drop_tariff_version($1,$2,$3,1)", [
-      operatorA,
-      OWNER_A,
-      id,
-    ]);
+    await drop(id, 1);
     expect(
       (await pg.query("select 1 from cpo_tariffs where id=$1", [id])).rows,
     ).toEqual([]);
     const kept = await create(OWNER_A);
     await record(kept, 1, 700);
-    await call("select cpo_drop_tariff_version($1,$2,$3,1)", [
-      operatorA,
-      OWNER_A,
-      kept,
-    ]);
+    await drop(kept, 1);
     expect(await versions(kept)).toEqual([[1, 700, false]]);
   });
 
@@ -1168,14 +1241,43 @@ describe("pricing", () => {
       station: [{ tariff_id: live, private: true }],
       connectors: [{ connector_id: 91012, tariff_id: live }],
     });
-    // The whole station is replaced: no tariff, not private, no overrides.
+    // The whole station is replaced: no tariff, not private, no overrides. The row
+    // stays, so its revision only grows.
     await setStation(OWNER_A, null, false);
-    expect(await rows()).toEqual({ station: [], connectors: [] });
+    expect(await rows()).toEqual({
+      station: [{ tariff_id: null, private: false }],
+      connectors: [],
+    });
     // A tariff in use can't be deleted from under a station.
     await setStation(OWNER_A, live, false);
     await expect(
       pg.query("delete from cpo_tariffs where id=$1", [live]),
     ).rejects.toThrow(/foreign key/);
+  });
+
+  it("refuses a station save from a form loaded before another change", async () => {
+    await pg.query("delete from cpo_station_pricing where operator_id=$1", [
+      operatorA,
+    ]);
+    const live = await create(OWNER_A);
+    await record(live, 1, 900);
+    // Two forms opened before the station had pricing: the first save wins.
+    await setStation(OWNER_A, live, true, [], operatorA, 0);
+    await expect(
+      setStation(OWNER_A, live, false, [], operatorA, 0),
+    ).rejects.toThrow(/cpo_station_changed/);
+    const opened = await stationRevision();
+    expect(opened).toBe(1);
+    await setStation(OWNER_A, live, true, [], operatorA, opened);
+    // The stale form would make the charger public again: refused.
+    await expect(
+      setStation(OWNER_A, live, false, [], operatorA, opened),
+    ).rejects.toThrow(/cpo_station_changed/);
+    const r = await pg.query<{ private: boolean; revision: number }>(
+      "select private, revision from cpo_station_pricing where operator_id=$1",
+      [operatorA],
+    );
+    expect(r.rows).toEqual([{ private: true, revision: 2 }]);
   });
 
   it("is not readable or writable from the browser, even by an owner", async () => {

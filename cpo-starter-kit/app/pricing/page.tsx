@@ -122,6 +122,7 @@ export default async function Page() {
                     <StationPricingForm
                       stationId={s.stationId}
                       stationName={s.name}
+                      revision={s.revision}
                       tariffId={s.tariffId}
                       private={s.private}
                       connectors={s.connectors.map((c) => ({

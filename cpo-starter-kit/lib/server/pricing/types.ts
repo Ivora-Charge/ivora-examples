@@ -29,9 +29,16 @@ export interface TariffDefinition {
   energyMinorPerKwh: number;
   /** Optional fee per session (0 for none). */
   sessionFeeMinor: number;
-  /** Idle fee per minute connected after charging ends (0 for none). */
+  /**
+   * Idle fee per minute a car is plugged in but not charging (0 for none). Ivora bills
+   * it as PARKING_TIME: after charging ends, and while charging is paused.
+   */
   idleMinorPerMinute: number;
-  /** Idle minutes that are free after charging ends, before the idle fee starts. */
+  /**
+   * Idle minutes per session that are free, before the idle fee starts. Ivora applies
+   * them (rules.idle_grace_minutes); the kit only offers them once Ivora's simulation
+   * shows it does (see README).
+   */
   idleGraceMinutes: number;
   periods: TouPeriod[];
   /** The operator's own words for drivers; null uses the kit's generated text. */
@@ -42,6 +49,8 @@ export interface TariffVersion {
   version: number;
   /** Ivora's tariff for this version; null while its creation is unconfirmed. */
   ivoraTariffId: number | null;
+  /** The create request's attempt, part of its Idempotency-Key. */
+  attempt: number;
   /** Null for older versions the demo no longer keeps in its cookie. */
   definition: TariffDefinition | null;
   createdAt: string;
@@ -54,7 +63,12 @@ export interface KitTariff {
   /** Our ID: Ivora references and keys derive from it (cpo-tariff-<id>-v<n>). */
   id: string;
   name: string;
-  /** Newest first. */
+  /**
+   * Moves with every new, dropped or discarded version. A save names the revision its
+   * editor was loaded at and is refused ("changed") if it moved meanwhile.
+   */
+  revision: number;
+  /** Newest first. Numbers are never reused, so there may be gaps. */
   versions: TariffVersion[];
 }
 
@@ -67,6 +81,8 @@ export interface StationPricing {
   private: boolean;
   /** Connector resource ID to kit tariff ID, where a connector differs. */
   connectors: Record<string, string>;
+  /** Moves with every save; 0 before the first. A save names the one it was loaded at. */
+  revision: number;
 }
 
 export interface PricingState {
@@ -96,15 +112,19 @@ export interface PricingStore {
     definition: TariffDefinition,
   ): Promise<string>;
   /**
-   * The next version, not yet in Ivora. Refused ("busy") while an earlier version's
-   * creation is still unconfirmed.
+   * The next version, not yet in Ivora. Refused ("changed") unless the tariff is still
+   * at `expectedRevision`, and ("busy") while an earlier version's creation is still
+   * unconfirmed.
    */
   addVersion(
     actor: Staff,
     tariffId: string,
+    expectedRevision: number,
     name: string,
     definition: TariffDefinition,
   ): Promise<number>;
+  /** A new create attempt for an unconfirmed version; returns its number. */
+  nextAttempt(actor: Staff, tariffId: string, version: number): Promise<number>;
   /** Ivora created the version's tariff. */
   recordVersion(
     actor: Staff,
@@ -112,7 +132,10 @@ export interface PricingStore {
     version: number,
     ivoraTariffId: number,
   ): Promise<void>;
-  /** Ivora definitely refused the version: forget it (and a tariff left with none). */
+  /**
+   * Ivora definitely refused the version, or staff discarded it and Ivora has no live
+   * tariff for it: forget it (and a tariff left with none).
+   */
   dropVersion(actor: Staff, tariffId: string, version: number): Promise<void>;
   /** Ivora archived the version's tariff. */
   recordArchived(
@@ -120,16 +143,20 @@ export interface PricingStore {
     tariffId: string,
     version: number,
   ): Promise<void>;
-  /** Replaces the station's pricing and connector overrides in one step. */
+  /**
+   * Replaces the station's pricing and connector overrides in one step. Refused
+   * ("changed") unless the station is still at `expectedRevision` (0: never saved).
+   */
   setStation(
     actor: Staff,
     stationId: number,
+    expectedRevision: number,
     input: StationPricingInput,
   ): Promise<void>;
 }
 
 export type PricingErrorCode =
-  "invalid" | "not_allowed" | "not_found" | "busy" | "not_ready";
+  "invalid" | "not_allowed" | "not_found" | "busy" | "not_ready" | "changed";
 
 /** An error staff can act on. The message is safe to show. */
 export class PricingError extends Error {
@@ -166,4 +193,16 @@ export const notReady = () =>
   new PricingError(
     "not_ready",
     "That tariff is not in Ivora yet. Finish saving it before assigning it.",
+  );
+
+export const tariffChanged = () =>
+  new PricingError(
+    "changed",
+    "Someone changed this tariff after you opened it. Reload the page to see the current prices, then make your change again.",
+  );
+
+export const stationChanged = () =>
+  new PricingError(
+    "changed",
+    "Someone changed this charger's prices or access after you opened the page. Reload the page to see them, then make your change again.",
   );

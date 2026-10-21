@@ -260,6 +260,19 @@ export interface AltText {
   text: string;
 }
 
+/**
+ * Ivora billing rules, applied after the elements in billing only (never published
+ * over OCPI). The kit uses one: free idle minutes.
+ */
+export interface BillingRules {
+  /**
+   * PARKING_TIME is charged only for idle time beyond the first N minutes of each
+   * session. Newer than the published OpenAPI: an API without it refuses the field
+   * (so the kit checks a simulation applies it before offering a grace period).
+   */
+  idle_grace_minutes?: number;
+}
+
 /** A tariff definition, as `POST /tariffs/simulate` takes it (no hold, no reference). */
 export interface TariffDefinitionInput {
   currency: string;
@@ -267,6 +280,8 @@ export interface TariffDefinitionInput {
   tariff_alt_text: AltText[];
   /** IANA time zone of the restrictions' local times. */
   time_zone: string;
+  /** Sent only when the kit uses a rule (an idle grace period). */
+  rules?: BillingRules;
 }
 
 /** `POST /tariffs`: a new tariff, found again by its external_reference. */
@@ -308,7 +323,10 @@ export interface SessionProfile {
   /** Charging time in minutes. */
   duration_minutes: number;
   energy_kwh: number;
-  /** Minutes connected after charging ends (PARKING_TIME is billed on them). */
+  /**
+   * Minutes connected after charging ends (PARKING_TIME is billed on them, less any
+   * free minutes of rules.idle_grace_minutes).
+   */
   idle_minutes: number;
 }
 
@@ -347,6 +365,11 @@ export interface Quote {
   /** Integer minor units: the exact subtotal after rules, rounded half up once. */
   total_minor: number;
   tariff_alt_text?: AltText[];
+  /**
+   * With rules.idle_grace_minutes: the idle seconds that were free. Absent otherwise,
+   * and from an API that does not apply the rule.
+   */
+  idle_free_seconds?: number;
 }
 
 export interface ListOptions {
@@ -423,6 +446,8 @@ export interface IvoraClient {
    * external_reference when the create may already have happened.
    */
   createTariff(input: TariffInput, key: string): Promise<Tariff>;
+  /** The tariff with this external_reference (archived ones too), if any. */
+  findTariff(externalReference: string): Promise<Tariff | null>;
   /**
    * Archives a tariff: bills that snapshot it keep its price. With a replacement,
    * Ivora first moves the connectors and charger displays that use it.

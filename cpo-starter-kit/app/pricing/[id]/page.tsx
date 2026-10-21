@@ -54,10 +54,12 @@ export default async function Page({
             {t.pending
               ? `Version ${t.pending.version} is saved in the kit, but Ivora has not confirmed it (the answer was lost or Ivora was busy). ${t.current ? `Drivers keep version ${t.current.version} until then.` : "It can't be assigned until then."}`
               : "An older version is still active in Ivora. Bills made with the kit already use the newest version."}{" "}
-            Finish saving repeats the same steps with the same keys, so nothing
-            is created twice.
+            Finish saving first asks Ivora whether it has the version, and only
+            sends it again if not, so nothing is created twice.
+            {t.pending &&
+              " Or discard this draft: drivers keep the current version (the kit archives anything Ivora made for the draft)."}
           </p>
-          <FinishTariff tariffId={t.id} />
+          <FinishTariff tariffId={t.id} canDiscard={Boolean(t.pending)} />
         </section>
       )}
       <section className="card" aria-labelledby="now-heading">
@@ -101,6 +103,7 @@ export default async function Page({
         </p>
         <TariffEditor
           tariffId={t.id}
+          revision={t.revision}
           initial={editorValues(t.name, def, def)}
           currency={def.currency}
           timeZones={TIME_ZONES}

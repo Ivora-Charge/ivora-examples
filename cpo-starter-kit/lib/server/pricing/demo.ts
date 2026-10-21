@@ -10,6 +10,8 @@ import {
   notFound,
   notReady,
   PricingError,
+  stationChanged,
+  tariffChanged,
   type PricingState,
   type PricingStore,
   type TariffDefinition,
@@ -61,11 +63,15 @@ const stateSchema = z.object({
       z.object({
         id: z.string().max(40),
         name: z.string().max(60),
+        revision: z.number().int().min(1).default(1),
+        /** The highest version number given out (numbers are never reused). */
+        lastVersion: z.number().int().min(1).optional(),
         versions: z
           .array(
             z.object({
               version: z.number().int().min(1),
               ivoraTariffId: z.number().int().nullable(),
+              attempt: z.number().int().min(1).default(1),
               definition: definitionSchema.nullable(),
               createdAt: z.string().max(40),
               archivedAt: z.string().max(40).nullable(),
@@ -83,6 +89,7 @@ const stateSchema = z.object({
         tariffId: z.string().max(40).nullable(),
         private: z.boolean(),
         connectors: z.record(z.string(), z.string().max(40)),
+        revision: z.number().int().min(1).default(1),
       }),
     )
     .max(MAX_STATIONS),
@@ -127,10 +134,12 @@ export function demoPricingSeed(): DemoPricingState {
       {
         id: "demo-standard",
         name: "Sample: Standard",
+        revision: 1,
         versions: [
           {
             version: 1,
             ivoraTariffId: SAMPLE_TARIFF_IDS[0],
+            attempt: 1,
             definition: STANDARD,
             createdAt: SEEDED_AT,
             archivedAt: null,
@@ -140,10 +149,12 @@ export function demoPricingSeed(): DemoPricingState {
       {
         id: "demo-free",
         name: "Sample: Free staff charging",
+        revision: 1,
         versions: [
           {
             version: 1,
             ivoraTariffId: SAMPLE_TARIFF_IDS[1],
+            attempt: 1,
             definition: FREE,
             createdAt: SEEDED_AT,
             archivedAt: null,
@@ -157,14 +168,22 @@ export function demoPricingSeed(): DemoPricingState {
         tariffId: "demo-standard",
         private: false,
         connectors: {},
+        revision: 1,
       },
       {
         stationId: 9102,
         tariffId: "demo-standard",
         private: false,
         connectors: { "91022": "demo-free" },
+        revision: 1,
       },
-      { stationId: 9103, tariffId: "demo-free", private: true, connectors: {} },
+      {
+        stationId: 9103,
+        tariffId: "demo-free",
+        private: true,
+        connectors: {},
+        revision: 1,
+      },
     ],
   };
 }
@@ -246,7 +265,10 @@ export function createDemoPricingStore(
     mode: "demo",
     async load(): Promise<PricingState> {
       const s = await cookie.load();
-      return { tariffs: s.tariffs, stations: s.stations };
+      return {
+        tariffs: s.tariffs.map(({ lastVersion: _l, ...t }) => t),
+        stations: s.stations,
+      };
     },
     createTariff(actor, name, definition) {
       return update(actor, (s) => {
@@ -259,10 +281,13 @@ export function createDemoPricingStore(
         s.tariffs.push({
           id,
           name,
+          revision: 1,
+          lastVersion: 1,
           versions: [
             {
               version: 1,
               ivoraTariffId: null,
+              attempt: 1,
               definition,
               createdAt: now(),
               archivedAt: null,
@@ -272,15 +297,20 @@ export function createDemoPricingStore(
         return id;
       });
     },
-    addVersion(actor, tariffId, name, definition) {
+    addVersion(actor, tariffId, expectedRevision, name, definition) {
       return update(actor, (s) => {
         const t = tariff(s, tariffId);
+        if (t.revision !== expectedRevision) throw tariffChanged();
         if (t.versions[0]?.ivoraTariffId === null) throw busy();
-        const version = (t.versions[0]?.version ?? 0) + 1;
+        const version =
+          Math.max(t.lastVersion ?? 0, t.versions[0]?.version ?? 0) + 1;
         t.name = name;
+        t.revision += 1;
+        t.lastVersion = version;
         t.versions.unshift({
           version,
           ivoraTariffId: null,
+          attempt: 1,
           definition,
           createdAt: now(),
           archivedAt: null,
@@ -297,12 +327,25 @@ export function createDemoPricingStore(
         v.ivoraTariffId ??= ivoraTariffId;
       });
     },
+    nextAttempt(actor, tariffId, version) {
+      return update(actor, (s) => {
+        const v = tariff(s, tariffId).versions.find(
+          (x) => x.version === version && x.ivoraTariffId === null,
+        );
+        if (!v) throw notFound();
+        return ++v.attempt;
+      });
+    },
     dropVersion(actor, tariffId, version) {
       return update(actor, (s) => {
         const t = tariff(s, tariffId);
-        t.versions = t.versions.filter(
+        const kept = t.versions.filter(
           (v) => v.version !== version || v.ivoraTariffId !== null,
         );
+        if (kept.length === t.versions.length) return;
+        t.lastVersion = Math.max(t.lastVersion ?? 0, t.versions[0].version);
+        t.versions = kept;
+        t.revision += 1;
         if (!t.versions.length) s.tariffs = s.tariffs.filter((x) => x !== t);
       });
     },
@@ -314,7 +357,7 @@ export function createDemoPricingStore(
         if (v) v.archivedAt ??= now();
       });
     },
-    setStation(actor, stationId, input) {
+    setStation(actor, stationId, expectedRevision, input) {
       return update(actor, (s) => {
         for (const id of [
           input.tariffId,
@@ -325,16 +368,20 @@ export function createDemoPricingStore(
             !tariff(s, id).versions.some((v) => v.ivoraTariffId !== null)
           )
             throw notReady();
+        const revision =
+          s.stations.find((x) => x.stationId === stationId)?.revision ?? 0;
+        if (revision !== expectedRevision) throw stationChanged();
+        // Kept even when empty, so its revision only grows (like the database row).
         s.stations = s.stations.filter((x) => x.stationId !== stationId);
-        if (input.tariffId || input.private || input.connectors.length)
-          s.stations.push({
-            stationId,
-            tariffId: input.tariffId,
-            private: input.private,
-            connectors: Object.fromEntries(
-              input.connectors.map((c) => [String(c.connectorId), c.tariffId]),
-            ),
-          });
+        s.stations.push({
+          stationId,
+          tariffId: input.tariffId,
+          private: input.private,
+          connectors: Object.fromEntries(
+            input.connectors.map((c) => [String(c.connectorId), c.tariffId]),
+          ),
+          revision: revision + 1,
+        });
         if (s.stations.length > MAX_STATIONS)
           throw new PricingError(
             "invalid",

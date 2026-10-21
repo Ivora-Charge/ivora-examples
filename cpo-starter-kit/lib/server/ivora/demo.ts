@@ -865,6 +865,22 @@ export function createDemoClient(
         return record(created);
       });
     },
+    async findTariff(externalReference) {
+      const x = (await fleet.load()).tariffs?.find(
+        (t) => t.external_reference === externalReference,
+      );
+      return x
+        ? {
+            id: x.id,
+            currency: x.currency,
+            rate_minor_per_kwh: 0,
+            authorization_minor: 0,
+            archived: x.archived,
+            external_reference: x.external_reference,
+            is_complex: true,
+          }
+        : null;
+    },
     async archiveTariff(tariffId, replacementTariffId) {
       return update((f) => {
         const tariffs = (f.tariffs ??= []);

@@ -30,10 +30,21 @@ import {
   definitionInput,
   describeDays,
   driverText,
+  graceMinutes,
+  holdMinor,
+  pricedElements,
+  samePrices,
   summary,
   tariffInput,
+  tariffReference,
 } from "./tariff";
-import { localDate, minutesBetween, zonedToUtc } from "./time";
+import {
+  elapsedMinutes,
+  localDate,
+  localTimeExists,
+  nextDate,
+  zonedToUtc,
+} from "./time";
 import {
   busy,
   notAllowed,
@@ -97,6 +108,60 @@ function definitelyFailed(e: unknown): boolean {
 
 const ivoraRefusal = (e: unknown) =>
   new PricingError("invalid", describeError(e), tariffProblems(e));
+
+const graceUnsupported = () =>
+  new PricingError(
+    "invalid",
+    "Ivora can't apply an idle grace period for this account yet, so drivers would pay the idle fee from their first idle minute. Set the idle grace period to 0 minutes, or remove the idle fee.",
+  );
+
+/** A whole number from a hidden form field, or null. */
+function revisionOf(text: string | undefined): number | null {
+  const n = Number(text);
+  return text && /^\d{1,9}$/.test(text) && Number.isSafeInteger(n) ? n : null;
+}
+
+const reloadPage = () =>
+  new PricingError(
+    "invalid",
+    "This form is out of date. Reload the page and try again.",
+  );
+
+/**
+ * Ivora's simulation of `def` for `session`. With an idle grace period, the draft
+ * carries rules.idle_grace_minutes, and the answer must show Ivora applied it
+ * (idle_free_seconds); an API without the rule refuses the field, which the same
+ * draft without it tells apart from any other problem. Either way the kit refuses
+ * the grace period rather than promise free minutes Ivora would bill.
+ */
+async function simulate(
+  d: PricingDeps,
+  def: TariffDefinition,
+  session: SessionProfile,
+): Promise<Quote> {
+  try {
+    const q = await d.ivora.simulateTariff(definitionInput(def), session);
+    if (graceMinutes(def) && typeof q.idle_free_seconds !== "number")
+      throw graceUnsupported();
+    return q;
+  } catch (e) {
+    if (!(e instanceof IvoraError)) throw e;
+    logIvora("tariff simulation", e);
+    if (graceMinutes(def) && definitelyFailed(e)) {
+      try {
+        await d.ivora.simulateTariff(
+          definitionInput(def, { withGrace: false }),
+          session,
+        );
+      } catch (without) {
+        if (!(without instanceof IvoraError)) throw without;
+        throw ivoraRefusal(definitelyFailed(without) ? without : e);
+      }
+      throw graceUnsupported();
+    }
+    throw ivoraRefusal(e);
+  }
+}
 
 // ---- Reading ----
 
@@ -212,6 +277,8 @@ export async function pricingProgress(
 export interface TariffView {
   id: string;
   name: string;
+  /** Sent back with a save, which is refused if the tariff changed meanwhile. */
+  revision: number;
   current: TariffVersion | null;
   pending: TariffVersion | null;
   /** The definition the editor starts from: the pending one, else the current one. */
@@ -244,6 +311,8 @@ export interface StationPricingView {
   siteName: string | null;
   private: boolean;
   tariffId: string | null;
+  /** Sent back with a save, which is refused if the station changed meanwhile. */
+  revision: number;
   connectors: ConnectorPricingView[];
 }
 
@@ -264,6 +333,7 @@ function tariffView(t: KitTariff, uses: number): TariffView {
   return {
     id: t.id,
     name: t.name,
+    revision: t.revision,
     current,
     pending,
     definition,
@@ -312,6 +382,7 @@ export async function loadPricing(
           st.location_id != null ? (sites.get(st.location_id) ?? null) : null,
         private: Boolean(sp?.private),
         tariffId: sp?.tariffId ?? null,
+        revision: sp?.revision ?? 0,
         connectors: st.connectors.map((c, i) => {
           const e = effectiveTariff(state, st.id, c.id);
           if (e) uses.set(e.tariff.id, (uses.get(e.tariff.id) ?? 0) + 1);
@@ -430,19 +501,31 @@ export type QuoteView = QuotePreview;
 /** Trailing zeros off a decimal string: "12.500000" to "12.5". */
 const trim = (q: string) => q.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
 
-/** The preview session as Ivora's session profile. The idle grace is the kit's. */
+/**
+ * The preview session as Ivora's session profile: every idle minute (Ivora applies
+ * the grace period), and the real elapsed charging time, across a change of clocks
+ * too. A start or end in a spring-forward gap does not happen, so it is refused.
+ */
 export function sessionProfile(
   def: TariffDefinition,
   s: Simulation,
-): SessionProfile & { billedIdleMinutes: number } {
-  const billedIdleMinutes = Math.max(0, s.idleMinutes - def.idleGraceMinutes);
+): SessionProfile {
+  const endDate = s.end > s.start ? s.date : nextDate(s.date);
+  for (const [date, time] of [
+    [s.date, s.start],
+    [endDate, s.end],
+  ])
+    if (!localTimeExists(date, time, def.timeZone))
+      throw new PricingError(
+        "invalid",
+        `${time} does not happen on ${date} in ${def.timeZone}: the clocks go forward then. Choose another time.`,
+      );
   return {
     start_at: zonedToUtc(s.date, s.start, def.timeZone).toISOString(),
     time_zone: def.timeZone,
-    duration_minutes: minutesBetween(s.start, s.end),
+    duration_minutes: elapsedMinutes(s.date, s.start, s.end, def.timeZone),
     energy_kwh: s.energyKwh,
-    idle_minutes: billedIdleMinutes,
-    billedIdleMinutes,
+    idle_minutes: s.idleMinutes,
   };
 }
 
@@ -454,18 +537,23 @@ export function quoteView(
   demo: boolean,
 ): QuoteView {
   const c = q.currency;
-  const billedIdle = Math.max(0, s.idleMinutes - def.idleGraceMinutes);
+  const periodOf = pricedElements(def).map((x) => x.period);
+  const freeMinutes =
+    typeof q.idle_free_seconds === "number"
+      ? trim((q.idle_free_seconds / 60).toFixed(2))
+      : null;
   const label = (type: string, element: number) => {
     if (type === "ENERGY") {
-      const p = def.kind === "paid" ? def.periods[element] : undefined;
-      return p
-        ? `Energy, period ${element + 1} (${describeDays(p.days)} ${p.start}–${p.end})`
+      const i = periodOf[element];
+      const p = i != null && def.kind === "paid" ? def.periods[i] : undefined;
+      return p && i != null
+        ? `Energy, period ${i + 1} (${describeDays(p.days)} ${p.start}–${p.end})`
         : "Energy, base price";
     }
     if (type === "FLAT") return "Session fee";
     if (type === "PARKING_TIME")
-      return def.idleGraceMinutes
-        ? `Idle fee (${billedIdle} of ${s.idleMinutes} idle minutes; the first ${def.idleGraceMinutes} are free)`
+      return freeMinutes !== null
+        ? `Idle fee (after ${freeMinutes} free ${freeMinutes === "1" ? "minute" : "minutes"})`
         : "Idle fee";
     return type;
   };
@@ -482,19 +570,29 @@ export function quoteView(
     amount: formatMinor(l.amount_minor, c),
   }));
   const notes: string[] = [];
+  const warnings: string[] = [];
   if (q.lines.reduce((a, l) => a + l.amount_minor, 0) !== q.subtotal_minor)
     notes.push(
       "Lines are rounded for display; the total rounds the exact sum once, as bills do.",
     );
-  if (q.lines.some((l) => l.type === "PARKING_TIME"))
+  if (
+    s.idleMinutes &&
+    freeMinutes !== null &&
+    !q.lines.some((l) => l.type === "PARKING_TIME")
+  )
     notes.push(
-      "Ivora's bills do not charge idle time yet (PARKING_TIME is priced in simulations and quotes only), so drivers are not billed this idle fee for now.",
+      `Ivora counted ${freeMinutes} of the ${s.idleMinutes} idle minutes as free, so there is no idle fee.`,
     );
-  if (s.idleMinutes && billedIdle === 0 && def.idleMinorPerMinute)
+  if (def.idleMinorPerMinute)
     notes.push(
-      `All ${s.idleMinutes} idle minutes are inside the ${def.idleGraceMinutes}-minute grace period.`,
+      "Ivora bills idle time whenever a car is plugged in but not charging: after charging ends, and while charging is paused. This preview has idle time after charging only.",
     );
   const total = formatMinor(q.total_minor, c);
+  const hold = holdMinor(def);
+  if (hold && q.total_minor > hold)
+    warnings.push(
+      `This session costs ${total}, more than the ${formatMinor(hold, def.currency)} card hold taken before charging. A card payment can collect at most what was held, so check the hold covers your longest sessions.`,
+    );
   const day = new Intl.DateTimeFormat("en-US", {
     timeZone: "UTC",
     weekday: "short",
@@ -518,6 +616,7 @@ export function quoteView(
     currency: c,
     driverText: q.tariff_alt_text?.[0]?.text ?? driverText(def),
     notes,
+    warnings,
     demo,
   };
 }
@@ -557,15 +656,7 @@ export async function previewTariff(
   const { currency } = await formCurrency(d, actor, tariffId);
   const { definition } = parse(tariffFormSchema(currency), form);
   const s = parse(simulationSchema, sim);
-  const { billedIdleMinutes: _b, ...session } = sessionProfile(definition, s);
-  let q: Quote;
-  try {
-    q = await d.ivora.simulateTariff(definitionInput(definition), session);
-  } catch (e) {
-    if (!(e instanceof IvoraError)) throw e;
-    logIvora("tariff simulation", e);
-    throw ivoraRefusal(e);
-  }
+  const q = await simulate(d, definition, sessionProfile(definition, s));
   return quoteView(q, definition, s, d.ivora.mode === "demo");
 }
 
@@ -591,19 +682,27 @@ export type PublishResult =
     }
   | { state: "unconfirmed"; version: number; error: string };
 
+const createKey = (tariffId: string, version: number, attempt: number) =>
+  idempotencyKey("tariff", `${tariffId}-v${version}-a${attempt}`, "create");
+
 /**
- * Sends the tariff's pending version to Ivora as a new tariff (`POST /tariffs`, key
- * cpo-tariff-<id>-v<n>-create, external_reference cpo-tariff-<id>-v<n>), then
- * archives the older versions with it as their replacement, so Ivora moves any
+ * Sends the tariff's pending version to Ivora as a new tariff (`POST /tariffs`,
+ * external_reference cpo-tariff-<id>-v<n>, key cpo-tariff-<id>-v<n>-a<k>-create),
+ * then archives the older versions with it as their replacement, so Ivora moves any
  * connectors and charger displays that used them. A version is never changed in
- * place: bills keep the tariff they snapshot. Safe to repeat ("Finish saving"): each
- * step has a key derived from the tariff and version, and a create that already
- * happened is found by its reference.
+ * place: bills keep the tariff they snapshot.
+ *
+ * Safe to repeat ("Finish saving", `retry`): the version is first looked up by its
+ * reference and adopted if Ivora has it. If not, the create is sent again as a new
+ * attempt with a new key (the same key would only replay its uncertain answer). The
+ * body of a version never changes and its number is never reused, so no key is ever
+ * sent with two bodies, and the reference stops a second tariff being made.
  */
 export async function publishTariff(
   d: PricingDeps,
   actor: Staff,
   tariffId: string,
+  { retry = true }: { retry?: boolean } = {},
 ): Promise<PublishResult> {
   requireManager(actor);
   const find = async () => {
@@ -617,12 +716,42 @@ export async function publishTariff(
   const pending = pendingVersion(t);
   if (pending) {
     if (!pending.definition) throw notFound();
+    const unconfirmed = (e: unknown): PublishResult => ({
+      state: "unconfirmed",
+      version: pending.version,
+      error: describeError(e),
+    });
+    let ivoraId: number | null = null;
+    let attempt = pending.attempt;
+    if (retry) {
+      // A failed lookup says nothing about the create: keep the version as it is.
+      let found;
+      try {
+        found = await d.ivora.findTariff(
+          tariffReference(t.id, pending.version),
+        );
+      } catch (e) {
+        if (!(e instanceof IvoraError)) throw e;
+        logIvora("tariff lookup", e);
+        return unconfirmed(e);
+      }
+      if (found?.archived)
+        throw new PricingError(
+          "invalid",
+          `Ivora has version ${pending.version} of this tariff, but archived. Discard this draft and save the prices again.`,
+        );
+      if (found) ivoraId = found.id;
+      else attempt = await d.store.nextAttempt(actor, t.id, pending.version);
+    }
     try {
-      const created = await d.ivora.createTariff(
-        tariffInput(pending.definition, t.id, pending.version),
-        idempotencyKey("tariff", `${t.id}-v${pending.version}`, "create"),
-      );
-      await d.store.recordVersion(actor, t.id, pending.version, created.id);
+      if (ivoraId === null)
+        ivoraId = (
+          await d.ivora.createTariff(
+            tariffInput(pending.definition, t.id, pending.version),
+            createKey(t.id, pending.version, attempt),
+          )
+        ).id;
+      await d.store.recordVersion(actor, t.id, pending.version, ivoraId);
     } catch (e) {
       if (!(e instanceof IvoraError)) throw e;
       logIvora("tariff create", e);
@@ -630,11 +759,7 @@ export async function publishTariff(
         await d.store.dropVersion(actor, t.id, pending.version);
         throw ivoraRefusal(e);
       }
-      return {
-        state: "unconfirmed",
-        version: pending.version,
-        error: describeError(e),
-      };
+      return unconfirmed(e);
     }
     t = await find();
   }
@@ -646,7 +771,11 @@ export async function publishTariff(
       await d.ivora.archiveTariff(
         old.ivoraTariffId!,
         current.ivoraTariffId,
-        idempotencyKey("tariff", `${t.id}-v${old.version}`, "archive"),
+        idempotencyKey(
+          "tariff",
+          `${t.id}-v${old.version}`,
+          `archive-to-v${current.version}`,
+        ),
       );
     } catch (e) {
       if (!(e instanceof IvoraError)) throw e;
@@ -662,9 +791,68 @@ export async function publishTariff(
 }
 
 /**
+ * Gives up on an unconfirmed version. Ivora is asked first: a tariff it made for the
+ * version anyway is archived (nothing uses it yet), then the version is forgotten and
+ * drivers keep the current one. A tariff with no other version goes with it. Its
+ * number is not reused.
+ */
+export async function discardPendingVersion(
+  d: PricingDeps,
+  actor: Staff,
+  tariffId: string,
+): Promise<{ version: number; tariffRemoved: boolean }> {
+  requireManager(actor);
+  const t = (await d.store.load(actor.operatorId)).tariffs.find(
+    (x) => x.id === tariffId,
+  );
+  if (!t) throw notFound();
+  const pending = pendingVersion(t);
+  if (!pending)
+    throw new PricingError(
+      "invalid",
+      "There is no unconfirmed version to discard. Reload the page.",
+    );
+  try {
+    const found = await d.ivora.findTariff(
+      tariffReference(t.id, pending.version),
+    );
+    if (found && !found.archived)
+      await d.ivora.archiveTariff(
+        found.id,
+        null,
+        idempotencyKey("tariff", `${t.id}-v${pending.version}`, "discard"),
+      );
+  } catch (e) {
+    if (!(e instanceof IvoraError)) throw e;
+    if (e.code !== "tariff_archived") {
+      logIvora("tariff discard", e);
+      throw new PricingError(
+        "invalid",
+        `The draft is kept: the kit could not make sure Ivora has no tariff for it. ${describeError(e)}`,
+      );
+    }
+  }
+  await d.store.dropVersion(actor, t.id, pending.version);
+  return { version: pending.version, tariffRemoved: t.versions.length === 1 };
+}
+
+/** A sample session for checking that Ivora applies an idle grace period. */
+const graceProbe = (def: TariffDefinition): SessionProfile => ({
+  start_at: new Date().toISOString(),
+  time_zone: def.timeZone,
+  duration_minutes: 60,
+  energy_kwh: 10,
+  idle_minutes: def.idleGraceMinutes + 5,
+});
+
+/**
  * Saves the editor: a new tariff, or a new version of `tariffId`, then publishes it
- * to Ivora. A refusal from Ivora drops the version (nothing was created) and shows
- * Ivora's problems; an uncertain answer keeps it for "Finish saving".
+ * to Ivora. A new version is refused if the tariff changed since the editor was
+ * loaded (its revision), and while the driver text is the operator's own and the
+ * prices changed, until they confirm it still fits. An idle grace period is checked
+ * with Ivora's simulation first. A refusal from Ivora drops the version (nothing was
+ * created) and shows Ivora's problems; an uncertain answer keeps it for "Finish
+ * saving".
  */
 export async function saveTariff(
   d: PricingDeps,
@@ -675,21 +863,46 @@ export async function saveTariff(
   requireManager(actor);
   const { currency, tariff } = await formCurrency(d, actor, tariffId);
   const { name, definition } = parse(tariffFormSchema(currency), form);
+  let expected: number | null = null;
+  if (tariff) {
+    expected = revisionOf(form.revision);
+    if (expected === null) throw reloadPage();
+    if (pendingVersion(tariff)) throw busy();
+    const before =
+      pendingVersion(tariff)?.definition ?? currentVersion(tariff)?.definition;
+    if (
+      before &&
+      definition.driverText !== null &&
+      definition.driverText === before.driverText &&
+      !samePrices(before, definition) &&
+      form.driverTextConfirmed !== "on"
+    )
+      throw new PricingError(
+        "invalid",
+        'The prices changed, but your text for drivers did not. Update it, clear it to use the kit\'s description, or tick "My text for drivers matches these prices".',
+      );
+  }
+  if (graceMinutes(definition))
+    await simulate(d, definition, graceProbe(definition));
   let id: string;
   if (tariff) {
-    if (pendingVersion(tariff)) throw busy();
-    await d.store.addVersion(actor, tariff.id, name, definition);
+    await d.store.addVersion(actor, tariff.id, expected!, name, definition);
     id = tariff.id;
   } else {
     id = await d.store.createTariff(actor, name, definition);
   }
-  return { id, result: await publishTariff(d, actor, id) };
+  return {
+    id,
+    result: await publishTariff(d, actor, id, { retry: false }),
+  };
 }
 
 // ---- Assignments ----
 
 export interface StationPricingForm {
   stationId?: string;
+  /** The station's revision the form was loaded at. */
+  revision?: string;
   tariffId?: string;
   private?: boolean;
   /** Connector resource ID to kit tariff ID; "" or "station" uses the station's. */
@@ -710,6 +923,8 @@ export async function setStationPricing(
   const stationId = Number(form.stationId);
   if (!Number.isSafeInteger(stationId) || stationId <= 0)
     throw new PricingError("invalid", "Choose a charger.");
+  const expected = revisionOf(form.revision);
+  if (expected === null) throw reloadPage();
   const state = await d.store.load(actor.operatorId);
   const ready = (id: string) => {
     const t = state.tariffs.find((x) => x.id === id);
@@ -741,7 +956,7 @@ export async function setStationPricing(
       );
     connectors.push({ connectorId: c.id, tariffId: ready(value) });
   }
-  await d.store.setStation(actor, stationId, {
+  await d.store.setStation(actor, stationId, expected, {
     tariffId,
     private: Boolean(form.private),
     connectors,

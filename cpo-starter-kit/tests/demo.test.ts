@@ -250,15 +250,26 @@ describe("demo mode", () => {
       idleMinutes: "20",
     };
     const q = await previewTariff(d, owner, form, sim);
-    // 23:00-24:00 Saturday at 0.20, 00:00-01:00 Sunday at the base 0.30, then 10
-    // billed idle minutes (20 less the default 10-minute grace) at 0.25.
-    expect(q).toMatchObject({ total: "$5.00", demo: true });
+    // Saturday night's period runs into Sunday morning: 23:00-01:00 all at 0.20,
+    // then 10 billed idle minutes (Ivora's rule leaves the first 10 of 20 free) at
+    // 0.25.
+    expect(q).toMatchObject({ total: "$4.50", demo: true });
     const { id, result } = await saveTariff(d, owner, form);
     expect(result).toMatchObject({ state: "saved", version: 1 });
-    const again = await saveTariff(d, owner, { ...form, energy: "0.32" }, id);
+    const revision = String(
+      (await d.store.load(owner.operatorId)).tariffs.find((t) => t.id === id)!
+        .revision,
+    );
+    const again = await saveTariff(
+      d,
+      owner,
+      { ...form, energy: "0.32", revision },
+      id,
+    );
     expect(again.result).toMatchObject({ state: "saved", version: 2 });
     await setStationPricing(d, owner, {
       stationId: "9101",
+      revision: "1",
       tariffId: id,
       private: false,
     });

@@ -13,6 +13,7 @@ import { EMPTY, type ActionState, type QuotePreview } from "@/lib/action-state";
 import type { EditorValues } from "@/lib/server/pricing/service";
 import { Result } from "../result";
 import {
+  discardTariffAction,
   finishTariffAction,
   previewTariffAction,
   saveTariffAction,
@@ -108,6 +109,11 @@ export function QuoteTable({ quote }: { quote: QuotePreview }) {
           </tfoot>
         </table>
       </div>
+      {quote.warnings.map((w) => (
+        <p key={w} className="notice" role="note">
+          {w}
+        </p>
+      ))}
       <p>
         <strong>Drivers read:</strong> {quote.driverText}
       </p>
@@ -204,6 +210,8 @@ function Period(p: {
  */
 export function TariffEditor(p: {
   tariffId: string | null;
+  /** The tariff's revision when the page was loaded; a save from a stale page is refused. */
+  revision?: number;
   initial: EditorValues;
   currency: string;
   timeZones: readonly string[];
@@ -238,7 +246,12 @@ export function TariffEditor(p: {
 
   return (
     <form className="form tariff-form" onSubmit={submit} noValidate={false}>
-      {p.tariffId && <input type="hidden" name="tariffId" value={p.tariffId} />}
+      {p.tariffId && (
+        <>
+          <input type="hidden" name="tariffId" value={p.tariffId} />
+          <input type="hidden" name="revision" value={p.revision ?? ""} />
+        </>
+      )}
       <div className="field">
         <label htmlFor={f("name")}>Tariff name</label>
         <input
@@ -337,8 +350,8 @@ export function TariffEditor(p: {
               aria-describedby={f("idle-hint")}
             />
             <span id={f("idle-hint")} className="hint">
-              Charged per started minute a car stays plugged in after charging
-              ends, after the grace period.
+              Charged per started minute a car is plugged in but not charging:
+              after charging ends, and while charging is paused.
             </span>
           </div>
           <div className="field">
@@ -348,7 +361,13 @@ export function TariffEditor(p: {
               name="idleGrace"
               inputMode="numeric"
               defaultValue={p.initial.idleGrace}
+              aria-describedby={f("grace-hint")}
             />
+            <span id={f("grace-hint")} className="hint">
+              Free idle minutes per session, applied by Ivora. The kit checks
+              Ivora applies them before saving; if your account can&apos;t yet,
+              set 0.
+            </span>
           </div>
           <fieldset className="periods">
             <legend>Time-of-use periods</legend>
@@ -410,6 +429,14 @@ export function TariffEditor(p: {
           prices change.
         </span>
       </div>
+      {p.tariffId && p.initial.driverText && (
+        <div className="confirm">
+          <input id={f("text-ok")} type="checkbox" name="driverTextConfirmed" />
+          <label htmlFor={f("text-ok")}>
+            My text for drivers matches these prices
+          </label>
+        </div>
+      )}
       <fieldset className="simulate">
         <legend>Preview a session</legend>
         <div className="period-times">
@@ -503,20 +530,54 @@ export function TariffEditor(p: {
   );
 }
 
-/** Repeats the unconfirmed steps of the last save, with the same keys. */
-export function FinishTariff({ tariffId }: { tariffId: string }) {
+/**
+ * Repeats the unconfirmed steps of the last save (the version is looked up in Ivora
+ * first), and, while a version is unconfirmed, offers to discard it.
+ */
+export function FinishTariff({
+  tariffId,
+  canDiscard,
+}: {
+  tariffId: string;
+  canDiscard: boolean;
+}) {
   const [state, action, pending] = useActionState(finishTariffAction, EMPTY);
+  const [discardState, discard, discarding] = useActionState(
+    discardTariffAction,
+    EMPTY,
+  );
   return (
-    <form action={action} className="form">
-      <input type="hidden" name="tariffId" value={tariffId} />
-      <Result state={state} />
-      <Problems state={state} />
-      <div>
-        <button type="submit" className="button" disabled={pending}>
-          {pending ? "Finishing…" : "Finish saving"}
-        </button>
-      </div>
-    </form>
+    <>
+      <form action={action} className="form">
+        <input type="hidden" name="tariffId" value={tariffId} />
+        <Result state={state} />
+        <Problems state={state} />
+        <div>
+          <button
+            type="submit"
+            className="button"
+            disabled={pending || discarding}
+          >
+            {pending ? "Finishing…" : "Finish saving"}
+          </button>
+        </div>
+      </form>
+      {canDiscard && (
+        <form action={discard} className="form">
+          <input type="hidden" name="tariffId" value={tariffId} />
+          <Result state={discardState} />
+          <div>
+            <button
+              type="submit"
+              className="button secondary"
+              disabled={pending || discarding}
+            >
+              {discarding ? "Discarding…" : "Discard this draft"}
+            </button>
+          </div>
+        </form>
+      )}
+    </>
   );
 }
 
@@ -529,6 +590,8 @@ export interface TariffOption {
 export function StationPricingForm(p: {
   stationId: number;
   stationName: string;
+  /** The station's revision when the page was loaded; a stale save is refused. */
+  revision: number;
   tariffId: string | null;
   private: boolean;
   connectors: { id: number; number: number; override: string | null }[];
@@ -542,6 +605,7 @@ export function StationPricingForm(p: {
   return (
     <form action={action} className="form">
       <input type="hidden" name="stationId" value={p.stationId} />
+      <input type="hidden" name="revision" value={p.revision} />
       <div className="field">
         <label htmlFor={`${id}-tariff`}>Tariff for {p.stationName}</label>
         <select

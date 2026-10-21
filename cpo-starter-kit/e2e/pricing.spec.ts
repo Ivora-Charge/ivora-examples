@@ -52,9 +52,9 @@ test("demo: create a tariff with time-of-use and an idle fee, preview it and sav
   );
   await expect(quote.getByTestId("quote-total")).toHaveText("$16.50");
   await expect(quote).toContainText("Energy, period 1 (Mon–Fri 16:00–21:00)");
-  await expect(quote).toContainText(
-    "Idle fee (5 of 15 idle minutes; the first 10 are free)",
-  );
+  // The free minutes are the simulation's (Ivora's rule), not the browser's.
+  await expect(quote).toContainText("Idle fee (after 10 free minutes)");
+  await expect(quote).toContainText("while charging is paused");
   await expect(quote).toContainText("Demo");
   // A preview keeps what was typed.
   await expect(page.getByLabel("Tariff name")).toHaveValue("Evening");
@@ -177,4 +177,97 @@ test("demo: assign tariffs per charger and connector; a private charger has no Q
     .textContent())!;
   await page.goto(new URL(url2).pathname);
   await expect(page.getByText(/\$0\.35 per kWh/)).toBeVisible();
+});
+
+test("demo: an overnight Friday period prices Saturday's early hours, and a long session warns about the hold", async ({
+  page,
+  isMobile,
+}) => {
+  await openPricing(page, isMobile);
+  await page.getByRole("link", { name: "New tariff" }).click();
+  await page.getByLabel("Tariff name").fill("Night");
+  await page.getByLabel("Price per kWh (USD)", { exact: true }).fill("0.35");
+  await page.getByRole("button", { name: "Add a time-of-use period" }).click();
+  const period = page.getByRole("group", { name: "Period 1", exact: true });
+  await period.getByLabel("From").fill("22:00");
+  await period.getByLabel("Until").fill("06:00");
+  for (const d of ["Mon", "Tue", "Wed", "Thu"])
+    await period.getByLabel(d).uncheck();
+  await period.getByLabel("Period 1 price per kWh (USD)").fill("0.20");
+
+  // Saturday 24 October 2026, 01:00 to 03:00: still Friday night's price.
+  await page.getByLabel("Date").fill("2026-10-24");
+  await page.getByLabel("Charging from").fill("01:00");
+  await page.getByLabel("Until", { exact: true }).last().fill("03:00");
+  await page.getByLabel("Energy (kWh)").fill("10");
+  await page.getByLabel("Then idle (minutes)").fill("0");
+  await page.getByRole("button", { name: "Preview price" }).click();
+  const quote = page.getByRole("region", { name: /Preview/ });
+  await expect(quote).toContainText("Energy, period 1 (Fri 22:00–06:00)");
+  await expect(quote.getByTestId("quote-total")).toHaveText("$2.00");
+
+  // 60 kWh at $0.35, 20 idle minutes at $0.40 after 10 free: more than the hold.
+  await page.getByLabel("Idle fee per minute (USD, optional)").fill("0.40");
+  await page.getByLabel("Date").fill("2026-10-20");
+  await page.getByLabel("Charging from").fill("10:00");
+  await page.getByLabel("Until", { exact: true }).last().fill("14:00");
+  await page.getByLabel("Energy (kWh)").fill("80");
+  await page.getByLabel("Then idle (minutes)").fill("20");
+  await page.getByRole("button", { name: "Preview price" }).click();
+  await expect(quote.getByTestId("quote-total")).toHaveText("$32.00");
+  await expect(quote.getByRole("note")).toContainText(
+    "more than the $25.00 card hold",
+  );
+});
+
+test("demo: a stale tariff editor or charger form is refused instead of undoing a newer change", async ({
+  page,
+  context,
+  isMobile,
+}) => {
+  await openPricing(page, isMobile);
+  const tariffUrl = await page
+    .getByRole("link", { name: "Sample: Standard" })
+    .getAttribute("href");
+  // Two tabs on the same tariff (the demo keeps prices in this browser's cookie).
+  const other = await context.newPage();
+  await other.goto(tariffUrl!);
+  await page.goto(tariffUrl!);
+  await page.getByLabel("Price per kWh (USD)", { exact: true }).fill("0.45");
+  await page.getByRole("button", { name: "Save as a new version" }).click();
+  await expect(page.getByText(/Version 2 is live/)).toBeVisible();
+  await other.getByLabel("Idle fee per minute (USD, optional)").fill("0.50");
+  await other.getByRole("button", { name: "Save as a new version" }).click();
+  await expect(other.locator("p.error")).toContainText(
+    "Someone changed this tariff after you opened it",
+  );
+
+  // Two tabs on the Pricing page: one makes DEMO-HARBOUR-01 private first.
+  await page.goto("/pricing");
+  await other.goto("/pricing");
+  const harbour = (p: Page) =>
+    p
+      .getByRole("list", { name: "Chargers and their tariffs" })
+      .getByRole("listitem")
+      .filter({ hasText: "DEMO-HARBOUR-01" })
+      .first();
+  await harbour(page).getByText("Change").click();
+  await harbour(page)
+    .getByLabel(/Private charger/)
+    .check();
+  await harbour(page)
+    .getByRole("button", { name: "Save prices for DEMO-HARBOUR-01" })
+    .click();
+  await expect(
+    harbour(page).getByText("Prices saved for DEMO-HARBOUR-01."),
+  ).toBeVisible();
+  await harbour(other).getByText("Change").click();
+  await harbour(other)
+    .getByRole("button", { name: "Save prices for DEMO-HARBOUR-01" })
+    .click();
+  await expect(harbour(other).locator("p.error")).toContainText(
+    "Someone changed this charger",
+  );
+  await page.reload();
+  await expect(harbour(page)).toContainText("Private");
 });

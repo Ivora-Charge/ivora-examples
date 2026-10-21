@@ -14,10 +14,12 @@ import type {
 
 // Demo mode's stand-in for `POST /tariffs/simulate`, so the pricing preview works
 // offline. It prices what the kit's editor builds (ENERGY, FLAT and PARKING_TIME, with
-// time-of-day and day-of-week restrictions) by the documented rules: for each minute
-// the first element whose restrictions hold prices each dimension, FLAT is charged by
-// the first element with FLAT that applies at the start, amounts stay exact and the
-// total is rounded half up once. Live mode always asks Ivora; this never runs there.
+// time-of-day and day-of-week restrictions, and the idle_grace_minutes rule) by the
+// documented rules: for each minute the first element whose restrictions hold prices
+// each dimension, FLAT is charged by the first element with FLAT that applies at the
+// start, the first idle minutes of rules.idle_grace_minutes are free (reported as
+// idle_free_seconds), amounts stay exact and the total is rounded half up once. Live
+// mode always asks Ivora; this never runs there.
 
 const MAX_MINUTES = 10_080;
 
@@ -84,6 +86,17 @@ function decimal(n: bigint, d: bigint): string {
 
 function check(t: TariffDefinitionInput) {
   if (!t.elements.length) throw invalid("A tariff needs at least one element.");
+  for (const k of Object.keys(t.rules ?? {}))
+    if (k !== "idle_grace_minutes")
+      throw invalid(`Demo mode does not price the ${k} rule.`);
+  const grace = t.rules?.idle_grace_minutes;
+  if (
+    grace !== undefined &&
+    (!Number.isInteger(grace) || grace < 0 || grace > 1440)
+  )
+    throw invalid(
+      "idle_grace_minutes is a whole number of minutes from 0 to 1440.",
+    );
   for (const e of t.elements) {
     const r = e.restrictions ?? {};
     for (const k of Object.keys(r))
@@ -137,7 +150,9 @@ export function demoSimulate(
     charged.set(hit.i, x);
   }
   const parked = new Map<number, { c: PriceComponent; n: bigint }>();
-  for (let m = 0; m < idle; m++) {
+  const grace = t.rules?.idle_grace_minutes;
+  const free = Math.min(idle, grace ?? 0);
+  for (let m = free; m < idle; m++) {
     const hit = first("PARKING_TIME", startMs + (duration + m) * 60_000);
     if (!hit) continue;
     const x = parked.get(hit.i) ?? { c: hit.c, n: 0n };
@@ -208,5 +223,6 @@ export function demoSimulate(
     adjustments: [],
     total_minor: total,
     tariff_alt_text: t.tariff_alt_text,
+    ...(grace !== undefined ? { idle_free_seconds: free * 60 } : {}),
   };
 }

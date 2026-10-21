@@ -5,9 +5,9 @@ import { currencyExponent, minorToMajorString, parseMajor } from "@/lib/money";
 import type { DayOfWeek } from "../ivora/types";
 import {
   DEFAULT_IDLE_GRACE_MINUTES,
-  describeDays,
   MAX_PERIODS,
   overlappingPeriods,
+  PAID_CURRENCY,
   WEEK,
 } from "./tariff";
 import type { TariffDefinition } from "./types";
@@ -22,6 +22,10 @@ export interface TariffForm {
   idleFee?: string;
   idleGrace?: string;
   driverText?: string;
+  /** "on": staff confirmed their own driver text still matches changed prices. */
+  driverTextConfirmed?: string;
+  /** The tariff's revision the editor was loaded at (an existing tariff only). */
+  revision?: string;
   periods?: { start?: string; end?: string; price?: string; days?: string[] }[];
 }
 
@@ -97,6 +101,8 @@ export function tariffFormSchema(currency: string) {
       sessionFee: z.string().optional(),
       idleFee: z.string().optional(),
       idleGrace: z.string().optional(),
+      driverTextConfirmed: z.string().optional(),
+      revision: z.string().optional(),
       driverText: z
         .string()
         .trim()
@@ -133,6 +139,11 @@ export function tariffFormSchema(currency: string) {
             driverText,
           },
         };
+      if (currency !== PAID_CURRENCY)
+        ctx.addIssue({
+          code: "custom",
+          message: `Paid tariffs are in ${PAID_CURRENCY} for now: Ivora Checkout settles card payments in US dollars, and the card hold before charging is $25.00. Set the company currency to ${PAID_CURRENCY} in Settings, or make this tariff free.`,
+        });
       const energyMinorPerKwh = money(
         ctx,
         f.energy,
@@ -205,12 +216,15 @@ export function tariffFormSchema(currency: string) {
             ),
           };
         });
-      for (const [a, b] of overlappingPeriods(
-        periods.filter((p) => HHMM.test(p.start) && HHMM.test(p.end)),
+      // Indexes stay those of `periods`: rows with bad times are checked as empty.
+      for (const [a, b, day] of overlappingPeriods(
+        periods.map((p) =>
+          HHMM.test(p.start) && HHMM.test(p.end) ? p : { ...p, days: [] },
+        ),
       ))
         ctx.addIssue({
           code: "custom",
-          message: `Periods ${a + 1} and ${b + 1} overlap (${describeDays(periods[a].days.filter((d) => periods[b].days.includes(d)))}). Each moment needs one price.`,
+          message: `Periods ${a + 1} and ${b + 1} overlap (on ${day.charAt(0)}${day.slice(1).toLowerCase()}s). Each moment needs one price.`,
         });
       return {
         name: f.name,
