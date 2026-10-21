@@ -432,7 +432,7 @@ class FakeIvora implements StoreApi {
       bill: {
         id: `bill_${id}`,
         station_id: 7,
-        connector_id: 71,
+        connector_id: body.connector_id,
         status: "open",
         tariff_id: body.tariff_id,
         hold_minor: 0,
@@ -1302,10 +1302,80 @@ describe("the session index", () => {
     });
     expect(ivora.keys("stop")).toEqual([`forecourt:store:${sale}:stop`]);
     expect(ivora.keys("list")).toHaveLength(2);
-    // Once B knows a sale there, tx-less samples read the index without rescanning.
-    now += INDEX_RESCAN_MS;
+    // Still at most one rescan per interval, however often samples arrive.
+    now += 1000;
     await onMeterSample({ transactionId: null, stationId: 7 }, deps);
     expect(ivora.keys("list")).toHaveLength(2);
+  });
+
+  it("stops a sale from another instance on a station's second connector, when this instance knows a sale on the first", async () => {
+    const KWH: SaleTerms = {
+      mode: "prepay",
+      prepaidCents: 2000,
+      limitWh: 30_000,
+    };
+    const twoConnectors = (first: string): Station => ({
+      ...station(),
+      connectors: [
+        {
+          id: 71,
+          number: 1,
+          status: first,
+          tariff_id: 9001,
+          max_power_w: 150_000,
+        },
+        {
+          id: 72,
+          number: 2,
+          status: "Preparing",
+          tariff_id: 9001,
+          max_power_w: 150_000,
+        },
+      ],
+    });
+    ivora.station = twoConnectors("Preparing");
+    const instanceA = otherInstance();
+    // Sale 1, on connector 1, through instance B: B knows it and its transaction.
+    await authorizeSale(
+      { code: "PUMP-3", connector: 1, terms: POSTPAY, requestId: REQ },
+      deps,
+    );
+    ivora.charging(5_000, 300);
+    ivora.station = twoConnectors("Charging");
+    expect(
+      await onMeterSample({ transactionId: null, stationId: 7 }, deps),
+    ).toEqual([]);
+    const scans = ivora.keys("list").length;
+    // Sale 2, on connector 2, through instance A.
+    const REQ2 = "0b1c2d3e-4f50-4a6b-8c7d-8e9f0a1b2c3d";
+    await authorizeSale(
+      { code: "PUMP-3", connector: 2, terms: KWH, requestId: REQ2 },
+      instanceA,
+    );
+    const sale2 = saleIdFor(KWH, REQ2);
+    ivora.charging(29_500, 1300, 150_000);
+    ivora.only().usage!.transaction_id = 22;
+    expect(ivora.only().bill.connector_id).toBe(72);
+    now += INDEX_RESCAN_MS - 1;
+    expect(
+      await onMeterSample({ transactionId: null, stationId: 7 }, deps),
+    ).toEqual([]);
+    expect(ivora.keys("list")).toHaveLength(scans);
+    // Within 15 s of B's last scan, not at the 60 s refresh.
+    now += 1;
+    const views = await onMeterSample(
+      { transactionId: null, stationId: 7 },
+      deps,
+    );
+    expect(views).toEqual([
+      expect.objectContaining({
+        sale: sale2,
+        stopping: true,
+        limitReached: "energy",
+      }),
+    ]);
+    expect(ivora.keys("stop")).toEqual([`forecourt:store:${sale2}:stop`]);
+    expect(ivora.keys("list")).toHaveLength(scans + 1);
   });
 
   it("shows the console when the listing stopped at its ceiling", async () => {
