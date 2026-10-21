@@ -3,6 +3,11 @@ import { expect, test, type Page } from "@playwright/test";
 
 // axe over the main screens, in light and dark, plus the 390 px no-sideways-scroll check.
 
+// Logins are rate-limited per client (10 per 15 minutes), and store.spec.ts
+// already uses all 10 cashier attempts across desktop and tablet. Sign in here
+// as a separate client so this spec doesn't lock those tests out.
+test.use({ extraHTTPHeaders: { "x-forwarded-for": "192.0.2.11" } });
+
 async function check(page: Page, path: string) {
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
