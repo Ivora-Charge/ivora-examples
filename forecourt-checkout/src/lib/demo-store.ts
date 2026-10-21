@@ -29,12 +29,14 @@ import {
   READY_STATUSES,
   saleAmounts,
   saleBill,
+  saleDueEvent,
   SaleError,
   startReports,
   tileState,
   validateTerms,
   type PaymentMethod,
   type PlannedReport,
+  type SaleDueEvent,
   type SaleReport,
   type SaleTerms,
   type SaleView,
@@ -702,4 +704,30 @@ export function demoSaleById(
 ) {
   const s = findDemoSale(store, sale);
   return demoSaleView(s, now, settings)!;
+}
+
+/** Every demo sale, newest first, as the POS sessions list sees them. */
+export function demoSales(
+  store: DemoStore,
+  now: number,
+  settings: Pick<Settings, "idleGraceMinutes">,
+): SaleView[] {
+  return [...store.sales]
+    .reverse()
+    .map((s) => demoSaleView(s, now, settings))
+    .filter((v): v is SaleView => v !== null);
+}
+
+/**
+ * The session_due events the live app would send for this forecourt now.
+ * Demo mode never sends them; the simulated POS panel shows them instead.
+ */
+export function demoDueEvents(
+  store: DemoStore,
+  now: number,
+  settings: Pick<Settings, "idleGraceMinutes">,
+): SaleDueEvent[] {
+  return demoSales(store, now, settings)
+    .map(saleDueEvent)
+    .filter((e): e is SaleDueEvent => e !== null);
 }

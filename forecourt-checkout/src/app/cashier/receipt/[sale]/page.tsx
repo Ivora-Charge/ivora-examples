@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { EmailReceipt } from "@/components/email-receipt";
 import { ErrorBox } from "@/components/error-box";
 import { PrintButton } from "@/components/print-button";
 import { StoreReceipt } from "@/components/store-receipt";
@@ -43,6 +44,9 @@ export default async function StoreReceiptPage({
           timeZone={s.siteTimeZone}
         />
         <PrintButton />
+        {s.emailReceipts ? (
+          <EmailReceipt sale={view.sale} demo={s.demo} />
+        ) : null}
       </main>
     );
   } catch (error) {

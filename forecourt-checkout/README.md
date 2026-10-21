@@ -5,6 +5,8 @@ Checkout for fuel stations, convenience stores and retail sites with DC fast cha
 - **Pay at the charger.** A driver scans the QR code on the charger with their phone, sees the price, pays with a card, Apple Pay or Google Pay, watches the session live and gets a receipt. No app, no account. When the car is full, the page asks the driver to move it and counts down to the idle fee.
 - **Pay in store, like fuel.** The driver picks "Pay at the counter" on the same QR page and tells the cashier "Charger 3". On a tablet-first cashier console, the cashier either takes a prepayment on the store's own POS and starts the charger, or authorises a plugged-in car and takes payment when it's done. The console shows change to hand back, any amount still due, and prints an 80 mm receipt. The driver's phone shows the session live.
 
+A convenience-store POS can join in: the app sends it a signed `session_due` webhook when a sale needs the counter, and the POS marks it paid through a small REST API. The console can also email the store receipt.
+
 Site staff get password-protected pages for prices per charger, today's sessions and revenue (card and paid in store), and recent faults. Cashiers get their own password that can authorise, stop and take payment, but cannot change prices or settings.
 
 It is built on the [Ivora API](https://ivoracharge.com/developers/guides) and Stripe, and it follows the shared [template conventions](../docs/conventions.md).
@@ -21,7 +23,9 @@ It is built on the [Ivora API](https://ivoracharge.com/developers/guides) and St
 | ----------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
 | ![Cashier console with chargers in every state](docs/cashier.png) | ![Driver's pay-at-the-counter screen while charging](docs/counter.png) | ![Printable store receipt, paid in store](docs/store-receipt.png) |
 
-All screenshots are demo mode: sample data, nothing charged, no charger contacted.
+![Simulated POS receiving a signed session_due webhook](docs/pos.png)
+
+All screenshots are demo mode: sample data, nothing charged, no charger contacted, no webhook or email sent.
 
 ## Run locally
 
@@ -35,9 +39,9 @@ npm run dev
 
 Open http://localhost:3000 and pick a demo charger, as if you had scanned its QR code. The demo runs a whole session from scan to receipt: the hold, charging with live kWh, power and running cost, the "move your car" countdown, and the receipt. Demo time runs 30 times faster, so the simulated car is full after about 50 seconds. The operator pages are at `/operator`; the demo password is `demo`.
 
-The cashier console is at `/cashier` (demo password `demo`). It opens with sample chargers in every state: available, plugged in, charging on a prepayment, done unpaid, a prepayment that ran over, paid, paying by card, offline, faulted, and one charging without a console sale (flagged). Try pay-after on Charger 3 (authorise, stop, mark paid, print) and a $20 prepay on Charger 4, which stops itself before the money runs out and shows the change. Open `/c/DEMO-4/1` in another tab and choose "Pay at the counter" to see the driver's side. Demo in-store sales live in a cookie in your own browser (`src/lib/demo-store.ts`), so every visitor gets their own forecourt and nothing is stored on the server.
+The cashier console is at `/cashier` (demo password `demo`). It opens with sample chargers in every state: available, plugged in, charging on a prepayment, done unpaid, a prepayment that ran over, paid, paying by card, offline, faulted, and one charging without a console sale (flagged). Try pay-after on Charger 3 (authorise, stop, mark paid, print) and a $20 prepay on Charger 4, which stops itself before the money runs out and shows the change. Open `/c/DEMO-4/1` in another tab and choose "Pay at the counter" to see the driver's side. Below the chargers, a **simulated POS** shows the signed `session_due` webhooks a store POS would receive (Charger 6 and 7 are due), and its buttons pay through `POST /api/pos/mark-paid` with the demo token `demo-pos-secret`, exactly as a POS would. On a receipt, "Email receipt" shows the email instead of sending it. Demo in-store sales live in a cookie in your own browser (`src/lib/demo-store.ts`), so every visitor gets their own forecourt and nothing is stored on the server.
 
-Demo mode is on whenever a required live variable is missing, or when `DEMO_MODE=1`. It never sends payment requests or charger commands: demo sessions are answered by `src/lib/demo.ts`, which has no network code, and a unit test fails if demo mode calls `fetch`.
+Demo mode is on whenever a required live variable is missing, or when `DEMO_MODE=1`. It never sends payment requests, charger commands, POS webhooks or emails: demo sessions are answered by `src/lib/demo.ts`, which has no network code, and a unit test fails if demo mode calls `fetch`.
 
 Checks, as CI runs them:
 
@@ -46,7 +50,7 @@ npm run format:check
 npm run typecheck
 npm test            # unit tests, no network or credentials
 npm run build
-npm run test:e2e    # Playwright, demo end to end: card flow on a phone, in-store flows on desktop and tablet
+npm run test:e2e    # Playwright, demo end to end: card flow on a phone; in-store flows and the simulated POS on desktop and tablet
 ```
 
 ## Connect real services
@@ -66,6 +70,11 @@ npm run test:e2e    # Playwright, demo end to end: card flow on a phone, in-stor
 | `SESSION_SECRET`              | Live     | Signs operator and driver cookies. `openssl rand -hex 32`.                                                                           |
 | `OPERATOR_PASSWORD`           | Live     | Password for `/operator`.                                                                                                            |
 | `CASHIER_PASSWORD`            | No       | Password for the cashier console at `/cashier`. Setting it turns on pay in store. Cashiers can't change prices or settings.          |
+| `POS_API_SECRET`              | No       | Bearer token for `/api/pos/mark-paid` and `/api/pos/sessions`. Unset, they answer 404. `openssl rand -hex 32`.                       |
+| `POS_WEBHOOK_URL`             | No       | HTTPS endpoint of your POS for the `session_due` webhook. Unset, no webhook is sent.                                                 |
+| `POS_WEBHOOK_SECRET`          | No       | Signs the `session_due` webhook (`Forecourt-Signature`). Required with `POS_WEBHOOK_URL`. `openssl rand -hex 32`.                    |
+| `RESEND_API_KEY`              | No       | Turns on emailed receipts, with `RECEIPT_EMAIL_FROM`. Resend is the example provider; see [Emailed receipts](#emailed-receipts).     |
+| `RECEIPT_EMAIL_FROM`          | No       | Sender of emailed receipts, on a domain verified with the provider, e.g. `Forecourt <receipts@example.com>`.                         |
 | `PUBLIC_BASE_URL`             | Live     | Your own HTTPS origin, used in Stripe return URLs and QR codes.                                                                      |
 | `IVORA_WEBHOOK_SECRET`        | Advised  | Verifies the `Ivora-Signature` header on `/api/webhooks/ivora`.                                                                      |
 | `STRIPE_WEBHOOK_SECRET`       | Advised  | Verifies Stripe's signature on `/api/webhooks/stripe`.                                                                               |
@@ -154,6 +163,8 @@ The console polls every 4 seconds. Ivora webhooks move in-store sales forward on
 
 The stop check runs whenever the app reads a prepaid sale: on every `meter.sampled` webhook, every console or driver-screen poll, and the sweep. The webhook is what makes it work with no screen open, so subscribe to `meter.sampled` with a 30-second interval (`"meter": {"sample_interval_seconds": 30}` when you register the endpoint; the default is 60 and the range 10 to 3600). Ivora always delivers a transaction's first and last samples. You can limit the endpoint to your forecourt's stations with `stations`. The headroom looks a minute ahead for money and half a minute for energy, which covers a 30-second sample interval plus the charger's reaction time; a longer interval makes overruns more likely.
 
+**Also set each charger's OCPP `MeterValueSampleInterval` to 30 seconds or less** (a ChangeConfiguration on the charger, or in its own settings). The webhook interval only limits how often Ivora delivers samples; the charger's own interval decides how fresh the energy and running cost are. A charger that reports every 60 or 300 seconds (common defaults) makes the cost estimate lag by that much, and the prepaid stop comes late however often the webhook fires.
+
 The daily sweep (`/api/cron/reconcile`, `vercel.json`) is the backstop for missed webhooks. To tighten it, run it every minute on a paid Vercel plan (`"schedule": "* * * * *"`), or call it from an external scheduler with `Authorization: Bearer $CRON_SECRET`.
 
 If the charger rejects a stop, the app retries it with a new idempotency key (`:stop-2`, then `:stop-3`). If Ivora can't tell whether a stop reached the charger (`unknown`), it is never resent under a new key. In both cases, and when all three attempts fail or Ivora refuses another, the console shows "Stop failed: stop it at the charger" (or "Stop not confirmed") on the tile, and the driver's screen asks the driver to see the cashier.
@@ -166,7 +177,13 @@ The counter page's API (`GET /api/counter/<code>/<connector>`) is public, so it 
 
 ### Receipts
 
-"Print receipt" opens `/cashier/receipt/<sale ID>`, laid out for 80 mm thermal paper (named `@page` of 80 mm width): energy, time, rates, idle fee and grace, total, prepaid, change, and the payment as "paid in store" with the method and POS reference. Emailed receipts are not built yet.
+"Print receipt" opens `/cashier/receipt/<sale ID>`, laid out for 80 mm thermal paper (named `@page` of 80 mm width): energy, time, rates, idle fee and grace, total, prepaid, change, and the payment as "paid in store" with the method and POS reference.
+
+### Emailed receipts
+
+Optional. With `RESEND_API_KEY` and `RECEIPT_EMAIL_FROM` set, the receipt page has an "Email receipt" form. The cashier types the driver's address; it is sent once to the provider with the receipt and is **never stored**: not in Ivora, a cookie, a URL or the logs (logs show only the sale ID and the provider's message ID). Each tap carries its own idempotency key, so a retry after a timeout doesn't send twice. The form is rate-limited per server instance.
+
+Any provider fits behind the `ReceiptMailer` interface in `src/lib/server/mailer.ts` (one `send()` method); `ResendMailer` is the example. To use another provider, implement the interface and return it from `receiptMailer()` in `src/lib/server/services.ts`. Demo mode has no mailer at all and shows the email that would be sent instead; a unit test checks that demo mode never sends.
 
 ### Money rules in store
 
@@ -184,11 +201,81 @@ The counter page's API (`GET /api/counter/<code>/<connector>`) is public, so it 
 
 ### What is stored
 
-Nothing new. A sale's terms (mode, prepaid amount, kWh limit) are encoded in its sale ID, which is Ivora's `payment_reference`, for example `pre-2000-0-3fa9c01b77de` or `post-3fa9c01b77de`; only this server creates those sessions, with its API key. Payments, change and overruns are read back from Ivora's settlement reports. The session list is ordered by opaque session ID, not time, so the console, webhook and sweep page through all of it (up to 10,000 sessions), and each server instance reuses the list for 5 seconds. Unpaid sales older than 24 hours drop off the "Unpaid sales" list; they stay in Ivora's records.
+Nothing new. A sale's terms (mode, prepaid amount, kWh limit) are encoded in its sale ID, which is Ivora's `payment_reference`, for example `pre-2000-0-3fa9c01b77de` or `post-3fa9c01b77de`; only this server creates those sessions, with its API key. Payments, change and overruns are read back from Ivora's settlement reports.
 
-### Point-of-sale integration (planned)
+Ivora's session list is ordered by opaque session ID, not time, so finding the open sales means reading every page. Each server instance keeps an **index of open and last-day sessions** (`src/lib/server/session-index.ts`) and rebuilds it at most once a minute; console polls, the driver's screen, meter samples and the POS list read the index, not the whole history. Wherever the sale is known, the app looks it up directly by `application_reference` instead: cashier actions, receipts, POS mark-paid, and the console, which names the sales it has shown on each poll so an instance that hasn't indexed a sale yet (it was authorised through another instance) finds it at once. A charger that is busy with no session the index knows, or a meter sample for an unknown transaction, triggers an early rebuild, at most every 15 seconds. Unpaid sales older than 24 hours drop off the "Unpaid sales" list; they stay in Ivora's records.
 
-There are no POS endpoints yet. The seams are in place: `markSalePaid()` in `src/lib/server/store.ts` is the one function that marks a sale paid (it validates the amount against the final bill and is idempotent by sale ID), and `saleEvents` in `src/lib/server/sale-events.ts` emits `sale.due` with a stable event ID whenever a sale has a final bill with money to collect.
+### Point-of-sale integration
+
+The integration point for convenience-store POS systems, with no specific vendor. The POS learns when a sale needs the counter from a signed webhook, and tells the app it took the money through a REST call. Both are optional and independent.
+
+**Outbound: `session_due` webhook.** With `POS_WEBHOOK_URL` and `POS_WEBHOOK_SECRET` set, the app POSTs JSON to your POS when an in-store sale finishes and the counter has something to do: a pay-after sale with its amount due, a prepaid sale that ran over (the extra due), or a prepaid sale with change to hand back (`amount_due_minor` 0). Settled sales send nothing.
+
+```http
+POST /your/pos/endpoint
+Content-Type: application/json
+Forecourt-Event-Id: post-3fa9c01b77de:due
+Forecourt-Signature: t=1792561776,v1=6dc9ddd4…
+
+{"id":"post-3fa9c01b77de:due","type":"session_due","sale_id":"post-3fa9c01b77de",
+ "charger_code":"PUMP-3","connector":1,"charger_label":"Charger 3","mode":"postpay",
+ "amount_due_minor":1940,"change_due_minor":0,"currency":"USD","energy_kwh":"36.042",
+ "started_at":"2026-10-20T15:00:00.000Z","ended_at":"2026-10-20T15:30:00.000Z"}
+```
+
+- Money is integer minor units; `energy_kwh` is a decimal string from the charger's Wh; times are ISO 8601 UTC. There is no card data and no personal data.
+- The signature is the same scheme as Ivora's `Ivora-Signature`: `v1` is the hex HMAC-SHA256 of `<t>.<raw body>` with `POS_WEBHOOK_SECRET`. Verify it over the raw bytes, in constant time, and reject timestamps more than five minutes old.
+- Answer `2xx` quickly. Failures (network, timeout, `408`, `429`, `5xx`) are retried three times a few seconds apart, then again on the next read of the sale after 1 minute, 5 minutes, 30 minutes and 2 hours. Other `4xx` answers are not retried. Retries carry the same event ID and body with a fresh `t`.
+- **De-duplicate by event ID.** It is stable per sale, and a delivery can arrive more than once (a retry, or another server instance).
+
+Verifying in Node.js:
+
+```js
+import { createHmac, timingSafeEqual } from "node:crypto";
+
+function verify(rawBody, header, secret) {
+  const parts = Object.fromEntries(header.split(",").map((p) => p.split("=")));
+  if (!/^\d+$/.test(parts.t ?? "") || !/^[a-f0-9]{64}$/.test(parts.v1 ?? ""))
+    return false;
+  if (Math.abs(Date.now() / 1000 - Number(parts.t)) > 300) return false;
+  const expected = createHmac("sha256", secret)
+    .update(`${parts.t}.${rawBody}`)
+    .digest("hex");
+  return timingSafeEqual(Buffer.from(expected), Buffer.from(parts.v1));
+}
+```
+
+**Inbound REST.** With `POS_API_SECRET` set (and pay in store on), the POS calls the app with `Authorization: Bearer <POS_API_SECRET>`, compared in constant time. Both endpoints are rate-limited per client (30 and 60 a minute per server instance), and the logs show only sale IDs, never the token.
+
+`POST /api/pos/mark-paid` records that the POS took the money, through the same `markSalePaid()` as the console's "Mark paid", so Ivora gets exactly the same settlement report. `amount_minor` must be what the final bill leaves to collect (the `amount_due_minor` from the webhook, or from the sessions list).
+
+```sh
+curl -X POST https://charge.example.com/api/pos/mark-paid \
+  -H "Authorization: Bearer $POS_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"sale_id":"post-3fa9c01b77de","amount_minor":1940,"method":"card","pos_reference":"R-1042"}'
+# 200 {"sale_id":"post-3fa9c01b77de","status":"paid","amount_minor":1940,"method":"card","pos_reference":"R-1042","currency":"USD"}
+```
+
+| Answer              | When                                                                                                               |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `200`               | Recorded, or a repeat with the same amount, method and POS reference (the original result, nothing recorded twice) |
+| `409`               | `idempotency_conflict`: the sale is already paid with different values; `session_not_finished`: no final bill yet  |
+| `422`               | `amount_mismatch`: the amount isn't what the final bill leaves to collect                                          |
+| `400`               | Malformed body; `pos_reference` may only use letters, digits, `.`, `-` and `_` (never card or customer data)       |
+| `401`, `404`, `429` | Wrong token; endpoints off or unknown sale; rate limited                                                           |
+
+`GET /api/pos/sessions?status=due|charging|paid[&limit=1-50]` lists recent in-store sales (last 24 hours, newest first) for a POS screen. It changes nothing; like every read it may move a sale forward the way a console poll does.
+
+```sh
+curl "https://charge.example.com/api/pos/sessions?status=due" \
+  -H "Authorization: Bearer $POS_API_SECRET"
+# {"status":"due","data":[{"sale_id":"post-3fa9c01b77de","status":"due","charger_code":"PUMP-3","connector":1,
+#   "charger_label":"Charger 3","mode":"postpay","prepaid_minor":null,"amount_due_minor":1940,"change_due_minor":0,
+#   "change_given":false,"cost_minor":1940,"currency":"USD","energy_kwh":"36.000","started_at":"…","ended_at":"…","payments":[]}]}
+```
+
+The in-process seam is still there for integrations inside the app: `saleEvents` in `src/lib/server/sale-events.ts` emits `sale.due` with the same stable event ID.
 
 ## What it uses from the Ivora API
 
@@ -218,7 +305,9 @@ Payment terminals are out of scope for now. `src/lib/terminal.ts` defines the `C
 ## Limits and next steps
 
 - **USD only**, like Ivora bills today.
-- **No database.** Session state lives in Stripe and Ivora; in-store sales live in Ivora only (see [What is stored](#what-is-stored)). The operator "today" view and the console page through the session list (up to 10,000 sessions), and the webhook de-duplicates per server instance (reconciling is idempotent, so a duplicate on another instance is harmless).
+- **No database.** Session state lives in Stripe and Ivora; in-store sales live in Ivora only (see [What is stored](#what-is-stored)). The webhook de-duplicates per server instance (reconciling is idempotent, so a duplicate on another instance is harmless).
+- **10,000-session ceiling.** A full read of the session list stops at 100 pages of 100 sessions. The session index, the operator "today" view and the daily sweep use full reads, so in a project with more sessions an open sale can be missed by them: the console shows a red banner when that happens, and the cron response says `"truncated": true`. Sales the app looks up by reference (console sales it has shown, cashier and POS actions, receipts) are unaffected. Use one Ivora project per deployment as the conventions ask, and start a new project before you reach the ceiling.
+- **Webhooks to the POS are per instance.** Each server instance remembers which `session_due` events it delivered, in memory, so a cold start or another instance may send one again. POS systems must de-duplicate by event ID.
 - **Idle after the transaction ends is not billed.** Ivora prices idle time inside the charging transaction. If the driver presses "End session" while still parked, the idle fee stops too.
 - **Idle detection while charging is approximate.** The countdown starts when the app first sees the connector idle; the final idle fee comes from Ivora's bill, which uses the charger's own reports.
 - **Holds expire.** Card authorizations last about 7 days with most issuers. The daily sweep settles abandoned sessions well before that; run it more often on a paid plan.
@@ -227,7 +316,7 @@ Payment terminals are out of scope for now. `src/lib/terminal.ts` defines the `C
 - **Prepaid overrun.** The headroom stop makes it rare, but a charger that is slow to stop, a missed meter sample, a rejected stop, or idle time after a stop can cost more than was prepaid. The console shows it and the cashier decides; it is never collected automatically.
 - **Pay in store needs chargers that require authorisation.** With free vend or auto-start, cars can charge without a sale; the console can only warn.
 - **The console polls.** Webhooks keep sales moving on the server; the tablet sees changes within a few seconds.
-- **Next steps:** POS integration (signed `session_due` webhook, mark-paid and sessions endpoints) and emailed receipts for in-store sales, card terminal adapter, partial refunds, a database for longer history, per-site multi-tenant operator accounts, and switching to Ivora-managed payments once that path supports application fees.
+- **Next steps:** card terminal adapter, partial refunds, a database for longer history, per-site multi-tenant operator accounts, and switching to Ivora-managed payments once that path supports application fees.
 
 ## License
 

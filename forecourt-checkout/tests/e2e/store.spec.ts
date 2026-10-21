@@ -179,3 +179,54 @@ test("prepay with change, as the driver at the counter sees it", async ({
   await expect(receipt).toContainText("Change given");
   expect(external).toEqual([]);
 });
+
+test("simulated POS: receives session_due and marks the sale paid", async ({
+  page,
+}) => {
+  const external = offline(page);
+  await signIn(page);
+  const pos = page.getByRole("region", { name: "Simulated POS" });
+  const six = pos.getByTestId("pos-event").filter({ hasText: "Charger 6" });
+  await expect(six).toContainText("session_due");
+  await expect(six).toContainText("signature verified");
+  await expect(six).toContainText(/Due \$\d+\.\d\d/);
+  await six.getByText("Webhook received").click();
+  await expect(six.locator("pre")).toContainText("Forecourt-Signature: t=");
+  await expect(six.locator("pre")).toContainText('"type": "session_due"');
+  await expect(six.locator("pre")).toContainText('"charger_code": "DEMO-6"');
+  await shot(page, "pos");
+
+  // The POS takes the money and calls POST /api/pos/mark-paid.
+  await six
+    .getByRole("button", { name: /POS: Charger 6 paid .* \(cash\)/ })
+    .click();
+  await expect(pos.getByTestId("pos-result")).toContainText('"status": "paid"');
+  await expect(pos.getByTestId("pos-result")).toContainText('"method": "cash"');
+  await expect(tile(page, "Charger 6", "Paid")).toBeVisible();
+  await expect(six).toHaveCount(0);
+
+  // Same receipt as a console payment, and the demo shows the email instead of sending it.
+  await tile(page, "Charger 6", "Paid").click();
+  await page
+    .getByRole("region", { name: "Charger 6" })
+    .getByRole("link", { name: "Print receipt" })
+    .click();
+  await expect(page.getByTestId("store-receipt")).toContainText(
+    "Paid in store (cash)",
+  );
+  await expect(page.getByTestId("store-receipt")).toContainText(
+    "POS ref SIM-2001",
+  );
+  const email = page.getByRole("region", { name: "Email receipt" });
+  await email
+    .getByLabel("Driver's email (used once, not stored)")
+    .fill("driver@example.com");
+  await email.getByRole("button", { name: "Email receipt" }).click();
+  const preview = page.getByTestId("email-preview");
+  await expect(preview).toContainText("Demo: nothing was sent.");
+  await expect(preview).toContainText("Charger 6");
+  await expect(
+    email.getByLabel("Driver's email (used once, not stored)"),
+  ).toHaveValue("");
+  expect(external).toEqual([]);
+});

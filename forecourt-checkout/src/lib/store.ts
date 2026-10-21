@@ -606,6 +606,56 @@ export function driverSale(v: SaleView): DriverSale {
   };
 }
 
+// --- The point-of-sale seam ---------------------------------------------------
+
+/**
+ * A sale finished and the counter has something to do: money to collect
+ * (postpay, or a prepaid overrun) or change to hand back. Every field comes
+ * from the sale's terms and final bill, never from payments recorded later,
+ * so each delivery of the same event ID carries the same body. No card or
+ * personal data.
+ */
+export type SaleDueEvent = {
+  /** Stable per sale: `<sale ID>:due`. */
+  id: string;
+  type: "sale.due";
+  sale: string;
+  charger: { code: string; connector: number; label: string };
+  mode: SaleMode;
+  /** Postpay: the final bill less idle grace. Prepay: what it cost above the prepaid amount. */
+  amountDueCents: number;
+  /** Prepay: the unused prepaid amount to hand back. */
+  changeDueCents: number;
+  currency: string;
+  energyWh: number;
+  startedAt: string | null;
+  endedAt: string | null;
+};
+
+/** The event for a sale that needs the counter, or null (still charging, or settled). */
+export function saleDueEvent(v: SaleView): SaleDueEvent | null {
+  const a = v.amounts;
+  if (!a || (v.phase !== "done" && v.phase !== "canceled")) return null;
+  if (a.status === "paid") return null;
+  return {
+    id: `${v.sale}:due`,
+    type: "sale.due",
+    sale: v.sale,
+    charger: {
+      code: v.charger.code,
+      connector: v.charger.connector,
+      label: v.charger.label,
+    },
+    mode: v.terms.mode,
+    amountDueCents: v.terms.mode === "prepay" ? a.overrunCents : a.dueCents,
+    changeDueCents: a.changeCents,
+    currency: v.currency,
+    energyWh: v.energyWh,
+    startedAt: v.startedAt,
+    endedAt: v.endedAt,
+  };
+}
+
 export type TileState =
   | "available"
   | "plugged_in"

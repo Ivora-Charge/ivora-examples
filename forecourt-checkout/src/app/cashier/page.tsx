@@ -29,7 +29,9 @@ export default async function Cashier() {
           <a href="/c/DEMO-4/1/counter" target="_blank">
             pay-at-the-counter screen
           </a>{" "}
-          in another tab to see what the driver sees.
+          in another tab to see what the driver sees. The simulated POS below
+          the chargers shows the signed <code>session_due</code> webhooks a
+          store POS would receive, and pays through the POS API.
         </p>
       ) : null}
       <CashierConsole initial={null} />
