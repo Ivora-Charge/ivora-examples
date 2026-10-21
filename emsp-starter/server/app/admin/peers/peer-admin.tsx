@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, type ReactNode } from "react";
+import type { ComponentProps } from "react";
+import { ActionCard } from "../action-card";
 import {
   connectPeerAction,
   invitePeerAction,
@@ -10,22 +11,6 @@ import {
   type ActionState,
   type PeerSummary,
 } from "./actions";
-
-type Action = (prev: ActionState, form: FormData) => Promise<ActionState>;
-
-function SecretField() {
-  return (
-    <label>
-      Admin secret
-      <input
-        name="adminSecret"
-        type="password"
-        autoComplete="current-password"
-        required
-      />
-    </label>
-  );
-}
 
 function PeerFacts({ peer }: { peer: PeerSummary }) {
   return (
@@ -68,14 +53,9 @@ function PeerFacts({ peer }: { peer: PeerSummary }) {
   );
 }
 
-function Result({ state }: { state: ActionState }) {
-  if (!state.message) return null;
+function Details({ state }: { state: ActionState }) {
   return (
-    <div
-      className={state.ok ? "result" : "result error"}
-      role={state.ok ? "status" : "alert"}
-    >
-      <p>{state.message}</p>
+    <>
       {state.tokenA && (
         <dl className="facts">
           <dt>Our versions URL</dt>
@@ -100,43 +80,25 @@ function Result({ state }: { state: ActionState }) {
           <PeerFacts peer={p} />
         </div>
       ))}
-    </div>
+    </>
   );
 }
 
-function ActionCard({
-  id,
-  title,
-  action,
-  children,
-  submit,
-}: {
-  id: string;
-  title: string;
-  action: Action;
-  children?: ReactNode;
-  submit: ReactNode;
-}) {
-  const [state, formAction, pending] = useActionState(action, {});
+function PeerCard(
+  props: Omit<ComponentProps<typeof ActionCard<ActionState>>, "details">,
+) {
   return (
-    <section className="card" aria-labelledby={id}>
-      <h2 id={id}>{title}</h2>
-      <form action={formAction} className="form">
-        {children}
-        <SecretField />
-        <div className="actions" aria-busy={pending}>
-          {submit}
-        </div>
-      </form>
-      <Result state={state} />
-    </section>
+    <ActionCard<ActionState>
+      {...props}
+      details={(state) => <Details state={state} />}
+    />
   );
 }
 
 export function PeerAdmin() {
   return (
     <>
-      <ActionCard
+      <PeerCard
         id="connect"
         title="Connect to a CPO"
         action={connectPeerAction}
@@ -169,9 +131,9 @@ export function PeerAdmin() {
             maxLength={64}
           />
         </label>
-      </ActionCard>
+      </PeerCard>
 
-      <ActionCard
+      <PeerCard
         id="invite"
         title="Let a CPO register with us"
         action={invitePeerAction}
@@ -185,9 +147,9 @@ export function PeerAdmin() {
           Name
           <input name="label" required maxLength={100} />
         </label>
-      </ActionCard>
+      </PeerCard>
 
-      <ActionCard
+      <PeerCard
         id="manage"
         title="Rotate tokens or unregister"
         action={managePeerAction}
@@ -211,9 +173,9 @@ export function PeerAdmin() {
           Peer ID
           <input name="peerId" required autoComplete="off" />
         </label>
-      </ActionCard>
+      </PeerCard>
 
-      <ActionCard
+      <PeerCard
         id="sync"
         title="Pull locations and tariffs"
         action={syncPeerAction}
@@ -237,9 +199,9 @@ export function PeerAdmin() {
           Peer ID
           <input name="peerId" required autoComplete="off" />
         </label>
-      </ActionCard>
+      </PeerCard>
 
-      <ActionCard
+      <PeerCard
         id="list"
         title="Peers"
         action={listPeersAction}

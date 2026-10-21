@@ -74,8 +74,12 @@ export function ocpiResponse(
 /**
  * Reads a JSON request body, at most 256 KB: a larger Content-Length is refused before
  * reading, and the stream is cut at the limit. Throws an OcpiProblem the peer sees.
+ * With `optional`, an empty body reads as undefined.
  */
-export async function readJson(request: Request): Promise<unknown> {
+export async function readJson(
+  request: Request,
+  { optional = false }: { optional?: boolean } = {},
+): Promise<unknown> {
   let text: string;
   try {
     text = await readLimitedText(request, MAX_REQUEST_BYTES);
@@ -88,6 +92,7 @@ export async function readJson(request: Request): Promise<unknown> {
       "Request body could not be read",
     );
   }
+  if (optional && !text.trim()) return undefined;
   try {
     return JSON.parse(text);
   } catch {

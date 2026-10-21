@@ -44,6 +44,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <nav aria-label="Admin" className="nav">
             <Link href="/">Overview</Link>
             <Link href="/admin/peers">CPO peers</Link>
+            <Link href="/admin/tokens">Driver tokens</Link>
           </nav>
         </header>
         <main id="main" tabIndex={-1}>

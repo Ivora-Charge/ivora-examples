@@ -4,6 +4,8 @@ import * as detailsRoute from "@/app/ocpi/2.2.1/route";
 import * as credentialsRoute from "@/app/ocpi/2.2.1/credentials/route";
 import * as locationsRoute from "@/app/ocpi/2.2.1/locations/[...path]/route";
 import * as tariffsRoute from "@/app/ocpi/2.2.1/tariffs/[...path]/route";
+import * as tokensRoute from "@/app/ocpi/2.2.1/tokens/route";
+import * as tokenRoute from "@/app/ocpi/2.2.1/tokens/[...path]/route";
 import type { Transport } from "@/lib/ocpi/client";
 import { setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 
@@ -25,6 +27,7 @@ export const emspHandler: Handler = async (request) => {
     "/ocpi/versions": versionsRoute,
     "/ocpi/2.2.1": detailsRoute,
     "/ocpi/2.2.1/credentials": credentialsRoute,
+    "/ocpi/2.2.1/tokens": tokensRoute,
   };
   const path = new URL(request.url).pathname;
   const route =
@@ -33,7 +36,9 @@ export const emspHandler: Handler = async (request) => {
       ? locationsRoute
       : path.startsWith("/ocpi/2.2.1/tariffs/")
         ? tariffsRoute
-        : undefined);
+        : path.startsWith("/ocpi/2.2.1/tokens/")
+          ? tokenRoute
+          : undefined);
   const handler = route?.[request.method] as Handler | undefined;
   if (!handler) return new Response("Not found", { status: 404 });
   return handler(request);

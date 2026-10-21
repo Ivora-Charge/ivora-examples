@@ -11,6 +11,8 @@ import { MemoryPeerStore } from "@/lib/ocpi/store";
 import { authorizationHeader } from "@/lib/ocpi/tokens";
 import { ocpiTimestamp } from "@/lib/ocpi/types";
 import { adminClientKey, resetAdminLimitForTests } from "@/lib/server/admin";
+import { setTokenStoreForTests } from "@/lib/tokens/registry";
+import { MemoryTokenStore } from "@/lib/tokens/store";
 import {
   emspHandler,
   inProcessNetwork,
@@ -65,6 +67,7 @@ beforeEach(() => {
   locations = new MemoryLocationStore();
   setPeerStoreForTests(peers);
   setLocationStoreForTests(locations);
+  setTokenStoreForTests(new MemoryTokenStore());
   net = inProcessNetwork({
     "emsp.example.test": emspHandler,
     "mock-cpo.example.test": (r) => cpo.handle(r),
@@ -78,6 +81,7 @@ afterEach(() => {
   uninstallNetwork();
   setPeerStoreForTests(undefined);
   setLocationStoreForTests(undefined);
+  setTokenStoreForTests(undefined);
   process.env = { ...saved };
   vi.restoreAllMocks();
 });
@@ -157,6 +161,7 @@ describe("scheduled pull (cron)", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       mode: "live",
+      tokens: { expired: 0, pushes: { sent: 0, failed: 0, dropped: 0 } },
       results: [
         expect.objectContaining({
           peerId: peer.id,

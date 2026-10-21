@@ -1,5 +1,5 @@
 import "server-only";
-import { ocpiRequest, type Transport } from "@/lib/ocpi/client";
+import { ocpiPaginate, ocpiRequest, type Transport } from "@/lib/ocpi/client";
 import { credentialsEndpoint } from "@/lib/ocpi/handshake";
 import {
   parseCredentials,
@@ -8,6 +8,13 @@ import {
 } from "@/lib/ocpi/schema";
 import type { EvseStatus, Location } from "@/lib/ocpi/locations";
 import type { Tariff } from "@/lib/ocpi/tariffs";
+import {
+  parseAuthorizationInfo,
+  parseToken,
+  type LocationReferences,
+  type Token,
+  type TokenType,
+} from "@/lib/ocpi/token-objects";
 import { generateToken, tokensFromHeader } from "@/lib/ocpi/tokens";
 import {
   ocpiTimestamp,
@@ -28,7 +35,9 @@ import {
  * use it as a real peer, in both handshake directions, so the eMSP is never tested
  * against one platform only. It serves sample locations and tariffs (sample-data.ts,
  * also what demo mode shows) from paginated Sender interfaces with date_from and
- * date_to, and pushes changes to the eMSP's Receiver interfaces. Later parts give it
+ * date_to, and pushes changes to the eMSP's Receiver interfaces. Its Tokens Receiver
+ * keeps the tokens the eMSP pushes (validated against 2.2.1), and it can pull the
+ * eMSP's Tokens Sender and ask for real-time authorization. Later parts give it
  * sessions and CDRs.
  *
  * `handle(request)` is the CPO's HTTP server. To reach the eMSP it uses `transport`
@@ -72,6 +81,7 @@ export function createMockCpo(options: MockCpoOptions) {
     credentials: `${baseUrl}/ocpi/2.2.1/credentials`,
     locations: `${baseUrl}/ocpi/2.2.1/locations`,
     tariffs: `${baseUrl}/ocpi/2.2.1/tariffs`,
+    tokens: `${baseUrl}/ocpi/2.2.1/tokens`,
   };
   const pageLimit = options.pageLimit ?? 2;
 
@@ -94,6 +104,8 @@ export function createMockCpo(options: MockCpoOptions) {
       options.sample,
     ),
     tariffs: sampleTariffs(party, options.sample),
+    /** Tokens the eMSP pushed to our Tokens Receiver, by `cc/party/uid/type`. */
+    tokens: new Map<string, Token>(),
   };
 
   const credentialsFor = (token: string): Credentials => ({
@@ -249,13 +261,26 @@ export function createMockCpo(options: MockCpoOptions) {
     return reply(list.slice(offset, offset + limit), { headers });
   }
 
-  /** The eMSP's Receiver endpoint for a module, from its version details. */
-  function emspReceiver(module: string) {
+  /** The eMSP's endpoint for a module and role, from its version details. */
+  function emspEndpoint(module: string, role: "SENDER" | "RECEIVER") {
     const url = state.emsp?.endpoints.find(
-      (e) => e.identifier === module && e.role === "RECEIVER",
+      (e) => e.identifier === module && e.role === role,
     )?.url;
-    if (!url) throw new Error(`The eMSP has no ${module} Receiver endpoint`);
+    if (!url)
+      throw new Error(
+        `The eMSP has no ${module} ${role === "SENDER" ? "Sender" : "Receiver"} endpoint`,
+      );
     return url;
+  }
+  const emspReceiver = (module: string) => emspEndpoint(module, "RECEIVER");
+
+  /** Routing headers from us to the eMSP. */
+  function toEmsp() {
+    const role = state.emsp!.credentials.roles[0];
+    return {
+      from: party,
+      to: { countryCode: role.country_code, partyId: role.party_id },
+    };
   }
 
   /** Sends one push to the eMSP's Receiver interface, with routing headers. */
@@ -266,17 +291,13 @@ export function createMockCpo(options: MockCpoOptions) {
     body?: unknown,
   ) {
     if (!state.emsp) throw new Error("Mock CPO is not registered with an eMSP");
-    const role = state.emsp.credentials.roles[0];
     return ocpiRequest(
       {
         method,
         url: `${emspReceiver(module)}/${path.map(encodeURIComponent).join("/")}`,
         token: state.emsp.token,
         body,
-        routing: {
-          from: party,
-          to: { countryCode: role.country_code, partyId: role.party_id },
-        },
+        routing: toEmsp(),
       },
       { transport, retries: 0 },
     );
@@ -337,6 +358,7 @@ export function createMockCpo(options: MockCpoOptions) {
           },
           { identifier: "locations", role: "SENDER", url: urls.locations },
           { identifier: "tariffs", role: "SENDER", url: urls.tariffs },
+          { identifier: "tokens", role: "RECEIVER", url: urls.tokens },
         ],
       });
     if (path === "/ocpi/2.2.1/credentials")
@@ -349,11 +371,75 @@ export function createMockCpo(options: MockCpoOptions) {
       if (!state.issued.has(token)) return unauthorized();
       return senderPage(url, urls.tariffs, state.tariffs);
     }
+    if (path.startsWith("/ocpi/2.2.1/tokens/")) {
+      if (!state.issued.has(token)) return unauthorized();
+      return tokensReceiver(request, url, path);
+    }
     return reply(undefined, {
       status: 404,
       code: STATUS.CLIENT_ERROR,
       message: "Not found",
     });
+  }
+
+  /**
+   * Our Tokens Receiver: GET, PUT and PATCH
+   * /ocpi/2.2.1/tokens/{country_code}/{party_id}/{uid}?type=. Pushed tokens must be
+   * valid 2.2.1 Token objects that match the URL, and a PATCH must carry last_updated.
+   */
+  async function tokensReceiver(request: Request, url: URL, path: string) {
+    const parts = path.split("/").slice(4).map(decodeURIComponent);
+    const type = url.searchParams.get("type") ?? "RFID";
+    if (parts.length !== 3)
+      return reply(undefined, {
+        status: 400,
+        code: STATUS.INVALID_PARAMETERS,
+        message: "Path must be /{country_code}/{party_id}/{uid}",
+      });
+    const [cc, pid, uid] = parts;
+    const key = `${cc}/${pid}/${uid}/${type}`;
+    const held = state.tokens.get(key);
+    const invalid = (message: string) =>
+      reply(undefined, {
+        status: 400,
+        code: STATUS.INVALID_PARAMETERS,
+        message,
+      });
+    if (request.method === "GET")
+      return held
+        ? reply(held)
+        : reply(undefined, {
+            status: 404,
+            code: STATUS.UNKNOWN_TOKEN,
+            message: "Unknown token",
+          });
+    if (request.method !== "PUT" && request.method !== "PATCH")
+      return notAllowed("Method not allowed");
+    const body = await request.json().catch(() => undefined);
+    if (request.method === "PATCH") {
+      if (!held)
+        return reply(undefined, {
+          status: 404,
+          code: STATUS.UNKNOWN_TOKEN,
+          message: "Unknown token",
+        });
+      if (!body || typeof body !== "object" || !("last_updated" in body))
+        return invalid("PATCH needs last_updated");
+    }
+    const parsed = parseToken(
+      request.method === "PUT" ? body : { ...held, ...body },
+    );
+    if (!parsed.ok) return invalid(parsed.errors.join("; "));
+    const t = parsed.value;
+    if (
+      t.country_code !== cc.toUpperCase() ||
+      t.party_id !== pid.toUpperCase() ||
+      t.uid !== uid ||
+      t.type !== type
+    )
+      return invalid("Token does not match the URL");
+    state.tokens.set(key, t);
+    return reply(undefined);
   }
 
   /** The eMSP's credentials endpoint, from its version details. */
@@ -496,6 +582,85 @@ export function createMockCpo(options: MockCpoOptions) {
 
     /** A raw push, for tests of what the eMSP refuses. */
     push,
+
+    /** A token the eMSP pushed to us, if any. */
+    pushedToken(
+      uid: string,
+      type: TokenType,
+      owner: Party = toEmsp().to,
+    ): Token | undefined {
+      return state.tokens.get(
+        `${owner.countryCode}/${owner.partyId}/${uid}/${type}`,
+      );
+    },
+
+    /**
+     * Pulls the eMSP's Tokens Sender, every page, as a CPO does to fill its whitelist.
+     * Invalid tokens fail the pull.
+     */
+    async pullTokens({
+      dateFrom,
+      dateTo,
+      limit,
+    }: { dateFrom?: Date; dateTo?: Date; limit?: number } = {}) {
+      if (!state.emsp)
+        throw new Error("Mock CPO is not registered with an eMSP");
+      const out: Token[] = [];
+      for await (const item of ocpiPaginate(
+        {
+          url: emspEndpoint("tokens", "SENDER"),
+          token: state.emsp.token,
+          dateFrom,
+          dateTo,
+          limit,
+          routing: toEmsp(),
+        },
+        { transport, retries: 0 },
+      )) {
+        const parsed = parseToken(item);
+        if (!parsed.ok)
+          throw new Error(`Invalid token: ${parsed.errors.join("; ")}`);
+        out.push(parsed.value);
+      }
+      return out;
+    },
+
+    /**
+     * Asks the eMSP whether a token may charge (real-time authorization), optionally
+     * at a location. Returns the validated AuthorizationInfo.
+     */
+    async authorize(
+      uid: string,
+      {
+        type = "RFID",
+        location,
+        body,
+      }: {
+        type?: TokenType;
+        location?: LocationReferences;
+        body?: unknown;
+      } = {},
+    ) {
+      if (!state.emsp)
+        throw new Error("Mock CPO is not registered with an eMSP");
+      const res = await ocpiRequest(
+        {
+          method: "POST",
+          url: `${emspEndpoint("tokens", "SENDER")}/${encodeURIComponent(uid)}/authorize`,
+          query: { type },
+          token: state.emsp.token,
+          body: body ?? location,
+          routing: toEmsp(),
+        },
+        { transport, retries: 0 },
+      );
+      const parsed = parseAuthorizationInfo(res.data);
+      if (!parsed.ok)
+        throw new Error(
+          `Invalid AuthorizationInfo: ${parsed.errors.join("; ")}`,
+        );
+      return parsed.value;
+    },
 
     /** This CPO unregisters from the eMSP (credentials DELETE). */
     async unregister() {

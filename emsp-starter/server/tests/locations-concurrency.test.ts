@@ -113,149 +113,157 @@ const key = (peerId: string, id: string) => ({
   id,
 });
 
-describe.each(STORES)("concurrent pushes (%s)", (_, makeStore) => {
-  it("applies many parallel PATCHes on different EVSEs and connectors of one location", async () => {
-    const store = await makeStore();
-    const peer = await connect(store);
-    const [base] = cpo.state.locations;
-    const n = 12;
-    await cpo.putLocation(bigLocation(base, n), { push: true });
+// Each PGlite test migrates a fresh database inside the test, which takes seconds on a
+// busy CI runner: a longer timeout than vitest's 5 s default.
+describe.each(STORES)(
+  "concurrent pushes (%s)",
+  { timeout: 20_000 },
+  (_, makeStore) => {
+    it("applies many parallel PATCHes on different EVSEs and connectors of one location", async () => {
+      const store = await makeStore();
+      const peer = await connect(store);
+      const [base] = cpo.state.locations;
+      const n = 12;
+      await cpo.putLocation(bigLocation(base, n), { push: true });
 
-    const results = await Promise.all([
-      ...Array.from({ length: n }, (_, i) =>
-        cpo.push("locations", "PATCH", ["ZZ", "MCK", "BIG", `BIG-${i}`], {
-          status: "CHARGING",
-          last_updated: T(1 + i),
-        }),
-      ),
-      ...Array.from({ length: n }, (_, i) =>
-        cpo.push(
-          "locations",
-          "PATCH",
-          ["ZZ", "MCK", "BIG", `BIG-${i}`, base.evses![0].connectors[1].id],
-          { max_electric_power: 7_000 + i, last_updated: T(1 + i) },
+      const results = await Promise.all([
+        ...Array.from({ length: n }, (_, i) =>
+          cpo.push("locations", "PATCH", ["ZZ", "MCK", "BIG", `BIG-${i}`], {
+            status: "CHARGING",
+            last_updated: T(1 + i),
+          }),
         ),
-      ),
-    ]);
-    expect(results).toHaveLength(2 * n);
+        ...Array.from({ length: n }, (_, i) =>
+          cpo.push(
+            "locations",
+            "PATCH",
+            ["ZZ", "MCK", "BIG", `BIG-${i}`, base.evses![0].connectors[1].id],
+            { max_electric_power: 7_000 + i, last_updated: T(1 + i) },
+          ),
+        ),
+      ]);
+      expect(results).toHaveLength(2 * n);
 
-    const held = (await store.getLocation(key(peer.id, "BIG")))!.location;
-    expect(held.evses!.map((e) => e.status)).toEqual(Array(n).fill("CHARGING"));
-    expect(held.evses!.map((e) => e.connectors[1].max_electric_power)).toEqual(
-      Array.from({ length: n }, (_, i) => 7_000 + i),
-    );
-    expect(held.last_updated).toBe(T(n));
-  });
+      const held = (await store.getLocation(key(peer.id, "BIG")))!.location;
+      expect(held.evses!.map((e) => e.status)).toEqual(
+        Array(n).fill("CHARGING"),
+      );
+      expect(
+        held.evses!.map((e) => e.connectors[1].max_electric_power),
+      ).toEqual(Array.from({ length: n }, (_, i) => 7_000 + i));
+      expect(held.last_updated).toBe(T(n));
+    });
 
-  it("applies parallel tariff PATCHes to different fields", async () => {
-    const store = await makeStore();
-    const peer = await connect(store);
-    await syncPeer(peer.id, "tariffs", { peers, locations: store, client });
-    const [tariff] = cpo.state.tariffs;
-    const at = new Date(Date.now() + 60_000).toISOString();
-    await Promise.all([
-      cpo.push("tariffs", "PATCH", ["ZZ", "MCK", tariff.id], {
+    it("applies parallel tariff PATCHes to different fields", async () => {
+      const store = await makeStore();
+      const peer = await connect(store);
+      await syncPeer(peer.id, "tariffs", { peers, locations: store, client });
+      const [tariff] = cpo.state.tariffs;
+      const at = new Date(Date.now() + 60_000).toISOString();
+      await Promise.all([
+        cpo.push("tariffs", "PATCH", ["ZZ", "MCK", tariff.id], {
+          tariff_alt_text: [{ language: "en", text: "Patched" }],
+          last_updated: at,
+        }),
+        cpo.push("tariffs", "PATCH", ["ZZ", "MCK", tariff.id], {
+          max_price: { excl_vat: 50 },
+          last_updated: at,
+        }),
+        cpo.push("tariffs", "PATCH", ["ZZ", "MCK", tariff.id], {
+          min_price: { excl_vat: 1 },
+          last_updated: at,
+        }),
+      ]);
+      const held = (await store.getTariff(key(peer.id, tariff.id)))!.tariff;
+      expect(held).toMatchObject({
         tariff_alt_text: [{ language: "en", text: "Patched" }],
-        last_updated: at,
-      }),
-      cpo.push("tariffs", "PATCH", ["ZZ", "MCK", tariff.id], {
         max_price: { excl_vat: 50 },
-        last_updated: at,
-      }),
-      cpo.push("tariffs", "PATCH", ["ZZ", "MCK", tariff.id], {
         min_price: { excl_vat: 1 },
-        last_updated: at,
-      }),
-    ]);
-    const held = (await store.getTariff(key(peer.id, tariff.id)))!.tariff;
-    expect(held).toMatchObject({
-      tariff_alt_text: [{ language: "en", text: "Patched" }],
-      max_price: { excl_vat: 50 },
-      min_price: { excl_vat: 1 },
+      });
     });
-  });
 
-  it("keeps a pushed change when an older pull of the same location lands after it", async () => {
-    const store = await makeStore();
-    const peer = await connect(store);
-    const [base] = cpo.state.locations;
-    const pulled = { ...base, last_updated: T(0) };
-    await store.saveLocations(peer.id, [pulled], "2026-10-21T09:00:00Z");
-    const before = await store.getLocation(key(peer.id, base.id));
-    const pushed = { ...pulled, name: "Pushed", last_updated: T(5) };
-    expect(
-      await store.putLocation(peer.id, pushed, T(5), before!.revision),
-    ).toBe(true);
-    // The stale revision loses, and so does an insert when one is held.
-    expect(
-      await store.putLocation(peer.id, pushed, T(5), before!.revision),
-    ).toBe(false);
-    expect(await store.putLocation(peer.id, pushed, T(5), null)).toBe(false);
+    it("keeps a pushed change when an older pull of the same location lands after it", async () => {
+      const store = await makeStore();
+      const peer = await connect(store);
+      const [base] = cpo.state.locations;
+      const pulled = { ...base, last_updated: T(0) };
+      await store.saveLocations(peer.id, [pulled], "2026-10-21T09:00:00Z");
+      const before = await store.getLocation(key(peer.id, base.id));
+      const pushed = { ...pulled, name: "Pushed", last_updated: T(5) };
+      expect(
+        await store.putLocation(peer.id, pushed, T(5), before!.revision),
+      ).toBe(true);
+      // The stale revision loses, and so does an insert when one is held.
+      expect(
+        await store.putLocation(peer.id, pushed, T(5), before!.revision),
+      ).toBe(false);
+      expect(await store.putLocation(peer.id, pushed, T(5), null)).toBe(false);
 
-    // A page pulled before the push arrives after it: the push stays, seen_at moves.
-    await store.saveLocations(peer.id, [pulled], "2026-10-21T10:00:00Z");
-    const after = (await store.getLocation(key(peer.id, base.id)))!;
-    expect(after.location.name).toBe("Pushed");
-    expect(Date.parse(after.seenAt)).toBe(Date.parse("2026-10-21T10:00:00Z"));
-    // A newer pull replaces it.
-    await store.saveLocations(
-      peer.id,
-      [{ ...pulled, name: "Newer", last_updated: T(6) }],
-      "2026-10-21T10:01:00Z",
-    );
-    const newest = (await store.getLocation(key(peer.id, base.id)))!;
-    expect(newest.location.name).toBe("Newer");
-    expect(newest.revision).not.toBe(after.revision);
-  });
-
-  it("deletes a tariff only if it is unchanged since read", async () => {
-    const store = await makeStore();
-    const peer = await connect(store);
-    const [tariff] = cpo.state.tariffs;
-    await store.saveTariffs(peer.id, [tariff], "2026-10-21T09:00:00Z");
-    const held = (await store.getTariff(key(peer.id, tariff.id)))!;
-    expect(
-      await store.putTariff(
+      // A page pulled before the push arrives after it: the push stays, seen_at moves.
+      await store.saveLocations(peer.id, [pulled], "2026-10-21T10:00:00Z");
+      const after = (await store.getLocation(key(peer.id, base.id)))!;
+      expect(after.location.name).toBe("Pushed");
+      expect(Date.parse(after.seenAt)).toBe(Date.parse("2026-10-21T10:00:00Z"));
+      // A newer pull replaces it.
+      await store.saveLocations(
         peer.id,
-        { ...tariff, currency: "CHF" },
-        T(1),
-        held.revision,
-      ),
-    ).toBe(true);
-    expect(
-      await store.deleteTariff(key(peer.id, tariff.id), held.revision),
-    ).toBe(false);
-    const now = (await store.getTariff(key(peer.id, tariff.id)))!;
-    expect(now.tariff.currency).toBe("CHF");
-    expect(
-      await store.deleteTariff(key(peer.id, tariff.id), now.revision),
-    ).toBe(true);
-    expect(await store.getTariff(key(peer.id, tariff.id))).toBeNull();
-  });
-
-  it("returns the nearest candidates first, before the limit", async () => {
-    const store = await makeStore();
-    const peer = await connect(store);
-    const [base] = cpo.state.locations;
-    // Five sites going east from the search point, saved farthest first.
-    const sites = [5, 4, 3, 2, 1].map((i) => ({
-      ...base,
-      id: `EAST${i}`,
-      coordinates: {
-        latitude: "52.000000",
-        longitude: (5 + i / 100).toFixed(6),
-      },
-    }));
-    await store.saveLocations(peer.id, sites, "2026-10-21T09:00:00Z");
-    const found = await store.findLocations({
-      peerIds: [peer.id],
-      bbox: { minLat: 51, maxLat: 53, minLng: 4, maxLng: 6 },
-      near: { lat: 52, lng: 5 },
-      limit: 2,
+        [{ ...pulled, name: "Newer", last_updated: T(6) }],
+        "2026-10-21T10:01:00Z",
+      );
+      const newest = (await store.getLocation(key(peer.id, base.id)))!;
+      expect(newest.location.name).toBe("Newer");
+      expect(newest.revision).not.toBe(after.revision);
     });
-    expect(found.map((s) => s.location.id)).toEqual(["EAST1", "EAST2"]);
-  });
-});
+
+    it("deletes a tariff only if it is unchanged since read", async () => {
+      const store = await makeStore();
+      const peer = await connect(store);
+      const [tariff] = cpo.state.tariffs;
+      await store.saveTariffs(peer.id, [tariff], "2026-10-21T09:00:00Z");
+      const held = (await store.getTariff(key(peer.id, tariff.id)))!;
+      expect(
+        await store.putTariff(
+          peer.id,
+          { ...tariff, currency: "CHF" },
+          T(1),
+          held.revision,
+        ),
+      ).toBe(true);
+      expect(
+        await store.deleteTariff(key(peer.id, tariff.id), held.revision),
+      ).toBe(false);
+      const now = (await store.getTariff(key(peer.id, tariff.id)))!;
+      expect(now.tariff.currency).toBe("CHF");
+      expect(
+        await store.deleteTariff(key(peer.id, tariff.id), now.revision),
+      ).toBe(true);
+      expect(await store.getTariff(key(peer.id, tariff.id))).toBeNull();
+    });
+
+    it("returns the nearest candidates first, before the limit", async () => {
+      const store = await makeStore();
+      const peer = await connect(store);
+      const [base] = cpo.state.locations;
+      // Five sites going east from the search point, saved farthest first.
+      const sites = [5, 4, 3, 2, 1].map((i) => ({
+        ...base,
+        id: `EAST${i}`,
+        coordinates: {
+          latitude: "52.000000",
+          longitude: (5 + i / 100).toFixed(6),
+        },
+      }));
+      await store.saveLocations(peer.id, sites, "2026-10-21T09:00:00Z");
+      const found = await store.findLocations({
+        peerIds: [peer.id],
+        bbox: { minLat: 51, maxLat: 53, minLng: 4, maxLng: 6 },
+        near: { lat: 52, lng: 5 },
+        limit: 2,
+      });
+      expect(found.map((s) => s.location.id)).toEqual(["EAST1", "EAST2"]);
+    });
+  },
+);
 
 describe("compare-and-swap retries", () => {
   it("answers 503 (3000) when every attempt loses, and never writes", async () => {

@@ -154,7 +154,8 @@ main:focus {
   gap: var(--space-xs);
   font-weight: var(--font-weight-bold);
 }
-.form input {
+.form input,
+.form select {
   width: 100%;
   min-width: 0;
   min-height: var(--min-tap-target);
