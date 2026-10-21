@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { OCPI_VERSION, ocpiUrls } from "@/lib/server/config";
+import { config, OCPI_VERSION, ocpiUrls } from "@/lib/server/config";
 import { assertLive } from "@/lib/server/demo";
 import { ocpiRequest, type ClientOptions } from "./client";
 import { OcpiError, OcpiProblem, OcpiUnauthorizedError } from "./errors";
@@ -57,6 +57,15 @@ export type HandshakeDeps = {
   client?: ClientOptions;
   /** Who acted, for the audit log, for example 'admin'. */
   actor?: string;
+};
+
+/**
+ * Discovery inside a peer's own credentials POST or PUT: one try, 5 s. The peer waits
+ * for our answer, so a slow or hanging versions endpoint must not hold the request.
+ */
+export const INBOUND_DISCOVERY: ClientOptions = {
+  retries: 0,
+  timeoutMs: 5_000,
 };
 
 type Discovery = {
@@ -323,23 +332,33 @@ async function giveUp(
 export async function invitePeer(
   input: { label: string },
   deps: HandshakeDeps,
-): Promise<{ peer: Peer; tokenA: string; versionsUrl: string }> {
+): Promise<{
+  peer: Peer;
+  tokenA: string;
+  versionsUrl: string;
+  expiresAt: string;
+}> {
   const label = input.label.trim();
   if (!label || label.length > 100)
     throw new HandshakeError("Name must be 1 to 100 characters");
   const peer = await deps.store.createPeer({ label, direction: "inbound" });
   const tokenA = generateToken();
+  const expiresAt = new Date(
+    Date.now() + config.tokenATtlDays * 24 * 60 * 60 * 1000,
+  ).toISOString();
   await deps.store.issueToken({
     hash: hashToken(tokenA),
     peerId: peer.id,
     scope: "registration",
+    expiresAt,
   });
   await deps.store.audit({
     actor: deps.actor ?? "admin",
     action: "ocpi.peer.invited",
     subjectId: peer.id,
+    details: { expiresAt },
   });
-  return { peer, tokenA, versionsUrl: ocpiUrls().versions };
+  return { peer, tokenA, versionsUrl: ocpiUrls().versions, expiresAt };
 }
 
 /** A peer's credentials body, validated, or a 400 for the peer. */
@@ -352,6 +371,35 @@ async function incomingCredentials(ctx: OcpiContext): Promise<Credentials> {
       `Invalid credentials: ${parsed.errors.join("; ")}`,
     );
   return parsed.value;
+}
+
+/**
+ * Reads the versions of a peer that is calling us, from the URL it sent. Whatever goes
+ * wrong, the peer gets one generic answer: never the remote server's status, message or
+ * body, so the credentials module cannot be used to probe other hosts. The details are
+ * logged here, without tokens.
+ */
+async function discoverCaller(
+  ctx: OcpiContext,
+  theirs: Credentials,
+): Promise<Discovery> {
+  try {
+    return await discover(
+      theirs.url,
+      theirs.token,
+      ctx.correlationId,
+      INBOUND_DISCOVERY,
+    );
+  } catch (e) {
+    console.warn(
+      `OCPI credentials ${ctx.request.method} by peer ${ctx.peer.id} (request ${ctx.requestId}): discovery failed: ${e instanceof Error ? e.message : "unknown error"}`,
+    );
+    throw new OcpiProblem(
+      400,
+      STATUS.UNABLE_TO_USE_CLIENT_API,
+      "Peer endpoint unreachable or invalid",
+    );
+  }
 }
 
 /** Turns a HandshakeError into the OCPI reply for a peer-started handshake. */
@@ -377,13 +425,12 @@ export async function postCredentials(ctx: OcpiContext): Promise<Response> {
       "Already registered: use PUT to update or DELETE to unregister",
     );
   const theirs = await incomingCredentials(ctx);
-  let found: Discovery;
   try {
     await checkRoles(store, theirs.roles, peer.id);
-    found = await discover(theirs.url, theirs.token, ctx.correlationId);
   } catch (e) {
     toProblem(e);
   }
+  const found = await discoverCaller(ctx, theirs);
 
   const tokenC = generateToken();
   const hashC = hashToken(tokenC);
@@ -423,13 +470,12 @@ export async function putCredentials(ctx: OcpiContext): Promise<Response> {
   if (peer.status !== "registered" || token.scope !== "full")
     throw notAllowed("Not registered: use POST to register");
   const theirs = await incomingCredentials(ctx);
-  let found: Discovery;
   try {
     await checkRoles(store, theirs.roles, peer.id);
-    found = await discover(theirs.url, theirs.token, ctx.correlationId);
   } catch (e) {
     toProblem(e);
   }
+  const found = await discoverCaller(ctx, theirs);
 
   const tokenC = generateToken();
   const hashC = hashToken(tokenC);
@@ -541,7 +587,16 @@ export async function rotateCredentials(
     throw asHandshakeError(e, "Updating credentials at the CPO failed");
   }
 
-  // The CPO now only knows newB, so store its new token whatever else happens.
+  // The CPO now only knows newB, so store its new token whatever else happens. New
+  // roles get the same checks as at registration; if they fail, the old ones stay.
+  let roles = theirs.roles;
+  let refused: HandshakeError | undefined;
+  try {
+    await checkRoles(store, theirs.roles, peerId);
+  } catch (e) {
+    refused = asHandshakeError(e, "The CPO's new roles were refused");
+    roles = peer.roles;
+  }
   let endpoints = peer.endpoints;
   let versionsUrl = peer.versionsUrl;
   try {
@@ -560,7 +615,7 @@ export async function rotateCredentials(
     peerId,
     {
       tokenCiphertext: encryptToken(theirs.token, peerId),
-      roles: theirs.roles,
+      roles,
       endpoints,
       versionsUrl,
     },
@@ -572,9 +627,13 @@ export async function rotateCredentials(
     action: "ocpi.peer.credentials_rotated",
     subjectId: peerId,
     requestId: correlationId,
-    details: { parties: partiesOf(theirs.roles) },
+    details: { parties: partiesOf(roles), rolesRefused: !!refused },
   });
   if (!updated) throw new HandshakeError("The peer changed during the update");
+  if (refused)
+    throw new HandshakeError(
+      `Tokens rotated with ${updated.label}, but its new roles were refused and the old ones kept: ${refused.message}`,
+    );
   return updated;
 }
 

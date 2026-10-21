@@ -21,6 +21,7 @@ import {
   emspHandler,
   inProcessNetwork,
   installNetwork,
+  uninstallNetwork,
   LIVE_ENV,
 } from "./support/network";
 
@@ -57,7 +58,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  vi.unstubAllGlobals();
+  uninstallNetwork();
   setPeerStoreForTests(undefined);
   process.env = { ...saved };
 });

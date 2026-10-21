@@ -3,6 +3,7 @@ import * as versionsRoute from "@/app/ocpi/versions/route";
 import * as detailsRoute from "@/app/ocpi/2.2.1/route";
 import * as credentialsRoute from "@/app/ocpi/2.2.1/credentials/route";
 import type { Transport } from "@/lib/ocpi/client";
+import { setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 
 type Handler = (request: Request) => Promise<Response>;
 
@@ -40,14 +41,40 @@ export function inProcessNetwork(hosts: Record<string, Handler>) {
     calls.push({ method: request.method, url });
     const handler = hosts[new URL(url).host];
     if (!handler) throw new TypeError("fetch failed");
-    return handler(request);
+    // Abort like fetch does, from the caller's own signal: a Request follows it only
+    // through a weak reference, which garbage collection can drop under load.
+    const signal = init.signal;
+    if (!signal) return handler(request);
+    return new Promise<Response>((resolve, reject) => {
+      if (signal.aborted) return reject(signal.reason);
+      signal.addEventListener("abort", () => reject(signal.reason), {
+        once: true,
+      });
+      handler(request).then(resolve, reject);
+    });
   };
   return { transport, calls };
 }
 
-/** Routes the global fetch (behind outboundFetch) to the in-process network. */
+/** A public address the fake DNS gives every host. Never connected to. */
+export const FAKE_PUBLIC_ADDRESS = "93.184.215.14";
+
+/**
+ * Routes outbound requests to the in-process network: the global fetch (behind
+ * outboundFetch), and peerFetch after its address check, with a fake DNS that resolves
+ * every host to a public address. Undo with `uninstallNetwork`.
+ */
 export function installNetwork(transport: Transport) {
   vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) =>
     transport(String(input), init ?? {}),
   );
+  setPeerNetworkForTests({
+    resolve: async () => [{ address: FAKE_PUBLIC_ADDRESS, family: 4 }],
+    send: (url, init) => transport(url.toString(), init),
+  });
+}
+
+export function uninstallNetwork() {
+  vi.unstubAllGlobals();
+  setPeerNetworkForTests(undefined);
 }

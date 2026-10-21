@@ -214,11 +214,12 @@ export function createMockCpo(options: MockCpoOptions) {
 
     const fault = state.faults.shift();
     if (fault === "hang")
-      return new Promise((_, reject) =>
+      return new Promise((_, reject) => {
+        if (request.signal.aborted) reject(request.signal.reason);
         request.signal.addEventListener("abort", () =>
           reject(request.signal.reason),
-        ),
-      );
+        );
+      });
     if (typeof fault === "number")
       return reply(undefined, {
         status: fault,

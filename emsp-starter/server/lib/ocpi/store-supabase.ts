@@ -3,11 +3,13 @@ import { outboundFetch } from "@/lib/server/demo";
 import type {
   AuditEntry,
   IssuedToken,
+  NewToken,
   Peer,
   PeerPatch,
   PeerStatus,
   PeerStore,
 } from "./store";
+import { tokenActive } from "./store";
 
 type PeerRow = {
   id: string;
@@ -148,11 +150,12 @@ export class SupabasePeerStore implements PeerStore {
     return rows[0] ? toPeer(rows[0]) : null;
   }
 
-  async issueToken(token: Omit<IssuedToken, "createdAt">) {
+  async issueToken(token: NewToken) {
     await this.rest("POST", "emsp_ocpi_issued_tokens", {
       token_hash: token.hash,
       peer_id: token.peerId,
       scope: token.scope,
+      expires_at: token.expiresAt ?? null,
     });
   }
 
@@ -163,18 +166,20 @@ export class SupabasePeerStore implements PeerStore {
         peer_id: string;
         scope: IssuedToken["scope"];
         created_at: string;
+        expires_at: string | null;
       }[]
     >(
       "GET",
-      `emsp_ocpi_issued_tokens?token_hash=${eq(hash)}&revoked_at=is.null&select=token_hash,peer_id,scope,created_at`,
+      `emsp_ocpi_issued_tokens?token_hash=${eq(hash)}&revoked_at=is.null&select=token_hash,peer_id,scope,created_at,expires_at`,
     );
     const r = rows[0];
-    return r
+    return r && tokenActive({ expiresAt: r.expires_at })
       ? {
           hash: r.token_hash,
           peerId: r.peer_id,
           scope: r.scope,
           createdAt: r.created_at,
+          expiresAt: r.expires_at,
         }
       : null;
   }

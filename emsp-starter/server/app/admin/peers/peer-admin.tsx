@@ -85,6 +85,12 @@ function Result({ state }: { state: ActionState }) {
           <dd>
             <code>{state.tokenA}</code>
           </dd>
+          {state.expiresAt && (
+            <>
+              <dt>Token A expires</dt>
+              <dd>{state.expiresAt}</dd>
+            </>
+          )}
         </dl>
       )}
       {state.peer && <PeerFacts peer={state.peer} />}

@@ -8,11 +8,17 @@ import {
 import { createMockCpo } from "@/lib/mock-cpo";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore } from "@/lib/ocpi/store";
-import { isAdminSecret } from "@/lib/server/admin";
+import {
+  ADMIN_LIMIT,
+  checkAdminSecret,
+  isAdminSecret,
+  resetAdminLimitForTests,
+} from "@/lib/server/admin";
 import {
   emspHandler,
   inProcessNetwork,
   installNetwork,
+  uninstallNetwork,
   LIVE_ENV,
 } from "./support/network";
 
@@ -28,6 +34,7 @@ const form = (fields: Record<string, string>) => {
 };
 
 beforeEach(() => {
+  resetAdminLimitForTests();
   for (const k of [...Object.keys(LIVE_ENV), "DEMO_MODE", "ADMIN_SECRET"])
     delete process.env[k];
   store = new MemoryPeerStore();
@@ -40,7 +47,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setPeerStoreForTests(undefined);
-  vi.unstubAllGlobals();
+  uninstallNetwork();
   process.env = { ...saved };
 });
 
@@ -68,6 +75,7 @@ describe("admin secret (temporary admin gate)", () => {
       managePeerAction,
       listPeersAction,
     ]) {
+      resetAdminLimitForTests();
       expect(await action({}, form({ label: "x" }))).toEqual({
         ok: false,
         message: "Wrong admin secret.",
@@ -77,6 +85,29 @@ describe("admin secret (temporary admin gate)", () => {
       ).toMatchObject({ ok: false });
     }
     expect(store.peers.size).toBe(0);
+  });
+
+  it("rate limits wrong secrets, per client and in total", async () => {
+    process.env.ADMIN_SECRET = SECRET;
+    const wrong = form({ adminSecret: "wrong" });
+    for (let i = 0; i < ADMIN_LIMIT.perClient; i++)
+      expect((await listPeersAction({}, wrong)).message).toBe(
+        "Wrong admin secret.",
+      );
+    // Limited: even the right secret is not compared now.
+    expect(
+      (await listPeersAction({}, form({ adminSecret: SECRET }))).message,
+    ).toMatch(/Too many wrong admin secrets/);
+
+    resetAdminLimitForTests();
+    const t0 = Date.now();
+    for (let i = 0; i < ADMIN_LIMIT.total; i++)
+      expect(checkAdminSecret("wrong", `10.0.0.${i}`, t0)).toBe("wrong");
+    expect(checkAdminSecret(SECRET, "192.0.2.1", t0)).toBe("limited");
+    // The window passes.
+    expect(
+      checkAdminSecret(SECRET, "192.0.2.1", t0 + ADMIN_LIMIT.windowMs),
+    ).toBe("ok");
   });
 });
 

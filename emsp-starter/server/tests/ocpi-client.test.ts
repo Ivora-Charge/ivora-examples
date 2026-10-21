@@ -15,6 +15,7 @@ import {
   OcpiUnauthorizedError,
 } from "@/lib/ocpi/errors";
 import { DemoModeError } from "@/lib/server/demo";
+import { setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 import { LIVE_ENV } from "./support/network";
 
 const URL_ = "https://cpo.example.test/ocpi/2.2.1/locations";
@@ -283,17 +284,30 @@ describe("OCPI client", () => {
       expect(sleep).not.toHaveBeenCalled();
     });
 
-    it("goes out through outboundFetch in live mode", async () => {
+    it("goes out through peerFetch, after the address check, in live mode", async () => {
       Object.assign(process.env, LIVE_ENV);
       delete process.env.DEMO_MODE;
-      const fetchSpy = vi.fn(async () =>
-        envelope({ data: 1, status_code: 1000 }),
+      const send = vi.fn(
+        async (_url: URL, _init: RequestInit, _pinned: unknown) =>
+          envelope({ data: 1, status_code: 1000 }),
       );
-      vi.stubGlobal("fetch", fetchSpy);
-      expect(
-        (await ocpiRequest({ url: URL_, token: TOKEN }, { sleep })).data,
-      ).toBe(1);
-      expect(fetchSpy).toHaveBeenCalledTimes(1);
+      const resolve = vi.fn(async () => [
+        { address: "93.184.215.14", family: 4 },
+      ]);
+      setPeerNetworkForTests({ resolve, send });
+      try {
+        expect(
+          (await ocpiRequest({ url: URL_, token: TOKEN }, { sleep })).data,
+        ).toBe(1);
+        expect(resolve).toHaveBeenCalledWith("cpo.example.test");
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(send.mock.calls[0][2]).toEqual({
+          address: "93.184.215.14",
+          family: 4,
+        });
+      } finally {
+        setPeerNetworkForTests(undefined);
+      }
     });
   });
 });

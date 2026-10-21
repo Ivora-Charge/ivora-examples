@@ -41,6 +41,8 @@ create table public.emsp_ocpi_issued_tokens (
   -- 'registration': a Token A, valid only to register. 'full': a Token B or C.
   scope text not null check (scope in ('registration', 'full')),
   created_at timestamptz not null default now(),
+  -- A Token A expires (OCPI_TOKEN_A_TTL_DAYS); a Token B or C does not.
+  expires_at timestamptz check (expires_at is null or expires_at > created_at),
   revoked_at timestamptz
 );
 

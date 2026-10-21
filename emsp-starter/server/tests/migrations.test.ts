@@ -231,4 +231,20 @@ describe("OCPI peer registry tables", () => {
       ),
     ).rejects.toThrow(/foreign key/);
   });
+
+  it("gives a Token A an expiry after its creation", async () => {
+    const { rows } = await db.query<{ id: string }>(PEER);
+    await db.query(
+      `insert into public.emsp_ocpi_issued_tokens (token_hash, peer_id, scope, expires_at)
+       values ($1, $2, 'registration', now() + interval '7 days')`,
+      ["c".repeat(64), rows[0].id],
+    );
+    await expect(
+      db.query(
+        `insert into public.emsp_ocpi_issued_tokens (token_hash, peer_id, scope, expires_at)
+         values ($1, $2, 'registration', now() - interval '1 day')`,
+        ["d".repeat(64), rows[0].id],
+      ),
+    ).rejects.toThrow(/check constraint/);
+  });
 });

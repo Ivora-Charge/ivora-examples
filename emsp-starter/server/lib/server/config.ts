@@ -26,6 +26,9 @@ export const LIVE_REQUIRED = [
   "OCPI_TOKEN_ENCRYPTION_KEY",
 ] as const;
 
+/** Days a Token A we issue stays valid, unless OCPI_TOKEN_A_TTL_DAYS says otherwise. */
+export const TOKEN_A_TTL_DAYS_DEFAULT = 7;
+
 /** Shortest ADMIN_SECRET accepted; a shorter one leaves the admin actions disabled. */
 export const ADMIN_SECRET_MIN_LENGTH = 32;
 
@@ -65,6 +68,16 @@ export const config = {
     if (!raw || !/^[A-Za-z0-9+/_-]+={0,2}$/.test(raw)) return undefined;
     const key = Buffer.from(raw, "base64");
     return key.length === 32 ? key : undefined;
+  },
+  /**
+   * Days a Token A (an invitation for a CPO to register) stays valid: 1 to 90, default
+   * 7. An invalid value falls back to the default and is reported by configErrors().
+   */
+  get tokenATtlDays(): number {
+    const v = env("OCPI_TOKEN_A_TTL_DAYS");
+    if (!v) return TOKEN_A_TTL_DAYS_DEFAULT;
+    const n = /^\d+$/.test(v) ? Number(v) : NaN;
+    return n >= 1 && n <= 90 ? n : TOKEN_A_TTL_DAYS_DEFAULT;
   },
   /**
    * Temporary gate for the admin actions until admin sign-in lands. Secret. Undefined
@@ -115,6 +128,11 @@ export function configErrors(): string[] {
   }
   if (env("OCPI_TOKEN_ENCRYPTION_KEY") && !config.tokenEncryptionKey)
     errors.push("OCPI_TOKEN_ENCRYPTION_KEY must be 32 bytes, base64-encoded");
+  const ttl = env("OCPI_TOKEN_A_TTL_DAYS");
+  if (ttl && !(/^\d+$/.test(ttl) && Number(ttl) >= 1 && Number(ttl) <= 90))
+    errors.push(
+      "OCPI_TOKEN_A_TTL_DAYS must be a whole number of days, 1 to 90",
+    );
   return errors;
 }
 

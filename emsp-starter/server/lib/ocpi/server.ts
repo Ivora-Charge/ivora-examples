@@ -1,5 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { BodyTooLargeError, readLimitedText } from "./body";
 import { OcpiProblem } from "./errors";
 import { ourParty } from "./identity";
 import { peerStore } from "./registry";
@@ -42,7 +43,8 @@ export type OcpiRouteOptions = {
 };
 
 const ID = /^[\x21-\x7e]{1,255}$/;
-const MAX_BODY = 64 * 1024;
+/** The largest request body a peer may send. */
+export const MAX_REQUEST_BYTES = 256 * 1024;
 
 /** An OCPI response: the envelope, and the request and correlation IDs. */
 export function ocpiResponse(
@@ -69,11 +71,23 @@ export function ocpiResponse(
   });
 }
 
-/** Reads a JSON request body, at most 64 KB. Throws an OcpiProblem the peer sees. */
+/**
+ * Reads a JSON request body, at most 256 KB: a larger Content-Length is refused before
+ * reading, and the stream is cut at the limit. Throws an OcpiProblem the peer sees.
+ */
 export async function readJson(request: Request): Promise<unknown> {
-  const text = await request.text();
-  if (text.length > MAX_BODY)
-    throw new OcpiProblem(413, STATUS.CLIENT_ERROR, "Request body too large");
+  let text: string;
+  try {
+    text = await readLimitedText(request, MAX_REQUEST_BYTES);
+  } catch (e) {
+    if (e instanceof BodyTooLargeError)
+      throw new OcpiProblem(413, STATUS.CLIENT_ERROR, "Request body too large");
+    throw new OcpiProblem(
+      400,
+      STATUS.INVALID_PARAMETERS,
+      "Request body could not be read",
+    );
+  }
   try {
     return JSON.parse(text);
   } catch {

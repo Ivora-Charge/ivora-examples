@@ -58,7 +58,19 @@ export type IssuedToken = {
   peerId: string;
   scope: TokenScope;
   createdAt: string;
+  /** After this the token no longer works. Set for a Token A; null for B and C. */
+  expiresAt: string | null;
 };
+
+export type NewToken = Omit<IssuedToken, "createdAt" | "expiresAt"> & {
+  expiresAt?: string | null;
+};
+
+/** Active: not revoked and not expired. */
+export const tokenActive = (
+  t: { revokedAt?: string | null; expiresAt: string | null },
+  now = Date.now(),
+) => !t.revokedAt && (!t.expiresAt || Date.parse(t.expiresAt) > now);
 
 export type AuditEntry = {
   actor: string;
@@ -86,8 +98,8 @@ export interface PeerStore {
     patch: PeerPatch,
     ifStatus?: PeerStatus,
   ): Promise<Peer | null>;
-  issueToken(token: Omit<IssuedToken, "createdAt">): Promise<void>;
-  /** An active (not revoked) token by its hash. */
+  issueToken(token: NewToken): Promise<void>;
+  /** An active (not revoked, not expired) token by its hash. */
   findToken(hash: string): Promise<IssuedToken | null>;
   revokeToken(hash: string): Promise<void>;
   /** Revokes every active token of the peer, except `keepHash`. */
@@ -146,17 +158,18 @@ export class MemoryPeerStore implements PeerStore {
     return structuredClone(p);
   }
 
-  async issueToken(token: Omit<IssuedToken, "createdAt">) {
+  async issueToken(token: NewToken) {
     if (this.tokens.has(token.hash)) throw new Error("token hash collision");
     this.tokens.set(token.hash, {
       ...token,
+      expiresAt: token.expiresAt ?? null,
       createdAt: new Date().toISOString(),
     });
   }
 
   async findToken(hash: string) {
     const t = this.tokens.get(hash);
-    if (!t || t.revokedAt) return null;
+    if (!t || !tokenActive(t)) return null;
     const { revokedAt: _, ...token } = t;
     return token;
   }

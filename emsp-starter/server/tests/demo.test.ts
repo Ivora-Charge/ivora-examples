@@ -10,6 +10,7 @@ import {
 } from "@/lib/server/demo";
 import { configErrors, missingForLive } from "@/lib/server/config";
 import { GET } from "@/app/api/v1/status/route";
+import { peerFetch, setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 
 const LIVE = {
   EMSP_COUNTRY_CODE: "nl",
@@ -128,15 +129,39 @@ describe("outbound requests have one gate", () => {
       return /\.(ts|tsx|mjs|js)$/.test(name) ? [path] : [];
     });
 
-  it("no server or app code calls fetch except lib/server/demo.ts", () => {
+  // demo.ts: outboundFetch. peer-fetch.ts: peerFetch, which calls assertLive first.
+  const gates = [
+    join("lib", "server", "demo.ts"),
+    join("lib", "server", "peer-fetch.ts"),
+  ];
+
+  it("no server or app code sends requests except the two gate files", () => {
     const offenders = [...files(join(root, "app")), ...files(join(root, "lib"))]
       .map((f) => relative(root, f))
-      .filter((f) => f !== join("lib", "server", "demo.ts"))
+      .filter((f) => !gates.includes(f))
       .filter((f) =>
-        /\bfetch\s*\(|(?:from\s+|require\s*\(\s*|import\s*\(\s*)["'](?:node:)?(?:https?|http2|net|tls|dgram|undici)(?:\/[\w/]*)?["']|\bundici\b|\bXMLHttpRequest\b|\bWebSocket\b/.test(
+        /\bfetch\s*\(|(?:from\s+|require\s*\(\s*|import\s*\(\s*)["'](?:node:)?(?:https?|http2|net|tls|dgram|dns|undici)(?:\/[\w/]*)?["']|\bundici\b|\bXMLHttpRequest\b|\bWebSocket\b/.test(
           readFileSync(join(root, f), "utf8"),
         ),
       );
     expect(offenders).toEqual([]);
+  });
+
+  it("peerFetch refuses in demo mode before resolving anything", async () => {
+    const resolve = vi.fn(async () => [
+      { address: "93.184.215.14", family: 4 },
+    ]);
+    const send = vi.fn(async () => new Response("ok"));
+    setPeerNetworkForTests({ resolve, send });
+    try {
+      for (const v of Object.keys(LIVE)) delete process.env[v];
+      await expect(
+        peerFetch("https://cpo.example.test/ocpi/versions"),
+      ).rejects.toBeInstanceOf(DemoModeError);
+      expect(resolve).not.toHaveBeenCalled();
+      expect(send).not.toHaveBeenCalled();
+    } finally {
+      setPeerNetworkForTests(undefined);
+    }
   });
 });

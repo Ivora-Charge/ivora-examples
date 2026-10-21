@@ -1,5 +1,6 @@
 "use server";
 
+import { headers } from "next/headers";
 import {
   connectToCpo,
   HandshakeError,
@@ -9,7 +10,7 @@ import {
 } from "@/lib/ocpi/handshake";
 import { peerStore } from "@/lib/ocpi/registry";
 import type { Peer } from "@/lib/ocpi/store";
-import { adminEnabled, isAdminSecret } from "@/lib/server/admin";
+import { adminEnabled, checkAdminSecret } from "@/lib/server/admin";
 
 /** A peer as the admin web shows it: no token, no ciphertext. */
 export type PeerSummary = {
@@ -31,6 +32,8 @@ export type ActionState = {
   /** Shown once, right after an invitation. Only its hash is stored. */
   tokenA?: string;
   versionsUrl?: string;
+  /** When the Token A stops working. */
+  expiresAt?: string;
 };
 
 function summary(p: Peer): PeerSummary {
@@ -55,6 +58,24 @@ const field = (form: FormData, name: string) => {
 };
 
 /**
+ * Who is asking, for the admin-secret rate limit. The address comes from the proxy in
+ * front of the server and may be forged without one; the limit also caps wrong secrets
+ * in total, so forging it does not help.
+ */
+async function clientKey(): Promise<string> {
+  try {
+    const h = await headers();
+    const ip =
+      h.get("x-real-ip")?.trim() ||
+      h.get("x-forwarded-for")?.split(",")[0]?.trim();
+    return ip ? ip.slice(0, 64) : "unknown";
+  } catch {
+    // Outside a request (tests): one shared key.
+    return "unknown";
+  }
+}
+
+/**
  * Runs `fn` only for an admin. Errors become a message for the form; only handshake
  * and demo-mode errors carry their own text, which never includes a token.
  */
@@ -68,8 +89,13 @@ async function asAdmin(
       message:
         "Admin actions are disabled: set ADMIN_SECRET (at least 32 characters) on the server.",
     };
-  if (!isAdminSecret(field(form, "adminSecret")))
-    return { ok: false, message: "Wrong admin secret." };
+  const check = checkAdminSecret(field(form, "adminSecret"), await clientKey());
+  if (check === "limited")
+    return {
+      ok: false,
+      message: "Too many wrong admin secrets. Try again in 15 minutes.",
+    };
+  if (check !== "ok") return { ok: false, message: "Wrong admin secret." };
   try {
     return await fn();
   } catch (e) {
@@ -114,16 +140,17 @@ export async function invitePeerAction(
   form: FormData,
 ): Promise<ActionState> {
   return asAdmin(form, async () => {
-    const { peer, tokenA, versionsUrl } = await invitePeer(
+    const { peer, tokenA, versionsUrl, expiresAt } = await invitePeer(
       { label: field(form, "label") },
       { store: peerStore(), actor: "admin" },
     );
     return {
       ok: true,
-      message: `Invitation for ${peer.label} created. Send the CPO this versions URL and Token A over a secure channel. The token is shown only once.`,
+      message: `Invitation for ${peer.label} created. Send the CPO this versions URL and Token A over a secure channel. The token is shown only once and works until ${expiresAt}.`,
       peer: summary(peer),
       tokenA,
       versionsUrl,
+      expiresAt,
     };
   });
 }

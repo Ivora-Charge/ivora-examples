@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import { outboundFetch } from "@/lib/server/demo";
+import { peerFetch } from "@/lib/server/peer-fetch";
+import { BodyTooLargeError, readLimitedText } from "./body";
 import {
   errorClassFor,
   OcpiClientError,
@@ -23,9 +24,11 @@ import type { Party } from "./types";
  *   Only GET is retried unless `retry: true`: a repeated POST or PUT to the credentials
  *   module would not be safe.
  * - Never follows redirects, so a token is never sent to a host nobody configured.
+ * - Reads at most 1 MB of a response.
+ * - The default transport, `peerFetch`, refuses hosts that are not public addresses.
  */
 
-/** Sends one HTTP request. Defaults to `outboundFetch`, the demo-mode gate. */
+/** Sends one HTTP request. Defaults to `peerFetch`: demo-mode gate and address check. */
 export type Transport = (url: string, init: RequestInit) => Promise<Response>;
 
 export type ClientOptions = {
@@ -63,7 +66,8 @@ export type OcpiResult = {
   correlationId: string;
 };
 
-const MAX_BODY = 5 * 1024 * 1024;
+/** The largest OCPI response we read. A page of objects stays well under it. */
+export const MAX_RESPONSE_BYTES = 1024 * 1024;
 const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -134,7 +138,7 @@ async function attemptOnce(
     headers["OCPI-to-country-code"] = req.routing.to.countryCode;
     headers["OCPI-to-party-id"] = req.routing.to.partyId;
   }
-  const transport = opts.transport ?? outboundFetch;
+  const transport = opts.transport ?? peerFetch;
 
   let res: Response;
   let text: string;
@@ -152,10 +156,18 @@ async function attemptOnce(
       redirect: "error",
       signal: controller.signal,
     });
-    text = await res.text();
+    text = await readLimitedText(res, MAX_RESPONSE_BYTES);
   } catch (e) {
     // Demo mode and other deliberate refusals are not network trouble: never retry them.
     if (e instanceof Error && "code" in e && e.code === "demo_mode") throw e;
+    if (e instanceof Error && "code" in e && e.code === "peer_address_refused")
+      throw new OcpiTransportError(`${what} refused: ${e.message}`, {
+        request: what,
+      });
+    if (e instanceof BodyTooLargeError)
+      throw new OcpiTransportError(`${what} returned too large a body`, {
+        request: what,
+      });
     const timeout =
       e instanceof Error &&
       (e.name === "TimeoutError" || e.name === "AbortError");
@@ -174,8 +186,6 @@ async function attemptOnce(
 
   if (res.status >= 300 && res.status < 400)
     throw fail(OcpiTransportError, `${what} answered with a redirect`);
-  if (text.length > MAX_BODY)
-    throw fail(OcpiTransportError, `${what} returned too large a body`);
 
   let json: unknown;
   try {
