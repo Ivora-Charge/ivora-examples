@@ -6,9 +6,30 @@ An operations app for small charging operators (CPOs) with no developers on staf
 
 ![Demo: overview with sample sites and chargers](docs/screenshot.png)
 
+## Make it yours in 5 minutes
+
+The kit ships as **Ampleaf**, a placeholder brand you are meant to replace. Everything about it lives in [`brand/`](brand), and components use only its tokens.
+
+1. **Name and copy:** `brand/brand.ts` (product name, tagline, support line). A rename is the one `name` line. Your business name is `OPERATOR_NAME` (below); it shows as the workspace in the sidebar and in page titles.
+2. **Colours, type scale, radius, spacing:** `brand/tokens.css`. Each colour is `light-dark(<light>, <dark>)`. If you change `--color-bg`, change `lib/theme.ts` to match (a test checks it). Run `npm test`: `tests/contrast.test.ts` fails if a text pair drops below WCAG AA (4.5:1) in either mode.
+3. **Logo:** `brand/logo.svg` (standalone file) and `brand/Logo.tsx` (the same shapes inline, so it follows the theme). Keep both in step.
+4. **Fonts:** put woff2 files in `brand/fonts/` and point `brand/fonts.ts` at them. Use open-licensed fonts and keep their license files next to them.
+5. **Icons:** `brand/icons.tsx`, one entry per section slug from `lib/modules.ts`.
+
+**Lime marks what is current or live** (the current page, the demo chip). `--color-accent` is a fill only, always with `--color-on-accent` text on it, and never a text colour on the page or a card: it is unreadable there. `tests/contrast.test.ts` fails if a stylesheet or component uses it as text. If you change the accent, keep that rule.
+
+The design brief, the approved mock and the palette are `brand/BRIEF.md`, `brand/mock.html` and `docs/brief/`. Screenshots of the main screens in light and dark, desktop and phone, are in `docs/screens/`.
+
+### Fonts and icons
+
+- [Manrope](https://github.com/sharanda/manrope), Copyright 2019 The Manrope Project Authors, SIL Open Font License 1.1 (`brand/fonts/OFL-Manrope.txt`).
+- [Fraunces](https://github.com/undercasetype/Fraunces), Copyright 2020 The Fraunces Project Authors, SIL Open Font License 1.1 (`brand/fonts/OFL-Fraunces.txt`).
+- Section, menu and theme icons: [Lucide](https://lucide.dev), ISC License, Copyright (c) Lucide Contributors.
+- The Ampleaf mark is original, Apache-2.0 with this template.
+
 ## What it does today
 
-- **App shell:** phone-first and keyboard accessible (skip link, labelled navigation, visible focus, 44 px tap targets). On a phone the sections are behind a Menu button; on a wide screen they are a sidebar. Every colour, font, size, radius and spacing is a token in [`app/tokens.css`](app/tokens.css); the tokens are neutral placeholders, so a brand restyles the kit by editing that one file.
+- **App shell:** phone-first and keyboard accessible (skip link, labelled navigation, visible focus, 44 px tap targets). On a phone the sections are behind a Menu button; on a wide screen they are a sidebar. Light and dark mode follow the system setting, with a toggle. Every colour, font, size, radius and spacing is a token in [`brand/tokens.css`](brand/tokens.css) (see "Make it yours in 5 minutes" below).
 - **Overview:** sites, chargers online, connectors, sessions charging now and recent energy, read from Ivora (or from sample data in demo mode).
 - **Team:** staff sign in with email and password or an emailed sign-in link. Owners and managers invite staff by email (a link that works once and expires in 72 hours), change roles and remove people. The last owner can't be removed or demoted.
 - **Sections:** Onboarding, Chargers, Live, Pricing, Reports and Settings are placeholders marked "Coming soon".

@@ -4,9 +4,14 @@ import { config, isDemo } from "@/lib/server/env";
 import { currentStaff } from "@/lib/server/auth";
 import { MODULES } from "@/lib/modules";
 import { ROLE_LABELS } from "@/lib/roles";
-import { THEME_COLOR } from "@/lib/theme";
+import { THEME_COLORS, THEME_KEY } from "@/lib/theme";
+import { brand } from "@/brand/brand";
+import { fontVariables } from "@/brand/fonts";
+import { Logo } from "@/brand/Logo";
+import "@/brand/tokens.css";
 import { signOutAction } from "./auth-actions";
 import Nav from "./nav";
+import ThemeToggle from "./theme-toggle";
 import "./globals.css";
 
 // Demo mode, the operator name and the session come from the server at request time.
@@ -18,16 +23,22 @@ export async function generateMetadata(): Promise<Metadata> {
       default: config.operatorName,
       template: `%s · ${config.operatorName}`,
     },
-    description: "EV charging operations on the Ivora API",
+    description: brand.tagline,
   };
 }
 
 export const viewport: Viewport = {
-  themeColor: THEME_COLOR,
-  colorScheme: "dark",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: THEME_COLORS.light },
+    { media: "(prefers-color-scheme: dark)", color: THEME_COLORS.dark },
+  ],
+  colorScheme: "light dark",
   width: "device-width",
   initialScale: 1,
 };
+
+// Applies a saved theme before first paint, so dark mode does not flash.
+const themeScript = `try{var t=localStorage.getItem(${JSON.stringify(THEME_KEY)});if(t)document.documentElement.dataset.theme=t}catch(e){}`;
 
 async function signedInStaff() {
   try {
@@ -49,7 +60,10 @@ export default async function RootLayout({
   const demo = isDemo();
   const staff = await signedInStaff();
   return (
-    <html lang="en">
+    <html lang="en" className={fontVariables} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body>
         <a className="skip" href="#main">
           Skip to content
@@ -68,11 +82,20 @@ export default async function RootLayout({
         )}
         <div className={staff ? "shell" : "shell signed-out"}>
           <header className="topbar">
-            <span className="brand">{config.operatorName}</span>
+            <a className="brand" href="/" aria-label={`${brand.name}, home`}>
+              <Logo />
+              <span>{brand.name}</span>
+            </a>
+            {!staff && <ThemeToggle />}
             {staff && (
               <>
+                <p className="workspace">
+                  <span>Workspace</span>
+                  {config.operatorName}
+                </p>
                 <Nav
-                  items={MODULES.map(({ href, label, status }) => ({
+                  items={MODULES.map(({ slug, href, label, status }) => ({
+                    slug,
                     href,
                     label,
                     soon: status === "coming-soon",
@@ -91,6 +114,7 @@ export default async function RootLayout({
                       </button>
                     </form>
                   )}
+                  <ThemeToggle />
                 </div>
               </>
             )}

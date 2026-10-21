@@ -3,8 +3,10 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Icon } from "@/brand/icons";
 
 export interface NavItem {
+  slug: string;
   href: string;
   label: string;
   soon: boolean;
@@ -27,6 +29,7 @@ export default function Nav({ items }: { items: NavItem[] }) {
         aria-controls="nav-list"
         onClick={() => setOpen((o) => !o)}
       >
+        <Icon name="menu" />
         Menu
       </button>
       <ul id="nav-list" className={open ? "nav-list open" : "nav-list"}>
@@ -41,6 +44,7 @@ export default function Nav({ items }: { items: NavItem[] }) {
                 href={item.href}
                 aria-current={current ? "page" : undefined}
               >
+                <Icon name={item.slug} />
                 {item.label}
                 {item.soon && <span className="soon">Soon</span>}
               </Link>
