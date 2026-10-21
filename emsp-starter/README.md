@@ -1,6 +1,6 @@
 # eMSP Starter
 
-> **In progress.** This is part 4 of 13. The server and the driver app have an app shell, a demo mode and brand tokens. The server speaks the OCPI 2.2.1 versions and credentials modules with any number of CPO peers, in both directions, pulls and receives every peer's locations and tariffs, serves a location search with display prices for the app, and issues drivers' app tokens and RFID cards, pushes them to every CPO and answers real-time authorization, all tested against a built-in mock CPO. Sessions, payments and the driver flows arrive in later parts.
+> **In progress.** This is part 5 of 13. The server and the driver app have an app shell, a demo mode and brand tokens. The server speaks the OCPI 2.2.1 versions and credentials modules with any number of CPO peers, in both directions, pulls and receives every peer's locations and tariffs, serves a location search with display prices for the app, and issues drivers' app tokens and RFID cards, pushes them to every CPO answers real-time authorization, and sends START_SESSION and STOP_SESSION commands (after a payment hold, one per app request) and takes their results, all tested against a built-in mock CPO. Sessions, payments and the driver flows arrive in later parts.
 
 For charging networks that want to run **their own driver app and payments**, connected over **OCPI 2.2.1** to any CPO platform. You run the eMSP (e-Mobility Service Provider) side: drivers, tokens, sessions, CDRs and payments. Each CPO you partner with is an OCPI peer. Ivora is one possible CPO peer among many; nothing here depends on it.
 
@@ -48,8 +48,9 @@ Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its READ
 1. **Scaffold**: app shells, demo mode, brand tokens, Supabase baseline, CI.
 2. **OCPI core**: versions and credentials in both directions, multiple CPO peers with token rotation, the OCPI client and server middleware, the mock CPO.
 3. **Locations and tariffs**: pull (full, then incremental, resumable) and push, stored per peer; the search API; display prices and a price preview.
-4. **Tokens** (this part): APP_USER tokens with eMA contract IDs and RFID cards, the Tokens Sender (paginated), pushes to every CPO's Tokens Receiver with retries, block and unblock, and real-time authorization.
-5. to 13. Sessions and commands, CDRs, payments, the optional live-data adapter, the driver flows and the admin web. Each part updates this README.
+4. **Tokens**: APP_USER tokens with eMA contract IDs and RFID cards, the Tokens Sender (paginated), pushes to every CPO's Tokens Receiver with retries, block and unblock, and real-time authorization.
+5. **Commands** (this part): START_SESSION and STOP_SESSION with the CommandResponse and the asynchronous CommandResult, one command per app request, a payment-hold hook before every start, and a clear state for chargers that refuse app starts.
+6. to 13. Sessions, CDRs, payments, the optional live-data adapter, the driver flows and the admin web. Each part updates this README.
 
 ## License
 
