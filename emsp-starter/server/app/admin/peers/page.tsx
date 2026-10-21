@@ -1,0 +1,41 @@
+import type { Metadata } from "next";
+import { ocpiUrls } from "@/lib/server/config";
+import { adminEnabled } from "@/lib/server/admin";
+import { isDemo } from "@/lib/server/demo";
+import { PeerAdmin } from "./peer-admin";
+
+export const metadata: Metadata = { title: "CPO peers" };
+
+export default function PeersPage() {
+  return (
+    <>
+      <h1>CPO peers</h1>
+      <section className="card" aria-labelledby="about">
+        <h2 id="about">OCPI connections</h2>
+        <p>
+          Each CPO you partner with is an OCPI 2.2.1 peer. Register at a CPO
+          with the Token A it gives you, or create a Token A for a CPO to
+          register with us at{" "}
+          <code className="wrap">{ocpiUrls().versions}</code>.
+        </p>
+        {isDemo() && (
+          <p className="note">
+            Demo mode: peers are kept in memory only, and nothing is sent to a
+            CPO, so registering at one is refused.
+          </p>
+        )}
+        {!adminEnabled() && (
+          <p className="note">
+            Admin actions are disabled until <code>ADMIN_SECRET</code> (at least
+            32 characters) is set on the server.
+          </p>
+        )}
+        <p className="note">
+          Temporary: these actions ask for <code>ADMIN_SECRET</code> until admin
+          sign-in arrives.
+        </p>
+      </section>
+      <PeerAdmin />
+    </>
+  );
+}

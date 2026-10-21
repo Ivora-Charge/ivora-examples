@@ -4,6 +4,24 @@ Depot charging for fleets (vans, buses, company cars) on the Ivora API. It is fo
 
 ![Demo: six simulated vehicles on their connectors within the 60 kW site cap](docs/screenshot.png)
 
+The UI ships as **Rotabay**, a calm operations console with tabular numbers and status shown by shape as well as colour. Screens in light and dark, desktop and phone, are in [`docs/screens/`](docs/screens).
+
+## Make it yours in 5 minutes
+
+The whole brand lives in [`brand/`](brand); components use only its tokens.
+
+1. **Name and copy:** `brand/brand.ts` (product name, tagline, support line). A rename is the one `name` line.
+2. **Colours, type scale, radius, spacing:** `brand/tokens.css`. Each colour is `light-dark(<light>, <dark>)`. Run `npm test`: `tests/contrast.test.ts` fails if a text pair drops below WCAG AA (4.5:1) in either mode.
+3. **Logo:** `brand/logo.svg` (standalone file) and `brand/Logo.tsx` (the same shapes inline, so it follows `currentColor` and `--accent`). Keep both in step.
+4. **Fonts:** put woff2 files in `brand/fonts/` and point `brand/fonts.ts` at them. Use open-licensed fonts and keep their license files next to them.
+
+Light and dark follow the system setting; the header button switches and remembers the choice in the browser. The design brief and the approved mock are `brand/BRIEF.md` and `brand/mock.html`.
+
+### Fonts and icons
+
+- [IBM Plex Sans, IBM Plex Sans Condensed and IBM Plex Mono](https://github.com/IBM/plex), Copyright 2017 IBM Corp., SIL Open Font License 1.1 (`brand/fonts/OFL-IBMPlex.txt`).
+- The Rotabay mark, the status shapes and the theme icon are original, Apache-2.0 with this template.
+
 ## Features
 
 - **Vehicles and drivers** live in the template's own database: SQLite by default (`SQLITE_PATH`, using Node's built-in `node:sqlite`), Postgres when `DATABASE_URL` is set, and in memory in demo mode. The single `docs` table is created on first use.

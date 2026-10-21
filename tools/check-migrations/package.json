@@ -1,0 +1,22 @@
+{
+  "name": "ivora-check-migrations",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The 10-30 rule for Supabase migrations: a static check shared by the templates' CI.",
+  "type": "module",
+  "license": "Apache-2.0",
+  "main": "cli.mjs",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "check": "node cli.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.10",
+    "prettier": "^3.9.10"
+  }
+}

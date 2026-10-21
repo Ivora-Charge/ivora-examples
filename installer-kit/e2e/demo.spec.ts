@@ -3,7 +3,7 @@ import { expect, test } from "@playwright/test";
 test("demo: site, charger, connection, test, config, price and hand-over", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/commission");
   await expect(page.getByText(/DEMO MODE/)).toBeVisible();
 
   // 1. Site

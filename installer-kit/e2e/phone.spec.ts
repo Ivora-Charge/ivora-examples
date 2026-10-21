@@ -34,6 +34,8 @@ for (const width of WIDTHS) {
   }) => {
     await page.setViewportSize({ width, height: 844 });
     await page.goto("/");
+    await expectNoHorizontalScroll(page, "Landing");
+    await page.goto("/commission");
 
     // 1. Site, with the existing location picker.
     await expect(page.getByLabel("Existing location")).toBeVisible();

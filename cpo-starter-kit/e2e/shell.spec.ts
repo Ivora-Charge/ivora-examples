@@ -6,7 +6,6 @@ const SECTIONS = [
   "Live",
   "Pricing",
   "Reports",
-  "Team",
   "Settings",
 ];
 
@@ -18,14 +17,19 @@ test("demo: overview shows labelled sample data", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
   await expect(page.getByText("DEMO-HARBOUR-01")).toBeVisible();
-  await expect(page.getByText("Sample", { exact: true })).toBeVisible();
+  await expect(
+    page.locator("main").getByText("Sample", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("Chargers online")).toBeVisible();
+  await expect(
+    page.getByText("Demo mode: add your Ivora API key in settings to go live"),
+  ).toBeVisible();
 
   if (process.env.SCREENSHOT)
     await page.screenshot({ path: "docs/screenshot.png", fullPage: false });
 });
 
-test("demo: every section is reachable from the menu and marked coming soon", async ({
+test("demo: every unbuilt section is reachable from the menu and marked coming soon", async ({
   page,
   isMobile,
 }) => {

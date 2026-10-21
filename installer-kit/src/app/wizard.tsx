@@ -54,11 +54,22 @@ async function api<T>(url: string, body?: unknown): Promise<T> {
   return json as T;
 }
 
+/** What the operator can do about an error, by kind (see docs/conventions.md). */
+function nextStep(e: ApiError): string {
+  if (e.error === "network_error")
+    return "Check your connection, then try again.";
+  if (/^(unauthorized|http_401|http_403)/.test(e.error))
+    return "Sign in again, then retry.";
+  if (/^(http_5|operator_password_missing|configuration)/.test(e.error))
+    return "This is not something you can fix on site. Tell the site operator and try again later.";
+  return "Check the value you entered, then try again.";
+}
+
 function ErrorNote({ e }: { e: ApiError }) {
   return (
     <p role="alert" className="error">
       <strong>{e.error}</strong>: {e.message}
-      {e.request_id && <> (request {e.request_id})</>}{" "}
+      {e.request_id && <> (request {e.request_id})</>} {nextStep(e)}{" "}
       {e.docs && (
         <a href={e.docs} target="_blank" rel="noreferrer">
           Errors and statuses
@@ -70,17 +81,27 @@ function ErrorNote({ e }: { e: ApiError }) {
 
 function Copy({ value, label }: { value: string; label: string }) {
   const [done, setDone] = useState(false);
+  useEffect(() => {
+    if (!done) return;
+    const t = setTimeout(() => setDone(false), 2500);
+    return () => clearTimeout(t);
+  }, [done]);
   return (
-    <button
-      type="button"
-      className="secondary"
-      aria-label={`Copy ${label}`}
-      onClick={() =>
-        navigator.clipboard.writeText(value).then(() => setDone(true))
-      }
-    >
-      {done ? "Copied" : "Copy"}
-    </button>
+    <>
+      <button
+        type="button"
+        className="secondary"
+        aria-label={`Copy ${label}`}
+        onClick={() =>
+          navigator.clipboard.writeText(value).then(() => setDone(true))
+        }
+      >
+        {done ? "Copied" : "Copy"}
+      </button>
+      <span className="sr" role="status">
+        {done ? `${label} copied` : ""}
+      </span>
+    </>
   );
 }
 
@@ -131,6 +152,9 @@ export default function Wizard({
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
   const [locations, setLocations] = useState<LocationOption[]>([]);
+  const [sitesState, setSitesState] = useState<"loading" | "ready" | "error">(
+    "loading",
+  );
   const [picked, setPicked] = useState("");
   const [site, setSite] = useState<Site>();
   const [form, setForm] = useState({
@@ -173,16 +197,27 @@ export default function Wizard({
     }
   };
 
+  const loadSites = () => {
+    setSitesState("loading");
+    return run(async () => {
+      try {
+        const res = await api<{ sites: Site[]; locations: LocationOption[] }>(
+          "/api/sites",
+        );
+        setLocations(res.locations);
+        setSitesState("ready");
+      } catch (e) {
+        setSitesState("error");
+        throw e;
+      }
+    });
+  };
+
   useEffect(() => {
     setStationName(defaultName());
     const saved = localStorage.getItem(NOTES_KEY);
     if (saved) setNotes(JSON.parse(saved));
-    run(async () => {
-      const res = await api<{ sites: Site[]; locations: LocationOption[] }>(
-        "/api/sites",
-      );
-      setLocations(res.locations);
-    });
+    loadSites();
   }, []);
 
   useEffect(() => {
@@ -235,14 +270,32 @@ export default function Wizard({
       <Steps now={step} />
       {error && <ErrorNote e={error} />}
 
-      <section id="step-1">
-        <h2>1. Site</h2>
+      <section id="step-1" aria-labelledby="h-1">
+        <h2 id="h-1">1. Site</h2>
         {site ? (
           <p>
             <strong>{site.name}</strong>, {site.address}
           </p>
         ) : (
           <>
+            {sitesState === "loading" && (
+              <div aria-busy="true" aria-label="Loading locations">
+                <div className="skeleton line" />
+                <div className="skeleton line short" />
+              </div>
+            )}
+            {sitesState === "error" && (
+              <p>
+                <button type="button" className="secondary" onClick={loadSites}>
+                  Retry loading locations
+                </button>
+              </p>
+            )}
+            {sitesState === "ready" && locations.length === 0 && (
+              <p className="empty">
+                No locations in this account yet. Create your first site below.
+              </p>
+            )}
             {locations.length > 0 && (
               <div className="row">
                 <label>
@@ -298,8 +351,8 @@ export default function Wizard({
       </section>
 
       {site && (
-        <section id="step-2">
-          <h2>2. Connect charger</h2>
+        <section id="step-2" aria-labelledby="h-2">
+          <h2 id="h-2">2. Connect charger</h2>
           {!created ? (
             <form
               className="row"
@@ -414,13 +467,17 @@ export default function Wizard({
       )}
 
       {charger && (
-        <section aria-live="polite">
-          <h2>Online check</h2>
+        <section aria-labelledby="h-online">
+          <h2 id="h-online">Online check</h2>
           {charger.state === "booted" ? (
-            <p className="status live">Charger online. {status.label}.</p>
+            <p className="status live" role="status">
+              Charger online. {status.label}.
+            </p>
           ) : (
             <>
-              <p className="status">{status.label}</p>
+              <p className="status waiting" role="status">
+                {status.label}
+              </p>
               <p className="hint">{copy.connectHint}</p>
             </>
           )}
@@ -452,8 +509,8 @@ export default function Wizard({
 
       {charger?.state === "booted" && (
         <>
-          <section id="step-3">
-            <h2>3. Test</h2>
+          <section id="step-3" aria-labelledby="h-3">
+            <h2 id="h-3">3. Test</h2>
             <div className="row">
               <label>
                 Connector
@@ -506,18 +563,26 @@ export default function Wizard({
               </p>
             )}
             {charger.test && (
-              <p className={`result ${charger.test.phase}`}>
-                {charger.test.phase === "done"
-                  ? "Passed"
-                  : charger.test.phase === "failed"
-                    ? `Failed (${charger.test.errorCode})`
-                    : `Test ${charger.test.phase}…`}
-                : {formatKwh(charger.test.energyWh)} delivered on connector{" "}
-                {charger.test.connectorNumber}.
-                {charger.test.phase === "done" &&
-                  charger.test.energyWh === 0 &&
-                  " No energy: plug in a vehicle to see energy flow."}
-              </p>
+              <div
+                className={`result ${charger.test.phase}`}
+                role="status"
+                aria-live="polite"
+              >
+                <span className="phase">
+                  {charger.test.phase === "done"
+                    ? "Passed"
+                    : charger.test.phase === "failed"
+                      ? `Failed (${charger.test.errorCode})`
+                      : `Test ${charger.test.phase}…`}
+                </span>
+                <span className="kwh">{formatKwh(charger.test.energyWh)}</span>
+                <span className="muted">
+                  delivered on connector {charger.test.connectorNumber}.
+                  {charger.test.phase === "done" &&
+                    charger.test.energyWh === 0 &&
+                    " No energy: plug in a vehicle to see energy flow."}
+                </span>
+              </div>
             )}
 
             <h3>Configuration</h3>
@@ -595,8 +660,8 @@ export default function Wizard({
             )}
           </section>
 
-          <section id="step-4">
-            <h2>4. Price (optional)</h2>
+          <section id="step-4" aria-labelledby="h-4">
+            <h2 id="h-4">4. Price (optional)</h2>
             <form
               className="row"
               onSubmit={(e) => {
@@ -642,13 +707,50 @@ export default function Wizard({
             </p>
           </section>
 
-          <section id="step-5">
-            <h2>5. Hand over</h2>
+          <section id="step-5" aria-labelledby="h-5">
+            <h2 id="h-5">5. Hand over</h2>
             {qrProblem && (
               <p role="alert" className="error">
                 Stickers are disabled: {qrProblem}
               </p>
             )}
+            <div className="previews">
+              {!qrProblem && (
+                <figure className="sticker" aria-label="Sticker preview">
+                  <p className="slot">Your logo here</p>
+                  <p className="scan">Scan to charge</p>
+                  <svg viewBox="0 0 24 24" width="96" height="96" role="img">
+                    <title>The QR code is printed in the PDF</title>
+                    <path
+                      d="M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h3v3h-3zM19 14h2v2h-2zM14 19h2v2h-2zM18 18h3v3h-3z"
+                      fill="currentColor"
+                    />
+                  </svg>
+                  <figcaption>
+                    {site?.name}, {charger.name}
+                  </figcaption>
+                </figure>
+              )}
+              <figure className="paper" aria-label="Report preview">
+                <p className="scan">Commissioning report</p>
+                <dl>
+                  <dt>Site</dt>
+                  <dd>{site?.name}</dd>
+                  <dt>Charger</dt>
+                  <dd>{charger.name}</dd>
+                  <dt>Model</dt>
+                  <dd>{charger.boot?.model ?? "-"}</dd>
+                  <dt>Test</dt>
+                  <dd>{charger.test?.passed ? "Pass" : "-"}</dd>
+                  <dt>Price</dt>
+                  <dd>
+                    {charger.tariffCentsPerKwh === undefined
+                      ? "-"
+                      : `${formatCents(charger.tariffCentsPerKwh)} / kWh`}
+                  </dd>
+                </dl>
+              </figure>
+            </div>
             <div className="row">
               {!qrProblem &&
                 charger.connectors.map((k) => (
@@ -690,6 +792,7 @@ function Credentials({
   onRotate: () => void;
 }) {
   const c = created.charger;
+  const [shown, setShown] = useState(false);
   return (
     <>
       <dl>
@@ -707,9 +810,20 @@ function Credentials({
         <dd className="value">
           {created.password ? (
             <>
-              <code data-testid="password" title={created.password}>
+              <code
+                data-testid="password"
+                className={shown ? undefined : "masked"}
+              >
                 {created.password}
               </code>
+              <button
+                type="button"
+                className="secondary"
+                aria-pressed={shown}
+                onClick={() => setShown(!shown)}
+              >
+                {shown ? "Mask" : "Reveal"}
+              </button>
               <Copy value={created.password} label="password" />
               <button type="button" className="secondary" onClick={onHide}>
                 Hide

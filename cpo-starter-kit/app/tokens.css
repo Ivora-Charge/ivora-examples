@@ -1,0 +1,63 @@
+/*
+ * Design tokens. Every colour, font, size, radius and spacing the app uses is here,
+ * so a brand restyles the kit by editing this file only, without touching components.
+ * These are neutral placeholders: greys with no brand colour. Status colours (ok,
+ * warning, error) carry meaning, not brand. Text colours meet WCAG AA on their
+ * backgrounds.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Colour */
+  --color-bg: #111214;
+  --color-surface: #1a1b1e;
+  --color-surface-hover: #2a2b30;
+  --color-border: #3a3b41;
+  --color-text: #ececee;
+  --color-text-muted: #a6a7ad;
+  --color-accent: #e4e4e7;
+  --color-accent-text: #111214;
+  --color-link: #ececee;
+  --color-focus: #e4e4e7;
+  --color-ok-bg: #16301f;
+  --color-ok: #b9e6c6;
+  --color-warn-bg: #3b2f00;
+  --color-warn: #fde68a;
+  --color-error-bg: #3d1214;
+  --color-error: #fecaca;
+  --color-danger: #fca5a5;
+
+  /* Type */
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.1rem;
+  --font-size-xl: 1.6rem;
+  --font-size-stat: 1.4rem;
+  --font-weight-medium: 600;
+  --font-weight-bold: 700;
+  --line-height: 1.5;
+
+  /* Space */
+  --space-0: 0.1rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2rem;
+
+  /* Shape and layout */
+  --radius: 10px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+  --border-width: 1px;
+  --focus-width: 3px;
+  --focus-offset: 2px;
+  --tap-target: 44px;
+  --sidebar-width: 15rem;
+  --content-max: 960px;
+  --form-max: 28rem;
+}

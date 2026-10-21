@@ -19,8 +19,8 @@ export default function Login() {
       );
   }
   return (
-    <main>
-      <h1>Fleet depot</h1>
+    <main id="main">
+      <h1>Operator sign-in</h1>
       <form onSubmit={submit} className="login">
         <label htmlFor="password">Operator password</label>
         <input
@@ -31,7 +31,9 @@ export default function Login() {
           onChange={(e) => setPassword(e.target.value)}
           required
         />
-        <button type="submit">Sign in</button>
+        <button type="submit" className="primary">
+          Sign in
+        </button>
         {msg && (
           <p className="warn" role="alert">
             {msg}

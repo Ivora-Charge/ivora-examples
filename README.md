@@ -14,12 +14,14 @@ Everything here is licensed under [Apache-2.0](LICENSE).
 | [`forecourt-checkout/`](forecourt-checkout/)                         | Fuel and convenience sites with DC fast chargers | Stations and connectors, tariffs, externally funded charging sessions, settlement reports, webhooks | Demo ready; live mode not yet run against a real project | [Demo](https://ivora-example-forecourt-checkout.vercel.app) |
 | [`fleet-depot/`](fleet-depot/)                                       | Fleet depots                                     | RFID authorization, charging sessions, meter values, bills, webhooks                                | Demo ready; live mode not yet run against a real project | [Demo](https://ivora-example-fleet-depot.vercel.app)        |
 | [`cpo-starter-kit/`](cpo-starter-kit/)                               | Small charging operators                         | Locations, stations, transactions                                                                   | In progress                                              | -                                                           |
+| [`emsp-starter/`](emsp-starter/)                                     | Networks running their own driver app over OCPI  | None required: OCPI 2.2.1 with any CPO                                                              | In progress                                              | -                                                           |
 | [Squid](https://github.com/Ivora-Charge/squid) (separate repository) | Vacation-rental hosts                            | Station provisioning, tariffs, externally funded charging sessions, webhooks                        | Live                                                     | -                                                           |
 
 - **installer-kit/**: connect a charger, test it, and print a QR sticker for the site.
 - **forecourt-checkout/**: drivers pay at the charger with a card, no app or account, or pay in the store like fuel, from a cashier console.
 - **fleet-depot/**: RFID cards per driver, charging scheduled to finish by departure time, and cost per vehicle.
 - **cpo-starter-kit/**: small charging operators fork it, brand it and run their charging network on Ivora (in progress).
+- **emsp-starter/**: a network runs its own driver app and payments, connected over OCPI 2.2.1 to any CPO platform. A Next.js server and an Expo app (in progress).
 - **Squid**: hosts let guests pay for charging by scanning a QR code. It is the first live example and the reference app for the conventions below.
 
 The live demos run in demo mode: sample data, no keys, nothing charged and no charger contacted.
