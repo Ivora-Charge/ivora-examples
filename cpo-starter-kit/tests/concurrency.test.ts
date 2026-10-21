@@ -194,21 +194,35 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
     const [{ id }] = await a<
       { id: string }[]
     >`select cpo_create_charger(${operator}, ${TECH}, 'RACE-01', null, 5, null, 1, 77, null) as id`;
-    const test = JSON.stringify({ phase: "starting", connectorNumber: 1 });
+    // An object, as the app's rpc sends it: a JSON.stringify'd string would arrive
+    // as a jsonb string and the function would refuse it.
+    const test = { phase: "starting", connectorNumber: 1 };
     const claim = (c: postgres.Sql | postgres.TransactionSql) =>
-      c`select cpo_claim_charger_test(${operator}, ${TECH}, ${id}, ${test}::jsonb) as n`;
+      c`select cpo_claim_charger_test(${operator}, ${TECH}, ${id}, ${c.json(test)}::jsonb) as n`;
     // The first claim holds its row lock in an open transaction; the second waits
     // for it, then sees the running test.
     const secondPid = await pidOf(b);
     let release!: () => void;
     const released = new Promise<void>((r) => (release = r));
     let claimed!: () => void;
-    const hasClaimed = new Promise<void>((r) => (claimed = r));
+    let claimFailed!: (e: unknown) => void;
+    const hasClaimed = new Promise<void>((resolve, reject) => {
+      claimed = resolve;
+      claimFailed = reject;
+    });
     const first = a.begin(async (tx) => {
-      await claim(tx);
+      try {
+        await claim(tx);
+      } catch (e) {
+        // Fail fast instead of waiting for the test timeout.
+        claimFailed(e);
+        throw e;
+      }
       claimed();
       await released;
     });
+    // If the claim fails, `first` rejects too; keep that from going unhandled.
+    first.catch(() => undefined);
     await hasClaimed;
     const second = Promise.resolve(claim(b)).then(
       () => null,
