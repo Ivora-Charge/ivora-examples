@@ -12,6 +12,8 @@ export interface Overview {
   /** Energy of the most recent sessions (up to 50), kWh. */
   recentEnergyKwh: number;
   stations: { id: number; name: string; online: boolean; connectors: number }[];
+  /** More sites or chargers than the client pages through: counts are a lower bound. */
+  truncated: boolean;
 }
 
 export type OverviewResult =
@@ -22,11 +24,13 @@ export type OverviewResult =
 export async function loadOverview(): Promise<OverviewResult> {
   const ivora = getIvora();
   try {
-    const [locations, stations, transactions] = await Promise.all([
-      ivora.listLocations(),
-      ivora.listStations(),
+    const [sites, chargers, transactions] = await Promise.all([
+      ivora.listAllLocations(),
+      ivora.listAllStations(),
       ivora.listTransactions({ limit: 50 }),
     ]);
+    const locations = sites.data;
+    const stations = chargers.data;
     const energyWh = transactions.reduce((n, t) => n + (t.energy_wh ?? 0), 0);
     return {
       ok: true,
@@ -44,6 +48,7 @@ export async function loadOverview(): Promise<OverviewResult> {
           online: s.online,
           connectors: s.connectors.length,
         })),
+        truncated: sites.truncated || chargers.truncated,
       },
     };
   } catch (e) {
