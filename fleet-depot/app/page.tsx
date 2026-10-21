@@ -9,8 +9,8 @@ export default async function Page() {
   const g = gate();
   if (g.mode === "missing")
     return (
-      <main>
-        <h1>Fleet depot</h1>
+      <main id="main">
+        <h1>Setup needed</h1>
         <p className="warn" role="alert">
           {g.reason} Live mode can send charging profiles to real stations and
           block RFID cards, so it does not run without an operator password.

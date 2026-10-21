@@ -120,12 +120,14 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
     return r.ok;
   }
 
-  if (!s) return <main>Loading…</main>;
+  if (!s) return <main id="main">Loading…</main>;
   const vehiclesFree = s.rows.filter((r) => !r.session).map((r) => r.vehicle);
+  const cap = s.settings.siteCapKw;
+  const used = cap > 0 ? Math.min(100, (s.totalKw / cap) * 100) : 0;
   return (
-    <main>
+    <main id="main">
       <header className="top">
-        <h1>Fleet depot</h1>
+        <h1>Depot overview</h1>
         {signedIn && (
           <button
             onClick={async () => {
@@ -144,12 +146,22 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
           {new Date(s.now).toLocaleString()}
         </div>
       )}
-      <p>
-        Site cap {s.settings.siteCapKw} kW, allocated{" "}
-        <b>{s.totalKw.toFixed(1)} kW</b>
+      <section className="panel power" aria-labelledby="power">
+        <h2 id="power">
+          Site power <span className="num">{cap} kW cap</span>
+        </h2>
+        <p className="hero num">
+          {s.totalKw.toFixed(1)} <small>kW allocated</small>
+        </p>
+        <div
+          className="meter"
+          role="img"
+          aria-label={`${s.totalKw.toFixed(1)} kW allocated of the ${cap} kW site cap, ${used.toFixed(0)}%`}
+        >
+          <i style={{ width: `${used}%` }} />
+        </div>
         {s.demo && (
-          <>
-            {" "}
+          <div className="actions">
             <button
               onClick={() =>
                 post("/api/state", { action: "advance", minutes: 60 })
@@ -164,12 +176,12 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
             >
               Advance 8 h
             </button>
-          </>
+          </div>
         )}
-      </p>
+      </section>
       {msg && (
         <p
-          className={msg.error ? "warn" : "ok"}
+          className={msg.error ? "msg warn" : "msg ok"}
           role={msg.error ? "alert" : "status"}
         >
           {msg.text}
@@ -184,14 +196,14 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
         </p>
       )}
       <h2>Live board</h2>
-      <table>
+      <table className="wide">
         <thead>
           <tr>
             <th>Vehicle</th>
             <th>Driver</th>
             <th>Connector</th>
             <th>State of charge</th>
-            <th>kW</th>
+            <th className="num">kW</th>
             <th>Departs</th>
             <th>Ready by</th>
             <th>Profile</th>
@@ -202,13 +214,17 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
           {s.rows.map((r) => (
             <tr key={r.vehicle.id}>
               <td>
-                {r.vehicle.name} <small>{r.vehicle.plate}</small>
+                <b>{r.vehicle.name}</b>{" "}
+                <small className="num">{r.vehicle.plate}</small>
               </td>
               <td>{r.driver ?? "-"}</td>
               <td>
-                {r.session
-                  ? `${r.session.station} / ${r.session.connector}`
-                  : "not plugged in"}
+                <span className={r.session ? "status charging" : "status idle"}>
+                  <i className="ic" aria-hidden="true" />
+                  {r.session
+                    ? `${r.session.station} / ${r.session.connector}`
+                    : "not plugged in"}
+                </span>
               </td>
               <td>
                 {r.soc === undefined ? (
@@ -220,6 +236,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                         ? "reported by the charger"
                         : "estimated from energy delivered"
                     }
+                    className="num"
                   >
                     <span className="bar" aria-hidden="true">
                       <span style={{ width: `${r.soc}%` }} />
@@ -228,8 +245,10 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                   </span>
                 )}
               </td>
-              <td>{r.session ? r.session.allocatedKw.toFixed(1) : "-"}</td>
-              <td>
+              <td className="num">
+                {r.session ? r.session.allocatedKw.toFixed(1) : "-"}
+              </td>
+              <td className="num">
                 {r.vehicle.departure
                   ? new Date(r.vehicle.departure).toLocaleString([], {
                       weekday: "short",
@@ -242,9 +261,13 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                 {r.readyBy === undefined ? (
                   "-"
                 ) : r.readyBy ? (
-                  <span className="ok">on track</span>
+                  <span className="status ok">
+                    <i className="ic" aria-hidden="true" />
+                    on track
+                  </span>
                 ) : (
-                  <span className="warn">
+                  <span className="status warn">
+                    <i className="ic" aria-hidden="true" />
                     at risk ({r.remainingKwh?.toFixed(1)} kWh left)
                   </span>
                 )}
@@ -357,7 +380,9 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
               ))}
             </select>
           </label>
-          <button type="submit">Save</button>
+          <button type="submit" className="primary">
+            Save
+          </button>
           <button type="button" onClick={() => setEdit(null)}>
             Cancel
           </button>
@@ -378,7 +403,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     {u.station} / {u.connector}
                   </td>
                   <td>card {u.idTokenHint ?? "unknown"}</td>
-                  <td>{u.allocatedKw.toFixed(1)} kW</td>
+                  <td className="num">{u.allocatedKw.toFixed(1)} kW</td>
                   <td>
                     <label>
                       Assign to{" "}
@@ -421,13 +446,19 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
             <tr key={d.id}>
               <td>{d.name}</td>
               <td>
-                {d.card ?? "-"}{" "}
-                {d.cardBlocked && <span className="warn">blocked</span>}
+                <span className="num">{d.card ?? "-"}</span>{" "}
+                {d.cardBlocked && (
+                  <span className="status warn">
+                    <i className="ic" aria-hidden="true" />
+                    blocked
+                  </span>
+                )}
                 {d.cardError && <span className="warn"> ({d.cardError})</span>}
               </td>
               <td>
                 {d.card && !d.cardBlocked && (
                   <button
+                    className="danger"
                     onClick={() =>
                       confirm(
                         `Block ${d.name}'s card? The charger will refuse it.`,
@@ -480,7 +511,9 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
             }
           />
         </label>
-        <button type="submit">Add driver</button>
+        <button type="submit" className="primary">
+          Add driver
+        </button>
       </form>
       <div className="panel">
         <label htmlFor="cards-csv">
@@ -498,18 +531,20 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
         </button>
       </div>
       <h2>Monthly report</h2>
-      <label htmlFor="report-by">Group by</label>{" "}
-      <select
-        id="report-by"
-        value={by}
-        onChange={(e) => setBy(e.target.value as "vehicle" | "driver")}
-      >
-        <option value="vehicle">Per vehicle</option>
-        <option value="driver">Per driver</option>
-      </select>{" "}
-      <a href={`/api/reports?by=${by}&format=csv`}>Download CSV</a>
-      <p>
-        <small>
+      <div className="toolbar">
+        <label htmlFor="report-by">Group by</label>
+        <select
+          id="report-by"
+          value={by}
+          onChange={(e) => setBy(e.target.value as "vehicle" | "driver")}
+        >
+          <option value="vehicle">Per vehicle</option>
+          <option value="driver">Per driver</option>
+        </select>
+        <a href={`/api/reports?by=${by}&format=csv`}>Download CSV</a>
+      </div>
+      <p className="note">
+        <small className="num">
           Tariff {(s.settings.centsPerKwh / 100).toFixed(2)}{" "}
           {s.settings.currency}/kWh; months are UTC.
         </small>
@@ -519,29 +554,29 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
           <thead>
             <tr>
               <th>Name</th>
-              <th>Sessions</th>
-              <th>Energy (kWh)</th>
-              <th>Cost ({report.currency})</th>
+              <th className="num">Sessions</th>
+              <th className="num">Energy (kWh)</th>
+              <th className="num">Cost ({report.currency})</th>
             </tr>
           </thead>
           <tbody>
             {report.rows.map((r) => (
               <tr key={r.key}>
                 <td>{r.label}</td>
-                <td>{r.sessions}</td>
-                <td>{r.kwh.toFixed(1)}</td>
-                <td>{(r.costCents / 100).toFixed(2)}</td>
+                <td className="num">{r.sessions}</td>
+                <td className="num">{r.kwh.toFixed(1)}</td>
+                <td className="num">{(r.costCents / 100).toFixed(2)}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
       <h2>Events</h2>
-      <table>
+      <table className="log">
         <tbody>
           {s.events.map((e) => (
             <tr key={e.id}>
-              <td>{new Date(e.at).toLocaleTimeString()}</td>
+              <td className="num">{new Date(e.at).toLocaleTimeString()}</td>
               <td>{e.type}</td>
               <td>{e.detail}</td>
             </tr>
