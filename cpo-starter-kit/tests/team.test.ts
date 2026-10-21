@@ -26,6 +26,7 @@ import {
   removeStaff,
   requestSignInLink,
   revokeStaffInvite,
+  SETUP_SECRET_MIN_LENGTH,
   setupOwner,
   signInWithPassword,
   type TeamDeps,
@@ -41,7 +42,7 @@ const TECH_ID = "00000000-0000-4000-8000-00000000d002";
 const VIEWER_ID = "00000000-0000-4000-8000-00000000d003";
 const NEW_USER = "00000000-0000-4000-8000-0000000000aa";
 const PASSWORD = "correct horse battery";
-const SETUP_SECRET = "setup-secret-for-tests-only";
+const SETUP_SECRET = "setup-secret-for-tests-only-0123456789";
 
 let clock = new Date("2026-03-01T12:00:00Z");
 
@@ -598,6 +599,55 @@ describe("team service", () => {
       await expect(setupOwner(d, form, "src")).rejects.toMatchObject({
         code: "rate_limited",
       });
+      // Another source still has its own quota.
+      await setupOwner(d, form, "other-src");
+    });
+
+    it("shares one quota between every caller without a trusted client address", async () => {
+      const { d, accounts } = fresh();
+      for (let i = 0; i < LIMITS.setupShared.quota; i++)
+        await expect(
+          setupOwner(d, { ...form, secret: `wrong-${i}` }, null),
+        ).rejects.toMatchObject({ code: "setup_secret" });
+      // The right secret waits too: nobody gets more tries by guessing.
+      await expect(setupOwner(d, form, null)).rejects.toMatchObject({
+        code: "rate_limited",
+      });
+      expect(accounts.createUser).not.toHaveBeenCalled();
+      // Callers with a trusted address keep their own quota.
+      await setupOwner(d, form, "src");
+      // The window passes.
+      clock = new Date(
+        clock.getTime() + LIMITS.setupShared.periodSeconds * 1000,
+      );
+      d.backend.hasStaff = async () => false;
+      await expect(
+        setupOwner(d, { ...form, secret: "wrong" }, null),
+      ).rejects.toMatchObject({ code: "setup_secret" });
+    });
+
+    it("stays off unless SETUP_SECRET has at least 32 characters", async () => {
+      expect(SETUP_SECRET_MIN_LENGTH).toBe(32);
+      const { d, accounts } = fresh();
+      const short = "x".repeat(SETUP_SECRET_MIN_LENGTH - 1);
+      await expect(
+        setupOwner(
+          { ...d, setupSecret: short },
+          { ...form, secret: short },
+          "src",
+        ),
+      ).rejects.toMatchObject({
+        code: "setup_disabled",
+        message: expect.stringContaining("at least 32 characters"),
+      });
+      expect(accounts.createUser).not.toHaveBeenCalled();
+      const long = "x".repeat(SETUP_SECRET_MIN_LENGTH);
+      await setupOwner(
+        { ...d, setupSecret: long },
+        { ...form, secret: long },
+        "src",
+      );
+      expect(accounts.createUser).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -659,6 +709,30 @@ describe("team service", () => {
       await expect(
         requestSignInLink(d, { email: "sample-viewer@example.com" }, "s"),
       ).rejects.toMatchObject({ code: "rate_limited" });
+    });
+
+    it("answers the same for an invitee without a login, never showing the invite", async () => {
+      const { d, accounts } = setup("live", { mailer: null });
+      await inviteStaff(d, owner, {
+        email: "joiner@example.com",
+        role: "technician",
+      });
+      // Supabase Auth refuses a link for an email with no login.
+      accounts.sendSignInLink.mockRejectedValueOnce(
+        new Error("Supabase Auth could not send the link (otp_disabled)."),
+      );
+      await expect(
+        requestSignInLink(d, { email: "joiner@example.com" }, "s"),
+      ).resolves.toBeUndefined();
+      await expect(
+        requestSignInLink(d, { email: "stranger@example.com" }, "s"),
+      ).resolves.toBeUndefined();
+      expect(logs.join("\n")).not.toContain("joiner@example.com");
+      // Staff still hear about a real failure.
+      accounts.sendSignInLink.mockRejectedValueOnce(new Error("down"));
+      await expect(
+        requestSignInLink(d, { email: "sample-viewer@example.com" }, "s"),
+      ).rejects.toThrow("down");
     });
 
     it("has nothing to sign in to in demo mode", async () => {

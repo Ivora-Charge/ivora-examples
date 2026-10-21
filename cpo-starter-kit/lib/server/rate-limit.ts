@@ -41,6 +41,8 @@ export const LIMITS = {
   linkSource: { quota: 10, periodSeconds: 600 },
   linkRecipient: { quota: 1, periodSeconds: 60 },
   setupSource: { quota: 10, periodSeconds: 600 },
+  /** Setup without a trusted client address: one quota shared by every caller. */
+  setupShared: { quota: 10, periodSeconds: 600 },
   acceptSource: { quota: 20, periodSeconds: 600 },
   inviteActor: { quota: 20, periodSeconds: 3600 },
   inviteRecipient: { quota: 3, periodSeconds: 3600 },
