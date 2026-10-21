@@ -37,7 +37,8 @@ export default defineConfig({
   webServer: {
     command: "npm run dev -- --port 3110",
     url: "http://localhost:3110",
-    env: { DEMO_MODE: "1" },
+    // The specs send their own x-forwarded-for to get separate login quotas.
+    env: { DEMO_MODE: "1", TRUSTED_PROXY_HEADER: "x-forwarded-for" },
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import {
   loginAllowed,
+  loginClient,
   OPERATOR_COOKIE,
   operatorCookie,
   operatorToken,
@@ -18,8 +19,7 @@ export async function POST(request: Request) {
   const s = settings();
   const expected = operatorPassword(s);
   if (!expected) return back("?error=not_configured");
-  const client =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  const client = loginClient(request.headers);
   if (!loginAllowed(`operator:${client}`))
     return back("?error=too_many_attempts");
   const form = await request.formData();

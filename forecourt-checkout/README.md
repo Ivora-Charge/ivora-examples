@@ -113,6 +113,7 @@ npm run test:e2e    # Playwright, demo end to end: card flow on a phone; in-stor
 | `TYPICAL_SESSION_MINUTES`     | No       | Default `25`.                                                                                                                        |
 | `IVORA_API_URL`               | No       | Default `https://api.ivoracharge.com`.                                                                                               |
 | `DEMO_MODE`                   | No       | `1` forces demo mode.                                                                                                                |
+| `TRUSTED_PROXY_HEADER`        | No       | Off Vercel: the header your proxy sets to the client address, for login limits. See [Security](#security).                           |
 
 `.env.example` lists them all. Never commit a real `.env` file.
 
@@ -221,7 +222,7 @@ Any provider fits behind the `ReceiptMailer` interface in `src/lib/server/mailer
 - A charger is only started by the cashier's "Authorise" or "Confirm … paid and start", which require the cashier (or operator) cookie. Reading a sale never starts it: a session that was created but not started (for example after a lost response) is canceled after 2 minutes, and the cashier taps again.
 - Starts, stops, cancels, finalizes and reports use idempotency keys from the sale ID and action (`forecourt:store:<sale ID>:start`, `:stop` and so on). The same tap reuses the same sale ID, so a retry after a timeout never starts twice. A stop the cashier presses and the automatic prepay stop share one key per attempt.
 - Idle fees apply in both flows with `IDLE_GRACE_MINUTES`.
-- The cashier password is separate from the operator one. A cashier can authorise, stop and mark paid; the operator pages (prices, settings) stay closed to it. An operator can also use the console. Both logins are rate-limited per client, separately. Changing `CASHIER_PASSWORD` signs every cashier out; logging out only accepts same-origin requests.
+- The cashier password is separate from the operator one. A cashier can authorise, stop and mark paid; the operator pages (prices, settings) stay closed to it. An operator can also use the console. Both logins are rate-limited per client, separately (10 attempts per 15 minutes per server instance). The client address comes only from a trusted source: on Vercel, Vercel's own `x-vercel-forwarded-for`; elsewhere, set `TRUSTED_PROXY_HEADER` to the header your proxy or CDN sets (for example `cf-connecting-ip`, or `x-forwarded-for` from a proxy that appends to it; the last entry is used). A plain `x-forwarded-for` from the client is never trusted, since it could be rotated for unlimited guesses. Without a trusted source, every caller shares one bucket per role, so guessing stays limited, but a single shared bucket can lock out real cashiers while the login is under attack. Changing `CASHIER_PASSWORD` signs every cashier out; logging out only accepts same-origin requests.
 
 ### What is stored
 

@@ -119,6 +119,38 @@ export async function isGuestOf(settings: Settings, sessionId: string) {
   return verifyToken(signingSecret(settings), "guest", value) === sessionId;
 }
 
+/**
+ * The client address for login limits, or one shared bucket when no trusted
+ * source says it. A client can send any x-forwarded-for, so it is never read
+ * on its own.
+ *
+ * - TRUSTED_PROXY_HEADER names a header your own proxy or CDN sets to the client
+ *   address and that callers can't set themselves (for example
+ *   `cf-connecting-ip`, `x-real-ip`, or `x-forwarded-for` from a proxy that
+ *   appends to it). For a comma list, the last entry is used: the one your
+ *   proxy added.
+ * - On Vercel, without it, Vercel's own `x-vercel-forwarded-for`.
+ * - Otherwise "shared": every caller uses one bucket per role.
+ */
+export function loginClient(
+  headers: Headers,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const name = env.TRUSTED_PROXY_HEADER?.trim().toLowerCase();
+  if (name) {
+    const parts = (headers.get(name) ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return parts.at(-1) ?? "shared";
+  }
+  if (env.VERCEL === "1")
+    return (
+      headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() || "shared"
+    );
+  return "shared";
+}
+
 // Best-effort brute-force brake per server instance and login page (key it by
 // role and client); put a WAF rule in front for more.
 const attempts = new Map<string, { count: number; since: number }>();

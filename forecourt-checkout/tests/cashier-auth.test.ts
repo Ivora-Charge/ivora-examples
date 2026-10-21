@@ -56,6 +56,60 @@ describe("cashier and operator roles", () => {
     expect(loginAllowed("cashier:1.2.3.4", T0 + 16 * 60_000)).toBe(true);
   });
 
+  it("keys login limits on a trusted header only", async () => {
+    const { loginClient } = await import("@/lib/server/auth");
+    const h = (v: Record<string, string>) => new Headers(v);
+    // No trusted source: a spoofed x-forwarded-for shares one bucket.
+    expect(loginClient(h({ "x-forwarded-for": "1.1.1.1" }), {})).toBe("shared");
+    expect(loginClient(h({ "x-forwarded-for": "2.2.2.2" }), {})).toBe("shared");
+    // Configured: clients are keyed separately, last entry wins.
+    const env = { TRUSTED_PROXY_HEADER: "X-Forwarded-For" };
+    expect(loginClient(h({ "x-forwarded-for": "9.9.9.9, 1.1.1.1" }), env)).toBe(
+      "1.1.1.1",
+    );
+    expect(loginClient(h({ "x-forwarded-for": "2.2.2.2" }), env)).toBe(
+      "2.2.2.2",
+    );
+    expect(loginClient(h({}), env)).toBe("shared");
+    // Vercel: its own header, and a client-set x-forwarded-for is ignored.
+    const vercel = { VERCEL: "1" };
+    expect(
+      loginClient(
+        h({
+          "x-vercel-forwarded-for": "3.3.3.3",
+          "x-forwarded-for": "4.4.4.4",
+        }),
+        vercel,
+      ),
+    ).toBe("3.3.3.3");
+    expect(loginClient(h({ "x-forwarded-for": "4.4.4.4" }), vercel)).toBe(
+      "shared",
+    );
+  });
+
+  it("does not give a spoofed x-forwarded-for a fresh login quota", async () => {
+    vi.stubEnv("DEMO_MODE", "1");
+    vi.stubEnv("TRUSTED_PROXY_HEADER", "");
+    vi.stubEnv("VERCEL", "");
+    const { POST } = await import("@/app/api/cashier/login/route");
+    const attempt = async (ip: string) => {
+      const body = new FormData();
+      body.set("password", "wrong-guess");
+      const r = await POST(
+        new Request("http://localhost/api/cashier/login", {
+          method: "POST",
+          headers: { "sec-fetch-site": "same-origin", "x-forwarded-for": ip },
+          body,
+        }),
+      );
+      return r.headers.get("location") ?? "";
+    };
+    let last = "";
+    for (let i = 0; i < 12; i++) last = await attempt(`198.51.100.${i}`);
+    expect(last).toContain("too_many_attempts");
+    vi.unstubAllEnvs();
+  });
+
   it("signs cashiers out when CASHIER_PASSWORD changes", async () => {
     vi.stubEnv("DEMO_MODE", "1");
     vi.stubEnv("CASHIER_PASSWORD", "first-password");

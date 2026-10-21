@@ -4,6 +4,7 @@ import {
   cashierCookie,
   cashierToken,
   loginAllowed,
+  loginClient,
 } from "@/lib/server/auth";
 import { sameOrigin } from "@/lib/server/http";
 import { cashierPassword, settings } from "@/lib/server/services";
@@ -18,8 +19,7 @@ export async function POST(request: Request) {
   const s = settings();
   const expected = cashierPassword(s);
   if (!expected) return back("?error=not_configured");
-  const client =
-    request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
+  const client = loginClient(request.headers);
   if (!loginAllowed(`cashier:${client}`))
     return back("?error=too_many_attempts");
   const form = await request.formData();
