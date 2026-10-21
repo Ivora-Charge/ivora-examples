@@ -129,6 +129,12 @@ export function createDemoClient(): IvoraClient {
           .slice(0, o.limit ?? 100),
       );
     },
+    async listAllLocations() {
+      return { data: copy(locations), truncated: false };
+    },
+    async listAllStations() {
+      return { data: copy(stations), truncated: false };
+    },
     async createLocation(input: LocationInput, key: string) {
       const seen =
         replays.get(key) ??

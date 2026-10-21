@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { moduleBySlug } from "@/lib/modules";
+import { requireRole } from "@/lib/server/auth";
 
 /** Placeholder for a section that a later part of the kit fills in. */
-export default function ComingSoon({ slug }: { slug: string }) {
+export default async function ComingSoon({ slug }: { slug: string }) {
+  await requireRole("viewer");
   const m = moduleBySlug(slug);
   return (
     <>

@@ -7,7 +7,7 @@ If a template needs to break a convention, say why in its README and in the pull
 ## Stack and layout
 
 - Node.js 22, Next.js App Router, TypeScript and npm.
-- One top-level folder per template, with its own `package.json`, `package-lock.json`, `README.md` and `.env.example`. Templates do not share code or dependencies with each other.
+- One top-level folder per template, with its own `package.json`, `package-lock.json`, `README.md` and `.env.example`. Templates do not share runtime code or dependencies with each other. The one exception is CI tooling under `tools/`, such as the [migration checker](#supabase-and-the-10-30-rule), which templates run but never import or ship.
 - One workflow per template at `.github/workflows/<folder>.yml`, with a `paths` filter on that folder and on the workflow file itself.
 - npm scripts named `format:check`, `typecheck`, `test` and `build`. CI runs all four and each must pass locally first.
 - Every CI job sets `timeout-minutes` (15 is plenty for a template), and every workflow has a `concurrency` group that cancels superseded pull-request runs, as the existing workflows do.
@@ -55,6 +55,18 @@ Every template has a demo mode that runs with no credentials and no network acce
 - Apply the same rule to payment providers: one idempotency key per logical payment action.
 - Respect rate limits. On `429`, wait for the time in `Retry-After`, then retry with backoff. Do not retry other `4xx` errors automatically, and never loop on `401`.
 - Make background jobs and webhook handlers safe to run twice.
+
+## Supabase and the 10-30 rule
+
+Templates that keep data in Supabase follow the 10-30 rule, because Supabase serves the `public` schema to browsers through its Data API and its default privileges open new tables and functions to the `anon` and `authenticated` roles.
+
+- RLS is on for every public table, and every migration revokes all privileges from `public`, `anon` and `authenticated` on each table it creates. No default privileges are granted.
+- Only tables read through the Data API get explicit, least-privilege grants (named privileges, never `ALL`), each matching an RLS policy for that role.
+- Every function revokes `EXECUTE` from `public`, `anon` and `authenticated`, and is then granted only to roles it names, never to `anon` or `PUBLIC`. Every `SECURITY DEFINER` function sets `search_path`.
+- DDL is written as plain statements, never inside `do $$ … $$` blocks.
+- Every role check and the write it guards happen in one statement or transaction, so a concurrent change can't slip in between.
+
+One shared checker, [`tools/check-migrations`](../tools/check-migrations/README.md), enforces this: `node tools/check-migrations <migrations dir>`. Each template's workflow runs it on the template's migrations and lists `tools/check-migrations/**` in its `paths` filter; the checker's own tests (including a PGlite proof with Supabase's default privileges) run in `.github/workflows/tools.yml`. CI tooling is the one thing templates share: their runtime code stays separate. **A fork of a single template** copies `tools/check-migrations` alongside the template folder, keeping the same relative layout, and the template's README says how.
 
 ## Units
 

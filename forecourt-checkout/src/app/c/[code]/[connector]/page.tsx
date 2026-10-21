@@ -49,18 +49,20 @@ export default async function Charger({
   const c = page.connector;
   return (
     <main>
-      <p className="muted" style={{ marginBottom: 0 }}>
-        {page.name}
-      </p>
-      <h1>
-        {c.label}{" "}
-        {c.maxPowerW ? (
-          <span className="muted">
-            up to {Math.round(c.maxPowerW / 1000)} kW
-          </span>
-        ) : null}
-      </h1>
-      {statusPill(c.status, c.available)}
+      <header className="board">
+        <p className="muted" style={{ marginBottom: 0 }}>
+          {page.name}
+        </p>
+        <h1>
+          {c.label}{" "}
+          {c.maxPowerW ? (
+            <span className="muted">
+              up to {Math.round(c.maxPowerW / 1000)} kW
+            </span>
+          ) : null}
+        </h1>
+        {statusPill(c.status, c.available)}
+      </header>
 
       <section className="card">
         <h2>Prices</h2>

@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "Your Charging Network",
+    "slug": "emsp-starter",
+    "scheme": "emsp-starter",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "ios": { "supportsTablet": true },
+    "android": {},
+    "web": { "bundler": "metro", "output": "single" },
+    "plugins": ["expo-router"]
+  }
+}

@@ -1,17 +1,26 @@
 import Link from "next/link";
 import { MODULES } from "@/lib/modules";
+import { requireRole } from "@/lib/server/auth";
+import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { loadOverview } from "@/lib/server/overview";
 import { formatKwh } from "@/lib/units";
 
 export const metadata = { title: "Overview" };
 
 export default async function Page() {
+  await requireRole("viewer");
   const r = await loadOverview();
   return (
     <>
       <h1>Overview</h1>
       {r.ok ? (
         <>
+          {r.overview.truncated && (
+            <p className="notice" role="note">
+              Showing the first {(MAX_LIST_PAGES * 100).toLocaleString("en-US")}{" "}
+              sites and chargers; the counts below are a lower bound.
+            </p>
+          )}
           <section className="stats" aria-label="Network summary">
             <Stat label="Sites" value={r.overview.sites} />
             <Stat

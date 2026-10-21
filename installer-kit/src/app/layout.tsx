@@ -26,11 +26,14 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           Skip to content
         </a>
         <header className="top">
-          <Logo />
-          <span className="name">{brand.name}</span>
+          <a className="home" href="/" aria-label={`${brand.name}, start page`}>
+            <Logo />
+            <span className="name">{brand.name}</span>
+          </a>
           <ThemeToggle />
         </header>
         {children}
+        <footer className="foot">{brand.tagline}</footer>
       </body>
     </html>
   );

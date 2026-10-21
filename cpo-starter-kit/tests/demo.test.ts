@@ -8,7 +8,19 @@ import { createLiveClient } from "@/lib/server/ivora/live";
 import { isDemo } from "@/lib/server/env";
 import { loadOverview } from "@/lib/server/overview";
 
-const VARS = ["IVORA_API_KEY", "IVORA_TENANT_ID", "DEMO_MODE"];
+const VARS = [
+  "IVORA_API_KEY",
+  "IVORA_TENANT_ID",
+  "DEMO_MODE",
+  "SUPABASE_URL",
+  "SUPABASE_ANON_KEY",
+  "SUPABASE_SERVICE_ROLE_KEY",
+];
+const SUPABASE = {
+  SUPABASE_URL: "https://supabase.example.test",
+  SUPABASE_ANON_KEY: "test-anon-key",
+  SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
+};
 
 describe("demo mode", () => {
   const saved = { ...process.env };
@@ -35,7 +47,13 @@ describe("demo mode", () => {
     process.env.IVORA_TENANT_ID = "  ";
     expect(isDemo()).toBe(true);
     process.env.IVORA_TENANT_ID = "42";
+    // Live charger data needs staff sign-in, so Supabase is required too.
+    expect(isDemo()).toBe(true);
+    Object.assign(process.env, SUPABASE);
     expect(isDemo()).toBe(false);
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "";
+    expect(isDemo()).toBe(true);
+    Object.assign(process.env, SUPABASE);
     process.env.DEMO_MODE = "true";
     expect(isDemo()).toBe(true);
   });
@@ -63,6 +81,8 @@ describe("demo mode", () => {
     expect(await ivora.listLocations()).toHaveLength(locations.length + 1);
 
     expect((await ivora.listTransactions()).length).toBeGreaterThan(0);
+    expect((await ivora.listAllStations()).data).toHaveLength(stations.length);
+    expect((await ivora.listAllLocations()).truncated).toBe(false);
 
     const r = await loadOverview();
     expect(r.ok).toBe(true);
@@ -74,6 +94,7 @@ describe("demo mode", () => {
   it("serves demo even with credentials when DEMO_MODE is forced", async () => {
     process.env.IVORA_API_KEY = "test-key";
     process.env.IVORA_TENANT_ID = "42";
+    Object.assign(process.env, SUPABASE);
     process.env.DEMO_MODE = "1";
     expect(getIvora().mode).toBe("demo");
     await getIvora().listStations();
