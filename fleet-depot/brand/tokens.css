@@ -1,0 +1,42 @@
+/*
+ * Rotabay brand tokens: the only place for colour, type, radius and spacing.
+ * Colours are light-dark(<light>, <dark>). The page follows the system
+ * setting; the header toggle sets data-theme="light" or "dark" on <html>.
+ * tests/contrast.test.ts checks every text pair against WCAG AA (4.5:1).
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Colour */
+  --bg: light-dark(#edf0f3, #0d1318); /* page: cool grey / control-room black */
+  --surface: light-dark(#ffffff, #151d25); /* panels, rows, inputs */
+  --ink: light-dark(#0f1a24, #e7edf2); /* text, departure ticks */
+  --muted: light-dark(#475766, #9aa8b5); /* labels, secondary text */
+  --accent: light-dark(#0a6a8c, #62c3e4); /* charging, power, primary action */
+  --on-accent: light-dark(#ffffff, #0a1620); /* text on accent */
+  --ok: light-dark(#17683d, #62d39b); /* ready, on track */
+  --warn: light-dark(#ae3517, #ff9c7d); /* at risk, errors */
+  --line: color-mix(in srgb, var(--ink) 13%, transparent); /* hairlines */
+  --tint: color-mix(in srgb, var(--ink) 5%, transparent); /* stripes, tracks */
+
+  /* Type (families come from brand/fonts.ts through next/font) */
+  --font-body: var(--font-plex-sans), sans-serif;
+  --font-head: var(--font-plex-cond), var(--font-body);
+  --font-mono: var(--font-plex-mono), monospace;
+  --text-tick: 0.6875rem; /* 11px axis ticks */
+  --text-label: 0.75rem; /* 12px labels, legends */
+  --text-body: 0.875rem; /* 14px tables, body */
+  --text-count: 1.625rem; /* 26px counts */
+  --text-hero: 2.5rem; /* 40px site kW */
+
+  /* Shape and space */
+  --radius: 6px;
+  --target: 44px;
+  --space: 16px;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}

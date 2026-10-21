@@ -432,7 +432,8 @@
         border-radius: 2px;
         display: inline-block;
       }
-      .m-only {
+      .m-only,
+      .tl-lab {
         display: none;
       }
       @media (max-width: 820px) {
@@ -475,6 +476,28 @@
         }
         .row .right.kw {
           display: none;
+        }
+        .tl-lab {
+          display: block;
+          grid-column: 1/-1;
+          order: 4;
+          position: relative;
+          height: 14px;
+          margin-top: -4px;
+          font: 500 11px var(--mono);
+          color: var(--muted);
+        }
+        .tl-lab span {
+          position: absolute;
+          white-space: nowrap;
+        }
+        .tl-lab .n {
+          color: var(--accent);
+          transform: translateX(-50%);
+        }
+        .tl-lab .d {
+          color: var(--ink);
+          transform: translateX(-100%);
         }
         .gauge .big {
           font-size: 34px;
@@ -745,8 +768,9 @@
   }
   <i class="dep" style="left:${pct(dep)}"></i><i class="now" style="left:${pct(NOW)}"></i>
  </div>
+ <div class="tl-lab" aria-hidden="true"><span style="left:0">${tm(T0)}</span><span class="n" style="left:${pct(NOW)}">now ${tm(NOW)}</span><span class="d" style="left:calc(${pct(dep)} + 1px)">dep ${tm(dep)}</span></div>
  <div class="right kw num">${kw ? kw.toFixed(1) + " kW" : "-"}</div>
- <div><span class="chip ${state}"><i class="ic"></i>${lab[state]} · <span class="num">${soc}</span></span><span class="m-only num" style="font-size:12px;color:var(--muted);margin-left:8px">dep ${tm(dep)}</span></div>`;
+ <div><span class="chip ${state}"><i class="ic"></i>${lab[state]} · <span class="num">${soc}</span></span></div>`;
         rows.append(r);
       });
     </script>

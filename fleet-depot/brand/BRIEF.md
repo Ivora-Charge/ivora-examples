@@ -1,6 +1,6 @@
 # SQD-31 brief: fleet-depot brand
 
-Brief stage only. No app code is changed; the mock is a static page (`mock.html`) and the screenshots are in `docs/brief/`.
+Approved by the owner on 2026-10-21 as **Rotabay**. The tokens now live in `brand/tokens.css` and `brand/brand.ts`; the mock is a static page (`mock.html`) and its screenshots are in `docs/brief/`. After approval the phone mini-timelines gained time labels (axis start, now, departure), as the owner asked.
 
 ## Name
 
