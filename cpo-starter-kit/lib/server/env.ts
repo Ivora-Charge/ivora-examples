@@ -1,6 +1,7 @@
 import "server-only";
 
 export const DEFAULT_API_BASE_URL = "https://api.ivoracharge.com";
+export const DEFAULT_DASHBOARD_URL = "https://platform.ivoracharge.com";
 
 /** An empty value counts as unset, so `FOO=` in .env behaves like a missing variable. */
 function env(name: string): string | undefined {
@@ -25,6 +26,19 @@ export const config = {
   /** Shown in the header and page titles. */
   get operatorName() {
     return env("OPERATOR_NAME") ?? "Your charging network";
+  },
+  /**
+   * Your Ivora dashboard, where Stripe is connected (API keys can't create Stripe
+   * onboarding links). Only an https origin is used.
+   */
+  get dashboardUrl() {
+    const v = env("IVORA_DASHBOARD_URL");
+    try {
+      if (v && new URL(v).protocol === "https:") return new URL(v).origin;
+    } catch {
+      // Not a URL: fall back to the default.
+    }
+    return DEFAULT_DASHBOARD_URL;
   },
   get supabaseUrl() {
     return env("SUPABASE_URL") ?? "";

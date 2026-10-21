@@ -73,6 +73,29 @@ export type Database = {
         Update: { attempts?: number; resets_at?: Timestamp };
         Relationships: [];
       };
+      cpo_company_profiles: {
+        Row: {
+          operator_id: string;
+          name: string | null;
+          support_email: string | null;
+          support_url: string | null;
+          website: string | null;
+          time_zone: string | null;
+          currency: string | null;
+          primary_color: string | null;
+          logo_url: string | null;
+          branding_hash: string | null;
+          branding_synced_at: Timestamp | null;
+          branding_syncs: number;
+          logo_uploads: number;
+          updated_by: string | null;
+          updated_at: Timestamp;
+        };
+        // Written only through the cpo_save_* and cpo_record_branding functions.
+        Insert: { operator_id: string };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -118,6 +141,37 @@ export type Database = {
           p_actor_role: string;
           p_user_id: string;
           p_expected_role: string;
+        };
+        Returns: undefined;
+      };
+      cpo_save_company: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_name: string;
+          p_support_email: string;
+          p_support_url: string | null;
+          p_website: string | null;
+          p_time_zone: string;
+          p_currency: string;
+        };
+        Returns: undefined;
+      };
+      cpo_save_brand: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_primary_color: string | null;
+        };
+        Returns: undefined;
+      };
+      cpo_record_branding: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_hash: string | null;
+          p_logo_url: string | null;
+          p_logo_uploaded: boolean;
         };
         Returns: undefined;
       };

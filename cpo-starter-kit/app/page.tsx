@@ -1,6 +1,14 @@
 import Link from "next/link";
 import { MODULES } from "@/lib/modules";
+import { atLeast } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
+import {
+  getOnboarding,
+  loadOnboarding,
+  loadStripe,
+  setupChecklist,
+  type ChecklistItem,
+} from "@/lib/server/onboarding";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { loadOverview } from "@/lib/server/overview";
 import { formatKwh } from "@/lib/units";
@@ -8,11 +16,22 @@ import { formatKwh } from "@/lib/units";
 export const metadata = { title: "Overview" };
 
 export default async function Page() {
-  await requireRole("viewer");
+  const me = await requireRole("viewer");
   const r = await loadOverview();
+  // The setup checklist is for the people who can act on it: owners and managers.
+  let checklist: ChecklistItem[] | null = null;
+  if (atLeast(me.role, "manager")) {
+    const d = getOnboarding();
+    const [o, stripe] = await Promise.all([
+      loadOnboarding(d, me),
+      loadStripe(d),
+    ]);
+    checklist = setupChecklist(o, stripe, r.ok ? r.overview.chargers : null);
+  }
   return (
     <>
       <h1>Overview</h1>
+      {checklist && <Checklist items={checklist} />}
       {r.ok ? (
         <>
           {r.overview.truncated && (
@@ -83,6 +102,42 @@ export default async function Page() {
         </ul>
       </section>
     </>
+  );
+}
+
+const STATE_LABEL: Record<ChecklistItem["state"], string> = {
+  done: "Done",
+  todo: "To do",
+  soon: "Coming soon",
+};
+
+function Checklist({ items }: { items: ChecklistItem[] }) {
+  const done = items.filter((i) => i.state === "done").length;
+  return (
+    <section className="card" aria-labelledby="setup-heading">
+      <h2 id="setup-heading">
+        Setup checklist
+        <span className="muted">
+          {done} of {items.length} done
+        </span>
+      </h2>
+      <ul className="rows checklist" aria-label="Setup checklist">
+        {items.map((i) => (
+          <li key={i.key} className={`check-${i.state}`}>
+            <span className="check-mark" aria-hidden="true" />
+            <span className="name">
+              {i.state === "soon" ? (
+                i.label
+              ) : (
+                <Link href={i.href}>{i.label}</Link>
+              )}
+            </span>
+            <span className="muted">{i.detail}</span>
+            <span className="check-state">{STATE_LABEL[i.state]}</span>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

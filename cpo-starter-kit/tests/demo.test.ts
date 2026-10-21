@@ -7,6 +7,17 @@ import {
 import { createLiveClient } from "@/lib/server/ivora/live";
 import { isDemo } from "@/lib/server/env";
 import { loadOverview } from "@/lib/server/overview";
+import {
+  createDemoOnboardingStore,
+  memoryDemoOnboarding,
+} from "@/lib/server/onboarding/demo";
+import {
+  loadOnboarding,
+  loadStripe,
+  saveBrand,
+  saveCompany,
+  syncBranding,
+} from "@/lib/server/onboarding/service";
 
 const VARS = [
   "IVORA_API_KEY",
@@ -88,6 +99,64 @@ describe("demo mode", () => {
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.overview.mode).toBe("demo");
 
+    const branding = await ivora.putBranding(
+      {
+        display_name: "Sample Co",
+        primary_color: "#17613a",
+        support_email: null,
+        support_url: null,
+      },
+      idempotencyKey("branding", "demo", "put-0"),
+    );
+    expect(branding.display_name).toBe("Sample Co");
+    // Demo mode keeps no logo: the upload is refused, never sent.
+    await expect(
+      ivora.putBrandingLogo(
+        { bytes: new Uint8Array(8), contentType: "image/png" },
+        idempotencyKey("logo", "demo", "put-0"),
+      ),
+    ).rejects.toMatchObject({ code: "demo_logo_not_stored" });
+    expect((await ivora.getPaymentAccount()).status).toBe("none");
+
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs onboarding end to end (company, brand, logo, Stripe) without any network call", async () => {
+    const d = {
+      store: createDemoOnboardingStore(memoryDemoOnboarding()),
+      ivora: getIvora(),
+    };
+    const owner = {
+      userId: "demo-owner",
+      email: "demo-owner@example.com",
+      role: "owner" as const,
+      operatorId: "demo-operator",
+      operatorName: "Sample Operator",
+      demo: true,
+    };
+    await saveCompany(d, owner, {
+      name: "Sample Charging Co",
+      supportEmail: "help@example.com",
+      supportUrl: "",
+      website: "",
+      timeZone: "UTC",
+      currency: "USD",
+    });
+    const png = new Uint8Array(40);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+    png.set([0x49, 0x48, 0x44, 0x52, 0, 0, 0, 64, 0, 0, 0, 64], 12);
+    const r = await saveBrand(d, owner, { primaryColor: "#17613a", logo: png });
+    expect(r.logo).toEqual({ state: "demo" });
+    expect(await syncBranding(d, owner, { force: true })).toEqual({
+      state: "synced",
+    });
+    const o = await loadOnboarding(d, owner);
+    expect(o.companyDone && o.brandDone).toBe(true);
+    for (const s of ["none", "pending", "pending_review", "ready"] as const) {
+      await d.store.setDemoStripe!(s);
+      const stripe = await loadStripe(d);
+      expect(stripe.ok && stripe.view.state).toBe(s);
+    }
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -114,6 +183,18 @@ describe("demo mode", () => {
       live.createLocation(
         { name: "X", external_reference: "cpo-site-x" },
         idempotencyKey("location", "x", "create"),
+      ),
+    ).rejects.toThrow(/Demo mode/);
+    await expect(live.getPaymentAccount()).rejects.toThrow(/Demo mode/);
+    await expect(
+      live.putBranding(
+        {
+          display_name: "X",
+          primary_color: null,
+          support_email: null,
+          support_url: null,
+        },
+        idempotencyKey("branding", "x", "put-0"),
       ),
     ).rejects.toThrow(/Demo mode/);
     expect(liveFetch).not.toHaveBeenCalled();

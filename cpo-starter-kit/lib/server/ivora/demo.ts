@@ -1,9 +1,11 @@
 import "server-only";
 import { IvoraError } from "./errors";
 import type {
+  Branding,
   IvoraClient,
   Location,
   LocationInput,
+  PaymentAccount,
   Station,
   Transaction,
 } from "./types";
@@ -102,6 +104,68 @@ const SAMPLE_TRANSACTIONS: Transaction[] = [
   },
 ];
 
+/**
+ * Every Stripe account state the kit shows, for demo mode's "simulate" switch. The
+ * account ID is visibly fake; no Stripe or Ivora request is ever made.
+ */
+export const DEMO_STRIPE_STATES = [
+  "none",
+  "pending",
+  "pending_review",
+  "ready",
+  "ready_requirements",
+] as const;
+export type DemoStripeState = (typeof DEMO_STRIPE_STATES)[number];
+
+const DEMO_ACCOUNT_ID = "acct_DEMO000000000000";
+
+export function demoPaymentAccount(state: DemoStripeState): PaymentAccount {
+  switch (state) {
+    case "none":
+      return { status: "none", charges_enabled: false, requirements_due: [] };
+    case "pending":
+      return {
+        status: "active",
+        stripe_account_id: DEMO_ACCOUNT_ID,
+        charges_enabled: false,
+        details_submitted: false,
+        disabled_reason: "requirements.past_due",
+        requirements_due: [
+          "external_account",
+          "individual.verification.document",
+        ],
+        livemode: false,
+      };
+    case "pending_review":
+      return {
+        status: "pending_review",
+        stripe_account_id: DEMO_ACCOUNT_ID,
+        charges_enabled: true,
+        details_submitted: true,
+        requirements_due: [],
+        livemode: false,
+      };
+    case "ready":
+      return {
+        status: "active",
+        stripe_account_id: DEMO_ACCOUNT_ID,
+        charges_enabled: true,
+        details_submitted: true,
+        requirements_due: [],
+        livemode: false,
+      };
+    case "ready_requirements":
+      return {
+        status: "active",
+        stripe_account_id: DEMO_ACCOUNT_ID,
+        charges_enabled: true,
+        details_submitted: true,
+        requirements_due: ["company.tax_id"],
+        livemode: false,
+      };
+  }
+}
+
 const copy = <T>(v: T): T => structuredClone(v);
 
 /**
@@ -178,6 +242,27 @@ export function createDemoClient(): IvoraClient {
           )
           .slice(0, o.limit ?? 50),
       );
+    },
+    // Branding answers like the API but is kept nowhere: each visitor's demo brand
+    // lives in their own cookie (lib/server/onboarding/demo.ts).
+    async putBranding(input) {
+      return {
+        ...input,
+        logo_url: null,
+        is_default: false,
+        updated_at: new Date().toISOString(),
+      } satisfies Branding;
+    },
+    async putBrandingLogo() {
+      // Nothing is uploaded or stored, so there is no logo URL to show.
+      throw new IvoraError(
+        409,
+        "demo_logo_not_stored",
+        "Demo mode checks the logo but does not upload or keep it",
+      );
+    },
+    async getPaymentAccount() {
+      return demoPaymentAccount("none");
     },
   };
 }

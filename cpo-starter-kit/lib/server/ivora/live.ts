@@ -2,12 +2,14 @@ import "server-only";
 import { isDemo } from "../env";
 import { IvoraError } from "./errors";
 import type {
+  Branding,
   IvoraClient,
   Listed,
   ListOptions,
   Location,
   LocationInput,
   Page,
+  PaymentAccount,
   Station,
   Transaction,
 } from "./types";
@@ -39,6 +41,12 @@ const TIMEOUT_MS = 10_000;
 /** A try with less time left than this is not worth starting. */
 const MIN_TRY_MS = 1_000;
 const KEY = /^[\x21-\x7e]{8,128}$/;
+
+/** A request body: JSON text or raw image bytes, with its content type. */
+interface Body {
+  data: string | Uint8Array<ArrayBuffer>;
+  contentType: string;
+}
 
 /** Codes after which the same request is repeated with the same Idempotency-Key. */
 const RETRY_SAME_KEY = new Set(["request_in_progress", "outcome_unknown"]);
@@ -111,10 +119,17 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   const now = o.now ?? Date.now;
   const attempts = o.attempts ?? 4;
 
+  // Tenant resources live under /v1/tenants/{id}; the Stripe payment account under
+  // the payment provider's own prefix.
+  const roots = {
+    tenant: `${origin}/v1/tenants/${o.tenantId}/`,
+    stripe: `${origin}/payment/stripe/v1/tenants/${o.tenantId}/`,
+  };
+
   async function once<T>(
     method: string,
-    path: string,
-    body: unknown,
+    url: string,
+    body: Body | undefined,
     key: string | undefined,
     timeoutMs: number,
   ): Promise<T> {
@@ -123,13 +138,14 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       accept: "application/json",
     };
     if (key) headers["idempotency-key"] = key;
-    if (body !== undefined) headers["content-type"] = "application/json";
+    if (body) headers["content-type"] = body.contentType;
     let res: Response;
     try {
-      res = await doFetch(`${origin}/v1/tenants/${o.tenantId}/${path}`, {
+      res = await doFetch(url, {
         method,
         headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
+        // The same text or bytes on every try.
+        body: body?.data,
         cache: "no-store",
         redirect: "error",
         signal: AbortSignal.timeout(timeoutMs),
@@ -151,13 +167,30 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   async function request<T>(
     method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
-    opts: { body?: unknown; key?: string; deadline?: number } = {},
+    opts: {
+      /** JSON body. */
+      body?: unknown;
+      /** Raw body with its own content type (logo images). */
+      raw?: { bytes: Uint8Array; contentType: string };
+      key?: string;
+      deadline?: number;
+      root?: keyof typeof roots;
+    } = {},
   ): Promise<T> {
     const deadline = opts.deadline ?? now() + MAX_REQUEST_SECONDS * 1000;
     // Second guard behind getIvora(): a live client never sends in demo mode.
     if (isDemo()) throw new Error("Demo mode never calls the Ivora API");
     if (method !== "GET" && !(opts.key && KEY.test(opts.key)))
       throw new Error(`Idempotency-Key missing or invalid for ${method}`);
+    const url = `${roots[opts.root ?? "tenant"]}${path}`;
+    const body: Body | undefined = opts.raw
+      ? {
+          data: new Uint8Array(opts.raw.bytes),
+          contentType: opts.raw.contentType,
+        }
+      : opts.body !== undefined
+        ? { data: JSON.stringify(opts.body), contentType: "application/json" }
+        : undefined;
     for (let n = 1; ; n++) {
       const left = deadline - now();
       if (left < MIN_TRY_MS)
@@ -169,8 +202,8 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       try {
         return await once<T>(
           method,
-          path,
-          opts.body,
+          url,
+          body,
           opts.key,
           Math.min(TIMEOUT_MS, left),
         );
@@ -262,6 +295,20 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
           `transactions${query({ limit: o.limit ?? 50, station_id: o.station_id })}`,
         )
       ).data;
+    },
+    // A PUT replaces the whole record, so repeating it is harmless; the key still
+    // makes a retried request count once.
+    putBranding(input, key) {
+      return request<Branding>("PUT", "branding", { body: input, key });
+    },
+    putBrandingLogo(logo, key) {
+      return request<Branding>("PUT", "branding/logo", {
+        raw: { bytes: logo.bytes, contentType: logo.contentType },
+        key,
+      });
+    },
+    getPaymentAccount() {
+      return request<PaymentAccount>("GET", "account", { root: "stripe" });
     },
   };
 }

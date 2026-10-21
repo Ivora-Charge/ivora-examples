@@ -2,6 +2,8 @@
 export interface ActionState {
   ok?: string;
   error?: string;
+  /** Saved, but something after it needs attention (for example an Ivora push). */
+  warning?: string;
   /** An invite link to share by hand (demo mode, or no email provider). */
   link?: string;
   /** Same-origin path of that link, for the demo's "open" button. */

@@ -148,6 +148,33 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
     expect(t.role).toBe("owner");
   });
 
+  it("refuses a manager's company save that waited on their own demotion", async () => {
+    await reset();
+    const managerPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const hasLocks = new Promise<void>((r) => (locked = r));
+    const owner = a.begin(async (tx) => {
+      await tx`select cpo_set_staff_role(${operator}, ${OWNER}, 'owner', ${MANAGER}, 'manager', 'technician')`;
+      locked();
+      await released;
+    });
+    await hasLocks;
+    const save = Promise.resolve(
+      b`select cpo_save_company(${operator}, ${MANAGER}, 'Sample Co', 'help@example.com', null, null, 'UTC', 'USD')`,
+    ).then(
+      () => null,
+      (e: Error) => e,
+    );
+    await waitingForLock(managerPid);
+    release();
+    await owner;
+    expect(String(await save)).toMatch(/cpo_not_allowed/);
+    const rows = await a`select 1 from cpo_company_profiles`;
+    expect(rows).toHaveLength(0);
+  });
+
   it("lets only one of two owners step down at the same moment", async () => {
     await reset();
     await a`insert into cpo_staff(operator_id, user_id, email, role)

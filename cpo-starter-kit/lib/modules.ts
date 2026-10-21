@@ -20,8 +20,8 @@ export const MODULES: Module[] = [
     href: "/onboarding",
     label: "Onboarding",
     summary:
-      "Step-by-step setup: connect Ivora, add your first site and charger, and print QR stickers.",
-    status: "coming-soon",
+      "Step-by-step setup: company details, your brand on the driver payment pages, and Stripe.",
+    status: "ready",
   },
   {
     slug: "chargers",
@@ -62,8 +62,8 @@ export const MODULES: Module[] = [
     slug: "settings",
     href: "/settings",
     label: "Settings",
-    summary: "Your brand, domain, and connected services.",
-    status: "coming-soon",
+    summary: "Company details, brand and card payments.",
+    status: "ready",
   },
 ];
 

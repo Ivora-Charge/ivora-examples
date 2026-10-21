@@ -44,6 +44,7 @@ const TABLES = [
   "cpo_staff",
   "cpo_invites",
   "cpo_rate_limits",
+  "cpo_company_profiles",
 ] as const;
 
 beforeAll(async () => {
@@ -182,6 +183,10 @@ describe("row level security", () => {
           `select cpo_set_staff_role('${operatorA}','${OWNER_A}','owner','${TECH_A}','technician','owner')`,
           `select cpo_remove_staff('${operatorA}','${OWNER_A}','owner','${TECH_A}','technician')`,
           `select cpo_lock_checked_roles('${operatorA}','${OWNER_A}','owner','${TECH_A}','technician')`,
+          `select cpo_save_company('${operatorA}','${OWNER_A}','X','x@example.com',null,null,'UTC','USD')`,
+          `select cpo_save_brand('${operatorA}','${OWNER_A}','#000000')`,
+          `select cpo_record_branding('${operatorA}','${OWNER_A}',null,null,false)`,
+          `select cpo_lock_onboarding_actor('${operatorA}','${OWNER_A}')`,
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -474,5 +479,117 @@ describe("rate limits", () => {
           .rows,
       ).toEqual([]);
     });
+  });
+});
+
+describe("company profile", () => {
+  const HEX = "a".repeat(64);
+  const save = (actor: string, operator = operatorA, name = "Sample Co A") =>
+    as("service_role", null, () =>
+      pg.query(
+        "select cpo_save_company($1,$2,$3,'Help@Example.com','https://example.com/help',null,'Europe/Berlin','EUR')",
+        [operator, actor, name],
+      ),
+    );
+  const profile = async () =>
+    (
+      await pg.query<{
+        name: string;
+        support_email: string;
+        primary_color: string | null;
+        branding_hash: string | null;
+        branding_syncs: number;
+        logo_uploads: number;
+        logo_url: string | null;
+      }>("select * from cpo_company_profiles where operator_id=$1", [operatorA])
+    ).rows[0];
+
+  it("lets owners and managers save, and refuses everyone else", async () => {
+    await save(OWNER_A);
+    expect(await profile()).toMatchObject({
+      name: "Sample Co A",
+      support_email: "help@example.com",
+      branding_syncs: 0,
+    });
+    await expect(save(TECH_A)).rejects.toThrow(/cpo_not_allowed/);
+    // An owner of another operator can't write this one.
+    await expect(save(OWNER_B)).rejects.toThrow(/cpo_not_allowed/);
+    await expect(save(OUTSIDER)).rejects.toThrow(/cpo_not_allowed/);
+    await pg.query("update cpo_staff set role='manager' where user_id=$1", [
+      TECH_A,
+    ]);
+    try {
+      await save(TECH_A, operatorA, "By Manager");
+      expect((await profile()).name).toBe("By Manager");
+    } finally {
+      await pg.query(
+        "update cpo_staff set role='technician' where user_id=$1",
+        [TECH_A],
+      );
+    }
+  });
+
+  it("saves the brand colour and records what Ivora shows", async () => {
+    const brand = (actor: string, color: string | null) =>
+      as("service_role", null, () =>
+        pg.query("select cpo_save_brand($1,$2,$3)", [operatorA, actor, color]),
+      );
+    const record = (hash: string | null, url: string | null, logo: boolean) =>
+      as("service_role", null, () =>
+        pg.query("select cpo_record_branding($1,$2,$3,$4,$5)", [
+          operatorA,
+          OWNER_A,
+          hash,
+          url,
+          logo,
+        ]),
+      );
+    await brand(OWNER_A, "#1D3FA8");
+    expect((await profile()).primary_color).toBe("#1d3fa8");
+    await expect(brand(TECH_A, "#000000")).rejects.toThrow(/cpo_not_allowed/);
+    await expect(brand(OWNER_A, "red")).rejects.toThrow(/check constraint/);
+    await record(HEX, null, false);
+    await record(null, "https://api.example.test/logo.png", true);
+    expect(await profile()).toMatchObject({
+      branding_hash: HEX,
+      branding_syncs: 1,
+      logo_uploads: 1,
+      logo_url: "https://api.example.test/logo.png",
+    });
+    await expect(
+      as("service_role", null, () =>
+        pg.query("select cpo_record_branding($1,$2,null,null,false)", [
+          operatorB,
+          OWNER_B,
+        ]),
+      ),
+    ).rejects.toThrow(/cpo_no_company/);
+  });
+
+  it("refuses plain-http support links and bad currencies", async () => {
+    await expect(
+      pg.query(
+        "update cpo_company_profiles set support_url='http://example.com' where operator_id=$1",
+        [operatorA],
+      ),
+    ).rejects.toThrow(/check constraint/);
+    await expect(
+      pg.query(
+        "update cpo_company_profiles set currency='usd' where operator_id=$1",
+        [operatorA],
+      ),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  it("is not readable or writable from the browser, even by an owner", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        await expect(
+          pg.query("select * from cpo_company_profiles"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          pg.query("update cpo_company_profiles set name='x'"),
+        ).rejects.toThrow(/permission denied/);
+      });
   });
 });

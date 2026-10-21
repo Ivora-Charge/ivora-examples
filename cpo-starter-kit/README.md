@@ -1,6 +1,6 @@
 # CPO Starter Kit
 
-> **In progress.** This is part 2 of the kit: the app shell, demo mode, the Ivora client, and the team (staff sign-in and roles on Supabase). Sections marked "Coming soon" are filled in by later parts.
+> **In progress.** This is part 3 of the kit: the app shell, demo mode, the Ivora client, the team (staff sign-in and roles on Supabase), and onboarding (company details, brand, Stripe status). Sections marked "Coming soon" are filled in by later parts.
 
 An operations app for small charging operators (CPOs) with no developers on staff. You fork it, put your own name on it, connect your Ivora project and go live: onboarding, chargers, live sessions, pricing, reports and your team in one place, on your own domain.
 
@@ -32,16 +32,29 @@ The design brief, the approved mock and the palette are `brand/BRIEF.md`, `brand
 - **App shell:** phone-first and keyboard accessible (skip link, labelled navigation, visible focus, 44 px tap targets). On a phone the sections are behind a Menu button; on a wide screen they are a sidebar. Light and dark mode follow the system setting, with a toggle. Every colour, font, size, radius and spacing is a token in [`brand/tokens.css`](brand/tokens.css) (see "Make it yours in 5 minutes" below).
 - **Overview:** sites, chargers online, connectors, sessions charging now and recent energy, read from Ivora (or from sample data in demo mode).
 - **Team:** staff sign in with email and password or an emailed sign-in link. Owners and managers invite staff by email (a link that works once and expires in 72 hours), change roles and remove people. The last owner can't be removed or demoted.
-- **Sections:** Onboarding, Chargers, Live, Pricing, Reports and Settings are placeholders marked "Coming soon".
+- **Onboarding and Settings:** a three-step setup wizard (Company, Brand, Payments) and a Settings page with the same forms. See [Onboarding](#onboarding) below.
+- **Setup checklist** on the Overview, for owners and managers: company details, brand, Stripe ready, first charger and first price (pricing comes in a later part).
+- **Sections:** Chargers, Live, Pricing and Reports are placeholders marked "Coming soon".
+
+### Onboarding
+
+Owners and managers only: technicians and viewers see a short note instead, and every server action checks the role on the server (and again in the database, in the same statement as the write).
+
+- **Company details:** name (what drivers see), support email, an optional https support URL, an optional https website, time zone (IANA; times are stored in UTC and shown in it) and currency (ISO 4217; money stays in integer minor units). Saved in Supabase (`cpo_company_profiles`).
+- **Brand:** a colour (`#rrggbb`) and an optional logo. Saving pushes the name, colour and support contacts to Ivora's driver payment pages with `PUT /branding`, then uploads the logo with `PUT /branding/logo`. The logo is checked first from its own bytes, with the API's limits: PNG, JPEG or WebP (never SVG), at most 512 KB, 32 to 2048 px a side, not animated. Ivora stores and serves the image; the kit keeps only its URL. If a push fails, the details stay saved, the page says so with the API's error, and **Push to Ivora again** retries. The card form itself is Stripe Checkout, whose look comes from your Stripe account's branding settings.
+- **The brand colour themes the kit**, with a contrast check: it replaces the kit's primary colour (buttons, links, focus) only in the modes where links reach 4.5:1 on the page and on cards and button text reaches 4.5:1 on it (WCAG AA). Otherwise that mode keeps the kit's own colour. The form shows the ratios as you type, including the colour against white for the driver pages. The rules are in [`lib/brand-colors.ts`](lib/brand-colors.ts) and `tests/brand-colors.test.ts`.
+- **Payments (Stripe via Ivora Checkout):** the kit reads `GET /payment/stripe/v1/tenants/{id}/account` and shows **Not connected** (`none` or `disconnected`), **Pending** (connected, but Stripe can't take charges yet), **Awaiting Ivora approval** (`pending_review`) or **Ready** (`active` with `charges_enabled`), plus Stripe's open requirements, the disabled reason and test or live mode. API keys can't create Stripe onboarding links (the API refuses them), so the kit links to your Ivora dashboard (`IVORA_DASHBOARD_URL`) to connect Stripe there, and **Check status again** re-reads it. **The kit stores no Stripe keys.**
+- **Idempotency:** a branding push uses `cpo-branding-<operator>-put-<pushes so far>-<content hash>`, and a logo upload `cpo-logo-<operator>-put-<uploads so far>-<image hash>`. A retry of the same push reuses its key; going back to an earlier brand later gets a new key, so it isn't answered with the stored reply to the first push.
+- **Demo mode** keeps the demo company in your browser's cookie, never uploads the logo (it is only checked), and has a **Demo: simulate a Stripe status** switch for every state. Nothing is sent to Ivora, Stripe or Supabase.
 
 ### Roles
 
-| Role       | May                                                                               |
-| ---------- | --------------------------------------------------------------------------------- |
-| Owner      | Everything, including inviting, promoting and removing owners.                    |
-| Manager    | Invite, change and remove technicians and viewers (only to technician or viewer). |
-| Technician | Work on chargers (later parts). Cannot change the team.                           |
-| Viewer     | Read the overview and reports. Cannot change anything.                            |
+| Role       | May                                                                                     |
+| ---------- | --------------------------------------------------------------------------------------- |
+| Owner      | Everything, including inviting, promoting and removing owners.                          |
+| Manager    | Company details, brand and payments; invite, change and remove technicians and viewers. |
+| Technician | Work on chargers (later parts). Cannot change the team.                                 |
+| Viewer     | Read the overview and reports. Cannot change anything.                                  |
 
 Nobody can remove themselves; ask another owner. Roles are stored in the `cpo_staff` table and checked on the server, never read from user metadata. Every page and every server action starts with `requireRole(min)` from [`lib/server/auth.ts`](lib/server/auth.ts), which later modules use too.
 
@@ -69,6 +82,7 @@ Copy `.env.example` to `.env.local` and fill it in. Live mode needs **both** Ivo
 | `IVORA_API_BASE_URL`        | Optional; defaults to `https://api.ivoracharge.com`. An empty value counts as unset.                           |
 | `OPERATOR_NAME`             | Your business name, shown in the header, page titles and emails (default "Your charging network").             |
 | `DEMO_MODE`                 | Set to `true` to force demo mode even when credentials are set (for example on a public demo instance).        |
+| `IVORA_DASHBOARD_URL`       | Optional; your Ivora dashboard, where Stripe is connected. Defaults to `https://platform.ivoracharge.com`.     |
 | `SUPABASE_URL`              | Your Supabase project URL. Required for live mode.                                                             |
 | `SUPABASE_ANON_KEY`         | The project's anon (or publishable) key. Used on the server only, with RLS. Required for live mode.            |
 | `SUPABASE_SERVICE_ROLE_KEY` | Service role key, for writes the server has already authorized. Server-only. Required for live mode.           |
@@ -98,7 +112,7 @@ Use **one Ivora project and API key per deployment**, and a test project for pre
 
 - **Server-only:** the Ivora client, Supabase clients and configuration import `server-only`, so importing them from a client component fails the build. Keys are never sent to the browser, logged or shown in errors. The Supabase session lives in HTTP-only cookies managed by the Supabase SSR client; the browser holds no Supabase key or token.
 - **Roles on the server:** every server action that changes something calls `requireRole()` and the team rules in [`lib/server/team/service.ts`](lib/server/team/service.ts) before touching data. Role changes and removals then run in one database function (`cpo_set_staff_role`, `cpo_remove_staff`) that locks the actor's and the target's rows and refuses if either role changed since the server checked it, so a manager can't demote or remove someone an owner promoted in between; the page asks to reload instead. A database trigger also refuses to remove or demote the last owner, locking the operator row so two owners cannot demote each other at the same time. Demoting or removing someone revokes the pending invites they may no longer send.
-- **Database (the 10-30 rule):** RLS is on for every table, and every migration revokes all privileges from `anon` and `authenticated` (older Supabase projects grant them everything by default). Only `cpo_operators` and `cpo_staff` are read through the Data API with the staff member's own session, so only they get column-level `SELECT` for `authenticated`, matching RLS policies that show a staff member their own operator and team only. `anon` reads nothing. Invites, rate limits and the migration ledger are service-role only, and invites store a SHA-256 of their token, never the token. Every function revokes `EXECUTE` from `public`, `anon` and `authenticated`; only `cpo_my_operator_ids`, which the RLS policies call, is granted back to `authenticated`. `npm run check:migrations` (run in CI) runs the repository's shared checker, [`tools/check-migrations`](../tools/check-migrations/README.md), on `supabase/migrations`. PGlite tests in `tests/database.test.ts` run the migrations with Supabase's default privileges on tables and functions and check the policies and grants; `tests/concurrency.test.ts` runs concurrent role changes against a real Postgres when `TEST_DATABASE_URL` points at a local throwaway server (CI starts one).
+- **Database (the 10-30 rule):** RLS is on for every table, and every migration revokes all privileges from `anon` and `authenticated` (older Supabase projects grant them everything by default). Only `cpo_operators` and `cpo_staff` are read through the Data API with the staff member's own session, so only they get column-level `SELECT` for `authenticated`, matching RLS policies that show a staff member their own operator and team only. `anon` reads nothing. Invites, rate limits, the company profile (`cpo_company_profiles`) and the migration ledger are service-role only, and invites store a SHA-256 of their token, never the token. Every function revokes `EXECUTE` from `public`, `anon` and `authenticated`; only `cpo_my_operator_ids`, which the RLS policies call, is granted back to `authenticated`. `npm run check:migrations` (run in CI) runs the repository's shared checker, [`tools/check-migrations`](../tools/check-migrations/README.md), on `supabase/migrations`. PGlite tests in `tests/database.test.ts` run the migrations with Supabase's default privileges on tables and functions and check the policies and grants; `tests/concurrency.test.ts` runs concurrent role changes against a real Postgres when `TEST_DATABASE_URL` points at a local throwaway server (CI starts one).
 - **Rate limits:** password sign-in (30 per source and 10 per account per 10 minutes), sign-in links (10 per source per 10 minutes, 1 per address per minute), setup (10 per source per 10 minutes), invite acceptance, and invites (20 per inviter and 3 per recipient per hour). Quotas are shared by all server instances through the database, keyed by HMAC digests, never plain addresses, and long-expired windows are purged as it goes. Per-source quotas need a client address callers can't fake: on Vercel, Vercel's own header; elsewhere, set `TRUSTED_PROXY_HEADER` to the header your proxy or CDN sets (for example `cf-connecting-ip`, or `x-forwarded-for` from a proxy that appends to it; the kit takes its last entry). Without one, per-source quotas are skipped rather than shared, so one client can't lock everyone out, and the per-account quotas still apply. Setup has no account to limit, so there it falls back to one quota shared by every caller (10 tries per 10 minutes): guessing the setup secret stays slow, and at worst setup has to wait a few minutes. A sign-in link request gets the same answer for any address, including an invitee who has no login yet (they join with their invite link).
 - **Logs:** never passwords, tokens or email addresses; record IDs and error codes only.
 - **Demo mode in one place:** `getIvora()` in `lib/server/ivora/index.ts` and `getTeam()` in `lib/server/team/index.ts` return demo implementations whenever demo mode is on, and the live Ivora and Supabase clients also refuse to run while demo mode is on. Tests stub `fetch` to fail and run every Ivora method and every team flow in demo mode.
@@ -115,17 +129,20 @@ The button deploys the kit in demo mode. To go live, set up Supabase as above, a
 
 ## What it uses from the Ivora API
 
-All paths are under `/v1/tenants/{tenant_id}` and follow the [published OpenAPI](https://api.ivoracharge.com/openapi.json) and the [developer guides](https://ivoracharge.com/developers/guides).
+All paths are under `/v1/tenants/{tenant_id}` (except the Stripe account, under `/payment/stripe/v1/tenants/{tenant_id}`) and follow the [published OpenAPI](https://api.ivoracharge.com/openapi.json) and the [developer guides](https://ivoracharge.com/developers/guides).
 
-| Module   | Use                        | Endpoint                                      | Permission       |
-| -------- | -------------------------- | --------------------------------------------- | ---------------- |
-| Overview | Sites (every page)         | `GET /locations`                              | `stations:read`  |
-| Overview | Chargers and connectors    | `GET /stations`, `GET /stations/{station_id}` | `stations:read`  |
-| Overview | Recent and active sessions | `GET /transactions`                           | `billing:read`   |
-| Client   | Create a site (used later) | `POST /locations` (with `Idempotency-Key`)    | `stations:write` |
-| Team     | None                       | Staff and roles live in Supabase              | None             |
+| Module     | Use                        | Endpoint                                                                 | Permission       |
+| ---------- | -------------------------- | ------------------------------------------------------------------------ | ---------------- |
+| Overview   | Sites (every page)         | `GET /locations`                                                         | `stations:read`  |
+| Overview   | Chargers and connectors    | `GET /stations`, `GET /stations/{station_id}`                            | `stations:read`  |
+| Overview   | Recent and active sessions | `GET /transactions`                                                      | `billing:read`   |
+| Client     | Create a site (used later) | `POST /locations` (with `Idempotency-Key`)                               | `stations:write` |
+| Team       | None                       | Staff and roles live in Supabase                                         | None             |
+| Onboarding | Driver-page branding       | `PUT /branding` (with `Idempotency-Key`)                                 | `stations:write` |
+| Onboarding | Logo                       | `PUT /branding/logo` (raw image, with `Idempotency-Key`)                 | `stations:write` |
+| Onboarding | Stripe account status      | `GET /payment/stripe/v1/tenants/{tenant_id}/account` (not under `/v1/…`) | `billing:read`   |
 
-Later parts add their endpoints and permissions to this table.
+So the kit's key needs `stations:read`, `stations:write` and `billing:read`. Connecting or disconnecting Stripe needs a signed-in project admin in the Ivora dashboard; API keys are refused. Later parts add their endpoints and permissions to this table.
 
 ## Limits and next steps
 
@@ -133,7 +150,9 @@ Later parts add their endpoints and permissions to this table.
 - One staff login belongs to one operator. Removing someone also deletes their login. Deleting the last owner's login in Supabase is refused by the database.
 - A login that exists but is not on the team (for example if deleting it failed after a removal) can still join by invite: with its password on the invite page, or by signing in (password or emailed link) and opening the invite again.
 - No password reset screen yet: staff without a password use an emailed sign-in link.
-- Next parts: onboarding, chargers, live sessions, pricing, reports and settings.
+- Onboarding does not read back branding that someone changed directly in Ivora: the kit pushes what it has saved, and **Push to Ivora again** overwrites the driver pages with it.
+- The time zone and currency are saved now and used by later parts (pricing, reports).
+- Next parts: chargers, live sessions, pricing and reports.
 
 ## Checks
 

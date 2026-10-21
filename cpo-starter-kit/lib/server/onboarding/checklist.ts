@@ -1,0 +1,70 @@
+import "server-only";
+import type { Onboarding, StripeResult } from "./service";
+
+export interface ChecklistItem {
+  key: "company" | "brand" | "stripe" | "charger" | "price";
+  label: string;
+  /** soon: the part of the kit that does this step is not built yet. */
+  state: "done" | "todo" | "soon";
+  detail: string;
+  href: string;
+}
+
+/**
+ * The home page's setup checklist. `chargers` is the number of chargers in the Ivora
+ * project (null when it could not be read).
+ */
+export function setupChecklist(
+  o: Onboarding,
+  stripe: StripeResult,
+  chargers: number | null,
+): ChecklistItem[] {
+  const stripeState = stripe.ok ? stripe.view.state : null;
+  return [
+    {
+      key: "company",
+      label: "Company details",
+      state: o.companyDone ? "done" : "todo",
+      detail: o.companyDone
+        ? `${o.profile.name}, ${o.profile.timeZone}, ${o.profile.currency}`
+        : "Name, support email, time zone and currency.",
+      href: "/onboarding?step=company",
+    },
+    {
+      key: "brand",
+      label: "Brand",
+      state: o.brandDone ? "done" : "todo",
+      detail: o.brandDone
+        ? "Your colour is on the driver payment pages."
+        : o.profile.primaryColor && !o.inSync
+          ? "Saved, but not on the driver payment pages yet."
+          : "Colour and logo for the driver payment pages.",
+      href: "/onboarding?step=brand",
+    },
+    {
+      key: "stripe",
+      label: "Stripe ready",
+      state: stripeState === "ready" ? "done" : "todo",
+      detail: stripe.ok
+        ? `${stripe.view.label}.`
+        : "Couldn't read the Stripe status.",
+      href: "/onboarding?step=payments",
+    },
+    {
+      key: "charger",
+      label: "First charger",
+      state: chargers ? "done" : "soon",
+      detail: chargers
+        ? `${chargers} ${chargers === 1 ? "charger" : "chargers"} in your Ivora project.`
+        : "Adding chargers comes with the Chargers section.",
+      href: "/chargers",
+    },
+    {
+      key: "price",
+      label: "First price",
+      state: "soon",
+      detail: "Setting prices comes with the Pricing section.",
+      href: "/pricing",
+    },
+  ];
+}
