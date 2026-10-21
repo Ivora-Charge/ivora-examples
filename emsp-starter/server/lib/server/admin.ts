@@ -63,6 +63,21 @@ export function checkAdminSecret(
   return "wrong";
 }
 
+/**
+ * The client key for the rate limit, from the headers a proxy in front of the server
+ * sets: the platform's own client-IP header first (Vercel's x-vercel-forwarded-for and
+ * x-real-ip, which a client cannot set), then the right-most X-Forwarded-For entry, the
+ * one the nearest proxy added. Entries further left are whatever the client sent.
+ * Without a proxy every header can be forged; the total cap still bounds guessing.
+ */
+export function adminClientKey(h: Headers): string {
+  const ip =
+    h.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
+    h.get("x-real-ip")?.trim() ||
+    h.get("x-forwarded-for")?.split(",").at(-1)?.trim();
+  return ip ? ip.slice(0, 64) : "unknown";
+}
+
 export function resetAdminLimitForTests() {
   failures.clear();
 }

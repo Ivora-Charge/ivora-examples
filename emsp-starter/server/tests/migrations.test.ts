@@ -248,3 +248,118 @@ describe("OCPI peer registry tables", () => {
     ).rejects.toThrow(/check constraint/);
   });
 });
+
+describe("OCPI locations and tariffs tables", () => {
+  const TABLES = [
+    "emsp_ocpi_locations",
+    "emsp_ocpi_tariffs",
+    "emsp_ocpi_sync_state",
+  ];
+  const peer = async () =>
+    (
+      await db.query<{ id: string }>(
+        `insert into public.emsp_ocpi_peers (label, direction)
+         values ('CPO', 'outbound') returning id`,
+      )
+    ).rows[0].id;
+  const location = (peerId: string, id: string, extra = "") =>
+    db.query(
+      `insert into public.emsp_ocpi_locations (peer_id, country_code, party_id,
+         location_id, data, publish, latitude, longitude, search_text, search_ids,
+         last_updated, seen_at)
+       values ($1, 'ZZ', 'MCK', $2, '{"id": "x"}', true, 52.1, 5.1, 'market hall',
+         array['LOC1', 'ZZMCKE11'], now(), now()) ${extra}`,
+      [peerId, id],
+    );
+
+  it("keeps them away from anon and authenticated", async () => {
+    for (const db_ of [db, legacy])
+      for (const role of ["anon", "authenticated"] as const)
+        await asRole(db_, role, async () => {
+          for (const table of TABLES)
+            await expect(
+              db_.query(`select * from public.${table}`),
+            ).rejects.toThrow(/permission denied/);
+        });
+  });
+
+  it("keys objects per peer, so two peers may use the same IDs", async () => {
+    const [a, b] = [await peer(), await peer()];
+    await asRole(db, "service_role", async () => {
+      await location(a, "LOC1");
+      await location(b, "LOC1");
+      await expect(location(a, "LOC1")).rejects.toThrow(/duplicate key/);
+      // What the store's upsert sends (on_conflict on the key).
+      await location(
+        a,
+        "LOC1",
+        "on conflict (peer_id, country_code, party_id, location_id) do update set publish = false",
+      );
+      const { rows } = await db.query<{ peer_id: string; publish: boolean }>(
+        "select peer_id, publish from public.emsp_ocpi_locations where location_id = 'LOC1' order by publish",
+      );
+      expect(rows).toEqual([
+        { peer_id: a, publish: false },
+        { peer_id: b, publish: true },
+      ]);
+      // The search's ID filter (search_ids=cs.{...}).
+      const { rows: found } = await db.query(
+        "select 1 from public.emsp_ocpi_locations where search_ids @> array['ZZMCKE11'] and peer_id = $1",
+        [b],
+      );
+      expect(found).toHaveLength(1);
+      // A full pull removes what it did not see.
+      await db.query(
+        "delete from public.emsp_ocpi_locations where peer_id = $1 and seen_at < now() + interval '1 second'",
+        [a],
+      );
+    });
+  });
+
+  it("lets the service role keep sync state, but never delete it", async () => {
+    const id = await peer();
+    await asRole(db, "service_role", async () => {
+      await db.query(
+        `insert into public.emsp_ocpi_sync_state (peer_id, module, run_id, run)
+         values ($1, 'locations', gen_random_uuid(), '{"mode": "full"}')`,
+        [id],
+      );
+      // Only the run that owns the state may change it.
+      const { affectedRows } = await db.query(
+        "update public.emsp_ocpi_sync_state set run_id = null, run = null where peer_id = $1 and run_id is null",
+        [id],
+      );
+      expect(affectedRows).toBe(0);
+      await expect(
+        db.query("delete from public.emsp_ocpi_sync_state"),
+      ).rejects.toThrow(/permission denied/);
+    });
+  });
+
+  it("rejects malformed rows", async () => {
+    const id = await peer();
+    const bad = [
+      `insert into public.emsp_ocpi_locations (peer_id, country_code, party_id, location_id,
+         data, publish, latitude, longitude, last_updated, seen_at)
+       values ('${id}', 'zz', 'MCK', 'L', '{}', true, 0, 0, now(), now())`,
+      `insert into public.emsp_ocpi_locations (peer_id, country_code, party_id, location_id,
+         data, publish, latitude, longitude, last_updated, seen_at)
+       values ('${id}', 'ZZ', 'MCK', 'L', '{}', true, 91, 0, now(), now())`,
+      `insert into public.emsp_ocpi_tariffs (peer_id, country_code, party_id, tariff_id,
+         data, last_updated, seen_at)
+       values ('${id}', 'ZZ', 'MCK', 'T', '[]', now(), now())`,
+      `insert into public.emsp_ocpi_sync_state (peer_id, module) values ('${id}', 'cdrs')`,
+      `insert into public.emsp_ocpi_sync_state (peer_id, module, run_id)
+       values ('${id}', 'tariffs', gen_random_uuid())`,
+    ];
+    for (const sql of bad)
+      await expect(db.query(sql)).rejects.toThrow(/check constraint/);
+    await expect(
+      db.query(
+        `insert into public.emsp_ocpi_tariffs (peer_id, country_code, party_id, tariff_id,
+           data, last_updated, seen_at)
+         values (gen_random_uuid(), 'ZZ', 'MCK', 'T', '{}', now(), now())`,
+      ),
+    ).rejects.toThrow(/foreign key/);
+  });
+});

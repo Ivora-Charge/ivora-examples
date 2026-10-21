@@ -2,6 +2,8 @@ import { vi } from "vitest";
 import * as versionsRoute from "@/app/ocpi/versions/route";
 import * as detailsRoute from "@/app/ocpi/2.2.1/route";
 import * as credentialsRoute from "@/app/ocpi/2.2.1/credentials/route";
+import * as locationsRoute from "@/app/ocpi/2.2.1/locations/[...path]/route";
+import * as tariffsRoute from "@/app/ocpi/2.2.1/tariffs/[...path]/route";
 import type { Transport } from "@/lib/ocpi/client";
 import { setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 
@@ -24,7 +26,14 @@ export const emspHandler: Handler = async (request) => {
     "/ocpi/2.2.1": detailsRoute,
     "/ocpi/2.2.1/credentials": credentialsRoute,
   };
-  const route = routes[new URL(request.url).pathname];
+  const path = new URL(request.url).pathname;
+  const route =
+    routes[path] ??
+    (path.startsWith("/ocpi/2.2.1/locations/")
+      ? locationsRoute
+      : path.startsWith("/ocpi/2.2.1/tariffs/")
+        ? tariffsRoute
+        : undefined);
   const handler = route?.[request.method] as Handler | undefined;
   if (!handler) return new Response("Not found", { status: 404 });
   return handler(request);

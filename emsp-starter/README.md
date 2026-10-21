@@ -1,6 +1,6 @@
 # eMSP Starter
 
-> **In progress.** This is part 2 of 13. The server and the driver app have an app shell, a demo mode and brand tokens. The server speaks the OCPI 2.2.1 versions and credentials modules with any number of CPO peers, in both directions, tested against a built-in mock CPO. Locations, sessions, payments and the driver flows arrive in later parts.
+> **In progress.** This is part 3 of 13. The server and the driver app have an app shell, a demo mode and brand tokens. The server speaks the OCPI 2.2.1 versions and credentials modules with any number of CPO peers, in both directions, pulls and receives every peer's locations and tariffs, and serves a location search with display prices for the app, all tested against a built-in mock CPO. Sessions, payments and the driver flows arrive in later parts.
 
 For charging networks that want to run **their own driver app and payments**, connected over **OCPI 2.2.1** to any CPO platform. You run the eMSP (e-Mobility Service Provider) side: drivers, tokens, sessions, CDRs and payments. Each CPO you partner with is an OCPI peer. Ivora is one possible CPO peer among many; nothing here depends on it.
 
@@ -41,13 +41,14 @@ The brand is a neutral **placeholder** (greys, the system font, "Your Charging N
 
 ## Data
 
-Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its README). Migrations follow the **10-30 rule**: row-level security and an explicit revoke on every public table, no default grants, grants to the Data API roles only on tables with a policy, and no public function executable by those roles. The app never reads the database directly, so tables are service-only. A CI check enforces the rule, and every migration runs in tests on PGlite.
+Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its README). Migrations follow the **10-30 rule**: row-level security and an explicit revoke on every public table, no default grants, grants to the Data API roles only on tables with a policy, and no public function executable by those roles. The app never reads the database directly, so tables are service-only. The repository's shared checker, [`tools/check-migrations`](../tools/check-migrations/README.md), enforces the rule in CI, and every migration runs in tests on PGlite. A fork of this template alone copies `tools/check-migrations` next to it.
 
 ## Parts
 
 1. **Scaffold**: app shells, demo mode, brand tokens, Supabase baseline, CI.
-2. **OCPI core** (this part): versions and credentials in both directions, multiple CPO peers with token rotation, the OCPI client and server middleware, the mock CPO.
-3. to 13. Locations and tariffs, tokens and real-time authorization, sessions and commands, CDRs, payments, the optional live-data adapter, the driver flows and the admin web. Each part updates this README.
+2. **OCPI core**: versions and credentials in both directions, multiple CPO peers with token rotation, the OCPI client and server middleware, the mock CPO.
+3. **Locations and tariffs** (this part): pull (full, then incremental, resumable) and push, stored per peer; the search API; display prices and a price preview.
+4. to 13. Tokens and real-time authorization, sessions and commands, CDRs, payments, the optional live-data adapter, the driver flows and the admin web. Each part updates this README.
 
 ## License
 

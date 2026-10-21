@@ -167,7 +167,7 @@ describe("admin peer actions", () => {
       peer: {
         status: "registered",
         parties: ["CPO ZZ-MCK (Mock CPO)"],
-        modules: ["credentials", "locations"],
+        modules: ["credentials", "locations", "tariffs"],
       },
     });
     const id = connected.peer!.id;

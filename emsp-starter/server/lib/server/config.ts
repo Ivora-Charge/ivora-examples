@@ -87,6 +87,14 @@ export const config = {
     const v = env("ADMIN_SECRET");
     return v && v.length >= ADMIN_SECRET_MIN_LENGTH ? v : undefined;
   },
+  /**
+   * Bearer secret for the scheduled pull (`/api/cron/ocpi-sync`). Secret. Undefined
+   * when unset or shorter than ADMIN_SECRET_MIN_LENGTH, which disables the route.
+   */
+  get cronSecret(): string | undefined {
+    const v = env("CRON_SECRET");
+    return v && v.length >= ADMIN_SECRET_MIN_LENGTH ? v : undefined;
+  },
 };
 
 /** Where CPO peers reach this eMSP's OCPI endpoints. */
@@ -96,6 +104,8 @@ export function ocpiUrls() {
     versions: `${base}/versions`,
     details: `${base}/${OCPI_VERSION}`,
     credentials: `${base}/${OCPI_VERSION}/credentials`,
+    locations: `${base}/${OCPI_VERSION}/locations`,
+    tariffs: `${base}/${OCPI_VERSION}/tariffs`,
   };
 }
 

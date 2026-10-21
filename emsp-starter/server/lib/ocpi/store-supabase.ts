@@ -1,5 +1,9 @@
 import "server-only";
-import { outboundFetch } from "@/lib/server/demo";
+import {
+  eq,
+  supabaseRest,
+  type SupabaseTransport,
+} from "@/lib/server/supabase-rest";
 import type {
   AuditEntry,
   IssuedToken,
@@ -55,55 +59,31 @@ const COLUMNS: Record<keyof PeerPatch, keyof PeerRow> = {
   unregisteredAt: "unregistered_at",
 };
 
-const eq = (v: string) => `eq.${encodeURIComponent(v)}`;
-
 /**
  * The peer registry in Supabase Postgres, through the Data API (PostgREST) as the
- * service role. Requests go through `outboundFetch`, so demo mode never reaches it.
- * Errors name the table and HTTP status only, never the key or row values.
+ * service role (supabase-rest.ts: never in demo mode, errors without keys or values).
  */
 export class SupabasePeerStore implements PeerStore {
-  constructor(
-    private readonly url: string,
-    private readonly serviceRoleKey: string,
-    private readonly transport: typeof outboundFetch = outboundFetch,
-  ) {}
-
-  private async rest<T>(
+  private readonly rest: <T>(
     method: "GET" | "POST" | "PATCH",
     path: string,
     body?: unknown,
-  ): Promise<T> {
-    const headers: Record<string, string> = {
-      apikey: this.serviceRoleKey,
-      Accept: "application/json",
-    };
-    // Legacy service_role keys are JWTs and go in Authorization too; newer secret
-    // keys are not JWTs and are sent as `apikey` only.
-    if (this.serviceRoleKey.split(".").length === 3)
-      headers.Authorization = `Bearer ${this.serviceRoleKey}`;
-    if (body !== undefined) {
-      headers["Content-Type"] = "application/json";
-      headers.Prefer = "return=representation";
-    }
-    const table = path.split("?")[0];
-    const res = await this.transport(
-      `${this.url.replace(/\/+$/, "")}/rest/v1/${path}`,
-      {
+  ) => Promise<T>;
+
+  constructor(
+    url: string,
+    serviceRoleKey: string,
+    transport?: SupabaseTransport,
+  ) {
+    const rest = supabaseRest(url, serviceRoleKey, transport);
+    // Writes return the changed rows.
+    this.rest = (method, path, body) =>
+      rest(
         method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body),
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
-      },
-    );
-    if (!res.ok) {
-      await res.body?.cancel();
-      throw new Error(
-        `Database request failed: ${method} ${table} (HTTP ${res.status})`,
+        path,
+        body,
+        body === undefined ? undefined : "return=representation",
       );
-    }
-    return (await res.json()) as T;
   }
 
   async createPeer(input: {

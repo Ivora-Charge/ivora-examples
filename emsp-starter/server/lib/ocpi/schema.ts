@@ -19,11 +19,11 @@ import {
 export type Parsed<T> =
   { ok: true; value: T } | { ok: false; errors: string[] };
 
-type Ctx = { errors: string[] };
-const isObject = (v: unknown): v is Record<string, unknown> =>
+export type Ctx = { errors: string[] };
+export const isObject = (v: unknown): v is Record<string, unknown> =>
   typeof v === "object" && v !== null && !Array.isArray(v);
 
-function str(
+export function str(
   ctx: Ctx,
   v: unknown,
   path: string,
@@ -41,14 +41,14 @@ function str(
   return v;
 }
 
-function optional<T>(
+export function optional<T>(
   v: unknown,
   check: (v: unknown) => T | undefined,
 ): T | undefined {
   return v === undefined || v === null ? undefined : check(v);
 }
 
-function url(
+export function url(
   ctx: Ctx,
   v: unknown,
   path: string,
@@ -70,7 +70,7 @@ function url(
   return s;
 }
 
-function array<T>(
+export function array<T>(
   ctx: Ctx,
   v: unknown,
   path: string,
@@ -89,7 +89,7 @@ function array<T>(
   return out.length === v.length ? out : undefined;
 }
 
-function object(
+export function object(
   ctx: Ctx,
   v: unknown,
   path: string,
@@ -101,7 +101,7 @@ function object(
   return v;
 }
 
-function done<T>(ctx: Ctx, value: T | undefined): Parsed<T> {
+export function done<T>(ctx: Ctx, value: T | undefined): Parsed<T> {
   return ctx.errors.length === 0 && value !== undefined
     ? { ok: true, value }
     : { ok: false, errors: ctx.errors.length ? ctx.errors : ["invalid"] };
@@ -109,12 +109,12 @@ function done<T>(ctx: Ctx, value: T | undefined): Parsed<T> {
 
 /** A token as OCPI sends it: string(64), printable ASCII without spaces. */
 export const TOKEN_PATTERN = /^[\x21-\x7e]{1,64}$/;
-const COUNTRY = /^[A-Za-z]{2}$/;
-const PARTY = /^[A-Za-z0-9]{3}$/;
+export const COUNTRY = /^[A-Za-z]{2}$/;
+export const PARTY = /^[A-Za-z0-9]{3}$/;
 const VERSION_NUMBER = /^\d{1,2}(\.\d{1,2}){0,2}$/;
 const MODULE_ID = /^[a-z_]{1,50}$/;
 
-function image(ctx: Ctx, v: unknown, path: string): Image | undefined {
+export function image(ctx: Ctx, v: unknown, path: string): Image | undefined {
   const o = object(ctx, v, path);
   if (!o) return undefined;
   const dim = (x: unknown, p: string) => {
@@ -139,7 +139,7 @@ function image(ctx: Ctx, v: unknown, path: string): Image | undefined {
   return value;
 }
 
-function businessDetails(
+export function businessDetails(
   ctx: Ctx,
   v: unknown,
   path: string,

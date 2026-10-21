@@ -6,6 +6,8 @@ import {
   parseVersionDetails,
   parseVersions,
 } from "@/lib/ocpi/schema";
+import type { EvseStatus, Location } from "@/lib/ocpi/locations";
+import type { Tariff } from "@/lib/ocpi/tariffs";
 import { generateToken, tokensFromHeader } from "@/lib/ocpi/tokens";
 import {
   ocpiTimestamp,
@@ -14,12 +16,20 @@ import {
   type Endpoint,
   type Party,
 } from "@/lib/ocpi/types";
+import {
+  SAMPLE_SITE_COUNT,
+  sampleLocations,
+  sampleTariffs,
+  type SampleOptions,
+} from "./sample-data";
 
 /**
  * The mock CPO: a second, generic OCPI 2.2.1 CPO platform that runs in-process. Tests
  * use it as a real peer, in both handshake directions, so the eMSP is never tested
- * against one platform only. Later parts give it locations, tariffs, sessions and CDRs,
- * and demo mode serves its sample data.
+ * against one platform only. It serves sample locations and tariffs (sample-data.ts,
+ * also what demo mode shows) from paginated Sender interfaces with date_from and
+ * date_to, and pushes changes to the eMSP's Receiver interfaces. Later parts give it
+ * sessions and CDRs.
  *
  * `handle(request)` is the CPO's HTTP server. To reach the eMSP it uses `transport`
  * (in tests, an in-process router), never the network.
@@ -30,10 +40,12 @@ export type MockCpoOptions = {
   baseUrl?: string;
   party?: Party;
   name?: string;
-  /** Sample locations served by the paginated locations module. Default 5. */
+  /** Sample locations served by the paginated locations module. Default: one per sample site. */
   locationCount?: number;
-  /** Most locations per page (X-Limit). Default 2. */
+  /** Most objects per page (X-Limit). Default 2. */
   pageLimit?: number;
+  /** Where the sample sites are, their currency and so on. */
+  sample?: SampleOptions;
 };
 
 export type RecordedRequest = {
@@ -59,17 +71,8 @@ export function createMockCpo(options: MockCpoOptions) {
     details: `${baseUrl}/ocpi/2.2.1`,
     credentials: `${baseUrl}/ocpi/2.2.1/credentials`,
     locations: `${baseUrl}/ocpi/2.2.1/locations`,
+    tariffs: `${baseUrl}/ocpi/2.2.1/tariffs`,
   };
-  const locations = Array.from(
-    { length: options.locationCount ?? 5 },
-    (_, i) => ({
-      country_code: party.countryCode,
-      party_id: party.partyId,
-      id: `LOC${i + 1}`,
-      name: `Sample site ${i + 1}`,
-      last_updated: "2026-01-01T00:00:00Z",
-    }),
-  );
   const pageLimit = options.pageLimit ?? 2;
 
   const state = {
@@ -84,6 +87,13 @@ export function createMockCpo(options: MockCpoOptions) {
     requests: [] as RecordedRequest[],
     /** Injected failures: each entry answers one request. */
     faults: [] as ("hang" | number)[],
+    /** What the Sender interfaces serve. Change freely in tests. */
+    locations: sampleLocations(
+      party,
+      options.locationCount ?? SAMPLE_SITE_COUNT,
+      options.sample,
+    ),
+    tariffs: sampleTariffs(party, options.sample),
   };
 
   const credentialsFor = (token: string): Credentials => ({
@@ -202,6 +212,87 @@ export function createMockCpo(options: MockCpoOptions) {
     return reply(credentialsFor(tokenC));
   }
 
+  /**
+   * One page of a Sender interface: objects with last_updated in [date_from, date_to),
+   * at most `pageLimit`, with X-Total-Count, X-Limit and a Link to the next page.
+   */
+  function senderPage(
+    url: URL,
+    base: string,
+    all: { last_updated: string }[],
+  ): Response {
+    const q = url.searchParams;
+    const from = q.get("date_from");
+    const to = q.get("date_to");
+    const list = all.filter(
+      (o) =>
+        (!from || Date.parse(o.last_updated) >= Date.parse(from)) &&
+        (!to || Date.parse(o.last_updated) < Date.parse(to)),
+    );
+    const offset = Math.max(0, Number(q.get("offset") ?? 0) || 0);
+    const limit = Math.min(
+      pageLimit,
+      Math.max(1, Number(q.get("limit") ?? pageLimit) || pageLimit),
+    );
+    const headers: Record<string, string> = {
+      "X-Total-Count": String(list.length),
+      "X-Limit": String(pageLimit),
+    };
+    if (offset + limit < list.length) {
+      const next = new URL(base);
+      next.searchParams.set("offset", String(offset + limit));
+      next.searchParams.set("limit", String(limit));
+      if (from) next.searchParams.set("date_from", from);
+      if (to) next.searchParams.set("date_to", to);
+      headers.Link = `<${next}>; rel="next"`;
+    }
+    return reply(list.slice(offset, offset + limit), { headers });
+  }
+
+  /** The eMSP's Receiver endpoint for a module, from its version details. */
+  function emspReceiver(module: string) {
+    const url = state.emsp?.endpoints.find(
+      (e) => e.identifier === module && e.role === "RECEIVER",
+    )?.url;
+    if (!url) throw new Error(`The eMSP has no ${module} Receiver endpoint`);
+    return url;
+  }
+
+  /** Sends one push to the eMSP's Receiver interface, with routing headers. */
+  async function push(
+    module: "locations" | "tariffs",
+    method: "PUT" | "PATCH" | "DELETE",
+    path: string[],
+    body?: unknown,
+  ) {
+    if (!state.emsp) throw new Error("Mock CPO is not registered with an eMSP");
+    const role = state.emsp.credentials.roles[0];
+    return ocpiRequest(
+      {
+        method,
+        url: `${emspReceiver(module)}/${path.map(encodeURIComponent).join("/")}`,
+        token: state.emsp.token,
+        body,
+        routing: {
+          from: party,
+          to: { countryCode: role.country_code, partyId: role.party_id },
+        },
+      },
+      { transport, retries: 0 },
+    );
+  }
+
+  const findLocation = (id: string) => {
+    const l = state.locations.find((x) => x.id === id);
+    if (!l) throw new Error(`Mock CPO has no location ${id}`);
+    return l;
+  };
+  const findEvse = (locationId: string, uid: string) => {
+    const e = findLocation(locationId).evses?.find((x) => x.uid === uid);
+    if (!e) throw new Error(`Mock CPO has no EVSE ${uid}`);
+    return e;
+  };
+
   async function handle(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const token = tokensFromHeader(request.headers.get("Authorization"))[0];
@@ -245,35 +336,18 @@ export function createMockCpo(options: MockCpoOptions) {
             url: urls.credentials,
           },
           { identifier: "locations", role: "SENDER", url: urls.locations },
+          { identifier: "tariffs", role: "SENDER", url: urls.tariffs },
         ],
       });
     if (path === "/ocpi/2.2.1/credentials")
       return credentialsModule(request, token);
     if (path === "/ocpi/2.2.1/locations" && request.method === "GET") {
       if (!state.issued.has(token)) return unauthorized();
-      const offset = Math.max(
-        0,
-        Number(url.searchParams.get("offset") ?? 0) || 0,
-      );
-      const limit = Math.min(
-        pageLimit,
-        Math.max(
-          1,
-          Number(url.searchParams.get("limit") ?? pageLimit) || pageLimit,
-        ),
-      );
-      const page = locations.slice(offset, offset + limit);
-      const headers: Record<string, string> = {
-        "X-Total-Count": String(locations.length),
-        "X-Limit": String(pageLimit),
-      };
-      if (offset + limit < locations.length) {
-        const next = new URL(urls.locations);
-        next.searchParams.set("offset", String(offset + limit));
-        next.searchParams.set("limit", String(limit));
-        headers.Link = `<${next}>; rel="next"`;
-      }
-      return reply(page, { headers });
+      return senderPage(url, urls.locations, state.locations);
+    }
+    if (path === "/ocpi/2.2.1/tariffs" && request.method === "GET") {
+      if (!state.issued.has(token)) return unauthorized();
+      return senderPage(url, urls.tariffs, state.tariffs);
     }
     return reply(undefined, {
       status: 404,
@@ -359,6 +433,69 @@ export function createMockCpo(options: MockCpoOptions) {
       };
       return parsed.value;
     },
+
+    /**
+     * Changes an EVSE's status (REMOVED to take it away), moving last_updated of the
+     * EVSE and its location. With `push`, PATCHes the eMSP's Receiver too.
+     */
+    async setEvseStatus(
+      locationId: string,
+      uid: string,
+      status: EvseStatus,
+      { push: send = false, at = new Date() } = {},
+    ) {
+      const location = findLocation(locationId);
+      const evse = findEvse(locationId, uid);
+      const last_updated = ocpiTimestamp(at);
+      evse.status = status;
+      evse.last_updated = last_updated;
+      location.last_updated = last_updated;
+      if (send)
+        await push(
+          "locations",
+          "PATCH",
+          [party.countryCode, party.partyId, locationId, uid],
+          { status, last_updated },
+        );
+    },
+
+    /** Adds or replaces a location here, and with `push` PUTs it to the eMSP. */
+    async putLocation(location: Location, { push: send = false } = {}) {
+      const i = state.locations.findIndex((x) => x.id === location.id);
+      if (i >= 0) state.locations[i] = location;
+      else state.locations.push(location);
+      if (send)
+        await push(
+          "locations",
+          "PUT",
+          [location.country_code, location.party_id, location.id],
+          location,
+        );
+    },
+
+    /** Adds or replaces a tariff here, and with `push` PUTs it to the eMSP. */
+    async putTariff(tariff: Tariff, { push: send = false } = {}) {
+      const i = state.tariffs.findIndex((x) => x.id === tariff.id);
+      if (i >= 0) state.tariffs[i] = tariff;
+      else state.tariffs.push(tariff);
+      if (send)
+        await push(
+          "tariffs",
+          "PUT",
+          [tariff.country_code, tariff.party_id, tariff.id],
+          tariff,
+        );
+    },
+
+    /** Removes a tariff here, and with `push` DELETEs it at the eMSP. */
+    async deleteTariff(id: string, { push: send = false } = {}) {
+      state.tariffs = state.tariffs.filter((t) => t.id !== id);
+      if (send)
+        await push("tariffs", "DELETE", [party.countryCode, party.partyId, id]);
+    },
+
+    /** A raw push, for tests of what the eMSP refuses. */
+    push,
 
     /** This CPO unregisters from the eMSP (credentials DELETE). */
     async unregister() {

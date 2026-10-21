@@ -345,8 +345,14 @@ describe("pagination", () => {
       { transport },
     ))
       pages.push(page);
-    expect(pages.map((p) => p.items.length)).toEqual([2, 2, 1]);
-    expect(pages[0]).toMatchObject({ totalCount: 5, limit: 2 });
+    expect(pages.map((p) => p.items.length)).toEqual([2, 2, 2]);
+    expect(pages[0]).toMatchObject({ totalCount: 6, limit: 2 });
+    // Each page names the next one, so a pull can resume there.
+    expect(pages.map((p) => p.next && new URL(p.next).search)).toEqual([
+      "?offset=2&limit=2&date_from=2026-10-01T00%3A00%3A00Z&date_to=2026-10-21T00%3A00%3A00Z",
+      "?offset=4&limit=2&date_from=2026-10-01T00%3A00%3A00Z&date_to=2026-10-21T00%3A00%3A00Z",
+      undefined,
+    ]);
     const correlation = new Set(
       cpo.state.requests.map((r) => r.headers["x-correlation-id"]),
     );
@@ -364,6 +370,7 @@ describe("pagination", () => {
       "LOC3",
       "LOC4",
       "LOC5",
+      "LOC6",
     ]);
   });
 

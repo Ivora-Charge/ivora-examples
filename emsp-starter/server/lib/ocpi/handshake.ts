@@ -394,6 +394,26 @@ async function discoverCaller(
     console.warn(
       `OCPI credentials ${ctx.request.method} by peer ${ctx.peer.id} (request ${ctx.requestId}): discovery failed: ${e instanceof Error ? e.message : "unknown error"}`,
     );
+    // These two come from a valid versions answer the peer itself serves, so naming
+    // them tells it nothing about another host. Fixed messages, never the peer's data.
+    if (
+      e instanceof HandshakeError &&
+      e.statusCode === STATUS.UNSUPPORTED_VERSION
+    )
+      throw new OcpiProblem(
+        400,
+        STATUS.UNSUPPORTED_VERSION,
+        `Peer offers no OCPI ${OCPI_VERSION}`,
+      );
+    if (
+      e instanceof HandshakeError &&
+      e.statusCode === STATUS.NO_MATCHING_ENDPOINTS
+    )
+      throw new OcpiProblem(
+        400,
+        STATUS.NO_MATCHING_ENDPOINTS,
+        "Peer has no credentials endpoint",
+      );
     throw new OcpiProblem(
       400,
       STATUS.UNABLE_TO_USE_CLIENT_API,

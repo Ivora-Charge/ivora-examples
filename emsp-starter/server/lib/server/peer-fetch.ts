@@ -53,6 +53,7 @@ for (const [net, prefix] of [
   ["::", 128], // unspecified
   ["::1", 128], // loopback
   ["::", 96], // IPv4-compatible (deprecated)
+  ["::ffff:0:0:0", 96], // IPv4-translated (SIIT): embeds an IPv4 address
   ["64:ff9b::", 96], // NAT64: embeds an IPv4 address
   ["64:ff9b:1::", 48], // local-use NAT64
   ["100::", 64], // discard
@@ -68,7 +69,8 @@ for (const [net, prefix] of [
 
 /**
  * True when `address` is an IP this server may connect to for a peer. IPv4-mapped IPv6
- * addresses (::ffff:a.b.c.d) are checked as IPv4.
+ * addresses (::ffff:a.b.c.d, also written ::ffff:7f00:1) are checked as IPv4;
+ * IPv4-translated ones (::ffff:0:a.b.c.d) are refused outright.
  */
 export function isPublicAddress(address: string): boolean {
   const ip = address.replace(/^\[|\]$/g, "").replace(/%.*$/, "");

@@ -237,6 +237,12 @@ export type Page = {
   totalCount?: number;
   /** X-Limit: the most objects the server returns per page. */
   limit?: number;
+  /**
+   * The next page's URL from the Link header, when there is one: save it to resume a
+   * pull later. Not yet checked; the iterator refuses it after this page if it leaves
+   * the first page's origin.
+   */
+  next?: string;
 };
 
 export type PageRequest = Omit<OcpiRequest, "method" | "body" | "retry"> & {
@@ -305,19 +311,21 @@ export async function* ocpiPages(
         `${describe("GET", first)} returned a page that is not a list`,
         { request: describe("GET", first) },
       );
+    const next = nextLink(res.headers.get("Link"));
+    let nextUrl: URL | undefined;
+    if (next)
+      try {
+        nextUrl = new URL(next, first);
+      } catch {
+        nextUrl = new URL("invalid:");
+      }
     yield {
       items: res.data,
       totalCount: headerInt(res.headers, "X-Total-Count"),
       limit: headerInt(res.headers, "X-Limit"),
+      ...(nextUrl ? { next: nextUrl.href } : {}),
     };
-    const next = nextLink(res.headers.get("Link"));
-    if (!next) return;
-    let nextUrl: URL;
-    try {
-      nextUrl = new URL(next, first);
-    } catch {
-      nextUrl = new URL("invalid:");
-    }
+    if (!nextUrl) return;
     if (nextUrl.origin !== first.origin || nextUrl.protocol !== first.protocol)
       throw new OcpiTransportError(
         `${describe("GET", first)} linked its next page to another origin; not followed`,

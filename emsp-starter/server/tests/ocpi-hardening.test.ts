@@ -124,6 +124,11 @@ describe("peer addresses", () => {
       "::ffff:7f00:1",
       "::ffff:10.0.0.5",
       "::ffff:a9fe:a9fe",
+      // IPv4-translated (SIIT): ::ffff:0:a.b.c.d, in either notation.
+      "::ffff:0:7f00:1",
+      "::ffff:0:127.0.0.1",
+      "::ffff:0:a00:5",
+      "::ffff:0:5db8:d70e",
       "64:ff9b::7f00:1",
       "2002:7f00:1::",
       "not-an-ip",

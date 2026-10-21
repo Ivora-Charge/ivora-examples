@@ -6,6 +6,7 @@ import {
   invitePeerAction,
   listPeersAction,
   managePeerAction,
+  syncPeerAction,
   type ActionState,
   type PeerSummary,
 } from "./actions";
@@ -206,6 +207,32 @@ export function PeerAdmin() {
           </>
         }
       >
+        <label>
+          Peer ID
+          <input name="peerId" required autoComplete="off" />
+        </label>
+      </ActionCard>
+
+      <ActionCard
+        id="sync"
+        title="Pull locations and tariffs"
+        action={syncPeerAction}
+        submit={
+          <>
+            <button type="submit" name="intent" value="changes">
+              Pull changes
+            </button>
+            <button type="submit" name="intent" value="full">
+              Pull everything
+            </button>
+          </>
+        }
+      >
+        <p className="muted">
+          Reads a registered CPO&apos;s tariffs and locations. The first pull
+          reads everything; later ones read what changed since. CPOs also push
+          changes as they happen.
+        </p>
         <label>
           Peer ID
           <input name="peerId" required autoComplete="off" />

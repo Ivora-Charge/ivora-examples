@@ -4,11 +4,13 @@ on:
   pull_request:
     paths:
       - "emsp-starter/**"
+      - "tools/check-migrations/**"
       - ".github/workflows/emsp-starter.yml"
   push:
     branches: [main, preproduction]
     paths:
       - "emsp-starter/**"
+      - "tools/check-migrations/**"
       - ".github/workflows/emsp-starter.yml"
 
 permissions:
@@ -38,8 +40,8 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run typecheck
-      - name: Migrations follow the 10-30 rule
-        run: npm run check:migrations
+      # The 10-30 rule, with the shared checker in tools/check-migrations.
+      - run: npm run check:migrations
       # Unit tests include the PGlite migration tests and the brand-token sync check.
       - run: npm test
       - run: npm run build
