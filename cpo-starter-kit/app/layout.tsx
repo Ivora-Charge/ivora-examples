@@ -4,6 +4,7 @@ import { config, isDemo } from "@/lib/server/env";
 import { currentStaff } from "@/lib/server/auth";
 import { MODULES } from "@/lib/modules";
 import { ROLE_LABELS } from "@/lib/roles";
+import { THEME_COLOR } from "@/lib/theme";
 import { signOutAction } from "./auth-actions";
 import Nav from "./nav";
 import "./globals.css";
@@ -22,7 +23,7 @@ export async function generateMetadata(): Promise<Metadata> {
 }
 
 export const viewport: Viewport = {
-  themeColor: "#111214", // --color-bg in tokens.css
+  themeColor: THEME_COLOR,
   colorScheme: "dark",
   width: "device-width",
   initialScale: 1,

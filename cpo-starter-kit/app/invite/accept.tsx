@@ -47,8 +47,10 @@ export function AcceptInvite({ demo }: { demo: boolean }) {
         {demo && <span className="badge">Demo</span>}
       </h2>
       <p>
-        You are invited as <strong>{inv.role}</strong>. Choose a password to
-        finish.
+        You are invited as <strong>{inv.role}</strong>.{" "}
+        {inv.signedIn
+          ? "You are signed in with this email: join with this login."
+          : "Choose a password to finish. If you already have a login with this email, enter its password."}
       </p>
       {demo && (
         <p className="notice" role="note">
@@ -70,21 +72,23 @@ export function AcceptInvite({ demo }: { demo: boolean }) {
             readOnly
           />
         </div>
-        <div className="field">
-          <label htmlFor="invite-password">Password</label>
-          <input
-            id="invite-password"
-            name="password"
-            type="password"
-            autoComplete="new-password"
-            minLength={12}
-            required
-            aria-describedby="invite-password-hint"
-          />
-          <span id="invite-password-hint" className="hint">
-            At least 12 characters.
-          </span>
-        </div>
+        {!inv.signedIn && (
+          <div className="field">
+            <label htmlFor="invite-password">Password</label>
+            <input
+              id="invite-password"
+              name="password"
+              type="password"
+              autoComplete="new-password"
+              minLength={12}
+              required
+              aria-describedby="invite-password-hint"
+            />
+            <span id="invite-password-hint" className="hint">
+              At least 12 characters.
+            </span>
+          </div>
+        )}
         <div>
           <button type="submit" className="button" disabled={pending}>
             {pending ? "Joining…" : "Join the team"}

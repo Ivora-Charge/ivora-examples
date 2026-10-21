@@ -7,7 +7,7 @@ begin;
 -- staff member's own session (cpo_operators, cpo_staff) get column-level SELECT for
 -- authenticated, matching their RLS policies. Everything else is service_role only,
 -- behind server code that has already checked the staff member's role.
--- `npm run check:migrations` enforces this in CI.
+-- `npm run check:migrations` (the shared tools/check-migrations) enforces this in CI.
 
 create table if not exists public.cpo_operators (
   id uuid primary key default gen_random_uuid(),
@@ -175,6 +175,67 @@ $$;
 revoke all on function public.cpo_accept_invite(text, uuid, text) from public, anon, authenticated;
 grant execute on function public.cpo_accept_invite(text, uuid, text) to service_role;
 
+-- Role changes and removals. The server checks the team rules against the roles it
+-- read; these functions lock the actor's and the target's rows and refuse with
+-- cpo_changed_meanwhile if either role has moved since, so a manager can't demote or
+-- remove someone an owner promoted in between. The check and the write are one
+-- transaction. Rows are locked in user_id order, so two changes can't deadlock.
+create or replace function public.cpo_lock_checked_roles(
+  p_operator_id uuid, p_actor_id uuid, p_actor_role text, p_user_id uuid, p_expected_role text
+)
+returns void language plpgsql security definer set search_path = '' as $$
+declare
+  v_actor text;
+  v_target text;
+begin
+  perform 1 from public.cpo_staff
+    where operator_id = p_operator_id and user_id in (p_actor_id, p_user_id)
+    order by user_id
+    for update;
+  select role into v_actor from public.cpo_staff
+    where operator_id = p_operator_id and user_id = p_actor_id;
+  select role into v_target from public.cpo_staff
+    where operator_id = p_operator_id and user_id = p_user_id;
+  if v_actor is distinct from p_actor_role or v_target is distinct from p_expected_role then
+    raise exception 'cpo_changed_meanwhile' using errcode = 'P0001';
+  end if;
+end;
+$$;
+revoke all on function public.cpo_lock_checked_roles(uuid, uuid, text, uuid, text) from public, anon, authenticated;
+
+create or replace function public.cpo_set_staff_role(
+  p_operator_id uuid, p_actor_id uuid, p_actor_role text, p_user_id uuid, p_expected_role text, p_role text
+)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.cpo_lock_checked_roles(p_operator_id, p_actor_id, p_actor_role, p_user_id, p_expected_role);
+  update public.cpo_staff set role = p_role
+    where operator_id = p_operator_id and user_id = p_user_id;
+  -- Invites the target may no longer send are revoked with the role.
+  update public.cpo_invites set revoked_at = now()
+    where operator_id = p_operator_id and invited_by = p_user_id
+      and accepted_at is null and revoked_at is null
+      and (p_role in ('technician', 'viewer') or (p_role = 'manager' and role in ('owner', 'manager')));
+end;
+$$;
+revoke all on function public.cpo_set_staff_role(uuid, uuid, text, uuid, text, text) from public, anon, authenticated;
+grant execute on function public.cpo_set_staff_role(uuid, uuid, text, uuid, text, text) to service_role;
+
+create or replace function public.cpo_remove_staff(
+  p_operator_id uuid, p_actor_id uuid, p_actor_role text, p_user_id uuid, p_expected_role text
+)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  perform public.cpo_lock_checked_roles(p_operator_id, p_actor_id, p_actor_role, p_user_id, p_expected_role);
+  update public.cpo_invites set revoked_at = now()
+    where operator_id = p_operator_id and invited_by = p_user_id
+      and accepted_at is null and revoked_at is null;
+  delete from public.cpo_staff where operator_id = p_operator_id and user_id = p_user_id;
+end;
+$$;
+revoke all on function public.cpo_remove_staff(uuid, uuid, text, uuid, text) from public, anon, authenticated;
+grant execute on function public.cpo_remove_staff(uuid, uuid, text, uuid, text) to service_role;
+
 -- One atomic quota shared by every server instance.
 create or replace function public.cpo_take_rate_limit(bucket_key text, quota integer, period_seconds integer)
 returns boolean language plpgsql security definer set search_path = '' as $$
@@ -182,6 +243,11 @@ begin
   if quota < 1 or period_seconds < 1 then
     raise exception 'Invalid rate limit';
   end if;
+  -- Purge a few long-expired windows on every call, so the table stays small.
+  delete from public.cpo_rate_limits where key in (
+    select key from public.cpo_rate_limits where resets_at < now() - interval '1 hour'
+    limit 50 for update skip locked
+  );
   insert into public.cpo_rate_limits as r (key, attempts, resets_at)
     values (bucket_key, 1, now() + make_interval(secs => period_seconds))
   on conflict (key) do update set

@@ -1,9 +1,17 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { readdirSync, readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
-import { readMigrations } from "../scripts/check-migrations";
 
-// The migrations run in an in-process Postgres (PGlite) with the Supabase roles and
-// auth.uid() stubbed, so RLS and grants are tested without a real project.
+// The migrations run in an in-process Postgres (PGlite) with the Supabase roles,
+// default privileges and auth.uid() stubbed, so RLS and grants are tested without a
+// real project.
+
+const MIGRATIONS = "supabase/migrations";
+const migrations = () =>
+  readdirSync(MIGRATIONS)
+    .filter((f) => f.endsWith(".sql"))
+    .sort()
+    .map((f) => readFileSync(`${MIGRATIONS}/${f}`, "utf8"));
 
 const OWNER_A = "10000000-0000-4000-8000-00000000000a";
 const TECH_A = "10000000-0000-4000-8000-00000000000b";
@@ -49,10 +57,13 @@ beforeAll(async () => {
       $$ select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid $$;
     grant usage on schema auth to anon, authenticated, service_role;
     grant execute on function auth.uid() to anon, authenticated, service_role;
-    -- Older Supabase projects grant browser roles everything on new public tables.
-    alter default privileges in schema public grant all on tables to anon, authenticated;
+    -- Supabase grants browser roles everything on new public tables, sequences and
+    -- functions (and Postgres grants PUBLIC EXECUTE on every function).
+    alter default privileges in schema public grant all on tables to anon, authenticated, service_role;
+    alter default privileges in schema public grant all on sequences to anon, authenticated, service_role;
+    alter default privileges in schema public grant all on functions to anon, authenticated, service_role;
   `);
-  for (const f of readMigrations("supabase/migrations")) await pg.exec(f.sql);
+  for (const sql of migrations()) await pg.exec(sql);
   await pg.query(
     "insert into auth.users(id,email) values ($1,'owner-a@example.com'),($2,'tech-a@example.com'),($3,'owner-b@example.com'),($4,'outsider@example.com')",
     [OWNER_A, TECH_A, OWNER_B, OUTSIDER],
@@ -168,9 +179,155 @@ describe("row level security", () => {
           `select cpo_accept_invite('${HASH("a")}','${OUTSIDER}','x@example.com')`,
           `select cpo_create_invite('${operatorA}','x@example.com','owner','${HASH("a")}',null,now())`,
           "select cpo_take_rate_limit('k',100,60)",
+          `select cpo_set_staff_role('${operatorA}','${OWNER_A}','owner','${TECH_A}','technician','owner')`,
+          `select cpo_remove_staff('${operatorA}','${OWNER_A}','owner','${TECH_A}','technician')`,
+          `select cpo_lock_checked_roles('${operatorA}','${OWNER_A}','owner','${TECH_A}','technician')`,
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
+  });
+
+  it("leaves browser roles only the one function the RLS policies need", async () => {
+    const { rows } = await pg.query<{ fn: string; role: string }>(`
+      select p.proname as fn, r.role from pg_proc p
+        join pg_namespace n on n.oid = p.pronamespace
+        cross join (values ('anon'), ('authenticated')) r(role)
+        where n.nspname = 'public' and has_function_privilege(r.role, p.oid, 'execute')
+        order by 1, 2`);
+    expect(rows).toEqual([
+      { fn: "cpo_my_operator_ids", role: "authenticated" },
+    ]);
+  });
+});
+
+describe("role changes and removals", () => {
+  const setRole = (
+    actor: string,
+    actorRole: string,
+    user: string,
+    expected: string,
+    to: string,
+  ) =>
+    as("service_role", null, () =>
+      pg.query("select cpo_set_staff_role($1,$2,$3,$4,$5,$6)", [
+        operatorA,
+        actor,
+        actorRole,
+        user,
+        expected,
+        to,
+      ]),
+    );
+  const remove = (
+    actor: string,
+    actorRole: string,
+    user: string,
+    expected: string,
+  ) =>
+    as("service_role", null, () =>
+      pg.query("select cpo_remove_staff($1,$2,$3,$4,$5)", [
+        operatorA,
+        actor,
+        actorRole,
+        user,
+        expected,
+      ]),
+    );
+  const roleOf = async (user: string) =>
+    (
+      await pg.query<{ role: string }>(
+        "select role from cpo_staff where user_id=$1",
+        [user],
+      )
+    ).rows[0]?.role;
+
+  it("applies a change only while the checked roles still hold", async () => {
+    await setRole(OWNER_A, "owner", TECH_A, "technician", "viewer");
+    expect(await roleOf(TECH_A)).toBe("viewer");
+    // Stale target role: the server checked "technician", it is "viewer" now.
+    await expect(
+      setRole(OWNER_A, "owner", TECH_A, "technician", "manager"),
+    ).rejects.toThrow(/cpo_changed_meanwhile/);
+    await expect(
+      remove(OWNER_A, "owner", TECH_A, "technician"),
+    ).rejects.toThrow(/cpo_changed_meanwhile/);
+    // Stale actor role, and an actor from another operator.
+    await expect(
+      setRole(OWNER_A, "manager", TECH_A, "viewer", "technician"),
+    ).rejects.toThrow(/cpo_changed_meanwhile/);
+    await expect(
+      setRole(OWNER_B, "owner", TECH_A, "viewer", "technician"),
+    ).rejects.toThrow(/cpo_changed_meanwhile/);
+    expect(await roleOf(TECH_A)).toBe("viewer");
+    await setRole(OWNER_A, "owner", TECH_A, "viewer", "technician");
+  });
+
+  it("does not let a manager demote or remove someone promoted to owner meanwhile", async () => {
+    await pg.query("update cpo_staff set role='manager' where user_id=$1", [
+      TECH_A,
+    ]);
+    await pg.query(
+      "insert into cpo_staff(operator_id,user_id,email,role) values ($1,$2,'outsider@example.com','technician')",
+      [operatorA, OUTSIDER],
+    );
+    try {
+      // The manager's page showed OUTSIDER as a technician; an owner promotes them.
+      await setRole(OWNER_A, "owner", OUTSIDER, "technician", "owner");
+      await expect(
+        setRole(TECH_A, "manager", OUTSIDER, "technician", "viewer"),
+      ).rejects.toThrow(/cpo_changed_meanwhile/);
+      await expect(
+        remove(TECH_A, "manager", OUTSIDER, "technician"),
+      ).rejects.toThrow(/cpo_changed_meanwhile/);
+      expect(await roleOf(OUTSIDER)).toBe("owner");
+    } finally {
+      await pg.query("delete from cpo_staff where user_id=$1", [OUTSIDER]);
+      await pg.query(
+        "update cpo_staff set role='technician' where user_id=$1",
+        [TECH_A],
+      );
+    }
+  });
+
+  it("still refuses to demote the last owner", async () => {
+    await expect(
+      setRole(OWNER_A, "owner", OWNER_A, "owner", "manager"),
+    ).rejects.toThrow(/cpo_last_owner/);
+  });
+
+  it("revokes pending invites the person may no longer send", async () => {
+    await pg.query("update cpo_staff set role='manager' where user_id=$1", [
+      TECH_A,
+    ]);
+    const invite = (email: string, role: string, hash: string) =>
+      as("service_role", null, () =>
+        pg.query(
+          "select cpo_create_invite($1,$2,$3,$4,$5,now() + interval '1 day')",
+          [operatorA, email, role, hash, TECH_A],
+        ),
+      );
+    const pending = async () =>
+      (
+        await pg.query<{ email: string }>(
+          "select email from cpo_invites where invited_by=$1 and accepted_at is null and revoked_at is null order by email",
+          [TECH_A],
+        )
+      ).rows.map((r) => r.email);
+    await invite("by-manager-1@example.com", "viewer", HASH("6"));
+    await invite("by-manager-2@example.com", "technician", HASH("7"));
+    await setRole(OWNER_A, "owner", TECH_A, "manager", "viewer");
+    expect(await pending()).toEqual([]);
+
+    await pg.query("update cpo_staff set role='manager' where user_id=$1", [
+      TECH_A,
+    ]);
+    await invite("by-manager-3@example.com", "viewer", HASH("8"));
+    await remove(OWNER_A, "owner", TECH_A, "manager");
+    expect(await pending()).toEqual([]);
+    await pg.query(
+      "insert into cpo_staff(operator_id,user_id,email,role) values ($1,$2,'tech-a@example.com','technician')",
+      [operatorA, TECH_A],
+    );
   });
 });
 
@@ -303,6 +460,19 @@ describe("rate limits", () => {
         "update cpo_rate_limits set resets_at = now() - interval '1 second'",
       );
       expect((await take()).rows[0].ok).toBe(true);
+    });
+  });
+
+  it("purges long-expired windows as it goes", async () => {
+    await as("service_role", null, async () => {
+      await pg.exec(
+        "insert into cpo_rate_limits values ('old-digest', 1, now() - interval '2 hours')",
+      );
+      await pg.query("select cpo_take_rate_limit('other-digest',1,60)");
+      expect(
+        (await pg.query("select 1 from cpo_rate_limits where key='old-digest'"))
+          .rows,
+      ).toEqual([]);
     });
   });
 });

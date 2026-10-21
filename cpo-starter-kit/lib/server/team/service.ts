@@ -227,6 +227,8 @@ export async function changeStaffRole(
   );
   const { team, target } = await memberOf(d, actor, userId);
   if (target.role === to) return;
+  // The team was read above; the backend writes only if these roles still hold.
+  const checked = { actor: { userId: actor.userId, role: actor.role }, target };
   allow(
     canChangeRole(actor, target, to),
     actor.role === "manager"
@@ -235,7 +237,7 @@ export async function changeStaffRole(
   );
   // The database checks this again, atomically, for changes made at the same time.
   if (leavesNoOwner(team, userId, to)) throw lastOwner();
-  await d.backend.setRole(actor.operatorId, userId, to);
+  await d.backend.setRole(actor.operatorId, checked, to);
 }
 
 export async function removeStaff(
@@ -256,7 +258,10 @@ export async function removeStaff(
       : "Managers can remove technicians and viewers only.",
   );
   if (leavesNoOwner(team, userId, null)) throw lastOwner();
-  await d.backend.removeMember(actor.operatorId, userId);
+  await d.backend.removeMember(actor.operatorId, {
+    actor: { userId: actor.userId, role: actor.role },
+    target,
+  });
   // Removing the login too ends their sessions and frees the email for a new invite.
   if (d.accounts)
     await d.accounts.deleteUser(userId).catch((e: unknown) => {
@@ -272,13 +277,15 @@ export interface InviteView {
   role: Role;
   operatorName: string;
   expiresAt: string;
+  /** Already signed in with the invited email: joins with this login, no password. */
+  signedIn: boolean;
 }
 
 /** What the invite page shows before the person accepts. */
 export async function lookupInvite(
   d: TeamDeps,
   rawToken: unknown,
-  source: string,
+  source: string | null,
 ): Promise<InviteView> {
   await limit(d.limiter, d.secret, "acceptSource", source);
   const token = parse(inviteTokenInput, rawToken);
@@ -289,22 +296,27 @@ export async function lookupInvite(
     Date.parse(invite.expiresAt) <= d.now().getTime()
   )
     throw invalidInvite();
+  const current =
+    d.backend.mode === "live" ? await d.accounts?.currentUser() : null;
   return {
     email: invite.email,
     role: invite.role,
     operatorName: invite.operatorName,
     expiresAt: invite.expiresAt,
+    signedIn: current?.email === invite.email,
   };
 }
 
 /**
- * Accept an invite: create the login for the invited email (or use the signed-in one
- * with that email), join the team in one database step, and sign in.
+ * Accept an invite: create the login for the invited email, or use an existing login
+ * with that email (already signed in, or proven with its password), join the team in
+ * one database step, and sign in. An existing login that is not staff yet, for
+ * example after an earlier removal, can join this way too.
  */
 export async function acceptStaffInvite(
   d: TeamDeps,
   raw: { token: unknown; password: unknown },
-  source: string,
+  source: string | null,
 ): Promise<InviteView> {
   const invite = await lookupInvite(d, raw.token, source);
   const tokenHash = hashToken(raw.token as string);
@@ -318,24 +330,43 @@ export async function acceptStaffInvite(
   const current = await accounts.currentUser();
   let userId: string;
   let password: string | null = null;
+  let created = false;
   if (current?.email === invite.email) userId = current.id;
   else {
     password = parse(passwordInput, raw.password);
-    const created = await accounts.createUser(invite.email, password);
-    if (created === "exists")
-      throw new TeamError(
-        "account_exists",
-        "A login with this email already exists. Sign in with it, then open this invite link again.",
+    const made = await accounts.createUser(invite.email, password);
+    if (made === "exists") {
+      // Their own login: the password proves it (and signs them in).
+      await limit(
+        d.limiter,
+        d.secret,
+        "passwordAccount",
+        invite.email,
+        "Too many sign-in attempts. Wait ten minutes and try again.",
       );
-    userId = created;
+      const existing = await accounts.signInWithPassword(
+        invite.email,
+        password,
+      );
+      if (!existing)
+        throw new TeamError(
+          "account_exists",
+          "A login with this email already exists. Enter its password, or ask for a sign-in link on the sign-in page and then open this invite again.",
+        );
+      userId = existing;
+    } else {
+      userId = made;
+      created = true;
+    }
   }
   try {
     await d.backend.acceptInvite(tokenHash, userId, invite.email);
   } catch (e) {
-    if (password) await accounts.deleteUser(userId).catch(() => undefined);
+    if (created) await accounts.deleteUser(userId).catch(() => undefined);
     throw e;
   }
-  if (password) await accounts.signInWithPassword(invite.email, password);
+  if (created && password)
+    await accounts.signInWithPassword(invite.email, password);
   console.info("cpo-starter-kit: invite accepted", { user: userId });
   return invite;
 }
@@ -349,7 +380,7 @@ export async function setupOwner(
     email: unknown;
     password: unknown;
   },
-  source: string,
+  source: string | null,
 ): Promise<void> {
   const accounts = accountsOf(d);
   await limit(
@@ -364,13 +395,14 @@ export async function setupOwner(
       "setup_disabled",
       "Setup is off. Set SETUP_SECRET (at least 16 characters) in the deployment's environment variables and redeploy.",
     );
-  if (typeof raw.secret !== "string" || !sameSecret(raw.secret, d.setupSecret))
-    throw new TeamError("setup_secret", "The setup secret is not right.");
+  // Once set up, the secret is not even compared: nothing left to guess at.
   if (await d.backend.hasStaff())
     throw new TeamError(
       "setup_done",
       "Setup is already done. Sign in instead.",
     );
+  if (typeof raw.secret !== "string" || !sameSecret(raw.secret, d.setupSecret))
+    throw new TeamError("setup_secret", "The setup secret is not right.");
   const operatorName = parse(operatorNameInput, raw.operatorName);
   const email = parse(emailInput, raw.email);
   const password = parse(passwordInput, raw.password);
@@ -390,10 +422,23 @@ export async function setupOwner(
   console.info("cpo-starter-kit: first owner created", { user: userId });
 }
 
-/** After any sign-in: only staff stay signed in. */
-async function staffOrSignOut(d: TeamDeps, accounts: Accounts, userId: string) {
+/**
+ * After any sign-in: only staff stay signed in, plus someone with a pending invite for
+ * their email, so they can open the invite and join with this login.
+ */
+async function staffOrSignOut(
+  d: TeamDeps,
+  accounts: Accounts,
+  userId: string,
+  email: string,
+) {
   const staff = await d.backend.staffForUser(userId);
   if (staff) return staff;
+  if (await d.backend.hasPendingInvite(email))
+    throw new TeamError(
+      "invite_pending",
+      "You are signed in, but not on the team yet. Open your invite link again to join.",
+    );
   await accounts.signOut();
   throw new TeamError(
     "no_access",
@@ -404,7 +449,7 @@ async function staffOrSignOut(d: TeamDeps, accounts: Accounts, userId: string) {
 export async function signInWithPassword(
   d: TeamDeps,
   raw: { email: unknown; password: unknown },
-  source: string,
+  source: string | null,
 ): Promise<Staff> {
   const accounts = accountsOf(d);
   const email = parse(emailInput, raw.email);
@@ -420,28 +465,32 @@ export async function signInWithPassword(
     : null;
   if (!userId)
     throw new TeamError("sign_in_failed", "The email or password is wrong.");
-  return staffOrSignOut(d, accounts, userId);
+  return staffOrSignOut(d, accounts, userId, email);
 }
 
 /** Emails a sign-in link to staff. Answers the same for any address. */
 export async function requestSignInLink(
   d: TeamDeps,
   raw: { email: unknown },
-  source: string,
+  source: string | null,
 ): Promise<void> {
   const accounts = accountsOf(d);
   const email = parse(emailInput, raw.email);
   const message = "Wait a minute before asking for another link.";
   await limit(d.limiter, d.secret, "linkSource", source, message);
   await limit(d.limiter, d.secret, "linkRecipient", email, message);
-  if (await d.backend.isStaffEmail(email)) await accounts.sendSignInLink(email);
+  if (
+    (await d.backend.isStaffEmail(email)) ||
+    (await d.backend.hasPendingInvite(email))
+  )
+    await accounts.sendSignInLink(email);
 }
 
 /** The emailed link's token (our own email). */
 export async function confirmSignInLink(
   d: TeamDeps,
   rawToken: unknown,
-  source: string,
+  source: string | null,
 ): Promise<Staff> {
   const accounts = accountsOf(d);
   await limit(d.limiter, d.secret, "acceptSource", source);
@@ -453,7 +502,7 @@ export async function confirmSignInLink(
     );
   const user = await accounts.currentUser();
   if (!user) throw new TeamError("sign_in_failed", "Sign-in did not complete.");
-  return staffOrSignOut(d, accounts, user.id);
+  return staffOrSignOut(d, accounts, user.id, user.email);
 }
 
 /** Supabase's own email link, which comes back with a PKCE code. */
@@ -472,5 +521,5 @@ export async function completeCodeSignIn(
     );
   const user = await accounts.currentUser();
   if (!user) throw new TeamError("sign_in_failed", "Sign-in did not complete.");
-  return staffOrSignOut(d, accounts, user.id);
+  return staffOrSignOut(d, accounts, user.id, user.email);
 }

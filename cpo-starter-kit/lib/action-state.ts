@@ -13,6 +13,7 @@ export interface ActionState {
     role: string;
     operatorName: string;
     expiresAt: string;
+    signedIn: boolean;
   };
 }
 

@@ -1,14 +1,16 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { leavesNoOwner, ROLES } from "@/lib/roles";
+import { canInvite, leavesNoOwner, ROLES, type Role } from "@/lib/roles";
 import {
+  changedMeanwhile,
   invalidInvite,
   lastOwner,
   TeamError,
   type InviteRecord,
   type Member,
   type Staff,
+  type Checked,
   type TeamBackend,
 } from "./types";
 
@@ -42,6 +44,7 @@ const stateSchema = z.object({
         email: z.string().max(254),
         role,
         tokenHash: z.string().regex(/^[0-9a-f]{64}$/),
+        invitedBy: z.string().max(64).optional(),
         expiresAt: z.string().max(40),
         state: z.enum(["pending", "accepted", "revoked"]),
       }),
@@ -129,6 +132,18 @@ export function createDemoBackend(
 ): TeamBackend {
   const live = (i: DemoTeamState["invites"][number]) =>
     i.state === "pending" && Date.parse(i.expiresAt) > now().getTime();
+  /** Like the database: the write applies only while the checked roles still hold. */
+  const still = (s: DemoTeamState, c: Checked) => {
+    for (const ref of [c.actor, c.target])
+      if (s.members.find((m) => m.userId === ref.userId)?.role !== ref.role)
+        throw changedMeanwhile();
+  };
+  /** Pending invites `userId` sent that their new role (null: removed) may not send. */
+  const dropInvitesBy = (s: DemoTeamState, userId: string, to: Role | null) => {
+    s.invites = s.invites.filter(
+      (i) => i.invitedBy !== userId || (to !== null && canInvite(to, i.role)),
+    );
+  };
   const save = async (s: DemoTeamState) => {
     // A cookie holds about 4 KB.
     if (encodeDemoState(s).length > MAX_COOKIE_CHARS)
@@ -156,6 +171,11 @@ export function createDemoBackend(
     },
     async isStaffEmail(email) {
       return (await store.load()).members.some((m) => m.email === email);
+    },
+    async hasPendingInvite(email) {
+      return (await store.load()).invites.some(
+        (i) => i.email === email && live(i),
+      );
     },
     async members() {
       return (await store.load()).members.map((m): Member => ({ ...m }));
@@ -190,6 +210,7 @@ export function createDemoBackend(
         email: i.email,
         role: i.role,
         tokenHash: i.tokenHash,
+        invitedBy: i.invitedBy,
         expiresAt: i.expiresAt.toISOString(),
         state: "pending",
       });
@@ -240,19 +261,22 @@ export function createDemoBackend(
       });
       await save(s);
     },
-    async setRole(_operatorId, userId, to) {
+    async setRole(_operatorId, checked, to) {
       const s = await store.load();
-      const m = s.members.find((x) => x.userId === userId);
-      if (!m)
-        throw new TeamError("not_found", "This person is not on the team.");
+      still(s, checked);
+      const { userId } = checked.target;
       if (leavesNoOwner(s.members, userId, to)) throw lastOwner();
-      m.role = to;
+      s.members.find((x) => x.userId === userId)!.role = to;
+      dropInvitesBy(s, userId, to);
       await save(s);
     },
-    async removeMember(_operatorId, userId) {
+    async removeMember(_operatorId, checked) {
       const s = await store.load();
+      still(s, checked);
+      const { userId } = checked.target;
       if (leavesNoOwner(s.members, userId, null)) throw lastOwner();
       s.members = s.members.filter((x) => x.userId !== userId);
+      dropInvitesBy(s, userId, null);
       await save(s);
     },
     async hasStaff() {

@@ -100,6 +100,27 @@ export type Database = {
         Returns: boolean;
       };
       cpo_my_operator_ids: { Args: Record<string, never>; Returns: string[] };
+      cpo_set_staff_role: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_actor_role: string;
+          p_user_id: string;
+          p_expected_role: string;
+          p_role: string;
+        };
+        Returns: undefined;
+      };
+      cpo_remove_staff: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_actor_role: string;
+          p_user_id: string;
+          p_expected_role: string;
+        };
+        Returns: undefined;
+      };
     };
     Enums: { [_ in never]: never };
     CompositeTypes: { [_ in never]: never };

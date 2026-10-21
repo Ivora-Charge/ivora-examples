@@ -48,8 +48,16 @@ export const config = {
   get emailFrom() {
     return env("EMAIL_FROM") ?? "";
   },
-  /** Public origin of this deployment, used in invite and sign-in links. */
+  /**
+   * Public origin of this deployment, used in invite and sign-in links. A Vercel
+   * preview deployment always links to itself, never to production's APP_URL.
+   */
   get appUrl() {
+    const preview =
+      env("VERCEL_ENV") === "preview"
+        ? (env("VERCEL_BRANCH_URL") ?? env("VERCEL_URL"))
+        : undefined;
+    if (preview) return `https://${preview}`.replace(/\/+$/, "");
     const vercel = env("VERCEL_PROJECT_PRODUCTION_URL");
     return (
       env("APP_URL") ?? (vercel ? `https://${vercel}` : "http://localhost:3000")

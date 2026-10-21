@@ -18,19 +18,26 @@ export interface LiveOptions {
   tenantId: string;
   fetch?: typeof fetch;
   sleep?: (ms: number) => Promise<void>;
+  /** Milliseconds clock, for tests. */
+  now?: () => number;
   /** Total tries per request, first one included (default 4). */
   attempts?: number;
 }
 
 /**
- * Longest total time one call may spend waiting between retries (Retry-After and
- * backoff together), so a request stays well inside a serverless function's time
- * limit. A wait that would go past it is returned to the caller instead.
+ * Longest total time one call may take: every try and every wait between tries
+ * (Retry-After and backoff) together, so a request stays well inside a serverless
+ * function's time limit. A wait or try that would go past it is not started; the last
+ * error (with its Retry-After) goes back to the caller instead. The listAll* methods
+ * share one such deadline across their pages.
  */
-export const MAX_TOTAL_WAIT_SECONDS = 20;
+export const MAX_REQUEST_SECONDS = 20;
 /** Pages followed by the listAll* methods (100 records each). */
 export const MAX_LIST_PAGES = 20;
-const TIMEOUT_MS = 15_000;
+/** Longest single try. */
+const TIMEOUT_MS = 10_000;
+/** A try with less time left than this is not worth starting. */
+const MIN_TRY_MS = 1_000;
 const KEY = /^[\x21-\x7e]{8,128}$/;
 
 /** Codes after which the same request is repeated with the same Idempotency-Key. */
@@ -101,6 +108,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   const doFetch: typeof fetch = (...a) => (o.fetch ?? globalThis.fetch)(...a);
   const sleep =
     o.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const now = o.now ?? Date.now;
   const attempts = o.attempts ?? 4;
 
   async function once<T>(
@@ -108,6 +116,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     path: string,
     body: unknown,
     key: string | undefined,
+    timeoutMs: number,
   ): Promise<T> {
     const headers: Record<string, string> = {
       authorization: `Bearer ${o.apiKey}`,
@@ -123,7 +132,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         body: body === undefined ? undefined : JSON.stringify(body),
         cache: "no-store",
         redirect: "error",
-        signal: AbortSignal.timeout(TIMEOUT_MS),
+        signal: AbortSignal.timeout(timeoutMs),
       });
     } catch {
       throw new IvoraError(0, "network_error", "Could not reach the Ivora API");
@@ -136,30 +145,42 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   /**
    * One API call. Writes need an Idempotency-Key derived from our record and action;
    * every retry (409 request_in_progress, 503 outcome_unknown, 429, lost response)
-   * sends that same key and body, so the action happens at most once. All waits share
-   * one budget (MAX_TOTAL_WAIT_SECONDS), which a multi-page list passes along.
+   * sends that same key and body, so the action happens at most once. Tries and waits
+   * share one deadline (MAX_REQUEST_SECONDS), which a multi-page list passes along.
    */
   async function request<T>(
     method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
-    opts: { body?: unknown; key?: string; budget?: { waitedS: number } } = {},
+    opts: { body?: unknown; key?: string; deadline?: number } = {},
   ): Promise<T> {
-    const budget = opts.budget ?? { waitedS: 0 };
+    const deadline = opts.deadline ?? now() + MAX_REQUEST_SECONDS * 1000;
     // Second guard behind getIvora(): a live client never sends in demo mode.
     if (isDemo()) throw new Error("Demo mode never calls the Ivora API");
     if (method !== "GET" && !(opts.key && KEY.test(opts.key)))
       throw new Error(`Idempotency-Key missing or invalid for ${method}`);
     for (let n = 1; ; n++) {
+      const left = deadline - now();
+      if (left < MIN_TRY_MS)
+        throw new IvoraError(
+          0,
+          "timeout",
+          "The Ivora API did not answer in time. Try again in a minute.",
+        );
       try {
-        return await once<T>(method, path, opts.body, opts.key);
+        return await once<T>(
+          method,
+          path,
+          opts.body,
+          opts.key,
+          Math.min(TIMEOUT_MS, left),
+        );
       } catch (e) {
         if (!(e instanceof IvoraError) || !retriable(e) || n >= attempts)
           throw e;
-        const waitS = e.retryAfterSeconds ?? 2 ** (n - 1);
-        // Past the budget: hand the error (and its Retry-After) back to the caller.
-        if (budget.waitedS + waitS > MAX_TOTAL_WAIT_SECONDS) throw e;
-        budget.waitedS += waitS;
-        await sleep(waitS * 1000);
+        const waitMs = (e.retryAfterSeconds ?? 2 ** (n - 1)) * 1000;
+        // Past the deadline: hand the error (and its Retry-After) back to the caller.
+        if (now() + waitMs + MIN_TRY_MS > deadline) throw e;
+        await sleep(waitMs);
       }
     }
   }
@@ -174,16 +195,21 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   const list = (o: ListOptions = {}) =>
     query({ limit: o.limit ?? 100, external_reference: o.external_reference });
 
-  /** Follows `next_cursor` page by page, up to MAX_LIST_PAGES. */
+  /**
+   * Follows `next_cursor` page by page, up to MAX_LIST_PAGES and one shared deadline.
+   * Either limit returns what was read so far, marked truncated.
+   */
   async function listAll<T>(path: string): Promise<Listed<T>> {
     const data: T[] = [];
-    const budget = { waitedS: 0 };
+    const deadline = now() + MAX_REQUEST_SECONDS * 1000;
     let after = 0;
     for (let page = 0; page < MAX_LIST_PAGES; page++) {
+      if (page > 0 && deadline - now() < MIN_TRY_MS)
+        return { data, truncated: true };
       const res = await request<Page<T>>(
         "GET",
         `${path}${query({ limit: 100, after: after || undefined })}`,
-        { budget },
+        { deadline },
       );
       data.push(...res.data);
       const next = res.next_cursor;

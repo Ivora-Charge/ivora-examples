@@ -3,6 +3,7 @@ import { isRole } from "@/lib/roles";
 import type { RateLimiter } from "../rate-limit";
 import { serviceClient, sessionClient } from "../supabase";
 import {
+  changedMeanwhile,
   invalidInvite,
   lastOwner,
   TeamError,
@@ -24,6 +25,7 @@ function check<R extends { data: unknown; error: DbError }>(r: R): Ok<R> {
   if (!r.error) return r.data as Ok<R>;
   const m = r.error.message;
   if (m.includes("cpo_last_owner")) throw lastOwner();
+  if (m.includes("cpo_changed_meanwhile")) throw changedMeanwhile();
   if (m.includes("cpo_already_staff"))
     throw new TeamError("already_staff", "This person is already on the team.");
   if (m.includes("cpo_invite_invalid")) throw invalidInvite();
@@ -80,6 +82,19 @@ export function createSupabaseBackend(): TeamBackend {
           .from("cpo_staff")
           .select("user_id")
           .eq("email", email)
+          .limit(1),
+      );
+      return rows.length > 0;
+    },
+    async hasPendingInvite(email) {
+      const rows = check(
+        await svc()
+          .from("cpo_invites")
+          .select("id")
+          .eq("email", email)
+          .is("accepted_at", null)
+          .is("revoked_at", null)
+          .gt("expires_at", new Date().toISOString())
           .limit(1),
       );
       return rows.length > 0;
@@ -187,25 +202,29 @@ export function createSupabaseBackend(): TeamBackend {
         }),
       );
     },
-    async setRole(operatorId, userId, to) {
-      const rows = check(
-        await svc()
-          .from("cpo_staff")
-          .update({ role: to })
-          .eq("operator_id", operatorId)
-          .eq("user_id", userId)
-          .select("user_id"),
-      );
-      if (!rows.length)
-        throw new TeamError("not_found", "This person is not on the team.");
-    },
-    async removeMember(operatorId, userId) {
+    // Check and write in one database transaction: the function locks the actor's and
+    // the target's rows and refuses if either role moved since the server checked it.
+    async setRole(operatorId, checked, to) {
       check(
-        await svc()
-          .from("cpo_staff")
-          .delete()
-          .eq("operator_id", operatorId)
-          .eq("user_id", userId),
+        await svc().rpc("cpo_set_staff_role", {
+          p_operator_id: operatorId,
+          p_actor_id: checked.actor.userId,
+          p_actor_role: checked.actor.role,
+          p_user_id: checked.target.userId,
+          p_expected_role: checked.target.role,
+          p_role: to,
+        }),
+      );
+    },
+    async removeMember(operatorId, checked) {
+      check(
+        await svc().rpc("cpo_remove_staff", {
+          p_operator_id: operatorId,
+          p_actor_id: checked.actor.userId,
+          p_actor_role: checked.actor.role,
+          p_user_id: checked.target.userId,
+          p_expected_role: checked.target.role,
+        }),
       );
     },
     async hasStaff() {

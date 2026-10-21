@@ -9,7 +9,7 @@ import {
 import {
   createLiveClient,
   MAX_LIST_PAGES,
-  MAX_TOTAL_WAIT_SECONDS,
+  MAX_REQUEST_SECONDS,
   parseRetryAfter,
 } from "@/lib/server/ivora/live";
 
@@ -49,17 +49,27 @@ const header = (c: Call, name: string) => new Headers(c.init.headers).get(name);
 const LOCATION = { name: "Site", external_reference: "cpo-site-1" };
 const KEY = "cpo-location-1-create";
 
-function client(responses: (() => Response)[]) {
-  const api = fakeApi(responses);
-  const sleep = vi.fn(async () => {});
+/** A fake clock: sleeping moves it on, and so does each request (`tryMs`). */
+function client(responses: (() => Response)[], tryMs = 0) {
+  let t = 0;
+  const api = fakeApi(
+    responses.map((r) => () => {
+      t += tryMs;
+      return r();
+    }),
+  );
+  const sleep = vi.fn(async (ms: number) => {
+    t += ms;
+  });
   const ivora = createLiveClient({
     baseUrl: `${BASE}/`,
     apiKey: API_KEY,
     tenantId: "42",
     fetch: api.fetch,
     sleep,
+    now: () => t,
   });
-  return { ivora, sleep, ...api };
+  return { ivora, sleep, elapsedMs: () => t, ...api };
 }
 
 describe("live Ivora client", () => {
@@ -147,7 +157,7 @@ describe("live Ivora client", () => {
   });
 
   it("caps the total wait per request and returns the rest to the caller", async () => {
-    expect(MAX_TOTAL_WAIT_SECONDS).toBeLessThanOrEqual(20);
+    expect(MAX_REQUEST_SECONDS).toBeLessThanOrEqual(20);
     const { ivora, calls, sleep } = client([
       err(429, "rate_limited", { "retry-after": "15" }),
       err(429, "rate_limited", { "retry-after": "15" }),
@@ -159,6 +169,50 @@ describe("live Ivora client", () => {
       retryAfterSeconds: 15,
     });
     expect(sleep).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("counts slow tries against the same total, not only the waits", async () => {
+    // Each try takes 9 s and fails with a gateway error; backoff is 1 s, then 2 s.
+    const { ivora, calls, elapsedMs } = client(
+      Array.from({ length: 4 }, () => err(503, "http_503")),
+      9_000,
+    );
+    await expect(ivora.listStations()).rejects.toMatchObject({ status: 503 });
+    // 9 + 1 + 9 = 19 s; a 2 s wait and another try would pass 20 s, so it stops.
+    expect(calls).toHaveLength(2);
+    expect(elapsedMs()).toBeLessThanOrEqual(MAX_REQUEST_SECONDS * 1000);
+  });
+
+  it("limits each try's own timeout to the time left", async () => {
+    const { ivora, calls } = client([
+      err(429, "rate_limited", { "retry-after": "15" }),
+      ok({ data: [] }),
+    ]);
+    const timeouts: number[] = [];
+    const spy = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+      timeouts.push(ms);
+      return new AbortController().signal;
+    });
+    try {
+      await ivora.listStations();
+    } finally {
+      spy.mockRestore();
+    }
+    expect(calls).toHaveLength(2);
+    expect(timeouts).toEqual([10_000, 5_000]);
+  });
+
+  it("returns the pages read so far when a long list runs out of time", async () => {
+    const { ivora, calls } = client(
+      Array.from({ length: MAX_LIST_PAGES }, (_, i) =>
+        ok({ data: [{ id: i + 1 }], next_cursor: i + 1 }),
+      ),
+      9_600,
+    );
+    const r = await ivora.listAllStations();
+    // Two pages take 19.2 s; under a second is left, too little for a third.
+    expect(r).toMatchObject({ truncated: true });
     expect(calls).toHaveLength(2);
   });
 

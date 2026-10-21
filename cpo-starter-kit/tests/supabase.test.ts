@@ -36,6 +36,11 @@ function fakeSupabase(answer: (c: Call) => Response) {
   return calls;
 }
 
+const CHECKED = {
+  actor: { userId: "user-0", role: "manager" as const },
+  target: { userId: "user-1", role: "technician" as const },
+};
+
 const pgError = (message: string, status = 400) =>
   Response.json(
     { code: "P0001", message, details: null, hint: null },
@@ -82,15 +87,37 @@ describe("Supabase team backend", () => {
     });
   });
 
+  it("changes roles and removes staff through RPCs that re-check both roles", async () => {
+    const calls = fakeSupabase(() => new Response(null, { status: 204 }));
+    const b = createSupabaseBackend();
+    await b.setRole("op-1", CHECKED, "viewer");
+    await b.removeMember("op-1", CHECKED);
+    expect(calls.map((c) => c.url.pathname)).toEqual([
+      "/rest/v1/rpc/cpo_set_staff_role",
+      "/rest/v1/rpc/cpo_remove_staff",
+    ]);
+    const expected = {
+      p_operator_id: "op-1",
+      p_actor_id: "user-0",
+      p_actor_role: "manager",
+      p_user_id: "user-1",
+      p_expected_role: "technician",
+    };
+    expect(calls[0].body).toEqual({ ...expected, p_role: "viewer" });
+    expect(calls[1].body).toEqual(expected);
+    expect(calls.every((c) => c.apikey === SERVICE_KEY)).toBe(true);
+  });
+
   it.each([
     ["cpo_last_owner", "last_owner"],
+    ["cpo_changed_meanwhile", "changed"],
     ["cpo_already_staff", "already_staff"],
     ["cpo_invite_invalid", "invite_invalid"],
     ["cpo_setup_done", "setup_done"],
   ])("maps the database's %s to %s", async (raised, code) => {
     fakeSupabase(() => pgError(raised));
     await expect(
-      createSupabaseBackend().setRole("op-1", "user-1", "viewer"),
+      createSupabaseBackend().setRole("op-1", CHECKED, "viewer"),
     ).rejects.toMatchObject({ code });
   });
 
@@ -102,7 +129,7 @@ describe("Supabase team backend", () => {
       ),
     );
     const e = await createSupabaseBackend()
-      .removeMember("op-1", "user-1")
+      .removeMember("op-1", CHECKED)
       .catch((x: Error) => x);
     expect(String(e)).toContain("42501");
     expect(String(e)).not.toContain("secret@example.com");

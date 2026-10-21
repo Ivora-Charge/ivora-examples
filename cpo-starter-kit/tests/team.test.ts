@@ -291,20 +291,79 @@ describe("team service", () => {
       });
     });
 
-    it("asks an existing login to sign in first, and joins a signed-in invitee without a new login", async () => {
-      const { d, accounts, token } = await invited("live");
-      accounts.createUser.mockResolvedValueOnce("exists");
+    it("joins an existing login with its own password, never deleting it", async () => {
+      const { d, store, accounts, token } = await invited("live");
+      const EXISTING = "00000000-0000-4000-8000-0000000000bb";
+      accounts.createUser.mockResolvedValue("exists");
+      accounts.signInWithPassword.mockResolvedValueOnce(null);
+      await expect(
+        acceptStaffInvite(d, { token, password: "not its password" }, "src"),
+      ).rejects.toMatchObject({ code: "account_exists" });
+
+      accounts.signInWithPassword.mockResolvedValueOnce(EXISTING);
+      d.backend.acceptInvite = vi.fn(async () => {
+        throw new Error("database down");
+      });
       await expect(
         acceptStaffInvite(d, { token, password: PASSWORD }, "src"),
-      ).rejects.toMatchObject({ code: "account_exists" });
-      accounts.currentUser.mockResolvedValueOnce({
+      ).rejects.toThrow("database down");
+      expect(accounts.deleteUser).not.toHaveBeenCalled();
+
+      accounts.signInWithPassword.mockResolvedValueOnce(EXISTING);
+      d.backend.acceptInvite = createDemoBackend(
+        store,
+        "Sample Operator",
+        () => clock,
+      ).acceptInvite;
+      await acceptStaffInvite(d, { token, password: PASSWORD }, "src");
+      expect(
+        store.state.members.find((m) => m.email === "joiner@example.com"),
+      ).toMatchObject({ userId: EXISTING, role: "technician" });
+    });
+
+    it("joins a signed-in invitee without a new login", async () => {
+      const { d, accounts, token } = await invited("live");
+      expect(await lookupInvite(d, token, "src")).toMatchObject({
+        signedIn: false,
+      });
+      accounts.currentUser.mockResolvedValue({
         id: NEW_USER,
         email: "joiner@example.com",
       });
-      accounts.createUser.mockClear();
+      // The page leaves out the password field.
+      expect(await lookupInvite(d, token, "src")).toMatchObject({
+        signedIn: true,
+      });
       await acceptStaffInvite(d, { token, password: "" }, "src");
       expect(accounts.createUser).not.toHaveBeenCalled();
       expect(accounts.signInWithPassword).not.toHaveBeenCalled();
+    });
+
+    it("keeps an invitee's existing login signed in, so they can open the invite and join", async () => {
+      const { d, accounts, token } = await invited("live");
+      // Not on the team (for example removed earlier, with the login left behind).
+      accounts.signInWithPassword.mockResolvedValueOnce(NEW_USER);
+      await expect(
+        signInWithPassword(
+          d,
+          { email: "joiner@example.com", password: PASSWORD },
+          "src",
+        ),
+      ).rejects.toMatchObject({ code: "invite_pending" });
+      expect(accounts.signOut).not.toHaveBeenCalled();
+      // A sign-in link works for them too.
+      await requestSignInLink(d, { email: "joiner@example.com" }, "src");
+      expect(accounts.sendSignInLink).toHaveBeenCalledWith(
+        "joiner@example.com",
+      );
+      accounts.currentUser.mockResolvedValue({
+        id: NEW_USER,
+        email: "joiner@example.com",
+      });
+      await acceptStaffInvite(d, { token, password: "" }, "src");
+      expect(await d.backend.staffForUser(NEW_USER)).toMatchObject({
+        role: "technician",
+      });
     });
 
     it("deletes the new login when joining fails", async () => {
@@ -392,6 +451,88 @@ describe("team service", () => {
         code: "invalid",
       });
     });
+
+    /**
+     * Interleaves `between` after the service has read the team and before it writes:
+     * the deterministic version of two staff members acting at the same moment.
+     */
+    function interleave(between: (b: TeamBackend) => Promise<void>) {
+      const s = setup("live");
+      const base = s.d.backend;
+      let once = false;
+      s.d.backend = {
+        ...base,
+        async members(operatorId) {
+          const team = await base.members(operatorId);
+          if (!once) {
+            once = true;
+            await between(base);
+          }
+          return team;
+        },
+      };
+      return s;
+    }
+    const promoteTech = (b: TeamBackend) =>
+      b.setRole(
+        DEMO_OPERATOR_ID,
+        {
+          actor: { userId: DEMO_OWNER_ID, role: "owner" },
+          target: { userId: TECH_ID, role: "technician" },
+        },
+        "owner",
+      );
+
+    it("refuses a manager's stale change after an owner promotes the target", async () => {
+      const { d, store } = interleave(promoteTech);
+      await expect(
+        changeStaffRole(d, manager, { userId: TECH_ID, role: "viewer" }),
+      ).rejects.toMatchObject({
+        code: "changed",
+        message: expect.stringMatching(/Reload the page/),
+      });
+      expect(store.state.members.find((m) => m.userId === TECH_ID)?.role).toBe(
+        "owner",
+      );
+    });
+
+    it("refuses a manager's stale removal after an owner promotes the target", async () => {
+      const { d, store, accounts } = interleave(promoteTech);
+      await expect(removeStaff(d, manager, TECH_ID)).rejects.toMatchObject({
+        code: "changed",
+      });
+      expect(store.state.members.find((m) => m.userId === TECH_ID)?.role).toBe(
+        "owner",
+      );
+      expect(accounts.deleteUser).not.toHaveBeenCalled();
+    });
+
+    it("refuses a change by someone demoted meanwhile", async () => {
+      const { d } = interleave((b) =>
+        b.setRole(
+          DEMO_OPERATOR_ID,
+          {
+            actor: { userId: DEMO_OWNER_ID, role: "owner" },
+            target: { userId: MANAGER_ID, role: "manager" },
+          },
+          "viewer",
+        ),
+      );
+      await expect(
+        changeStaffRole(d, manager, { userId: VIEWER_ID, role: "technician" }),
+      ).rejects.toMatchObject({ code: "changed" });
+    });
+
+    it("revokes invites a demoted manager can no longer send", async () => {
+      const { d } = setup("live", { mailer: null });
+      await inviteStaff(d, manager, {
+        email: "pending@example.com",
+        role: "viewer",
+      });
+      expect(await d.backend.pendingInvites(DEMO_OPERATOR_ID)).toHaveLength(1);
+      await changeStaffRole(d, owner, { userId: MANAGER_ID, role: "viewer" });
+      expect(await d.backend.pendingInvites(DEMO_OPERATOR_ID)).toEqual([]);
+    });
   });
 
   describe("setup", () => {
@@ -432,6 +573,10 @@ describe("team service", () => {
       await expect(setupOwner(d, form, "src")).rejects.toMatchObject({
         code: "setup_done",
       });
+      // Once set up, a wrong secret gets the same answer: nothing to probe.
+      await expect(
+        setupOwner(d, { ...form, secret: "wrong" }, "src"),
+      ).rejects.toMatchObject({ code: "setup_done" });
       expect(accounts.createUser).not.toHaveBeenCalled();
     });
 

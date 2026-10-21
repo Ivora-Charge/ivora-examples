@@ -48,14 +48,18 @@ export const LIMITS = {
 
 export type LimitName = keyof typeof LIMITS;
 
-/** Count an attempt against `name` for `subject`, or throw `rate_limited`. */
+/**
+ * Count an attempt against `name` for `subject`, or throw `rate_limited`. A null
+ * subject (no trusted client address, see sourceOf) skips the quota.
+ */
 export async function limit(
   limiter: RateLimiter,
   secret: string,
   name: LimitName,
-  subject: string,
+  subject: string | null,
   message = "Too many attempts. Wait a few minutes and try again.",
 ): Promise<void> {
+  if (subject === null) return;
   const { quota, periodSeconds } = LIMITS[name];
   if (
     !(await limiter.take(
@@ -68,13 +72,29 @@ export async function limit(
 }
 
 /**
- * The caller's address for per-source quotas. Only Vercel's own header is trusted;
- * elsewhere every caller shares one bucket and the per-account quotas do the work.
+ * The caller's address for per-source quotas, or null when no trusted header says it.
+ *
+ * - TRUSTED_PROXY_HEADER names a header that your own proxy or CDN sets to the client
+ *   address and that callers can't set themselves (for example `cf-connecting-ip`,
+ *   `x-real-ip`, or `x-forwarded-for` from a proxy that appends to it). For a comma
+ *   list, the last entry is used: the one your proxy added.
+ * - On Vercel, without it, Vercel's own `x-vercel-forwarded-for`.
+ * - Otherwise null: per-source quotas are skipped rather than shared, so one client
+ *   can't lock everyone out. The per-account quotas still apply.
  */
-export function sourceOf(headers: Headers): string {
-  if (process.env.VERCEL === "1")
-    return (
-      headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() || "unknown"
-    );
-  return "shared";
+export function sourceOf(
+  headers: Headers,
+  env: Record<string, string | undefined> = process.env,
+): string | null {
+  const name = env.TRUSTED_PROXY_HEADER?.trim().toLowerCase();
+  if (name) {
+    const parts = (headers.get(name) ?? "")
+      .split(",")
+      .map((p) => p.trim())
+      .filter(Boolean);
+    return parts.at(-1) ?? null;
+  }
+  if (env.VERCEL === "1")
+    return headers.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() || null;
+  return null;
 }
