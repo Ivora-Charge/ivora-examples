@@ -19,7 +19,13 @@ export default defineConfig({
     // Pay in store: the cashier console on a desktop and a tablet.
     {
       name: "desktop",
-      testMatch: "store.spec.ts",
+      testMatch: ["store.spec.ts", "a11y.spec.ts"],
+      use: { ...devices["Desktop Chrome"] },
+    },
+    // README screenshots (npm run screenshots); skipped otherwise.
+    {
+      name: "screens",
+      testMatch: "screens.spec.ts",
       use: { ...devices["Desktop Chrome"] },
     },
     {

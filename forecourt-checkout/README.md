@@ -29,7 +29,9 @@ It is built on the [Ivora API](https://ivoracharge.com/developers/guides) and St
 
 All screenshots are demo mode: sample data, nothing charged, no charger contacted, no webhook or email sent.
 
-Light and dark, desktop (1440 px) and phone (390 px): [charger](docs/screens/charger-phone-light.png) ([dark](docs/screens/charger-phone-dark.png)), [cashier console](docs/screens/cashier-desktop-light.png) ([dark](docs/screens/cashier-desktop-dark.png)), [operator](docs/screens/operator-desktop-light.png) ([dark](docs/screens/operator-desktop-dark.png)) and [home](docs/screens/home-phone-light.png) ([dark](docs/screens/home-phone-dark.png)); every capture is in [docs/screens](docs/screens).
+Light and dark, desktop (1440 px) and phone (390 px): [charger](docs/screens/charger-phone-light.png) ([dark](docs/screens/charger-phone-dark.png)), [cashier console](docs/screens/cashier-desktop-light.png) ([dark](docs/screens/cashier-desktop-dark.png)), [operator](docs/screens/operator-desktop-light.png) ([dark](docs/screens/operator-desktop-dark.png)) and [home](docs/screens/home-phone-light.png) ([dark](docs/screens/home-phone-dark.png)); every capture is in [docs/screens](docs/screens), including the cashier console on a tablet in landscape and portrait. Regenerate them all from the demo with `npm run screenshots` (Playwright, light and dark, 1440 px and 390 px).
+
+Accessibility: `tests/e2e/a11y.spec.ts` runs axe (WCAG 2 A/AA) over the landing, charger, counter, operator and cashier screens in light and dark, and checks that nothing scrolls sideways at 390 px.
 
 ## Make it yours in 5 minutes
 

@@ -106,7 +106,14 @@ export function CashierConsole({ initial }: { initial: ConsoleState | null }) {
   if (!state)
     return (
       <>
-        <p>Loading chargers…</p>
+        <p role="status">Loading chargers…</p>
+        {error ? null : (
+          <div className="pumps" aria-hidden="true">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="skeleton pump-skel" />
+            ))}
+          </div>
+        )}
         {error ? <ErrorBox info={error} /> : null}
       </>
     );
@@ -299,29 +306,35 @@ function TileButton({
 }) {
   const v = tile.sale;
   return (
-    <button
+    <div
       role="listitem"
-      className={`pump state-${tile.state}${selected ? " selected" : ""}`}
       aria-label={`${tile.label}: ${TILE_LABELS[tile.state]}`}
-      aria-pressed={selected}
-      onClick={onSelect}
     >
-      <span className="pump-label">{tile.label}</span>
-      <span className="pump-state">{TILE_LABELS[tile.state]}</span>
-      <span className="pump-line">{headline(tile)}</span>
-      {v && v.terms.mode === "prepay" && tile.state === "charging" ? (
-        <span className="pump-line small">
-          prepaid {formatCents(v.terms.prepaidCents ?? 0, v.currency)}
-        </span>
-      ) : null}
-      {tile.warning ? <span className="pump-warn">⚠ Check charger</span> : null}
-      {v?.stopProblem ? (
-        <span className="pump-warn">
-          ⚠ {v.stopProblem === "failed" ? "Stop failed" : "Stop not confirmed"}:
-          stop it at the charger
-        </span>
-      ) : null}
-    </button>
+      <button
+        className={`pump state-${tile.state}${selected ? " selected" : ""}`}
+        aria-pressed={selected}
+        onClick={onSelect}
+      >
+        <span className="pump-label">{tile.label}</span>
+        <span className="pump-state">{TILE_LABELS[tile.state]}</span>
+        <span className="pump-line">{headline(tile)}</span>
+        {v && v.terms.mode === "prepay" && tile.state === "charging" ? (
+          <span className="pump-line small">
+            prepaid {formatCents(v.terms.prepaidCents ?? 0, v.currency)}
+          </span>
+        ) : null}
+        {tile.warning ? (
+          <span className="pump-warn">⚠ Check charger</span>
+        ) : null}
+        {v?.stopProblem ? (
+          <span className="pump-warn">
+            ⚠{" "}
+            {v.stopProblem === "failed" ? "Stop failed" : "Stop not confirmed"}:
+            stop it at the charger
+          </span>
+        ) : null}
+      </button>
+    </div>
   );
 }
 

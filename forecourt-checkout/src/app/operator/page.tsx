@@ -91,9 +91,19 @@ export default async function Today() {
       <section className="card">
         <h2>Sessions</h2>
         {data.rows.length === 0 ? (
-          <p className="muted">No sessions yet today.</p>
+          <div className="empty">
+            <p>No sessions yet today.</p>
+            <p className="muted">
+              Sessions appear here as soon as a driver starts charging.
+            </p>
+          </div>
         ) : (
-          <div className="table-scroll">
+          <div
+            className="table-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label="Table, scrolls sideways"
+          >
             <table>
               <thead>
                 <tr>

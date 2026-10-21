@@ -7,12 +7,12 @@ export function OperatorNav({
 }) {
   const item = (key: typeof current, href: string, label: string) =>
     key === current ? (
-      <strong>{label}</strong>
+      <strong aria-current="page">{label}</strong>
     ) : (
       <Link href={href}>{label}</Link>
     );
   return (
-    <nav className="operator">
+    <nav className="operator" aria-label="Operator">
       {item("today", "/operator", "Today")}
       {item("prices", "/operator/prices", "Prices")}
       {item("faults", "/operator/faults", "Faults")}

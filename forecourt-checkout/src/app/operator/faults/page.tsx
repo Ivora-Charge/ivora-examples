@@ -27,9 +27,20 @@ export default async function Faults() {
       {data.demo ? <p className="notice">Demo data.</p> : null}
       <section className="card">
         {data.rows.length === 0 ? (
-          <p className="muted">No faults reported.</p>
+          <div className="empty">
+            <p>No faults reported.</p>
+            <p className="muted">
+              All chargers are running clean. A fault shows here when one
+              reports it.
+            </p>
+          </div>
         ) : (
-          <div className="table-scroll">
+          <div
+            className="table-scroll"
+            tabIndex={0}
+            role="region"
+            aria-label="Table, scrolls sideways"
+          >
             <table>
               <thead>
                 <tr>
