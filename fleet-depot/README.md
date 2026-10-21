@@ -2,7 +2,7 @@
 
 Depot charging for fleets (vans, buses, company cars) on the Ivora API. It is for operators who want every vehicle ready by its departure time, the site's power limit respected, and a monthly energy and cost figure per vehicle and per driver.
 
-![Demo: six simulated vehicles on their connectors within the 60 kW site cap](docs/screenshot.png)
+![Depot overview: departure timeline, site power against the 60 kW cap](docs/screens/overview-desktop-light.png)
 
 The UI ships as **Rotabay**, a calm operations console with tabular numbers and status shown by shape as well as colour. Screens in light and dark, desktop and phone, are in [`docs/screens/`](docs/screens).
 
@@ -42,6 +42,16 @@ Light and dark follow the system setting; the header button switches and remembe
 - **Reports**: energy and cost per vehicle and per driver per month. They use Wh meter registers and the transaction's `energy_wh`, with the site tariff in integer cents (`TARIFF_CENTS_PER_KWH`). The CSV export is at `/api/reports?by=driver&format=csv&month=YYYY-MM` and guards against spreadsheet formula injection.
 - **Live board**: which vehicle is on which connector, the state of charge (the charger's `soc_percent` when it reports one, otherwise an estimate labelled "est."), ready-by status, and profile status with the composite schedule.
 - **Webhooks** arrive at `/api/webhooks`, verified with `Ivora-Signature` (see below).
+
+## Screens
+
+The landing page is at `/`; the console is at `/depot` with four tabs (Overview, Vehicles and cards, Sessions and cost, Settings) and a wall-display mode (Settings, or Esc to leave). The overview shows a departure timeline: one row per vehicle with energy delivered, the planned charge, a departure tick and a now line; on phones each row carries its own mini timeline labelled start, now and departure. Charts have text alternatives. The delivered bar is an estimate drawn back from now at the current power, because the state carries energy, not the plug-in time.
+
+Regenerate the screenshots in `docs/screens/` (light and dark, desktop 1440 px and phone 390 px) with `npm run build && npm run screenshots`.
+
+| Overview (dark, phone)                    | Wall display (dark)                             |
+| ----------------------------------------- | ----------------------------------------------- |
+| ![](docs/screens/overview-phone-dark.png) | ![](docs/screens/wall-display-desktop-dark.png) |
 
 ## Run locally
 
