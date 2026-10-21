@@ -1,0 +1,93 @@
+/*
+ * Ampleaf brand tokens: the only place for colour, type, radius and spacing.
+ * Components use these variables and nothing else, so a restyle is this file.
+ *
+ * Colours are light-dark(<light>, <dark>). The page follows the system setting;
+ * the sidebar toggle sets data-theme="light" or "dark" on <html>.
+ * tests/contrast.test.ts checks every text pair against WCAG AA (4.5:1) in both.
+ *
+ * Rule: lime (--color-accent) marks what is current or live, and it is FILL ONLY.
+ * Put --color-on-accent text on it; never use it as a text colour on bg or
+ * surface (it is about 1.2:1 on white). tests/contrast.test.ts fails if you do.
+ */
+:root {
+  color-scheme: light dark;
+
+  /* Colour. Page: pale sage / night canopy. Surface: cards, sidebar, inputs. */
+  --color-bg: light-dark(#f2f5ec, #0b130e);
+  --color-surface: light-dark(#ffffff, #132019);
+  /* Ink, and secondary text and labels. */
+  --color-text: light-dark(#10241a, #e7f1e9);
+  --color-text-muted: light-dark(#4a5e52, #9bb2a3);
+  /* Leaf green: primary actions, links, focus; text on it. */
+  --color-primary: light-dark(#17613a, #6fd394);
+  --color-on-primary: light-dark(#ffffff, #06200f);
+  /* Lime: current/live, FILL ONLY; text on it. */
+  --color-accent: light-dark(#c5f24a, #c9f55a);
+  --color-on-accent: light-dark(#10241a, #10241a);
+  /* Status: online (teal, apart from primary), needs attention, offline/errors. */
+  --color-ok: light-dark(#0b6b5c, #5ed6bf);
+  --color-warn: light-dark(#8a4b00, #f2b25c);
+  --color-danger: light-dark(#b3261e, #ff8f85);
+  /* Mixed from the above (--s is surface): hairlines, input borders (3:1), tints. */
+  --color-border: color-mix(in srgb, var(--color-text) 11%, transparent);
+  --color-input-border: color-mix(in srgb, var(--color-text) 50%, var(--s));
+  --color-surface-hover: color-mix(in srgb, var(--color-primary) 8%, var(--s));
+  --color-ok-bg: color-mix(in srgb, var(--color-ok) 12%, var(--s));
+  --color-warn-bg: color-mix(in srgb, var(--color-warn) 12%, var(--s));
+  --color-danger-bg: color-mix(in srgb, var(--color-danger) 12%, var(--s));
+  --s: var(--color-surface);
+  --color-link: var(--color-primary);
+  --color-focus: var(--color-primary);
+  --shadow:
+    0 1px 2px color-mix(in srgb, var(--color-text) 8%, transparent),
+    0 6px 20px -12px color-mix(in srgb, var(--color-text) 18%, transparent);
+
+  /* Type: families from brand/fonts.ts (next/font). Sans: UI, body, tables.
+     Display: titles, wordmark, big numbers. Sizes: 12 labels, 13 secondary,
+     15 body, 16 card titles, 23 wordmark, 28-34 titles and KPI numbers. */
+  --font-sans: var(--font-manrope), system-ui, sans-serif;
+  --font-display: var(--font-fraunces), Georgia, serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.8125rem;
+  --font-size-md: 0.9375rem;
+  --font-size-lg: 1rem;
+  --font-size-brand: 1.4375rem;
+  --font-size-xl: clamp(1.75rem, 1.25rem + 1.5vw, 2.125rem);
+  --font-size-stat: var(--font-size-xl);
+  --font-weight-medium: 600;
+  --font-weight-bold: 800;
+  --line-height: 1.5;
+  --tracking-caps: 0.06em;
+
+  /* Space */
+  --space-0: 0.125rem;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.5rem;
+  --space-6: 2.25rem;
+
+  /* Shape and layout. The leaf corner is the signature: current or live only. */
+  --radius: 12px;
+  --radius-sm: 9px;
+  --radius-pill: 999px;
+  --leaf: 18px 3px 18px 3px;
+  --leaf-sm: 10px 2px 10px 2px;
+  --border-width: 1px;
+  --focus-width: 3px;
+  --focus-offset: 2px;
+  --tap-target: 44px;
+  --sidebar-width: 15.5rem;
+  --content-max: 1180px;
+  --form-max: 28rem;
+  --transition: 120ms ease-out;
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+}

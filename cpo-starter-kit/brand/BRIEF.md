@@ -1,6 +1,6 @@
 # SQD-32 brief: cpo-starter-kit brand
 
-Brief stage only. No app code is changed; the mock is a static page (`mock.html`) and the screenshots are in `docs/brief/`.
+Approved 2026-10-21 (name, then palette v2). Part A builds it into the app: the tokens are in `brand/tokens.css` as `--color-<token>`, with `ink` as `--color-text` and `muted` as `--color-text-muted`. The mock is a static page (`mock.html`) and its screenshots are in `docs/brief/`.
 
 ## Name
 
