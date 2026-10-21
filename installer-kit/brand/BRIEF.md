@@ -1,11 +1,11 @@
 # SQD-29 brief: installer-kit brand
 
-> Location note: the ticket asks for `<template>/brand/BRIEF.md`. The `brand/` folder is created in the full part A (`brand.ts`, `tokens.css`, `logo.svg`); this brief and its mocks live in `docs/brief/` so the BRIEF PR touches only documents. The final build moves `logo.svg` into `brand/`.
+> Approved by the owner on 2026-10-21 with the name Lugline and four fixes (listed at the end). The mock in `mock.html` and `mock/` is the approved brief stage and still shows the earlier working name and mark.
 
 ## Name
 
-**Boltmark**. Coined; it is a one-line change in `brand/brand.ts` later.
-Alternates: **Lugline**, **Sparkhand**.
+**Lugline** (a lug is the crimped terminal on the end of a cable). Coined; a rename is one line in `brand/brand.ts`.
+Alternates: **Boltmark**, **Sparkhand**.
 Name searches for EV and charging companies were not exhaustive (no trademark search done); the owner may want a quick check before the full build.
 
 ## Mood, users
@@ -54,8 +54,15 @@ A **checklist wizard**: a numbered step rail (done = green, current = orange wit
 
 ## Logo concept
 
-Original mark (`logo.svg`): a rounded tile with a single bold stroke that forms a "B" whose lower bowl ends in a round dot, read as a bolt head and a plug pin. It uses `currentColor` plus one inner colour, so it recolours from tokens and prints in one colour.
+Original mark (`logo.svg`): a heavy "L" whose foot is crimped into a ring lug, the terminal an electrician fits to a cable. The L is `currentColor` and the lug uses `--accent`, falling back to `currentColor`, so it prints in one colour.
 
 ## Mocks
 
-`mock.html` is a static page (no app code) showing the Connect step: demo banner, step rail, OCPP details with copy buttons, password reveal, live online status. Captured in light mode: `desktop.png` (1440 px) and `phone.png` (390 px, no sideways scroll; checked `scrollWidth` = 390). Fonts used by the mock are in `fonts/`.
+`mock.html` is a static page (no app code) showing the Connect step: demo banner, step rail, OCPP details with copy buttons, password reveal, live online status. Captured in light mode: `mock/desktop.png` (1440 px) and `mock/phone.png` (390 px, no sideways scroll; checked `scrollWidth` = 390). Fonts used by the mock are in `fonts/`.
+
+## Owner fixes applied in the build
+
+1. Phones get a compact step bar ("Step 2 of 5" and five segments; done steps link back). Desktop keeps the rail.
+2. The mark is redrawn for Lugline (above).
+3. The connect step shows either "Plug in the charger. Then tap Test." (charger not online) or "Charger online" (booted), never both.
+4. Connection URL, charge point ID and password stay on one line with an ellipsis; the `title` holds the full value and Copy copies all of it.
