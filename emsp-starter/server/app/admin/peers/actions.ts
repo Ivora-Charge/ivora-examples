@@ -8,9 +8,16 @@ import {
   rotateCredentials,
   unregisterPeer,
 } from "@/lib/ocpi/handshake";
+import { locationStore } from "@/lib/locations/registry";
+import { syncPeer, SyncError, type SyncReport } from "@/lib/locations/sync";
 import { peerStore } from "@/lib/ocpi/registry";
 import type { Peer } from "@/lib/ocpi/store";
-import { adminEnabled, checkAdminSecret } from "@/lib/server/admin";
+import { assertLive } from "@/lib/server/demo";
+import {
+  adminClientKey,
+  adminEnabled,
+  checkAdminSecret,
+} from "@/lib/server/admin";
 
 /** A peer as the admin web shows it: no token, no ciphertext. */
 export type PeerSummary = {
@@ -57,18 +64,10 @@ const field = (form: FormData, name: string) => {
   return typeof v === "string" ? v : "";
 };
 
-/**
- * Who is asking, for the admin-secret rate limit. The address comes from the proxy in
- * front of the server and may be forged without one; the limit also caps wrong secrets
- * in total, so forging it does not help.
- */
+/** Who is asking, for the admin-secret rate limit (see adminClientKey). */
 async function clientKey(): Promise<string> {
   try {
-    const h = await headers();
-    const ip =
-      h.get("x-real-ip")?.trim() ||
-      h.get("x-forwarded-for")?.split(",")[0]?.trim();
-    return ip ? ip.slice(0, 64) : "unknown";
+    return adminClientKey(await headers());
   } catch {
     // Outside a request (tests): one shared key.
     return "unknown";
@@ -99,7 +98,8 @@ async function asAdmin(
   try {
     return await fn();
   } catch (e) {
-    if (e instanceof HandshakeError) return { ok: false, message: e.message };
+    if (e instanceof HandshakeError || e instanceof SyncError)
+      return { ok: false, message: e.message };
     if (e instanceof Error && "code" in e && e.code === "demo_mode")
       return { ok: false, message: e.message };
     console.error(
@@ -193,5 +193,45 @@ export async function listPeersAction(
   return asAdmin(form, async () => {
     const peers = (await peerStore().listPeers()).map(summary);
     return { ok: true, peers, message: `${peers.length} peer(s).` };
+  });
+}
+
+const describeSync = (r: SyncReport) =>
+  `${r.module}: ${r.items} stored${r.invalid ? `, ${r.invalid} invalid skipped` : ""}${r.removed ? `, ${r.removed} removed` : ""}${r.complete ? "" : " (more pages left: pull again to continue)"}`;
+
+/**
+ * Pulls a registered peer's tariffs, then its locations: changes since the last pull,
+ * or everything with intent "full".
+ */
+export async function syncPeerAction(
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  return asAdmin(form, async () => {
+    const id = field(form, "peerId").trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id))
+      return { ok: false, message: "Peer ID must be a UUID." };
+    assertLive("pull locations and tariffs from a CPO");
+    const mode = field(form, "intent") === "full" ? "full" : "auto";
+    const deps = { peers: peerStore(), locations: locationStore() };
+    const peer = await deps.peers.getPeer(id);
+    if (!peer) return { ok: false, message: "No such peer." };
+    const reports: SyncReport[] = [];
+    for (const module of ["tariffs", "locations"] as const)
+      if (
+        peer.endpoints.some(
+          (e) => e.identifier === module && e.role === "SENDER",
+        )
+      )
+        reports.push(await syncPeer(id, module, deps, { mode }));
+    if (!reports.length)
+      return {
+        ok: false,
+        message: `${peer.label} has no locations or tariffs Sender endpoint.`,
+      };
+    return {
+      ok: true,
+      message: `Pulled from ${peer.label}. ${reports.map(describeSync).join("; ")}.`,
+    };
   });
 }

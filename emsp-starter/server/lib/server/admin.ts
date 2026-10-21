@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash, timingSafeEqual } from "node:crypto";
 import { config } from "./config";
+import { clientKey } from "./rate-limit";
 
 /**
  * TEMPORARY admin gate, until admin sign-in lands (part 7): every admin action asks
@@ -62,6 +63,9 @@ export function checkAdminSecret(
   for (const k of [key, ALL]) failures.set(k, [...recent(k, now), now]);
   return "wrong";
 }
+
+/** The client key for the admin-secret rate limit: see clientKey. */
+export const adminClientKey = clientKey;
 
 export function resetAdminLimitForTests() {
   failures.clear();
