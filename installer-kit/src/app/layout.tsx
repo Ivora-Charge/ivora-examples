@@ -1,15 +1,37 @@
 import type { ReactNode } from "react";
+import { brand } from "../../brand/brand";
+import { fontVariables } from "../../brand/fonts";
+import { Logo } from "../../brand/Logo";
+import "../../brand/tokens.css";
 import "./globals.css";
+import { THEME_KEY } from "@/lib/theme";
+import ThemeToggle from "./theme-toggle";
 
 export const metadata = {
-  title: "Installer kit",
-  description: "Connect, test and hand over an OCPP charger",
+  title: brand.name,
+  description: brand.tagline,
 };
+
+// Applies a saved theme before first paint, so dark mode does not flash.
+const themeScript = `try{var t=localStorage.getItem(${JSON.stringify(THEME_KEY)});if(t)document.documentElement.dataset.theme=t}catch(e){}`;
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="en">
-      <body>{children}</body>
+    <html lang="en" className={fontVariables} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
+      <body>
+        <a className="skip" href="#main">
+          Skip to content
+        </a>
+        <header className="top">
+          <Logo />
+          <span className="name">{brand.name}</span>
+          <ThemeToggle />
+        </header>
+        {children}
+      </body>
     </html>
   );
 }

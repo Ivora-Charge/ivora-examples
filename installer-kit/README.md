@@ -1,4 +1,4 @@
-# Installer kit
+# Lugline (installer kit)
 
 For installers and hardware sellers: connect a site's OCPP 1.6J charger to Ivora, prove it works, and hand the site QR stickers and a one-page commissioning report, in minutes and with no new hardware.
 
@@ -11,7 +11,28 @@ For installers and hardware sellers: connect a site's OCPP 1.6J charger to Ivora
 
 This template collects no payments. For paid charging, see [forecourt-checkout](../forecourt-checkout) and [Squid](https://github.com/Ivora-Charge/squid).
 
-![Installer kit demo: site, charger credentials, connection, test, price and hand-over](docs/screenshot.png)
+| Light                                                                                    | Dark                                                                                   |
+| ---------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| ![Lugline demo after hand-over, desktop, light](docs/screens/handover-desktop-light.png) | ![Lugline demo after hand-over, desktop, dark](docs/screens/handover-desktop-dark.png) |
+
+More in [docs/screens](docs/screens) (desktop and phone, light and dark).
+
+## Make it yours in 5 minutes
+
+The whole brand lives in [`brand/`](brand); components use only its tokens.
+
+1. **Name and copy:** `brand/brand.ts` (product name, tagline, lead, support line, connect hint). A rename is the one `name` line.
+2. **Colours, type scale, radius, spacing:** `brand/tokens.css`. Each colour is `light-dark(<light>, <dark>)`. Run `npm test`: `tests/contrast.test.ts` fails if a text pair drops below WCAG AA (4.5:1) in either mode.
+3. **Logo:** `brand/logo.svg` (standalone file) and `brand/Logo.tsx` (the same paths inline, so it follows `currentColor` and `--accent`). Keep both in step.
+4. **Fonts:** put woff2 files in `brand/fonts/` and point `brand/fonts.ts` at them. Use open-licensed fonts and keep their license files next to them.
+
+Light and dark follow the system setting; the header button switches and remembers the choice in the browser. The design brief and the approved mock are in `brand/BRIEF.md` and `brand/mock/`.
+
+### Fonts and icons
+
+- [Barlow and Barlow Condensed](https://github.com/jpt/barlow), Copyright 2017 The Barlow Project Authors, SIL Open Font License 1.1 (`brand/fonts/OFL-Barlow.txt`).
+- [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono), Copyright 2020 The JetBrains Mono Project Authors, SIL Open Font License 1.1 (`brand/fonts/OFL-JetBrainsMono.txt`).
+- The Lugline mark and the theme icon are original SVGs, Apache-2.0 with this template.
 
 ## Run locally
 
