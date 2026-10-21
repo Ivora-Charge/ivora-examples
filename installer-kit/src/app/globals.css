@@ -5,6 +5,7 @@ body {
   padding: 0 1rem;
   color: #111;
   line-height: 1.45;
+  overflow-wrap: break-word;
 }
 h1 {
   margin-bottom: 0.2rem;
@@ -46,6 +47,12 @@ textarea {
   border: 1px solid #bbb;
   border-radius: 6px;
   box-sizing: border-box;
+  max-width: 100%;
+}
+/* Let a long select shrink to the card instead of keeping its intrinsic width. */
+label > select {
+  width: 100%;
+  min-width: 0;
 }
 textarea {
   width: 100%;
@@ -79,9 +86,14 @@ button:disabled {
   align-items: flex-end;
   margin: 0.5rem 0;
 }
+/* Fields wrap onto their own line, at most the row's width, on narrow screens. */
+.row > label {
+  min-width: 0;
+  max-width: 100%;
+}
 .grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
   gap: 0.6rem;
   margin-bottom: 0.6rem;
 }
@@ -101,6 +113,17 @@ dt {
 }
 dd {
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 30rem) {
+  /* Stack labels above values so long URLs and the copy buttons fit. */
+  dl {
+    grid-template-columns: 1fr;
+  }
+  dd {
+    margin-bottom: 0.4rem;
+  }
 }
 .banner {
   background: #fff3cd;
@@ -136,6 +159,7 @@ dd {
 }
 .qrs {
   display: flex;
+  flex-wrap: wrap;
   gap: 1.5rem;
 }
 .qr {
