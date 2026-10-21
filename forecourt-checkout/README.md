@@ -1,8 +1,11 @@
 # Forecourt checkout
 
-Pay-at-the-charger checkout for fuel stations, convenience stores and retail sites with DC fast chargers.
+Checkout for fuel stations, convenience stores and retail sites with DC fast chargers, with two ways to pay:
 
-A driver scans the QR code on the charger with their phone, sees the price, pays with a card, Apple Pay or Google Pay, watches the session live and gets a receipt. No app, no account. When the car is full, the page asks the driver to move it and counts down to the idle fee. Site staff get password-protected pages for prices per charger, today's sessions and revenue, and recent faults.
+- **Pay at the charger.** A driver scans the QR code on the charger with their phone, sees the price, pays with a card, Apple Pay or Google Pay, watches the session live and gets a receipt. No app, no account. When the car is full, the page asks the driver to move it and counts down to the idle fee.
+- **Pay in store, like fuel.** The driver picks "Pay at the counter" on the same QR page and tells the cashier "Charger 3". On a tablet-first cashier console, the cashier either takes a prepayment on the store's own POS and starts the charger, or authorises a plugged-in car and takes payment when it's done. The console shows change to hand back, any amount still due, and prints an 80 mm receipt. The driver's phone shows the session live.
+
+Site staff get password-protected pages for prices per charger, today's sessions and revenue (card and paid in store), and recent faults. Cashiers get their own password that can authorise, stop and take payment, but cannot change prices or settings.
 
 It is built on the [Ivora API](https://ivoracharge.com/developers/guides) and Stripe, and it follows the shared [template conventions](../docs/conventions.md).
 
@@ -13,6 +16,10 @@ It is built on the [Ivora API](https://ivoracharge.com/developers/guides) and St
 | ![Charger page with prices and estimate](docs/charger.png) | ![Idle-fee countdown after charging](docs/move-car.png) | ![Receipt with idle grace and hold release](docs/receipt.png) |
 
 ![Operator page: today's sessions, revenue and application fee](docs/operator.png)
+
+| Cashier console                                                   | Pay at the counter (driver)                                            | Store receipt (80 mm)                                             |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| ![Cashier console with chargers in every state](docs/cashier.png) | ![Driver's pay-at-the-counter screen while charging](docs/counter.png) | ![Printable store receipt, paid in store](docs/store-receipt.png) |
 
 All screenshots are demo mode: sample data, nothing charged, no charger contacted.
 
@@ -28,6 +35,8 @@ npm run dev
 
 Open http://localhost:3000 and pick a demo charger, as if you had scanned its QR code. The demo runs a whole session from scan to receipt: the hold, charging with live kWh, power and running cost, the "move your car" countdown, and the receipt. Demo time runs 30 times faster, so the simulated car is full after about 50 seconds. The operator pages are at `/operator`; the demo password is `demo`.
 
+The cashier console is at `/cashier` (demo password `demo`). It opens with sample chargers in every state: available, plugged in, charging on a prepayment, done unpaid, a prepayment that ran over, paid, paying by card, offline, faulted, and one charging without a console sale (flagged). Try pay-after on Charger 3 (authorise, stop, mark paid, print) and a $20 prepay on Charger 4, which stops itself before the money runs out and shows the change. Open `/c/DEMO-4/1` in another tab and choose "Pay at the counter" to see the driver's side. Demo in-store sales live in a cookie in your own browser (`src/lib/demo-store.ts`), so every visitor gets their own forecourt and nothing is stored on the server.
+
 Demo mode is on whenever a required live variable is missing, or when `DEMO_MODE=1`. It never sends payment requests or charger commands: demo sessions are answered by `src/lib/demo.ts`, which has no network code, and a unit test fails if demo mode calls `fetch`.
 
 Checks, as CI runs them:
@@ -37,7 +46,7 @@ npm run format:check
 npm run typecheck
 npm test            # unit tests, no network or credentials
 npm run build
-npm run test:e2e    # Playwright, demo end to end
+npm run test:e2e    # Playwright, demo end to end: card flow on a phone, in-store flows on desktop and tablet
 ```
 
 ## Connect real services
@@ -46,7 +55,8 @@ npm run test:e2e    # Playwright, demo end to end
 2. For each charger, set the station's `external_reference` to your own short code, such as `PUMP-3`. QR codes encode `https://<your domain>/c/<code>/<connector number>`, so you can move hosting or replace a charger without reprinting stickers.
 3. Give every connector a tariff in Ivora. The tariff's `authorization_minor` is the card hold for that charger. Prices can then be changed on the operator Prices page.
 4. In Stripe, enable Apple Pay and Google Pay under payment methods. Stripe-hosted Checkout shows them to drivers whose phone supports them; no domain verification is needed for hosted Checkout.
-5. Set the environment variables below. Add webhooks: an Ivora webhook to `https://<your domain>/api/webhooks/ivora` for `charging_session.status_changed` and `bill.finalized`, and a Stripe webhook to `https://<your domain>/api/webhooks/stripe` for `checkout.session.completed` and `checkout.session.expired` (a Connect webhook if you use a connected account).
+5. To take payment in the store, set `CASHIER_PASSWORD` and read [Pay in store](#pay-in-store) first: **every charger must require authorisation** (no free vend, no auto-start on plug-in).
+6. Set the environment variables below. Add webhooks: an Ivora webhook to `https://<your domain>/api/webhooks/ivora` for `charging_session.status_changed` and `bill.finalized` (with pay in store, also `meter.sampled` with `"meter": {"sample_interval_seconds": 30}`; see [Stopping at the prepaid limit](#stopping-at-the-prepaid-limit)), and a Stripe webhook to `https://<your domain>/api/webhooks/stripe` for `checkout.session.completed` and `checkout.session.expired` (a Connect webhook if you use a connected account).
 
 | Variable                      | Required | What it is                                                                                                                           |
 | ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -55,6 +65,7 @@ npm run test:e2e    # Playwright, demo end to end
 | `STRIPE_SECRET_KEY`           | Live     | Stripe secret key. Use test mode outside production.                                                                                 |
 | `SESSION_SECRET`              | Live     | Signs operator and driver cookies. `openssl rand -hex 32`.                                                                           |
 | `OPERATOR_PASSWORD`           | Live     | Password for `/operator`.                                                                                                            |
+| `CASHIER_PASSWORD`            | No       | Password for the cashier console at `/cashier`. Setting it turns on pay in store. Cashiers can't change prices or settings.          |
 | `PUBLIC_BASE_URL`             | Live     | Your own HTTPS origin, used in Stripe return URLs and QR codes.                                                                      |
 | `IVORA_WEBHOOK_SECRET`        | Advised  | Verifies the `Ivora-Signature` header on `/api/webhooks/ivora`.                                                                      |
 | `STRIPE_WEBHOOK_SECRET`       | Advised  | Verifies Stripe's signature on `/api/webhooks/stripe`.                                                                               |
@@ -114,22 +125,89 @@ All amounts are integer cents. Every rounding is half up, once, at a documented 
 
 OCPP 1.6 meter registers are Wh. The app does arithmetic on Ivora's integer `energy_wh` and converts to kWh only for display, in one helper (`src/lib/units.ts`). Power arrives in W and is shown in kW.
 
+## Pay in store
+
+For fuel stations and convenience stores: the driver pays at the counter, and the store takes the money on its own POS (cash or card). That money never touches Stripe or this app. The app only drives the charger and records what happened in Ivora as **settlement reports**, which never move money, so the operator's figures show "paid in store" next to card payments. The flow is in `src/lib/server/store.ts`, the pure rules in `src/lib/store.ts`.
+
+### The cashier console
+
+`/cashier` shows every connector as a large tile, numbered from the station's `external_reference` like a fuel pump (`PUMP-3` is "Charger 3"; stations with several connectors are "Charger 3-1", "Charger 3-2"). Tile states: Available, Plugged in (waiting for the cashier), Starting, Charging (live kWh and cost), Done unpaid, Paid, Paying by card, Offline and Faulted. A tile shows "⚠ Check charger" when the charger is charging without a console sale or card session, or Ivora has a session the app didn't create.
+
+The console polls every 4 seconds. Ivora webhooks move in-store sales forward on the server even when no console or driver screen is open: `meter.sampled` runs the prepaid stop check while charging, and `charging_session.status_changed` and `bill.finalized` finalize the bill and record the prepaid capture. The cron sweep is a backstop. The next poll shows the result. Pushing updates to the tablet would need shared state between server instances, which this template avoids.
+
+### Prepay
+
+1. The store takes cash or card on its POS. The cashier enters the prepaid amount (quick buttons for $10 to $50), or a kWh amount that the console prices with the tariff quote, and confirms.
+2. The console creates an Ivora externally funded session (processor `in-store`, `payment_reference` = the sale ID, `application_reference` = `forecourt:store:<sale ID>`), records an `authorization` settlement report for the prepaid amount, then starts it with `funding_confirmed: true`. If the report can't be recorded, the charger is not started.
+3. **Ivora does not stop at an external amount, so the app does** (see [Stopping at the prepaid limit](#stopping-at-the-prepaid-limit)). A dollar sale stops when the running cost reaches the prepaid amount less a headroom: the cost of the next minute at the recent power (energy at the session's tariff snapshot per-kWh price, plus the higher of its time and idle rates), but at least 50 cents or 5% of the prepaid amount. A kWh sale stops on energy, half a minute of energy at the recent power (at least 1% of the limit) before it; its prepaid amount (the quote for that energy) is only a safety cap, keeping back just the next minute's cost. Either way the unused amount is handed back as change.
+4. When the transaction ends the app finalizes the bill and records a `capture` report for the part the prepaid amount covered, `min(cost, prepaid)`, under its own operation reference `<sale>:capture`.
+5. The console shows the change to hand back (prepaid − cost). "Change given" records a `release` report for the unused amount (amount 0, as Ivora's release reports require).
+6. **Overrun.** If the session cost more than the prepaid amount (a charger slow to stop, or idle fees after it stopped), the console shows "Used $x more than prepaid" and "Extra due $x". It is never charged or recorded as collected automatically. The cashier decides whether to collect it; "Mark extra paid" records a separate `capture` report.
+
+### Postpay
+
+1. The driver plugs in; the tile shows Plugged in. The cashier taps "Authorise: pay after charging" and the console creates and starts an externally funded session. Pay-after needs the car plugged in, so a charger never waits authorised with nobody there.
+2. When the transaction ends, the console shows the amount due from the final bill, idle fees included.
+3. "Mark paid" (cash or card on the POS, with an optional POS reference) records a `capture` report for exactly the amount due. **A POS reference must hold no card or customer data**: use the POS's own receipt or transaction number. It is stored in Ivora as part of the operation reference and printed on the receipt.
+
+### Stopping at the prepaid limit
+
+The stop check runs whenever the app reads a prepaid sale: on every `meter.sampled` webhook, every console or driver-screen poll, and the sweep. The webhook is what makes it work with no screen open, so subscribe to `meter.sampled` with a 30-second interval (`"meter": {"sample_interval_seconds": 30}` when you register the endpoint; the default is 60 and the range 10 to 3600). Ivora always delivers a transaction's first and last samples. You can limit the endpoint to your forecourt's stations with `stations`. The headroom looks a minute ahead for money and half a minute for energy, which covers a 30-second sample interval plus the charger's reaction time; a longer interval makes overruns more likely.
+
+The daily sweep (`/api/cron/reconcile`, `vercel.json`) is the backstop for missed webhooks. To tighten it, run it every minute on a paid Vercel plan (`"schedule": "* * * * *"`), or call it from an external scheduler with `Authorization: Bearer $CRON_SECRET`.
+
+If the charger rejects a stop, the app retries it with a new idempotency key (`:stop-2`, then `:stop-3`). If Ivora can't tell whether a stop reached the charger (`unknown`), it is never resent under a new key. In both cases, and when all three attempts fail or Ivora refuses another, the console shows "Stop failed: stop it at the charger" (or "Stop not confirmed") on the tile, and the driver's screen asks the driver to see the cashier.
+
+### The driver's screen
+
+The QR page offers "Pay here by card" (unchanged) and "Pay at the counter: tell the cashier Charger 3". The counter page shows the number large, then live status once the cashier starts the charger: energy, power, cost against the prepaid amount, "please move your car", and finally the amount due or the change to collect.
+
+The counter page's API (`GET /api/counter/<code>/<connector>`) is public, so it answers only what the driver needs (status, energy, time, the amount due or change; no sale ID, payments or POS references), reuses one answer per charger for 5 seconds on each server instance, and allows 60 reads a minute per client.
+
+### Receipts
+
+"Print receipt" opens `/cashier/receipt/<sale ID>`, laid out for 80 mm thermal paper (named `@page` of 80 mm width): energy, time, rates, idle fee and grace, total, prepaid, change, and the payment as "paid in store" with the method and POS reference. Emailed receipts are not built yet.
+
+### Money rules in store
+
+- Integer cents throughout. The amount owed is Ivora's final bill less the same idle grace credit as card payments. There is no 50-cent minimum: that is a card rule.
+- Reports per sale, each with its own operation reference and an idempotency key `forecourt:store:<sale ID>:report:<step>`: `authorization` (prepaid amount, reference `<sale>`), `capture` (prepaid part, `<sale>:capture`, a distinct operation from the authorization), `capture` (postpay `<sale>:paid:<method>[:<POS ref>]` or overrun `<sale>:extra:...`) and `release` (change, `<sale>:change`). Captures never exceed the final bill. Mark-paid only accepts exactly the outstanding amount; repeating it is a no-op, and a different amount after payment is refused.
+- In-store sales carry no application fee, because they never pass through Stripe.
+
+### Safety
+
+- **Chargers must require authorisation.** Turn off free vend and auto-start on plug-in, or a car can charge without a sale. The console flags any connector charging without a console sale or card session.
+- A charger is only started by the cashier's "Authorise" or "Confirm … paid and start", which require the cashier (or operator) cookie. Reading a sale never starts it: a session that was created but not started (for example after a lost response) is canceled after 2 minutes, and the cashier taps again.
+- Starts, stops, cancels, finalizes and reports use idempotency keys from the sale ID and action (`forecourt:store:<sale ID>:start`, `:stop` and so on). The same tap reuses the same sale ID, so a retry after a timeout never starts twice. A stop the cashier presses and the automatic prepay stop share one key per attempt.
+- Idle fees apply in both flows with `IDLE_GRACE_MINUTES`.
+- The cashier password is separate from the operator one. A cashier can authorise, stop and mark paid; the operator pages (prices, settings) stay closed to it. An operator can also use the console. Both logins are rate-limited per client, separately. Changing `CASHIER_PASSWORD` signs every cashier out; logging out only accepts same-origin requests.
+
+### What is stored
+
+Nothing new. A sale's terms (mode, prepaid amount, kWh limit) are encoded in its sale ID, which is Ivora's `payment_reference`, for example `pre-2000-0-3fa9c01b77de` or `post-3fa9c01b77de`; only this server creates those sessions, with its API key. Payments, change and overruns are read back from Ivora's settlement reports. The session list is ordered by opaque session ID, not time, so the console, webhook and sweep page through all of it (up to 10,000 sessions), and each server instance reuses the list for 5 seconds. Unpaid sales older than 24 hours drop off the "Unpaid sales" list; they stay in Ivora's records.
+
+### Point-of-sale integration (planned)
+
+There are no POS endpoints yet. The seams are in place: `markSalePaid()` in `src/lib/server/store.ts` is the one function that marks a sale paid (it validates the amount against the final bill and is idempotent by sale ID), and `saleEvents` in `src/lib/server/sale-events.ts` emits `sale.due` with a stable event ID whenever a sale has a final bill with money to collect.
+
 ## What it uses from the Ivora API
 
-| Endpoint                                                                             | Used for                                          |
-| ------------------------------------------------------------------------------------ | ------------------------------------------------- |
-| `GET /v1/tenants/{tenant_id}/stations?external_reference=`                           | Resolve a QR code to a station and connector      |
-| `GET /v1/tenants/{tenant_id}/stations`, `GET .../stations/{station_id}`              | Connector status, idle detection, operator list   |
-| `GET /v1/tenants/{tenant_id}/tariffs/{tariff_id}`, `PATCH` the same                  | Price breakdown; operator price changes           |
-| `POST /v1/tenants/{tenant_id}/tariffs/{tariff_id}/quote`                             | Typical-session estimate on the charger page      |
-| `POST /v1/tenants/{tenant_id}/charging-sessions`, `GET` with `application_reference` | Create and recover externally funded sessions     |
-| `POST .../charging-sessions/{id}/start`, `/stop`, `/cancel`, `/finalize`             | Start, stop, cancel and bill a session            |
-| `POST .../charging-sessions/{id}/settlement-reports`                                 | Optional audit of authorization, capture, release |
-| `GET /v1/tenants/{tenant_id}/stats`                                                  | Today's sessions, energy and billed revenue       |
-| `GET /v1/tenants/{tenant_id}/stations/{station_id}/faults`                           | Recent faults                                     |
-| Webhooks: `charging_session.status_changed`, `bill.finalized`                        | Settle a session as soon as it changes            |
+| Endpoint                                                                             | Used for                                        |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------- |
+| `GET /v1/tenants/{tenant_id}/stations?external_reference=`                           | Resolve a QR code to a station and connector    |
+| `GET /v1/tenants/{tenant_id}/stations`, `GET .../stations/{station_id}`              | Connector status, idle detection, operator list |
+| `GET /v1/tenants/{tenant_id}/tariffs/{tariff_id}`, `PATCH` the same                  | Price breakdown; operator price changes         |
+| `POST /v1/tenants/{tenant_id}/tariffs/{tariff_id}/quote`                             | Typical-session estimate on the charger page    |
+| `POST /v1/tenants/{tenant_id}/charging-sessions`, `GET` with `application_reference` | Create and recover externally funded sessions   |
+| `POST .../charging-sessions/{id}/start`, `/stop`, `/cancel`, `/finalize`             | Start, stop, cancel and bill a session          |
+| `POST .../charging-sessions/{id}/settlement-reports`                                 | Card audit trail; the in-store money record     |
+| `GET .../charging-sessions/{id}/settlement-reports`                                  | What was paid in store, change given            |
+| `GET /v1/tenants/{tenant_id}/stats`                                                  | Today's sessions, energy and billed revenue     |
+| `GET /v1/tenants/{tenant_id}/stations/{station_id}/faults`                           | Recent faults                                   |
+| Webhooks: `charging_session.status_changed`, `bill.finalized`                        | Settle a session as soon as it changes          |
+| Webhook: `meter.sampled` (pay in store)                                              | Stop a prepaid sale at its limit                |
 
-API key permissions documented on the portal: `stations:read`, `stations:control` (start and stop), `billing:read` (sessions, quotes, revenue), `billing:write` (create, finalize and cancel sessions) and `settlement:write` (create sessions and reports). Editing prices also writes tariffs; check the portal for the permission your key needs. The app sends `Ivora-Version: 2026-10-15` so tariff elements and bill breakdowns are present.
+API key permissions documented on the portal: `stations:read`, `stations:control` (start and stop), `billing:read` (sessions, quotes, revenue), `billing:write` (create, finalize and cancel sessions) and `settlement:write` (create sessions and reports). Pay in store needs no extra permission: it uses the same session, command and settlement report endpoints, and reads reports back; check the portal for the scope that reads settlement reports. Editing prices also writes tariffs; check the portal for the permission your key needs. The app sends `Ivora-Version: 2026-10-15` so tariff elements and bill breakdowns are present.
 
 Errors show the API's code and request ID with a link to [Errors and statuses](https://ivoracharge.com/developers/guides/reference/errors). On `429` the client waits once for a short `Retry-After` and otherwise reports `rate_limited`. `request_in_progress` and `outcome_unknown` are retried on the next poll with the same key.
 
@@ -140,13 +218,16 @@ Payment terminals are out of scope for now. `src/lib/terminal.ts` defines the `C
 ## Limits and next steps
 
 - **USD only**, like Ivora bills today.
-- **No database.** Session state lives in Stripe and Ivora. The operator "today" view reads the latest 100 sessions, and the webhook de-duplicates per server instance (reconciling is idempotent, so a duplicate on another instance is harmless).
+- **No database.** Session state lives in Stripe and Ivora; in-store sales live in Ivora only (see [What is stored](#what-is-stored)). The operator "today" view and the console page through the session list (up to 10,000 sessions), and the webhook de-duplicates per server instance (reconciling is idempotent, so a duplicate on another instance is harmless).
 - **Idle after the transaction ends is not billed.** Ivora prices idle time inside the charging transaction. If the driver presses "End session" while still parked, the idle fee stops too.
 - **Idle detection while charging is approximate.** The countdown starts when the app first sees the connector idle; the final idle fee comes from Ivora's bill, which uses the charger's own reports.
 - **Holds expire.** Card authorizations last about 7 days with most issuers. The daily sweep settles abandoned sessions well before that; run it more often on a paid plan.
 - **Conditional prices** (time of day, power or energy bands) are priced correctly by Ivora but can't be edited on the Prices page; edit them through the API.
 - **Refunds** are not in the UI; issue them in the Stripe Dashboard.
-- **Next steps:** card terminal adapter, partial refunds, a database for longer history, per-site multi-tenant operator accounts, and switching to Ivora-managed payments once that path supports application fees.
+- **Prepaid overrun.** The headroom stop makes it rare, but a charger that is slow to stop, a missed meter sample, a rejected stop, or idle time after a stop can cost more than was prepaid. The console shows it and the cashier decides; it is never collected automatically.
+- **Pay in store needs chargers that require authorisation.** With free vend or auto-start, cars can charge without a sale; the console can only warn.
+- **The console polls.** Webhooks keep sales moving on the server; the tablet sees changes within a few seconds.
+- **Next steps:** POS integration (signed `session_due` webhook, mark-paid and sessions endpoints) and emailed receipts for in-store sales, card terminal adapter, partial refunds, a database for longer history, per-site multi-tenant operator accounts, and switching to Ivora-managed payments once that path supports application fees.
 
 ## License
 

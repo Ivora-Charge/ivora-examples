@@ -21,6 +21,8 @@ export type Settings = {
   publicBaseUrl: string;
   /** Stripe connected account of the site operator; empty when the deployer runs the site. */
   stripeConnectedAccount: string;
+  /** Drivers may pay at the counter: on in demo mode, or when CASHIER_PASSWORD is set. */
+  payInStore: boolean;
 };
 
 /** Live mode needs all of these. Any missing one keeps the app in demo mode. */
@@ -83,5 +85,6 @@ export function readSettings(
     siteTimeZone: env.SITE_TIME_ZONE?.trim() || "UTC",
     publicBaseUrl,
     stripeConnectedAccount: env.STRIPE_CONNECTED_ACCOUNT_ID?.trim() ?? "",
+    payInStore: demo || Boolean(env.CASHIER_PASSWORD?.trim()),
   };
 }

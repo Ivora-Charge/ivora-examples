@@ -14,6 +14,7 @@ import {
 } from "../tariff";
 import { startOfLocalDay } from "../time";
 import { liveDeps, ivoraClient } from "./services";
+import { STORE_PREFIX } from "../store";
 import { APPLICATION_PREFIX } from "./sessions";
 
 // Operator pages: prices per charger, today's sessions and revenue, recent
@@ -28,6 +29,8 @@ export type SessionRow = {
   billedCents: number | null;
   capturedCents: number;
   feeCents: number;
+  /** Card through Stripe, or cash or card at the store's own POS. */
+  paidVia: "card" | "store";
 };
 
 export type Overview = {
@@ -39,7 +42,10 @@ export type Overview = {
   energyKwh: string;
   successRate: string | null;
   billedCents: number | null;
+  /** Card payments captured through Stripe. */
   capturedCents: number;
+  /** Recorded as paid in store (settlement reports; the money never touches Stripe). */
+  inStoreCents: number;
   feeCents: number;
   feeBps: number;
   chargesFee: boolean;
@@ -61,7 +67,7 @@ export async function overview(
       to: new Date(now).toISOString(),
       timeZone: settings.siteTimeZone,
     }),
-    ivora.listSessions(100),
+    ivora.listAllSessions(),
     ivora.listStations(),
   ]);
   const names = new Map(stations.map((s) => [s.id, s.name]));
@@ -73,6 +79,7 @@ export async function overview(
     )
     .map((s): SessionRow => {
       const captured = s.settlement?.captured_minor ?? 0;
+      const store = s.application_reference.startsWith(STORE_PREFIX);
       return {
         reference: s.id,
         createdAt: s.created_at,
@@ -81,11 +88,18 @@ export async function overview(
         energyWh: s.bill.energy_wh ?? s.usage?.energy_wh ?? 0,
         billedCents: s.bill.total_minor,
         capturedCents: captured,
-        feeCents: deps.payments.chargesApplicationFee
-          ? applicationFeeCents(captured, settings.applicationFeeBps)
-          : 0,
+        // In-store payments never touch Stripe, so they carry no application fee.
+        feeCents:
+          deps.payments.chargesApplicationFee && !store
+            ? applicationFeeCents(captured, settings.applicationFeeBps)
+            : 0,
+        paidVia: store ? "store" : "card",
       };
     });
+  const sum = (via: SessionRow["paidVia"]) =>
+    rows
+      .filter((r) => r.paidVia === via)
+      .reduce((total, r) => total + r.capturedCents, 0);
   const usd = stats.revenue?.currencies.find((c) => c.currency === "USD");
   return {
     demo: false,
@@ -96,8 +110,9 @@ export async function overview(
     energyKwh: stats.totals.energy_kwh,
     successRate: stats.totals.success_rate,
     billedCents: usd ? usd.billed_minor : null,
-    capturedCents: rows.reduce((sum, r) => sum + r.capturedCents, 0),
-    feeCents: rows.reduce((sum, r) => sum + r.feeCents, 0),
+    capturedCents: sum("card"),
+    inStoreCents: sum("store"),
+    feeCents: rows.reduce((total, r) => total + r.feeCents, 0),
     feeBps: settings.applicationFeeBps,
     chargesFee: deps.payments.chargesApplicationFee,
     stations: stats.stations,
@@ -112,6 +127,7 @@ function demoOverview(settings: Settings, from: string): Overview {
     { h: 9.6, station: "Demo charger 2", wh: 28_900, billed: 1_683 },
     { h: 12.1, station: "Demo charger 1", wh: 35_400, billed: 2_041 },
     { h: 13.4, station: "Demo charger 2", wh: 12_050, billed: 802 },
+    { h: 14.2, station: "Demo charger 6", wh: 30_400, billed: 1_754, store: 1 },
   ];
   const rows = sample.map((s, i): SessionRow => ({
     reference: `demo-session-${i + 1}`,
@@ -121,9 +137,17 @@ function demoOverview(settings: Settings, from: string): Overview {
     energyWh: s.wh,
     billedCents: s.billed,
     capturedCents: s.billed,
-    feeCents: applicationFeeCents(s.billed, settings.applicationFeeBps),
+    feeCents:
+      "store" in s
+        ? 0
+        : applicationFeeCents(s.billed, settings.applicationFeeBps),
+    paidVia: "store" in s ? "store" : "card",
   }));
   const billed = rows.reduce((sum, r) => sum + (r.billedCents ?? 0), 0);
+  const via = (v: SessionRow["paidVia"]) =>
+    rows
+      .filter((r) => r.paidVia === v)
+      .reduce((sum, r) => sum + r.capturedCents, 0);
   return {
     demo: true,
     siteName: DEMO_SITE_NAME,
@@ -133,11 +157,17 @@ function demoOverview(settings: Settings, from: string): Overview {
     energyKwh: (rows.reduce((sum, r) => sum + r.energyWh, 0) / 1000).toFixed(3),
     successRate: "1.0000",
     billedCents: billed,
-    capturedCents: billed,
+    capturedCents: via("card"),
+    inStoreCents: via("store"),
     feeCents: rows.reduce((sum, r) => sum + r.feeCents, 0),
     feeBps: settings.applicationFeeBps,
     chargesFee: true,
-    stations: { total: 2, online: 2, offline: 0, faulted: 1 },
+    stations: {
+      total: DEMO_CHARGERS.length,
+      online: DEMO_CHARGERS.filter((c) => c.online).length,
+      offline: DEMO_CHARGERS.filter((c) => !c.online).length,
+      faulted: 1,
+    },
     rows,
   };
 }

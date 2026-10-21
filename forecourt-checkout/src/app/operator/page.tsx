@@ -67,6 +67,10 @@ export default async function Today() {
           <span className="muted">card payments</span>
         </div>
         <div className="stat">
+          Paid in store<b>{formatCents(data.inStoreCents)}</b>
+          <span className="muted">cash or card at the counter</span>
+        </div>
+        <div className="stat">
           Application fee<b>{formatCents(data.feeCents)}</b>
           <span className="muted">
             {data.chargesFee
@@ -98,7 +102,8 @@ export default async function Today() {
                   <th>Status</th>
                   <th className="num">Energy</th>
                   <th className="num">Billed</th>
-                  <th className="num">Captured</th>
+                  <th className="num">Paid</th>
+                  <th>Via</th>
                   <th className="num">Fee</th>
                 </tr>
               </thead>
@@ -115,6 +120,7 @@ export default async function Today() {
                         : formatCents(r.billedCents)}
                     </td>
                     <td className="num">{formatCents(r.capturedCents)}</td>
+                    <td>{r.paidVia === "store" ? "paid in store" : "card"}</td>
                     <td className="num">{formatCents(r.feeCents)}</td>
                   </tr>
                 ))}
@@ -123,8 +129,9 @@ export default async function Today() {
           </div>
         )}
         <p className="muted">
-          Times in {s.siteTimeZone}. Billed is Ivora&apos;s final bill; captured
-          is what the card was charged after idle grace and holds.
+          Times in {s.siteTimeZone}. Billed is Ivora&apos;s final bill; paid is
+          what the card was charged after idle grace and holds, or what the
+          cashier recorded as paid in store.
         </p>
       </section>
     </main>

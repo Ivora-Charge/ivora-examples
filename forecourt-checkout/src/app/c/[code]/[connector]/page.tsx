@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { ErrorBox } from "@/components/error-box";
 import { PayButton } from "@/components/pay-button";
 import { formatCents } from "@/lib/money";
@@ -119,7 +120,10 @@ export default async function Charger({
         </p>
       </section>
 
-      <section className="card stack">
+      <section className="card stack" aria-label="Pay here by card">
+        {page.payInStore ? (
+          <h2 style={{ margin: 0 }}>Pay here by card</h2>
+        ) : null}
         <p style={{ margin: 0 }}>
           We place a{" "}
           <strong>{formatCents(page.holdCents, page.currency)}</strong> hold on
@@ -139,6 +143,22 @@ export default async function Charger({
             : "Card, Apple Pay or Google Pay, through Stripe."}
         </p>
       </section>
+
+      {page.payInStore ? (
+        <section className="card stack" aria-label="Pay at the counter">
+          <h2 style={{ margin: 0 }}>Pay at the counter</h2>
+          <p style={{ margin: 0 }}>
+            Pay cash or card in the store, like fuel. Tell the cashier{" "}
+            <strong>{page.label}</strong>.
+          </p>
+          <Link
+            className="button secondary block"
+            href={`/c/${encodeURIComponent(page.code)}/${c.number}/counter`}
+          >
+            Pay at the counter: tell the cashier {page.label}
+          </Link>
+        </section>
+      ) : null}
     </main>
   );
 }

@@ -20,7 +20,8 @@ export async function POST(request: Request) {
   if (!expected) return back("?error=not_configured");
   const client =
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() || "local";
-  if (!loginAllowed(client)) return back("?error=too_many_attempts");
+  if (!loginAllowed(`operator:${client}`))
+    return back("?error=too_many_attempts");
   const form = await request.formData();
   if (!passwordMatches(String(form.get("password") ?? ""), expected))
     return back("?error=wrong_password");

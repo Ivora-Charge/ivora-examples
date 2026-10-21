@@ -61,6 +61,30 @@ export function sessionIdFromEvent(event: {
     : null;
 }
 
+const positiveInt = (v: unknown) => {
+  const n = typeof v === "string" && /^\d+$/.test(v) ? Number(v) : v;
+  return typeof n === "number" && Number.isSafeInteger(n) && n > 0 ? n : null;
+};
+
+/**
+ * A meter.sampled event's transaction and station, for the prepaid stop
+ * check. Null for any other event.
+ */
+export function meterSampleFromEvent(event: {
+  type: string;
+  resource_id?: string | null;
+  station_id?: number | null;
+  data?: Record<string, unknown>;
+}): { transactionId: number | null; stationId: number | null } | null {
+  if (event.type !== "meter.sampled") return null;
+  const data = event.data ?? {};
+  return {
+    transactionId:
+      positiveInt(data.transaction_id) ?? positiveInt(event.resource_id),
+    stationId: positiveInt(event.station_id) ?? positiveInt(data.station_id),
+  };
+}
+
 /** Remembers recent event IDs so a redelivery is acknowledged without work. */
 export class RecentIds {
   private readonly seen = new Map<string, number>();

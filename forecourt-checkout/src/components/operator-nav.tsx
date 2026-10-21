@@ -16,6 +16,7 @@ export function OperatorNav({
       {item("today", "/operator", "Today")}
       {item("prices", "/operator/prices", "Prices")}
       {item("faults", "/operator/faults", "Faults")}
+      <Link href="/cashier">Cashier console</Link>
       <form action="/api/operator/logout" method="post">
         <button className="secondary" type="submit">
           Sign out

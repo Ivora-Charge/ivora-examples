@@ -40,6 +40,8 @@ export type DemoConnector = {
   label: string;
   maxPowerW: number;
   status: string;
+  /** A sample session that isn't an in-store sale: paid by card, or started outside the console. */
+  session?: "card" | "outside";
 };
 
 export type DemoCharger = {
@@ -51,6 +53,12 @@ export type DemoCharger = {
 
 export const DEMO_SITE_NAME = "Sample Forecourt (demo data)";
 
+const ccs = (status: string, maxPowerW = 150_000): DemoConnector[] => [
+  { number: 1, label: "CCS", maxPowerW, status },
+];
+
+// Chargers 1 and 2 show pay at the charger; 3 to 10 put the cashier console in
+// every state (the in-store samples themselves are in src/lib/demo-store.ts).
 export const DEMO_CHARGERS: DemoCharger[] = [
   {
     code: "DEMO-1",
@@ -66,11 +74,78 @@ export const DEMO_CHARGERS: DemoCharger[] = [
     name: "Demo charger 2",
     online: true,
     connectors: [
-      { number: 1, label: "CCS", maxPowerW: 150_000, status: "Charging" },
+      {
+        number: 1,
+        label: "CCS",
+        maxPowerW: 150_000,
+        status: "Charging",
+        session: "card",
+      },
       { number: 2, label: "CCS", maxPowerW: 150_000, status: "Faulted" },
     ],
   },
+  // Car plugged in, waiting for the cashier.
+  {
+    code: "DEMO-3",
+    name: "Demo charger 3",
+    online: true,
+    connectors: ccs("Preparing"),
+  },
+  {
+    code: "DEMO-4",
+    name: "Demo charger 4",
+    online: true,
+    connectors: ccs("Preparing"),
+  },
+  // Sample in-store sales: prepaid and charging, done unpaid, prepaid overrun, paid.
+  {
+    code: "DEMO-5",
+    name: "Demo charger 5",
+    online: true,
+    connectors: ccs("Available", 50_000),
+  },
+  {
+    code: "DEMO-6",
+    name: "Demo charger 6",
+    online: true,
+    connectors: ccs("Available"),
+  },
+  {
+    code: "DEMO-7",
+    name: "Demo charger 7",
+    online: true,
+    connectors: ccs("Available"),
+  },
+  {
+    code: "DEMO-8",
+    name: "Demo charger 8",
+    online: true,
+    connectors: ccs("Available"),
+  },
+  {
+    code: "DEMO-9",
+    name: "Demo charger 9",
+    online: false,
+    connectors: ccs("Unavailable"),
+  },
+  {
+    code: "DEMO-10",
+    name: "Demo charger 10",
+    online: true,
+    connectors: [
+      {
+        number: 1,
+        label: "CCS",
+        maxPowerW: 150_000,
+        status: "Charging",
+        session: "outside",
+      },
+    ],
+  },
 ];
+
+/** Connector states a driver can start from: free, or plugged in and waiting. */
+export const DEMO_READY = new Set(["Available", "Preparing"]);
 
 export function demoCharger(code: string) {
   return DEMO_CHARGERS.find((c) => c.code === code) ?? null;
@@ -115,7 +190,8 @@ export function startDemoSession(code: string, connector: number, now: number) {
   const charger = demoCharger(code);
   const c = charger?.connectors.find((x) => x.number === connector);
   if (!charger || !c) throw new Error("Unknown demo charger.");
-  if (c.status !== "Available")
+  if (!charger.online) throw new Error("This charger is offline.");
+  if (!DEMO_READY.has(c.status))
     throw new Error(`This connector is ${c.status.toLowerCase()}.`);
   return encodeDemoId({
     code,
