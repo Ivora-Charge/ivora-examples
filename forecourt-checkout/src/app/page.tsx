@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { brand } from "../../brand/brand";
 import { DEMO_CHARGERS, DEMO_SITE_NAME } from "@/lib/demo";
 import { settings } from "@/lib/server/services";
 
@@ -6,7 +7,7 @@ export default function Home() {
   const s = settings();
   return (
     <main>
-      <h1>Forecourt checkout</h1>
+      <h1>{brand.name}: forecourt checkout</h1>
       <p className="muted">
         Drivers scan the QR code on a DC fast charger, pay with a card, Apple
         Pay or Google Pay, watch the session live and get a receipt. No app or

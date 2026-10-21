@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kerbly: charger page (brief mock)</title>
+    <title>Fillbay: charger page (brief mock)</title>
     <style>
       @font-face {
         font-family: "Archivo Black";
@@ -34,8 +34,7 @@
         --danger: #b3261e;
         --pump: #0b0f14;
         --pump-ink: #ffd60a;
-        --line: #101828;
-        --shadow: #101828;
+        --line: rgba(16, 24, 40, 0.16);
       }
       [data-theme="dark"] {
         --bg: #0c1016;
@@ -48,8 +47,7 @@
         --danger: #ff8f85;
         --pump: #000000;
         --pump-ink: #ffd60a;
-        --line: #f8f5e6;
-        --shadow: #ffd60a;
+        --line: rgba(248, 245, 230, 0.16);
       }
       * {
         box-sizing: border-box;
@@ -64,8 +62,8 @@
         overflow-x: hidden;
       }
       .demo {
-        background: var(--ink);
-        color: var(--bg);
+        background: var(--pump);
+        color: var(--pump-ink);
         text-align: center;
         padding: 0.5rem 1rem;
         font-weight: 700;
@@ -73,8 +71,9 @@
       }
       header {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        gap: 0.75rem;
+        gap: 0.25rem 0.75rem;
         padding: 1rem 1.25rem;
         max-width: 1120px;
         margin: 0 auto;
@@ -95,6 +94,12 @@
         color: var(--muted);
         font-weight: 700;
       }
+      @media (max-width: 600px) {
+        .site {
+          flex-basis: 100%;
+          margin-left: 0;
+        }
+      }
       main {
         max-width: 1120px;
         margin: 0 auto;
@@ -114,17 +119,15 @@
       }
       .card {
         background: var(--surface);
-        border: 3px solid var(--line);
-        border-radius: 18px;
+        border-top: 6px solid var(--accent);
+        border-radius: 14px;
         padding: 1.25rem;
-        box-shadow: 6px 6px 0 var(--shadow);
+        box-shadow: 0 1px 2px var(--line);
       }
       .board {
         background: var(--pump);
         color: var(--pump-ink);
-        border-radius: 18px;
-        border: 3px solid var(--line);
-        box-shadow: 6px 6px 0 var(--shadow);
+        border-radius: 14px;
         padding: 1.25rem;
       }
       .row {
@@ -145,6 +148,7 @@
           400 clamp(5rem, 22vw, 9rem)/0.9 "Archivo Black",
           sans-serif;
         font-variant-numeric: tabular-nums;
+        text-shadow: 0 0 22px rgba(255, 214, 10, 0.45);
       }
       .state {
         display: inline-flex;
@@ -214,7 +218,7 @@
         min-height: 68px;
         padding: 0.75rem 1.1rem;
         border-radius: 14px;
-        border: 3px solid var(--line);
+        border: 2px solid var(--ink);
         font:
           400 1.35rem "Archivo Black",
           sans-serif;
@@ -232,7 +236,7 @@
       .btn.primary {
         background: var(--accent);
         color: var(--on-accent);
-        box-shadow: 4px 4px 0 var(--shadow);
+        border-color: var(--accent);
       }
       .btn.alt {
         background: var(--surface);
@@ -278,14 +282,25 @@
     <header>
       <svg viewBox="0 0 64 64" aria-hidden="true">
         <rect width="64" height="64" rx="14" fill="var(--accent)" />
-        <path
-          d="M17 12h10v16l13-16h13L38 31l16 21H41L27 33v19H17z"
-          fill="currentColor"
+        <path d="M15 12h29v10H26v6h13v9H26v15H15z" fill="var(--on-accent)" />
+        <rect
+          x="44"
+          y="12.5"
+          width="10"
+          height="4"
+          rx="2"
+          fill="var(--on-accent)"
         />
-        <rect x="44" y="9" width="4" height="9" rx="1.5" fill="currentColor" />
-        <rect x="51" y="9" width="4" height="9" rx="1.5" fill="currentColor" />
+        <rect
+          x="44"
+          y="18.5"
+          width="10"
+          height="4"
+          rx="2"
+          fill="var(--on-accent)"
+        />
       </svg>
-      <span class="brand">Kerbly</span>
+      <span class="brand">Fillbay</span>
       <span class="site">Riverside Fuel &amp; Shop</span>
     </header>
     <main>
@@ -305,7 +320,7 @@
         <dl style="margin-top: 1rem">
           <dt>Idle fee after 10 min</dt>
           <dd>$0.40 / min</dd>
-          <dt>Card hold, released after</dt>
+          <dt>Card hold, rest released when you finish</dt>
           <dd>$25.00</dd>
           <dt>Estimate for 20 kWh</dt>
           <dd>$8.40</dd>

@@ -1,17 +1,16 @@
-# SQD-30 brief: forecourt-checkout brand
+# SQD-30 brief: forecourt-checkout brand (Fillbay)
 
 ## Name
 
-**Kerbly** (the kerb is where you pull up at a stop). Coined; a rename is one line in `brand/brand.ts` once built.
-Alternates: **Tallybay**, **Fillbay**.
-Name searches for EV, charging and fuel-retail companies were not exhaustive (no trademark search done); a collision check is needed before the full build.
+**Fillbay** (fill up at the bay). Approved by the owner on 2026-10-21 in place of the first lead, Kerbly, which was too close to an existing charging network's name. A rename is one line in `brand/brand.ts`.
+Alternates: **Tallybay**, **Stopfill**. Name searches were not exhaustive, and no trademark search was done.
 
 ## Mood, users
 
 Mood: **bright, bold, brisk**.
 Drivers at a fuel or convenience stop, on a phone, in bright sun, in a hurry. Cashiers and staff read across a counter on a tablet or desktop. Tone is friendly and short: "Pick a way to pay. Then plug in."
 
-## Palette (8 tokens; AA contrast measured with the WCAG 2.x formula)
+## Palette (9 tokens; AA contrast measured with the WCAG 2.x formula)
 
 | Token       | Light     | Dark      | Use                                                      |
 | ----------- | --------- | --------- | -------------------------------------------------------- |
@@ -23,6 +22,7 @@ Drivers at a fuel or convenience stop, on a phone, in bright sun, in a hurry. Ca
 | `on-accent` | `#101828` | `#101828` | Text on accent                                           |
 | `ok`        | `#0A6A32` | `#4ADE80` | Ready / paid                                             |
 | `danger`    | `#B3261E` | `#FF8F85` | Errors, move your car                                    |
+| `on-danger` | `#FFFFFF` | `#101828` | Text on danger (Stop charging)                           |
 
 Plus a pump-board pair, `pump` (`#0B0F14` / `#000000`) and `pump-ink` (`#FFD60A` both modes), for the charger number display.
 `accent` is never used as text colour on `bg` or `surface`; text on it is `on-accent`.
@@ -36,6 +36,8 @@ Contrast pairs the unit test will check (light / dark), all at least 4.5:1:
 - on-accent on accent: 11.3 / 12.6
 - ok on surface: 6.7 / 9.3
 - danger on surface: 6.5 / 7.3
+- on-danger on danger: 6.5 / 8.0
+- ok on bg: 6.1 / 10.9; danger on bg: 5.9 / 8.6
 - pump-ink on pump: 13.6 / 14.9
 
 ## Type (SIL OFL 1.1, self-hosted via `next/font`)
@@ -47,12 +49,12 @@ Numbers use tabular figures. Scale (rem, 18 px base): 0.8 label caps, 1.125 body
 
 ## Layout idea
 
-A **pump board**: one near-black display panel with the charger number in huge yellow digits and a state pill (Ready, Charging, Move your car) beside the price card; thick 3 px ink borders and hard offset shadows keep it readable in glare. Phone: panel, price, then big stacked pay buttons (68 px tall). Desktop and the cashier tablet: the board and price side by side, the cashier console as a grid of pump boards, one per charger.
+A **pump board**: one near-black lit display panel with the charger in big glowing yellow type and a state pill (Ready, Charging, Move your car) beside the price card. Fillbay's own surface language (owner fix 1): flat **price-sign panels** under a yellow canopy band, black-and-yellow **signage stripes** on notices and on chargers waiting for payment, and small lit pump displays for charger names. No thick outlines or hard offset shadows. Phone: board, price, then big stacked pay buttons. Desktop and the cashier tablet: the cashier console is a grid of pump tiles, one per charger, each with a state-coloured band.
 
 ## Logo concept
 
-Original mark (`logo.svg`): a rounded forecourt-yellow tile holding a heavy "K" whose upper arm ends in two small plug prongs. The K is `currentColor` and the tile uses `--accent`.
+Original mark (`logo.svg`, and `Logo.tsx` for the app): a rounded forecourt-yellow tile holding a heavy "F" whose top arm ends in two plug prongs. The tile uses `--accent` and the F uses `--on-accent`.
 
 ## Mocks
 
-`mock.html` is a static page (no app code) showing the charger page: demo banner, pump board with state, price and estimate, the two pay choices and a 3-step strip. Captured as `docs/brief/desktop-light.png`, `desktop-dark.png` (1440 px) and `phone-light.png`, `phone-dark.png` (390 px). `scrollWidth` equals the viewport width in all four (no sideways scroll). Amounts in the mock are placeholders for layout only. Fonts used are in `brand/fonts/` with their OFL texts.
+`mock.html` is a static page (no app code) showing the charger page: demo banner, pump board with state, price and estimate, the two pay choices and a 3-step strip. Captured as `docs/brief/desktop-light.png`, `desktop-dark.png` (1440 px) and `phone-light.png`, `phone-dark.png` (390 px). `scrollWidth` equals the viewport width in all four (no sideways scroll). Owner fixes 2 and 3: on phones the site name wraps below the logo, and the hold row reads "Card hold, rest released when you finish" (no amount changed). Amounts in the mock are placeholders for layout only. Fonts used are in `brand/fonts/` with their OFL texts.

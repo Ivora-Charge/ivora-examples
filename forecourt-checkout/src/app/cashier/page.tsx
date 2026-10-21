@@ -1,10 +1,11 @@
+import { brand } from "../../../brand/brand";
 import { CashierConsole } from "@/components/cashier-console";
 import { DEMO_SITE_NAME } from "@/lib/demo";
 import { requireCashier } from "@/lib/server/operator-page";
 
 export const dynamic = "force-dynamic";
 
-export const metadata = { title: "Cashier console · Forecourt checkout" };
+export const metadata = { title: `Cashier console · ${brand.name}` };
 
 /** Tablet-first console at the counter: every charger like a fuel pump. */
 export default async function Cashier() {

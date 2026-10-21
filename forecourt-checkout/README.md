@@ -1,5 +1,7 @@
 # Forecourt checkout
 
+Ships as **Fillbay**, an original demo brand you can replace in a few minutes (see [Make it yours in 5 minutes](#make-it-yours-in-5-minutes)).
+
 Checkout for fuel stations, convenience stores and retail sites with DC fast chargers, with two ways to pay:
 
 - **Pay at the charger.** A driver scans the QR code on the charger with their phone, sees the price, pays with a card, Apple Pay or Google Pay, watches the session live and gets a receipt. No app, no account. When the car is full, the page asks the driver to move it and counts down to the idle fee.
@@ -26,6 +28,26 @@ It is built on the [Ivora API](https://ivoracharge.com/developers/guides) and St
 ![Simulated POS receiving a signed session_due webhook](docs/pos.png)
 
 All screenshots are demo mode: sample data, nothing charged, no charger contacted, no webhook or email sent.
+
+Light and dark, desktop (1440 px) and phone (390 px): [charger](docs/screens/charger-phone-light.png) ([dark](docs/screens/charger-phone-dark.png)), [cashier console](docs/screens/cashier-desktop-light.png) ([dark](docs/screens/cashier-desktop-dark.png)), [operator](docs/screens/operator-desktop-light.png) ([dark](docs/screens/operator-desktop-dark.png)) and [home](docs/screens/home-phone-light.png) ([dark](docs/screens/home-phone-dark.png)); every capture is in [docs/screens](docs/screens).
+
+## Make it yours in 5 minutes
+
+Everything brand-specific lives in [`brand/`](brand). Components use only its tokens.
+
+1. **Name and copy:** `brand/brand.ts` (`name`, `tagline`, `support`). Renaming is one line.
+2. **Colours, type scale, radius and spacing:** `brand/tokens.css`. Each colour is `light-dark(<light>, <dark>)`; `npm test` checks every text pair against WCAG AA in both modes (`tests/contrast.test.ts`).
+3. **Logo:** `brand/logo.svg`, and the same mark inline in `brand/Logo.tsx` so it follows the theme.
+4. **Fonts:** put `.woff2` files in `brand/fonts/` and point `brand/fonts.ts` at them (self-hosted through `next/font`, nothing loads from a font CDN).
+5. **Theme:** the page follows the system light/dark setting until the header toggle is used; the choice is kept in `localStorage` (key in `src/lib/theme.ts`).
+
+The design brief and mocks are in `brand/BRIEF.md` and `docs/brief/`.
+
+### Fonts and icons
+
+- [Archivo Black](https://fonts.google.com/specimen/Archivo+Black) and [Atkinson Hyperlegible](https://fonts.google.com/specimen/Atkinson+Hyperlegible), both under the SIL Open Font License 1.1 (`brand/fonts/OFL-*.txt`).
+- The Fillbay mark and the few icons (theme toggle) are original SVGs, released with this template under Apache-2.0.
+- Fillbay is a made-up demo name, not a real product.
 
 ## Run locally
 

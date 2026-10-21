@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Kerbly">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Fillbay">
   <rect width="64" height="64" rx="14" fill="var(--accent, #FFC700)"/>
-  <path d="M17 12h10v16l13-16h13L38 31l16 21H41L27 33v19H17z" fill="currentColor"/>
-  <rect x="44" y="9" width="4" height="9" rx="1.5" fill="currentColor"/>
-  <rect x="51" y="9" width="4" height="9" rx="1.5" fill="currentColor"/>
+  <path d="M15 12h29v10H26v6h13v9H26v15H15z" fill="currentColor"/>
+  <rect x="44" y="12.5" width="10" height="4" rx="2" fill="currentColor"/>
+  <rect x="44" y="18.5" width="10" height="4" rx="2" fill="currentColor"/>
 </svg>
