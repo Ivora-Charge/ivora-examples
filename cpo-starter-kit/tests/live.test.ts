@@ -6,7 +6,12 @@ import {
   IvoraError,
   resetIvoraForTests,
 } from "@/lib/server/ivora";
-import { createLiveClient, parseRetryAfter } from "@/lib/server/ivora/live";
+import {
+  createLiveClient,
+  MAX_LIST_PAGES,
+  MAX_TOTAL_WAIT_SECONDS,
+  parseRetryAfter,
+} from "@/lib/server/ivora/live";
 
 // The Ivora API is replaced by a fake fetch: no network, no real credentials.
 const API_KEY = "test-key-not-real";
@@ -63,6 +68,9 @@ describe("live Ivora client", () => {
     // Live mode: credentials set, demo not forced.
     process.env.IVORA_API_KEY = API_KEY;
     process.env.IVORA_TENANT_ID = "42";
+    process.env.SUPABASE_URL = "https://supabase.example.test";
+    process.env.SUPABASE_ANON_KEY = "test-anon-key";
+    process.env.SUPABASE_SERVICE_ROLE_KEY = "test-service-role-key";
     delete process.env.DEMO_MODE;
     resetIvoraForTests();
     vi.stubGlobal("fetch", () => {
@@ -136,6 +144,56 @@ describe("live Ivora client", () => {
     });
     expect(sleep).not.toHaveBeenCalled();
     expect(calls).toHaveLength(1);
+  });
+
+  it("caps the total wait per request and returns the rest to the caller", async () => {
+    expect(MAX_TOTAL_WAIT_SECONDS).toBeLessThanOrEqual(20);
+    const { ivora, calls, sleep } = client([
+      err(429, "rate_limited", { "retry-after": "15" }),
+      err(429, "rate_limited", { "retry-after": "15" }),
+      ok({ data: [] }),
+    ]);
+    // 15 s fits the budget; another 15 s would not, so the second 429 comes back.
+    await expect(ivora.listStations()).rejects.toMatchObject({
+      status: 429,
+      retryAfterSeconds: 15,
+    });
+    expect(sleep).toHaveBeenCalledTimes(1);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("follows next_cursor across pages", async () => {
+    const { ivora, calls } = client([
+      ok({ data: [{ id: 1 }, { id: 2 }], next_cursor: 2 }),
+      ok({ data: [{ id: 3 }], next_cursor: 3 }),
+      ok({ data: [], next_cursor: 0 }),
+    ]);
+    const r = await ivora.listAllStations();
+    expect(r.data.map((s) => s.id)).toEqual([1, 2, 3]);
+    expect(r.truncated).toBe(false);
+    expect(calls.map((c) => c.url)).toEqual([
+      `${BASE}/v1/tenants/42/stations?limit=100`,
+      `${BASE}/v1/tenants/42/stations?limit=100&after=2`,
+      `${BASE}/v1/tenants/42/stations?limit=100&after=3`,
+    ]);
+  });
+
+  it("stops on a cursor that does not move and says when it hit the page ceiling", async () => {
+    const stuck = client([
+      ok({ data: [{ id: 1 }], next_cursor: 5 }),
+      ok({ data: [{ id: 2 }], next_cursor: 5 }),
+    ]);
+    expect((await stuck.ivora.listAllLocations()).data).toHaveLength(2);
+    expect(stuck.calls).toHaveLength(2);
+
+    const many = client(
+      Array.from({ length: MAX_LIST_PAGES }, (_, i) =>
+        ok({ data: [{ id: i + 1 }], next_cursor: i + 1 }),
+      ),
+    );
+    const r = await many.ivora.listAllLocations();
+    expect(r).toMatchObject({ truncated: true });
+    expect(r.data).toHaveLength(MAX_LIST_PAGES);
   });
 
   it.each([

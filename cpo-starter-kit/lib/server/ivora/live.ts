@@ -3,6 +3,7 @@ import { isDemo } from "../env";
 import { IvoraError } from "./errors";
 import type {
   IvoraClient,
+  Listed,
   ListOptions,
   Location,
   LocationInput,
@@ -21,8 +22,14 @@ export interface LiveOptions {
   attempts?: number;
 }
 
-/** Longest Retry-After we wait for inside one request; longer ones go back to the operator. */
-export const MAX_WAIT_SECONDS = 30;
+/**
+ * Longest total time one call may spend waiting between retries (Retry-After and
+ * backoff together), so a request stays well inside a serverless function's time
+ * limit. A wait that would go past it is returned to the caller instead.
+ */
+export const MAX_TOTAL_WAIT_SECONDS = 20;
+/** Pages followed by the listAll* methods (100 records each). */
+export const MAX_LIST_PAGES = 20;
 const TIMEOUT_MS = 15_000;
 const KEY = /^[\x21-\x7e]{8,128}$/;
 
@@ -50,7 +57,7 @@ export function parseRetryAfter(
 }
 
 function retriable(e: IvoraError): boolean {
-  if (e.status === 429) return (e.retryAfterSeconds ?? 0) <= MAX_WAIT_SECONDS;
+  if (e.status === 429) return true;
   if (RETRY_SAME_KEY.has(e.code)) return true;
   // Lost connection or timeout (the request may have arrived), or a gateway error.
   return (
@@ -129,13 +136,15 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   /**
    * One API call. Writes need an Idempotency-Key derived from our record and action;
    * every retry (409 request_in_progress, 503 outcome_unknown, 429, lost response)
-   * sends that same key and body, so the action happens at most once.
+   * sends that same key and body, so the action happens at most once. All waits share
+   * one budget (MAX_TOTAL_WAIT_SECONDS), which a multi-page list passes along.
    */
   async function request<T>(
     method: "GET" | "POST" | "PATCH" | "PUT" | "DELETE",
     path: string,
-    opts: { body?: unknown; key?: string } = {},
+    opts: { body?: unknown; key?: string; budget?: { waitedS: number } } = {},
   ): Promise<T> {
+    const budget = opts.budget ?? { waitedS: 0 };
     // Second guard behind getIvora(): a live client never sends in demo mode.
     if (isDemo()) throw new Error("Demo mode never calls the Ivora API");
     if (method !== "GET" && !(opts.key && KEY.test(opts.key)))
@@ -147,6 +156,9 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         if (!(e instanceof IvoraError) || !retriable(e) || n >= attempts)
           throw e;
         const waitS = e.retryAfterSeconds ?? 2 ** (n - 1);
+        // Past the budget: hand the error (and its Retry-After) back to the caller.
+        if (budget.waitedS + waitS > MAX_TOTAL_WAIT_SECONDS) throw e;
+        budget.waitedS += waitS;
         await sleep(waitS * 1000);
       }
     }
@@ -161,6 +173,27 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   };
   const list = (o: ListOptions = {}) =>
     query({ limit: o.limit ?? 100, external_reference: o.external_reference });
+
+  /** Follows `next_cursor` page by page, up to MAX_LIST_PAGES. */
+  async function listAll<T>(path: string): Promise<Listed<T>> {
+    const data: T[] = [];
+    const budget = { waitedS: 0 };
+    let after = 0;
+    for (let page = 0; page < MAX_LIST_PAGES; page++) {
+      const res = await request<Page<T>>(
+        "GET",
+        `${path}${query({ limit: 100, after: after || undefined })}`,
+        { budget },
+      );
+      data.push(...res.data);
+      const next = res.next_cursor;
+      // Stop on the last page, and on a cursor that does not move forward.
+      if (!next || !res.data.length || next <= after)
+        return { data, truncated: false };
+      after = next;
+    }
+    return { data, truncated: true };
+  }
 
   return {
     mode: "live",
@@ -183,6 +216,12 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         if (found) return found;
         throw e;
       }
+    },
+    listAllLocations() {
+      return listAll<Location>("locations");
+    },
+    listAllStations() {
+      return listAll<Station>("stations");
     },
     async listStations(o) {
       return (await request<Page<Station>>("GET", `stations${list(o)}`)).data;
