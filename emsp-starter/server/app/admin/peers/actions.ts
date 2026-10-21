@@ -1,6 +1,5 @@
 "use server";
 
-import { headers } from "next/headers";
 import {
   connectToCpo,
   HandshakeError,
@@ -13,11 +12,7 @@ import { syncPeer, SyncError, type SyncReport } from "@/lib/locations/sync";
 import { peerStore } from "@/lib/ocpi/registry";
 import type { Peer } from "@/lib/ocpi/store";
 import { assertLive } from "@/lib/server/demo";
-import {
-  adminClientKey,
-  adminEnabled,
-  checkAdminSecret,
-} from "@/lib/server/admin";
+import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
 /** A peer as the admin web shows it: no token, no ciphertext. */
 export type PeerSummary = {
@@ -59,57 +54,16 @@ function summary(p: Peer): PeerSummary {
   };
 }
 
-const field = (form: FormData, name: string) => {
-  const v = form.get(name);
-  return typeof v === "string" ? v : "";
-};
-
-/** Who is asking, for the admin-secret rate limit (see adminClientKey). */
-async function clientKey(): Promise<string> {
-  try {
-    return adminClientKey(await headers());
-  } catch {
-    // Outside a request (tests): one shared key.
-    return "unknown";
-  }
-}
-
-/**
- * Runs `fn` only for an admin. Errors become a message for the form; only handshake
- * and demo-mode errors carry their own text, which never includes a token.
- */
-async function asAdmin(
+/** Runs `fn` only for an admin; handshake and pull errors carry their own text. */
+function asAdmin(
   form: FormData,
   fn: () => Promise<ActionState>,
 ): Promise<ActionState> {
-  if (!adminEnabled())
-    return {
-      ok: false,
-      message:
-        "Admin actions are disabled: set ADMIN_SECRET (at least 32 characters) on the server.",
-    };
-  const check = checkAdminSecret(field(form, "adminSecret"), await clientKey());
-  if (check === "limited")
-    return {
-      ok: false,
-      message: "Too many wrong admin secrets. Try again in 15 minutes.",
-    };
-  if (check !== "ok") return { ok: false, message: "Wrong admin secret." };
-  try {
-    return await fn();
-  } catch (e) {
-    if (e instanceof HandshakeError || e instanceof SyncError)
-      return { ok: false, message: e.message };
-    if (e instanceof Error && "code" in e && e.code === "demo_mode")
-      return { ok: false, message: e.message };
-    console.error(
-      `Admin peer action failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
-    return {
-      ok: false,
-      message: "Something went wrong. Check the peer list before trying again.",
-    };
-  }
+  return gate(form, fn, {
+    shown: (e) => e instanceof HandshakeError || e instanceof SyncError,
+    fallback: "Something went wrong. Check the peer list before trying again.",
+    what: "peer",
+  });
 }
 
 /** We register at a CPO, from its versions URL and the Token A it gave us. */

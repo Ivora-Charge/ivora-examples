@@ -54,16 +54,28 @@ export function rateLimit({
 }
 
 /**
- * The client key for rate limits, from the headers a proxy in front of the server sets:
- * the platform's own client-IP header first (Vercel's x-vercel-forwarded-for and
- * x-real-ip, which a client cannot set), then the right-most X-Forwarded-For entry, the
- * one the nearest proxy added. Entries further left are whatever the client sent.
- * Without a proxy every header can be forged.
+ * The client key for rate limits (the public API's, and the admin secret's).
+ *
+ * - TRUSTED_PROXY_HEADER, when set, names the one header your own proxy or CDN sets to
+ *   the client address and callers cannot set themselves (for example
+ *   `cf-connecting-ip`, or `x-forwarded-for` from a proxy that appends to it). For a
+ *   comma list, the last entry is used: the one your proxy added. No other header is
+ *   read, and a request without it counts as "unknown".
+ * - Otherwise, the platform's own client-IP header first (Vercel's
+ *   x-vercel-forwarded-for and x-real-ip, which a client cannot set there), then the
+ *   right-most X-Forwarded-For entry, the one the nearest proxy added. Entries further
+ *   left are whatever the client sent. Without a proxy every header can be forged, and
+ *   with none of them every client is "unknown" and shares one limit.
  */
-export function clientKey(h: Headers): string {
-  const ip =
-    h.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
-    h.get("x-real-ip")?.trim() ||
-    h.get("x-forwarded-for")?.split(",").at(-1)?.trim();
+export function clientKey(
+  h: Headers,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  const trusted = env.TRUSTED_PROXY_HEADER?.trim().toLowerCase();
+  const ip = trusted
+    ? h.get(trusted)?.split(",").at(-1)?.trim()
+    : h.get("x-vercel-forwarded-for")?.split(",")[0]?.trim() ||
+      h.get("x-real-ip")?.trim() ||
+      h.get("x-forwarded-for")?.split(",").at(-1)?.trim();
   return ip ? ip.slice(0, 64) : "unknown";
 }

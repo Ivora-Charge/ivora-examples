@@ -106,6 +106,7 @@ export function ocpiUrls() {
     credentials: `${base}/${OCPI_VERSION}/credentials`,
     locations: `${base}/${OCPI_VERSION}/locations`,
     tariffs: `${base}/${OCPI_VERSION}/tariffs`,
+    tokens: `${base}/${OCPI_VERSION}/tokens`,
   };
 }
 

@@ -15,10 +15,10 @@ export function ourVersions(): Version[] {
 
 /**
  * Body of our version details endpoint. Later parts add the modules they implement
- * (tokens, sessions, cdrs, commands).
+ * (sessions, cdrs, commands).
  */
 export function ourVersionDetails(): VersionDetails {
-  const { credentials, locations, tariffs } = ocpiUrls();
+  const { credentials, locations, tariffs, tokens } = ocpiUrls();
   return {
     version: OCPI_VERSION,
     endpoints: [
@@ -26,6 +26,7 @@ export function ourVersionDetails(): VersionDetails {
       { identifier: "credentials", role: "RECEIVER", url: credentials },
       { identifier: "locations", role: "RECEIVER", url: locations },
       { identifier: "tariffs", role: "RECEIVER", url: tariffs },
+      { identifier: "tokens", role: "SENDER", url: tokens },
     ],
   };
 }

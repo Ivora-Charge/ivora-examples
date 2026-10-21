@@ -1,6 +1,6 @@
 # eMSP Starter: server
 
-> **In progress** (part 3 of 13). See the [template README](../README.md) for what the eMSP Starter is and how the server and the app fit together.
+> **In progress** (part 4 of 13). See the [template README](../README.md) for what the eMSP Starter is and how the server and the app fit together.
 
 The Next.js server of the eMSP Starter: OCPI 2.2.1 eMSP endpoints, the REST API for the driver app, the admin web, and the Supabase migrations.
 
@@ -11,10 +11,12 @@ The Next.js server of the eMSP Starter: OCPI 2.2.1 eMSP endpoints, the REST API 
 - **Admin web shell:** an Overview with the eMSP's OCPI identity (version, country code, party ID) and, in demo mode, the names of the variables live mode still needs.
 - **API:** `GET /api/v1/status` returns the mode, the network name and the OCPI identity. It holds no secrets, so any origin may read it. `GET /api/v1/locations` searches charging locations; see [Locations and tariffs](#locations-and-tariffs).
 - **Config and demo mode:** `lib/server/config.ts` reads the environment (server-only); `lib/server/demo.ts` is the one demo-mode switch and the only gate for outbound requests.
-- **Database:** an append-only audit log, the OCPI peer registry and the locations and tariffs cache, the migrate script, and the shared 10-30 check.
+- **Database:** an append-only audit log, the OCPI peer registry, the locations and tariffs cache, drivers' tokens and their push queue, the migrate script, and the shared 10-30 check.
 - **OCPI 2.2.1 core:** the versions and credentials modules, with any number of CPO peers, in both handshake directions. See [OCPI peers](#ocpi-peers).
 - **Locations and tariffs:** pulled from every CPO peer (full, then incremental, paginated and resumable) and received as pushes, stored per peer, searchable by the app, with display prices and a price preview. See [Locations and tariffs](#locations-and-tariffs).
+- **Tokens and real-time authorization:** drivers' APP_USER tokens (with an eMA contract ID from our party) and RFID cards, served to CPOs from our Tokens Sender, pushed to every CPO's Tokens Receiver at once (with retries), and authorized in real time. See [Tokens](#tokens-and-real-time-authorization).
 - **Admin, CPO peers** (`/admin/peers`): connect to a CPO, create a Token A for a CPO to register with us, rotate tokens, unregister, list peers, pull a peer's locations and tariffs. Temporarily gated by `ADMIN_SECRET`.
+- **Admin, driver tokens** (`/admin/tokens`): look up a driver's tokens, create an app token, add an RFID card, block, unblock, change the whitelist, retry missed pushes. Temporarily gated by `ADMIN_SECRET`.
 
 ## Run locally
 
@@ -31,38 +33,43 @@ With no credentials it starts in **demo mode**, with a "Demo" banner on every pa
 
 Copy `.env.example` to `.env.local` and fill it in. All variables are server-side only; never prefix one with `NEXT_PUBLIC_`.
 
-| Variable                    | Purpose                                                                                                                                                                             |
-| --------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EMSP_COUNTRY_CODE`         | Your ISO 3166-1 alpha-2 country code, for example `NL`. Required for live mode.                                                                                                     |
-| `EMSP_PARTY_ID`             | Your 3-character OCPI party ID. Required for live mode.                                                                                                                             |
-| `PUBLIC_BASE_URL`           | The `https://` origin this server is reached at. CPO peers call the OCPI endpoints on it. Required.                                                                                 |
-| `SUPABASE_URL`              | Supabase project URL. Required for live mode.                                                                                                                                       |
-| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Bypasses RLS: never logged, never sent to the app. Required for live mode.                                                                               |
-| `SUPABASE_DB_URL`           | Postgres connection string, used only by `npm run db:migrate`.                                                                                                                      |
-| `OCPI_TOKEN_ENCRYPTION_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts the tokens CPO peers give us, at rest. Required for live mode. Losing or changing it means re-registering every peer. |
-| `ADMIN_SECRET`              | **Temporary**, until admin sign-in (part 7). At least 32 characters (`openssl rand -base64 32`). Every admin action asks for it; without it the admin actions are disabled.         |
-| `CRON_SECRET`               | Optional. At least 32 characters. Enables the scheduled pull, `GET /api/cron/ocpi-sync` with `Authorization: Bearer <CRON_SECRET>`. Without it the route answers 503.               |
-| `OCPI_TOKEN_A_TTL_DAYS`     | Optional. Days a Token A we issue stays valid, 1 to 90. Default 7.                                                                                                                  |
-| `OCPI_ALLOW_PRIVATE_PEERS`  | **Local development and tests only.** `1` lets peer URLs point at loopback or private addresses, for a CPO on your machine. Off by default; ignored when `NODE_ENV` is production.  |
-| `DEMO_MODE`                 | Set to `true` (or `1`, `yes`, `on`) to force demo mode even when everything above is set, for example on a public demo.                                                             |
+| Variable                    | Purpose                                                                                                                                                                                                        |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `EMSP_COUNTRY_CODE`         | Your ISO 3166-1 alpha-2 country code, for example `NL`. Required for live mode.                                                                                                                                |
+| `EMSP_PARTY_ID`             | Your 3-character OCPI party ID. Required for live mode.                                                                                                                                                        |
+| `PUBLIC_BASE_URL`           | The `https://` origin this server is reached at. CPO peers call the OCPI endpoints on it. Required.                                                                                                            |
+| `SUPABASE_URL`              | Supabase project URL. Required for live mode.                                                                                                                                                                  |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Bypasses RLS: never logged, never sent to the app. Required for live mode.                                                                                                          |
+| `SUPABASE_DB_URL`           | Postgres connection string, used only by `npm run db:migrate`.                                                                                                                                                 |
+| `OCPI_TOKEN_ENCRYPTION_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts the tokens CPO peers give us, at rest. Required for live mode. Losing or changing it means re-registering every peer.                            |
+| `ADMIN_SECRET`              | **Temporary**, until admin sign-in (part 7). At least 32 characters (`openssl rand -base64 32`). Every admin action asks for it; without it the admin actions are disabled.                                    |
+| `CRON_SECRET`               | Optional. At least 32 characters. Enables the scheduled jobs, `GET /api/cron/ocpi-sync` with `Authorization: Bearer <CRON_SECRET>`: the pull, token push retries and expiry. Without it the route answers 503. |
+| `TRUSTED_PROXY_HEADER`      | Optional. The header your own proxy or CDN sets to the client address, for example `cf-connecting-ip`. When set, it alone keys every rate limit. See **Rate limits without a proxy** below.                    |
+| `OCPI_TOKEN_A_TTL_DAYS`     | Optional. Days a Token A we issue stays valid, 1 to 90. Default 7.                                                                                                                                             |
+| `OCPI_ALLOW_PRIVATE_PEERS`  | **Local development and tests only.** `1` lets peer URLs point at loopback or private addresses, for a CPO on your machine. Off by default; ignored when `NODE_ENV` is production.                             |
+| `DEMO_MODE`                 | Set to `true` (or `1`, `yes`, `on`) to force demo mode even when everything above is set, for example on a public demo.                                                                                        |
 
 Live mode turns on only when all required variables are set and valid. OCPI peer credentials are not environment variables: they are exchanged with each CPO over the OCPI credentials module and stored in the database, with tokens we issue stored as hashes and peer tokens encrypted at rest.
 
 > **Before going live:** this part has no admin sign-in, only the temporary `ADMIN_SECRET` on admin actions, rate limited per server instance. Run live mode only on a private deployment until the admin part lands.
 >
-> **Admin lockout:** wrong secrets are limited to 5 per client and 50 in total per 15 minutes. The total cap is what stops guessing from many addresses, but it also means anyone who can reach the admin page can send 50 wrong secrets and lock the real admin out for 15 minutes, from as many forged addresses as they like. The client key is taken from the hosting platform's own client-IP header where there is one (`x-vercel-forwarded-for`, `x-real-ip`), else from the right-most `X-Forwarded-For` entry, the one your proxy added; entries to its left are whatever the client sent. Without a proxy in front of the server every one of these headers can be forged. Until admin sign-in lands, keep the admin page off the public internet (an IP allow-list or a private network) so the lockout cannot be triggered by strangers; restarting the server clears the counts.
+> **Admin lockout:** wrong secrets are limited to 5 per client and 50 in total per 15 minutes. The total cap is what stops guessing from many addresses, but it also means anyone who can reach the admin page can send 50 wrong secrets and lock the real admin out for 15 minutes, from as many forged addresses as they like. The client key is taken from the hosting platform's own client-IP header where there is one (`x-vercel-forwarded-for`, `x-real-ip`), else from the right-most `X-Forwarded-For` entry, the one your proxy added; entries to its left are whatever the client sent. Without a proxy in front of the server every one of these headers can be forged. When `TRUSTED_PROXY_HEADER` is set, that header alone is read (its last entry, the one your proxy added) and nothing else. Until admin sign-in lands, keep the admin page off the public internet (an IP allow-list or a private network) so the lockout cannot be triggered by strangers; restarting the server clears the counts.
+>
+> **Rate limits without a proxy:** when no client-IP header reaches the server (no proxy, or a proxy that sets another header), the search and price-preview limits key every client as `unknown`, so one client can use up the 120 (and 30) requests per minute for everyone. Set `TRUSTED_PROXY_HEADER` to the header your proxy sets, or put your platform's firewall rate limiting in front.
 
 ## OCPI peers
 
 This server is the eMSP side of OCPI 2.2.1. Every CPO platform is a peer, and none is special. Our endpoints:
 
-| Endpoint                  | What it does                                                                                         |
-| ------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `GET /ocpi/versions`      | Our versions. Needs a token we issued (a Token A too).                                               |
-| `GET /ocpi/2.2.1`         | Version details: credentials, and the locations and tariffs Receiver interfaces.                     |
-| `/ocpi/2.2.1/credentials` | `GET` our credentials, `POST` to register (with a Token A), `PUT` to rotate, `DELETE` to unregister. |
-| `/ocpi/2.2.1/locations/…` | Locations Receiver: `GET`, `PUT`, `PATCH` a location, EVSE or connector.                             |
-| `/ocpi/2.2.1/tariffs/…`   | Tariffs Receiver: `GET`, `PUT`, `PATCH`, `DELETE` a tariff.                                          |
+| Endpoint                        | What it does                                                                                         |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `GET /ocpi/versions`            | Our versions. Needs a token we issued (a Token A too).                                               |
+| `GET /ocpi/2.2.1`               | Version details: credentials, the locations and tariffs Receivers and the tokens Sender.             |
+| `/ocpi/2.2.1/credentials`       | `GET` our credentials, `POST` to register (with a Token A), `PUT` to rotate, `DELETE` to unregister. |
+| `/ocpi/2.2.1/locations/…`       | Locations Receiver: `GET`, `PUT`, `PATCH` a location, EVSE or connector.                             |
+| `/ocpi/2.2.1/tariffs/…`         | Tariffs Receiver: `GET`, `PUT`, `PATCH`, `DELETE` a tariff.                                          |
+| `GET /ocpi/2.2.1/tokens`        | Tokens Sender: every token we issued, paginated, with `date_from` and `date_to`.                     |
+| `POST …/tokens/{uid}/authorize` | Real-time authorization of one of our tokens.                                                        |
 
 **We register at a CPO.** The CPO gives you its versions URL and a Token A. In **Connect to a CPO**, this server reads the CPO's versions and 2.2.1 details with Token A, issues our Token B, POSTs our credentials to the CPO and stores the Token C it answers with. It then reads the versions again with Token C, from the URL the CPO returned. If anything fails after the CPO accepted us, it unregisters there again.
 
@@ -83,7 +90,7 @@ How it works, in `lib/ocpi/`:
 
 ### Mock CPO
 
-`lib/mock-cpo/` is a second, generic OCPI 2.2.1 CPO that runs in-process: versions, credentials (all four methods, both directions), and paginated locations and tariffs Sender interfaces with `date_from` and `date_to`. It pushes changes to our Receiver interfaces (`setEvseStatus`, `putLocation`, `putTariff`, `deleteTariff`) and injects failures (HTTP errors and hangs). Its sample data (`sample-data.ts`: invented sites in an invented city) covers AC and DC, several connector standards, every EVSE state the search cares about, facilities, parking restrictions, an unpublished site and free, energy, time-of-day, idle-fee, parking and flat-fee tariffs. The tests use it as a real peer, with a second instance on another platform that uses the same location and tariff IDs, over an in-process network (`tests/support/network.ts`): no request leaves the process. Demo mode shows the same sample data.
+`lib/mock-cpo/` is a second, generic OCPI 2.2.1 CPO that runs in-process: versions, credentials (all four methods, both directions), paginated locations and tariffs Sender interfaces with `date_from` and `date_to`, and a Tokens Receiver that validates every token we push against 2.2.1. It pulls our Tokens Sender (`pullTokens`) and asks for real-time authorization (`authorize`) as a CPO does. It pushes changes to our Receiver interfaces (`setEvseStatus`, `putLocation`, `putTariff`, `deleteTariff`) and injects failures (HTTP errors and hangs). Its sample data (`sample-data.ts`: invented sites in an invented city) covers AC and DC, several connector standards, every EVSE state the search cares about, facilities, parking restrictions, an unpublished site and free, energy, time-of-day, idle-fee, parking and flat-fee tariffs. The tests use it as a real peer, with a second instance on another platform that uses the same location and tariff IDs, over an in-process network (`tests/support/network.ts`): no request leaves the process. Demo mode shows the same sample data.
 
 ## Locations and tariffs
 
@@ -127,6 +134,32 @@ EVSE filters (status, parking, EVSE ID, charger ID) and connector filters (power
 
 **Prices** (`lib/locations/pricing.ts`) are **display only**. A connector's price is its first active `REGULAR` (or untyped) tariff, else its first active one. The display price lists every energy, time, parking and flat component with its conditions in words (days, time of day, dates, duration, energy, power, current, reservation), VAT included when the CPO gives the rate, and the tariff's minimum and maximum price. The preview walks the session minute by minute in the location's time zone, applying for each dimension the first element whose restrictions match (minimum inclusive, maximum exclusive), rounding the last period of each dimension up to its step size, then the tariff's minimum and maximum price. Money is integer arithmetic throughout: tariff prices are read as ten-thousandths of the currency unit (`priceE4`, `unitPriceE4`: OCPI prices have at most 4 decimals), line amounts stay exact fractions, and the total is rounded **once**, half up, to the currency's minor units (`totalExclVatMinor`, `totalInclVatMinor`, with `minorDigits`: 2 for EUR, 0 for JPY). Line amounts (`amountExclVatMinor`) are rounded on their own for display, so they may differ from the total by a minor unit. What a driver pays is settled from the CDR in a later part, and you may add your own fees on top of the CPO's tariff.
 
+## Tokens and real-time authorization
+
+Every driver has one **APP_USER** token, the one the app charges with, and may have **RFID** cards. The app token comes with the driver's **contract ID** in eMA ID format: our country code, our party ID, `C` and 8 random letters and digits, without separators or the optional check digit (for example `NLABCC12AB34CD`), like the OCPI 2.2.1 examples. RFID cards join the driver's contract: same contract ID and `group_id`. The `issuer` is the brand name. Each token has its own **whitelist** setting, which tells a CPO when it may let the token charge without asking us: `ALLOWED` by default (ask us; charge if we cannot answer), or `ALWAYS`, `ALLOWED_OFFLINE`, `NEVER`. A token is `active`, `blocked` (until unblocked) or `expired` (an RFID card past its expiry date); OCPI's `valid` is true only while active.
+
+Until driver sign-in lands (part 7), app tokens are created from `/admin/tokens` for a **driver reference**, any ID of up to 64 characters that will become the account ID; part 7 creates them at sign-up with `createAppToken` (`lib/tokens/manage.ts`).
+
+**Tokens Sender.** `GET /ocpi/2.2.1/tokens` serves every token, oldest `last_updated` first, at most 100 per page (`X-Limit`), with `X-Total-Count`, a `Link` to the next page on `PUBLIC_BASE_URL`, `offset`, `limit`, `date_from` (inclusive) and `date_to` (exclusive). A CPO that pulls with `date_from` gets every change, pushed or missed.
+
+**Pushes** (`lib/tokens/push.ts`). A new token is `PUT`, and a change (block, unblock, expiry, whitelist) `PATCH`ed with the fields that changed and `last_updated`, to `{receiver}/{country_code}/{party_id}/{uid}?type=` of every registered peer that lists a tokens Receiver, all at once, with routing headers to the peer's CPO party. `last_updated` moves forward by at least a second on every change, so a CPO that keeps the newest version never mistakes two quick changes for one. A push that fails (after one retry) is queued per peer and token (`emsp_token_pushes`); the cron route and **Retry missed pushes** send the token's current version with a `PUT`, after 1, 2, 4 ... minutes, at most 6 hours apart, until it lands. A queued push for a peer that unregistered is dropped. Demo mode pushes nothing.
+
+**Real-time authorization** (`lib/tokens/authorize.ts`). `POST /ocpi/2.2.1/tokens/{token_uid}/authorize?type=` (type defaults to `RFID`), with an optional `LocationReferences` body, answers an `AuthorizationInfo`:
+
+| `allowed`     | When                                                                                                    |
+| ------------- | ------------------------------------------------------------------------------------------------------- |
+| `ALLOWED`     | The token is active. Comes with a new `authorization_reference` and the location and EVSEs asked about. |
+| `BLOCKED`     | The token is blocked. Takes effect at once, before any push lands.                                      |
+| `EXPIRED`     | The token is expired, or past its expiry date even if the expiry sweep has not run yet.                 |
+| `NO_CREDIT`   | The driver has no usable saved card. From part 7 (`driverStanding`); until then never.                  |
+| `NOT_ALLOWED` | The driver may not charge (an account restriction). From part 7; until then never.                      |
+
+The token's own status comes first, then the driver's standing. Unknown tokens, and types we do not issue (`AD_HOC_USER`, `OTHER`), get `2004 Unknown Token` (HTTP 404); an invalid body or `type` gets `2001`. The answer carries the token as the CPO should cache it, and every answer goes to the audit log with its `authorization_reference`. Both endpoints need a registered peer's token and the `OCPI-from`/`OCPI-to` routing headers.
+
+**Blocking a token** from the admin takes effect for real-time authorization immediately and is pushed to every CPO at once. A CPO that charges a token without asking (`ALWAYS`, or offline with `ALLOWED`/`ALLOWED_OFFLINE`) only stops once its push lands; set `NEVER` on tokens that must always be checked.
+
+**Expiry.** The cron route marks active tokens past their expiry as `expired` and pushes `valid: false` (at most 100 per call).
+
 ## Database
 
 Migrations live in `supabase/migrations/`, named `<YYYYMMDDNNNN>_<name>.sql`, and are additive.
@@ -136,11 +169,12 @@ npm run check:migrations   # the 10-30 check, also run in CI
 npm run db:migrate         # applies pending migrations using SUPABASE_DB_URL from .env.local
 ```
 
-| Migration                                 | What it adds                                                                                                                                                                                                                                                                                                    |
-| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `202610210001_baseline.sql`               | The append-only audit log.                                                                                                                                                                                                                                                                                      |
-| `202610210002_ocpi_peers.sql`             | The OCPI peer registry and the hashes of the tokens we issue.                                                                                                                                                                                                                                                   |
-| `202610210003_ocpi_locations_tariffs.sql` | The locations and tariffs cache (`emsp_ocpi_locations`, `emsp_ocpi_tariffs`, each row with a `revision` for compare-and-swap), the state of each peer's pull (`emsp_ocpi_sync_state`), and the functions that store a pulled page and find search candidates. Service-only: executable by `service_role` alone. |
+| Migration                                 | What it adds                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `202610210001_baseline.sql`               | The append-only audit log.                                                                                                                                                                                                                                                                                          |
+| `202610210002_ocpi_peers.sql`             | The OCPI peer registry and the hashes of the tokens we issue.                                                                                                                                                                                                                                                       |
+| `202610210003_ocpi_locations_tariffs.sql` | The locations and tariffs cache (`emsp_ocpi_locations`, `emsp_ocpi_tariffs`, each row with a `revision` for compare-and-swap), the state of each peer's pull (`emsp_ocpi_sync_state`), and the functions that store a pulled page and find search candidates. Service-only: executable by `service_role` alone.     |
+| `202610210004_tokens.sql`                 | Our drivers' tokens (`emsp_tokens`: one APP_USER and one contract per driver, unique uid per type, compare-and-swap `revision`; never deleted) and the queue of pushes peers missed (`emsp_token_pushes`), with `emsp_tokens_count` for `X-Total-Count` and `emsp_token_push_failed` for the backoff. Service-only. |
 
 `db:migrate` runs every pending file in one transaction under an advisory lock and records it in `public.emsp_schema_migrations`. Without `SUPABASE_DB_URL`, run the files in filename order in the Supabase SQL editor.
 
@@ -169,14 +203,17 @@ OCPI 2.2.1 as the eMSP role, with any CPO. Nothing from the Ivora API yet; an op
 ## Limits and next steps
 
 - No admin sign-in yet: `ADMIN_SECRET` is a stopgap with no session. Wrong secrets are limited to 5 per client and 50 in total per 15 minutes, counted per server instance.
-- The OCPI version details list credentials, locations and tariffs; later parts add tokens, sessions, CDRs and commands.
+- The OCPI version details list credentials, locations, tariffs and tokens; later parts add sessions, CDRs and commands.
 - Demo mode keeps peers in memory and refuses to contact a CPO; its locations and tariffs are the mock CPO's sample data, loaded in-process, never pulled.
-- Locations with `publish: false` never appear, including those published only to certain tokens (`publish_allowed_to`); showing them to the right drivers needs the tokens module (part 4).
+- Locations with `publish: false` never appear, including those published only to certain tokens (`publish_allowed_to`); showing them to the right drivers needs driver sign-in (part 7).
+- App tokens are created by an admin until driver sign-in (part 7) creates them at sign-up; real-time authorization rests on the token's status until part 7 adds the driver's standing and saved card (`NO_CREDIT`, `NOT_ALLOWED`).
+- Tokens are pushed to each peer's first CPO party. A platform that hosts several CPO parties behind one connection gets one push per token, addressed to that party.
+- Contract IDs carry no eMA check digit.
 - The search reads at most 1,000 candidates per query from the store, nearest first; see [Locations and tariffs](#locations-and-tariffs).
 - The public API's rate limits are counted per server instance.
 - Prices are display only: the CPO's tariff as it says, without your own fees.
 - Rotating `OCPI_TOKEN_ENCRYPTION_KEY` needs every peer to be registered again. An expired Token A leaves its peer pending; unregister it to close it.
-- Next parts: tokens and real-time authorization, sessions, CDRs, payments and the admin web.
+- Next parts: sessions and commands, CDRs, payments, driver sign-in and the admin web.
 
 ## Checks
 

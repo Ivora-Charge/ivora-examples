@@ -2,7 +2,8 @@ import type { PGlite, Transaction } from "@electric-sql/pglite";
 
 /**
  * Just enough of Supabase's Data API (PostgREST) over PGlite for the stores' requests:
- * GET, PATCH and DELETE with eq/lt/gte/lte/in/is filters and `select`; POST inserts with
+ * GET, PATCH and DELETE with eq/lt/gte/lte/in/is filters and `select` (GET also with
+ * `order`, `limit` and `offset`); POST inserts with
  * `on_conflict` and `resolution=ignore-duplicates`; and POST rpc/<function> with named
  * arguments. Each request runs in its own transaction as service_role, like PostgREST,
  * so grants and row locks are Postgres's own. Requests from concurrent callers
@@ -39,7 +40,29 @@ const ident = (s: string) => {
   return `"${s}"`;
 };
 
-const RESERVED = new Set(["select", "on_conflict", "limit", "order"]);
+const RESERVED = new Set(["select", "on_conflict", "limit", "offset", "order"]);
+
+/** `order=a.asc,b.desc`, `limit` and `offset` of a GET. */
+function paging(params: URLSearchParams): string {
+  let sql = "";
+  const order = params.get("order");
+  if (order)
+    sql += ` order by ${order
+      .split(",")
+      .map((o) => {
+        const [col, dir = "asc"] = o.split(".");
+        if (dir !== "asc" && dir !== "desc") throw new Error(`Bad order ${o}`);
+        return `${ident(col)} ${dir}`;
+      })
+      .join(", ")}`;
+  for (const k of ["limit", "offset"]) {
+    const v = params.get(k);
+    if (v === null) continue;
+    if (!/^\d+$/.test(v)) throw new Error(`Bad ${k}`);
+    sql += ` ${k} ${v}`;
+  }
+  return sql;
+}
 
 function where(params: URLSearchParams, args: unknown[]): string {
   const out: string[] = [];
@@ -90,7 +113,7 @@ async function table(
   let sql: string;
   if (method === "GET") {
     const ret = returning(params).replace(" returning ", "");
-    sql = `select ${ret} from ${t}${where(params, args)}`;
+    sql = `select ${ret} from ${t}${where(params, args)}${paging(params)}`;
   } else if (method === "DELETE") {
     sql = `delete from ${t}${where(params, args)}${returning(params)}`;
   } else if (method === "PATCH") {
