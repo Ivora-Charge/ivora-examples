@@ -5,7 +5,9 @@ import {
   saleAction,
   type SaleAction,
 } from "@/lib/server/cashier";
+import { consoleLogin } from "@/lib/server/auth";
 import { errorResponse } from "@/lib/server/http";
+import { clientOf, RateLimiter } from "@/lib/server/pos";
 import { UserError } from "@/lib/server/sessions";
 import { cashierRequest, noStore } from "@/lib/server/cashier-guard";
 
@@ -31,14 +33,9 @@ const email = z.object({
   requestId: z.uuid(),
 });
 
-// Emailed receipts: a brake per server instance on how many one console sends.
-const emails = { count: 0, since: 0 };
-function emailAllowed(now = Date.now()) {
-  if (now - emails.since > 60_000)
-    Object.assign(emails, { count: 0, since: now });
-  emails.count += 1;
-  return emails.count <= 20;
-}
+// Emailed receipts: a brake per server instance on how many one signed-in
+// console sends from one client, so one busy till doesn't block the others.
+const emails = new RateLimiter(20);
 
 /** Stop, mark paid, give change, email the receipt, or (demo only) unplug. */
 export async function POST(
@@ -49,7 +46,8 @@ export async function POST(
     const s = await cashierRequest(request);
     const { sale, action } = await params;
     if (action === "email") {
-      if (!emailAllowed())
+      const login = (await consoleLogin(s)) ?? "none";
+      if (!emails.allow(`${login}|${clientOf(request)}`))
         throw new UserError(
           429,
           "rate_limited",

@@ -4,6 +4,7 @@ import {
   ivoraClient,
   liveDeps,
   liveStoreDeps,
+  posOutbox,
   settings,
 } from "@/lib/server/services";
 import { APPLICATION_PREFIX, reconcile } from "@/lib/server/sessions";
@@ -35,7 +36,8 @@ function authorized(request: Request) {
  * Safety sweep for sessions nobody is watching: drivers who closed the page,
  * missed webhooks. Settles finished sessions and releases unused holds; for
  * in-store sales it stops at the prepaid limit, finalizes and records the
- * prepaid capture. It never marks an in-store sale paid.
+ * prepaid capture. It never marks an in-store sale paid. It also retries
+ * this instance's session_due webhooks that are due again.
  */
 export async function GET(request: Request) {
   if (!authorized(request))
@@ -51,6 +53,8 @@ export async function GET(request: Request) {
       x.created_at >= since &&
       !SETTLED.has(x.settlement?.status ?? ""),
   );
+  // Before the reconcile loop, which may offer some of these events again.
+  const posRetried = posOutbox(s)?.retryDue() ?? 0;
   let reconciled = 0;
   const failed: string[] = [];
   for (const x of open) {
@@ -67,5 +71,5 @@ export async function GET(request: Request) {
       failed.push(x.id);
     }
   }
-  return NextResponse.json({ reconciled, failed, truncated });
+  return NextResponse.json({ reconciled, failed, truncated, posRetried });
 }
