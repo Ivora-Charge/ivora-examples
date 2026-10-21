@@ -8,6 +8,10 @@ test("demo: vehicles arrive, share the site cap, and show up in the report", asy
   await expect(
     page.getByRole("status").filter({ hasText: "Demo" }),
   ).toBeVisible();
+  await page.getByRole("link", { name: "Try the demo" }).click();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Demo" }),
+  ).toBeVisible();
   await expect(page.getByText("not plugged in").first()).toBeVisible();
 
   // 16:30 -> 22:30: every vehicle has arrived.
@@ -16,18 +20,14 @@ test("demo: vehicles arrive, share the site cap, and show up in the report", asy
     await page.getByRole("button", { name: "Advance 1 h" }).click();
     await r;
   }
-  await expect(
-    page.getByRole("cell", { name: "DEMO-ST-1 / 6", exact: true }),
-  ).toBeVisible();
+  await expect(page.getByText("DEMO-ST-1 / 6", { exact: true })).toBeVisible();
   await expect(page.getByText("not plugged in")).toHaveCount(0);
   await expect(
     page.getByText(/accepted \(\d+ W now, simulated\)/).first(),
   ).toBeVisible();
 
-  if (process.env.SCREENSHOT)
-    await page.screenshot({ path: "docs/screenshot.png", fullPage: false });
-
   // Edit a departure: labelled form, plan recomputed.
+  await page.getByRole("tab", { name: "Vehicles and cards" }).click();
   await page.getByRole("button", { name: "Edit" }).first().click();
   await page.getByLabel("Target %").fill("80");
   await page.getByRole("button", { name: "Save" }).click();
@@ -36,6 +36,7 @@ test("demo: vehicles arrive, share the site cap, and show up in the report", asy
   ).toBeVisible();
 
   // Report and CSV link.
+  await page.getByRole("tab", { name: "Sessions and cost" }).click();
   await page.getByLabel("Group by").selectOption("driver");
   await expect(
     page.getByRole("link", { name: "Download CSV" }),
@@ -45,6 +46,7 @@ test("demo: vehicles arrive, share the site cap, and show up in the report", asy
   expect((await csv.text()).split("\n")[0]).toContain("cost");
 
   // Card import is labelled and reports per-line errors.
+  await page.getByRole("tab", { name: "Vehicles and cards" }).click();
   await page
     .getByLabel(/Import cards as CSV/)
     .fill("idTag,driverName\nDEMO7001,Sample Driver\nbad tag!,X");
