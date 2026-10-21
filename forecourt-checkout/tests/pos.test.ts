@@ -15,6 +15,7 @@ import { bearerMatches, RateLimiter } from "@/lib/server/pos";
 import {
   POS_ATTEMPT_DELAYS_MS,
   POS_RUN_BACKOFF_MS,
+  POS_SENDING_STALE_MS,
   PosOutbox,
 } from "@/lib/server/pos-webhook";
 import { posOutbox, receiptMailer } from "@/lib/server/services";
@@ -205,6 +206,127 @@ describe("POS webhook delivery", () => {
     limited.box.offer(EVENT);
     await limited.settle();
     expect(limited.sent).toHaveLength(2);
+  });
+
+  it("retries a run cut off mid-send once it's stale, not while it may still be running", async () => {
+    let now = T0;
+    const sent: string[] = [];
+    let respond = true;
+    const box = new PosOutbox({
+      url: "https://pos.example.com/hook",
+      secret: SECRET,
+      now: () => now,
+      sleep: async () => {},
+      // Like after() when the route hits its time limit: the first run never ends.
+      schedule: (task) => void task(),
+      fetch: (async (_url: string, init: RequestInit) => {
+        sent.push(init.body as string);
+        if (!respond) return new Promise<Response>(() => {});
+        return new Response(null, { status: 200 });
+      }) as unknown as typeof fetch,
+    });
+    respond = false;
+    box.offer(EVENT);
+    await Promise.resolve();
+    expect(sent).toHaveLength(1);
+    respond = true;
+    now += POS_SENDING_STALE_MS - 1;
+    box.offer(EVENT);
+    expect(box.retryDue()).toBe(0);
+    expect(sent).toHaveLength(1);
+    now += 1;
+    box.offer(EVENT);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(sent).toHaveLength(2);
+    expect(new Set(sent).size).toBe(1); // the same event and body
+    now += 24 * 60 * 60_000;
+    box.offer(EVENT);
+    expect(box.retryDue()).toBe(0);
+    expect(sent).toHaveLength(2); // delivered: never again
+  });
+
+  it("lets the sweep retry due events without the sale being read again", async () => {
+    const o = outbox([500, 500, 500, 200]);
+    o.box.offer(EVENT);
+    await o.settle();
+    expect(o.sent).toHaveLength(POS_ATTEMPT_DELAYS_MS.length);
+    expect(o.box.retryDue()).toBe(0); // backoff not over yet
+    o.advance(POS_RUN_BACKOFF_MS[0]);
+    expect(o.box.retryDue()).toBe(1);
+    await o.settle();
+    expect(o.sent).toHaveLength(POS_ATTEMPT_DELAYS_MS.length + 1);
+    o.advance(24 * 60 * 60_000);
+    expect(o.box.retryDue()).toBe(0);
+    o.box.offer(EVENT);
+    await o.settle();
+    expect(o.sent).toHaveLength(POS_ATTEMPT_DELAYS_MS.length + 1);
+  });
+
+  it("lets the sweep pick up a stale send, and ignores the late result of the run it replaced", async () => {
+    let now = T0;
+    const hanging: ((r: Response) => void)[] = [];
+    const plan: ("hang" | number)[] = ["hang", "hang", 500, 500];
+    const box = new PosOutbox({
+      url: "https://pos.example.com/hook",
+      secret: SECRET,
+      now: () => now,
+      sleep: async () => {},
+      schedule: (task) => void task(),
+      fetch: (() => {
+        const next = plan.shift() ?? 200;
+        if (next === "hang")
+          return new Promise<Response>((r) => hanging.push(r));
+        return Promise.resolve(new Response(null, { status: next }));
+      }) as unknown as typeof fetch,
+    });
+    box.offer(EVENT); // run 1 hangs
+    now += POS_SENDING_STALE_MS;
+    expect(box.retryDue()).toBe(1); // run 2 hangs too
+    expect(hanging).toHaveLength(2);
+    // Run 1 comes back late and fails. Run 2 is still the one in charge: no
+    // backoff from run 1's result, so run 2 is retried when it goes stale.
+    now += 30_000;
+    hanging[0](new Response(null, { status: 500 }));
+    await new Promise((r) => setTimeout(r, 0));
+    now += POS_SENDING_STALE_MS - 30_000 - 1;
+    expect(box.retryDue()).toBe(0);
+    now += 1;
+    expect(box.retryDue()).toBe(1); // run 3 delivers
+    await new Promise((r) => setTimeout(r, 0));
+    // Run 2's late failure doesn't undo the delivery.
+    hanging[1](new Response(null, { status: 500 }));
+    await new Promise((r) => setTimeout(r, 0));
+    now += 24 * 60 * 60_000;
+    expect(box.retryDue()).toBe(0);
+    box.offer(EVENT);
+    expect(plan).toEqual([]);
+  });
+
+  it("gives up on an event whose runs keep getting cut off", () => {
+    let now = T0;
+    let fetches = 0;
+    const log = vi.fn();
+    const box = new PosOutbox({
+      url: "https://pos.example.com/hook",
+      secret: SECRET,
+      now: () => now,
+      schedule: (task) => void task(),
+      log,
+      fetch: (() => {
+        fetches += 1;
+        return new Promise<Response>(() => {});
+      }) as unknown as typeof fetch,
+    });
+    box.offer(EVENT);
+    for (let i = 0; i < POS_RUN_BACKOFF_MS.length + 3; i++) {
+      now += POS_SENDING_STALE_MS;
+      box.retryDue();
+    }
+    expect(fetches).toBe(POS_RUN_BACKOFF_MS.length + 1);
+    expect(log).toHaveBeenCalledWith("pos webhook gave up", {
+      event: EVENT.id,
+      result: "failed",
+    });
   });
 
   it("is off in demo mode, even with a URL and secret set", () => {

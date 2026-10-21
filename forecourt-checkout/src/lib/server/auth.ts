@@ -1,5 +1,5 @@
 import "server-only";
-import { createHmac } from "node:crypto";
+import { createHash, createHmac } from "node:crypto";
 import { cookies } from "next/headers";
 import type { Settings } from "../settings";
 import { signToken, verifyToken } from "../tokens";
@@ -58,6 +58,27 @@ export async function isCashier(settings: Settings) {
       `store-${cashierKeyId(settings)}` ||
     verifyToken(secret, "operator", jar.get(OPERATOR_COOKIE)?.value) === "site"
   );
+}
+
+/**
+ * Names the console's sign-in (each login gets its own signed cookie) without
+ * revealing the cookie, for per-cashier rate limits. Null when not signed in.
+ */
+export async function consoleLogin(settings: Settings) {
+  const jar = await cookies();
+  const secret = signingSecret(settings);
+  const cashier = jar.get(CASHIER_COOKIE)?.value;
+  const operator = jar.get(OPERATOR_COOKIE)?.value;
+  const value =
+    verifyToken(secret, "cashier", cashier) ===
+    `store-${cashierKeyId(settings)}`
+      ? `cashier:${cashier}`
+      : verifyToken(secret, "operator", operator) === "site"
+        ? `operator:${operator}`
+        : null;
+  return value
+    ? createHash("sha256").update(value).digest("base64url").slice(0, 16)
+    : null;
 }
 
 export function cookieOptions(maxAgeMs: number, secure: boolean) {

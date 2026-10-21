@@ -79,4 +79,50 @@ describe("cashier and operator roles", () => {
     expect(counterAllowed("5.6.7.9", T0)).toBe(true);
     expect(counterAllowed("5.6.7.8", T0 + 61_000)).toBe(true);
   });
+
+  it("rate-limits emailed receipts per signed-in console and client, not for the whole site", async () => {
+    vi.stubEnv("DEMO_MODE", "1");
+    const auth = await import("@/lib/server/auth");
+    const { settings: read } = await import("@/lib/server/services");
+    const { POST } =
+      await import("@/app/api/cashier/sales/[sale]/[action]/route");
+    const s = read();
+    const tills = {
+      a: auth.cashierToken(s, Date.now()),
+      b: auth.cashierToken(s, Date.now() + 1000), // another login: its own cookie
+    };
+    const send = async (till: keyof typeof tills, ip: string) => {
+      jar.clear();
+      jar.set(auth.CASHIER_COOKIE, tills[till]);
+      const response = await POST(
+        new Request(
+          "http://localhost/api/cashier/sales/post-3fa9c01b77de/email",
+          {
+            method: "POST",
+            headers: {
+              "sec-fetch-site": "same-origin",
+              "content-type": "application/json",
+              "x-forwarded-for": ip,
+            },
+            // Malformed on purpose: the limit counts before the body is read, and nothing is sent.
+            body: "{}",
+          },
+        ),
+        {
+          params: Promise.resolve({
+            sale: "post-3fa9c01b77de",
+            action: "email",
+          }),
+        },
+      );
+      return response.status;
+    };
+    for (let i = 0; i < 20; i++) expect(await send("a", "10.1.0.1")).toBe(400);
+    expect(await send("a", "10.1.0.1")).toBe(429);
+    // Another till, or the same login from another client, isn't held back.
+    expect(await send("b", "10.1.0.1")).toBe(400);
+    expect(await send("a", "10.1.0.2")).toBe(400);
+    jar.clear();
+    vi.unstubAllEnvs();
+  });
 });

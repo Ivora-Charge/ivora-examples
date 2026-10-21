@@ -597,6 +597,12 @@ export async function onMeterSample(
     // authorised on another instance. Rescan, at most every INDEX_RESCAN_MS.
     if (!open.some((s) => s.usage?.transaction_id === tx))
       open = here((await index.read({ rescan: true })).sessions);
+  } else if (tx === null && !open.some(isStore)) {
+    // The event doesn't name its transaction (the API doesn't promise one),
+    // and this instance knows no sale here: one may have been authorised on
+    // another instance since the last scan. Rescan, at most every INDEX_RESCAN_MS,
+    // rather than wait up to INDEX_TTL_MS for the next full scan.
+    open = here((await index.read({ rescan: true })).sessions);
   }
   const prepaid = open.filter((s) => {
     const sale = saleFromReference(s.application_reference);

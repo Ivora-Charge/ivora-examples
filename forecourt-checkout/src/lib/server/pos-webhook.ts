@@ -11,10 +11,14 @@ import type { SaleDueEvent } from "../store";
 // polls, Ivora webhooks, the sweep), so offer() is called many times for the
 // same event; it sends once per event ID per server instance, and only
 // retries a delivery that failed. One delivery run tries up to three times a
-// few seconds apart; if all fail, the next read of the sale after a growing
-// backoff runs it again. Every attempt carries the same event ID and body
-// with a fresh signature timestamp. The POS must de-duplicate by event ID: a
-// cold start or another instance may send an event again.
+// few seconds apart; if all fail, the next read of the sale or the sweep
+// (retryDue()) after a growing backoff runs it again. A run that never
+// finished (the route hit its time limit while it ran after the response)
+// counts as failed once POS_SENDING_STALE_MS has passed. Every attempt
+// carries the same event ID and body with a fresh signature timestamp. The
+// POS must de-duplicate by event ID: a cold start or another instance may
+// send an event again. State is in memory, so the POS should also poll
+// GET /api/pos/sessions?status=due as its backstop.
 
 /** Waits before each attempt within one delivery run. */
 export const POS_ATTEMPT_DELAYS_MS = [0, 1_000, 4_000];
@@ -26,12 +30,18 @@ export const POS_RUN_BACKOFF_MS = [
   2 * 60 * 60_000,
 ];
 export const POS_TIMEOUT_MS = 5_000;
+/**
+ * A run still "sending" after this long was cut off: retry it. Longer than a
+ * whole run (the attempt delays plus three timeouts, about 20 s).
+ */
+export const POS_SENDING_STALE_MS = 60_000;
 const MAX_TRACKED = 1000;
 
+/** `runs`: failed or cut-off runs before the current one. */
 type State =
-  | { status: "sending" }
+  | { status: "sending"; runs: number; since: number; event: SaleDueEvent }
   | { status: "delivered" }
-  | { status: "waiting"; runs: number; nextAt: number }
+  | { status: "waiting"; runs: number; nextAt: number; event: SaleDueEvent }
   | { status: "gave_up" };
 
 export type PosOutboxConfig = {
@@ -70,11 +80,25 @@ export class PosOutbox {
 
   /** A sale was read as due. Sends its event unless it was sent or is waiting to retry. */
   offer(event: SaleDueEvent) {
+    const now = this.now();
     const state = this.states.get(event.id);
-    if (state && state.status !== "waiting") return;
-    if (state?.status === "waiting" && this.now() < state.nextAt) return;
-    const runs = state?.status === "waiting" ? state.runs : 0;
-    this.track(event.id, { status: "sending" });
+    let runs = 0;
+    if (state?.status === "delivered" || state?.status === "gave_up") return;
+    if (state?.status === "waiting") {
+      if (now < state.nextAt) return;
+      runs = state.runs;
+    }
+    if (state?.status === "sending") {
+      if (now - state.since < POS_SENDING_STALE_MS) return;
+      // That run was cut off before it recorded a result: count it as failed.
+      runs = state.runs + 1;
+      if (runs > POS_RUN_BACKOFF_MS.length) {
+        this.giveUp(event.id, "failed");
+        return;
+      }
+    }
+    const sending: State = { status: "sending", runs, since: now, event };
+    this.track(event.id, sending);
     this.schedule(async () => {
       let result: RunResult;
       try {
@@ -82,17 +106,41 @@ export class PosOutbox {
       } catch {
         result = "failed";
       }
-      if (result === "delivered") this.track(event.id, { status: "delivered" });
-      else if (result === "rejected" || runs >= POS_RUN_BACKOFF_MS.length) {
-        this.track(event.id, { status: "gave_up" });
-        this.config.log?.("pos webhook gave up", { event: event.id, result });
-      } else
+      if (result === "delivered") {
+        this.track(event.id, { status: "delivered" });
+        return;
+      }
+      // A newer run took over from this one (it was taken for cut off): leave it be.
+      if (this.states.get(event.id) !== sending) return;
+      if (result === "rejected" || runs >= POS_RUN_BACKOFF_MS.length)
+        this.giveUp(event.id, result);
+      else
         this.track(event.id, {
           status: "waiting",
           runs: runs + 1,
           nextAt: this.now() + POS_RUN_BACKOFF_MS[runs],
+          event,
         });
     });
+  }
+
+  /**
+   * The sweep: run every event whose backoff has passed, or whose run was cut
+   * off, without waiting for its sale to be read again. Returns how many it started.
+   */
+  retryDue() {
+    const now = this.now();
+    const due: SaleDueEvent[] = [];
+    for (const state of this.states.values())
+      if (
+        (state.status === "waiting" && now >= state.nextAt) ||
+        (state.status === "sending" &&
+          now - state.since >= POS_SENDING_STALE_MS)
+      )
+        due.push(state.event);
+    for (const event of due) this.offer(event);
+    return due.filter((e) => this.states.get(e.id)?.status === "sending")
+      .length;
   }
 
   /** One delivery run: up to POS_ATTEMPT_DELAYS_MS.length attempts. */
@@ -129,6 +177,11 @@ export class PosOutbox {
       if (!retryable(status)) return "rejected";
     }
     return "failed";
+  }
+
+  private giveUp(id: string, result: RunResult) {
+    this.track(id, { status: "gave_up" });
+    this.config.log?.("pos webhook gave up", { event: id, result });
   }
 
   private track(id: string, state: State) {

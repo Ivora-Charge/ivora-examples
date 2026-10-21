@@ -181,7 +181,7 @@ The counter page's API (`GET /api/counter/<code>/<connector>`) is public, so it 
 
 ### Emailed receipts
 
-Optional. With `RESEND_API_KEY` and `RECEIPT_EMAIL_FROM` set, the receipt page has an "Email receipt" form. The cashier types the driver's address; it is sent once to the provider with the receipt and is **never stored**: not in Ivora, a cookie, a URL or the logs (logs show only the sale ID and the provider's message ID). Each tap carries its own idempotency key, so a retry after a timeout doesn't send twice. The form is rate-limited per server instance.
+Optional. With `RESEND_API_KEY` and `RECEIPT_EMAIL_FROM` set, the receipt page has an "Email receipt" form. The cashier types the driver's address; it is sent once to the provider with the receipt and is **never stored**: not in Ivora, a cookie, a URL or the logs (logs show only the sale ID and the provider's message ID). Each tap carries its own idempotency key, so a retry after a timeout doesn't send twice. The form is rate-limited to 20 a minute per signed-in console and client IP, per server instance, so one busy till doesn't hold back the others.
 
 Any provider fits behind the `ReceiptMailer` interface in `src/lib/server/mailer.ts` (one `send()` method); `ResendMailer` is the example. To use another provider, implement the interface and return it from `receiptMailer()` in `src/lib/server/services.ts`. Demo mode has no mailer at all and shows the email that would be sent instead; a unit test checks that demo mode never sends.
 
@@ -203,7 +203,7 @@ Any provider fits behind the `ReceiptMailer` interface in `src/lib/server/mailer
 
 Nothing new. A sale's terms (mode, prepaid amount, kWh limit) are encoded in its sale ID, which is Ivora's `payment_reference`, for example `pre-2000-0-3fa9c01b77de` or `post-3fa9c01b77de`; only this server creates those sessions, with its API key. Payments, change and overruns are read back from Ivora's settlement reports.
 
-Ivora's session list is ordered by opaque session ID, not time, so finding the open sales means reading every page. Each server instance keeps an **index of open and last-day sessions** (`src/lib/server/session-index.ts`) and rebuilds it at most once a minute; console polls, the driver's screen, meter samples and the POS list read the index, not the whole history. Wherever the sale is known, the app looks it up directly by `application_reference` instead: cashier actions, receipts, POS mark-paid, and the console, which names the sales it has shown on each poll so an instance that hasn't indexed a sale yet (it was authorised through another instance) finds it at once. A charger that is busy with no session the index knows, or a meter sample for an unknown transaction, triggers an early rebuild, at most every 15 seconds. Unpaid sales older than 24 hours drop off the "Unpaid sales" list; they stay in Ivora's records.
+Ivora's session list is ordered by opaque session ID, not time, so finding the open sales means reading every page. Each server instance keeps an **index of open and last-day sessions** (`src/lib/server/session-index.ts`) and rebuilds it at most once a minute; console polls, the driver's screen, meter samples and the POS list read the index, not the whole history. Wherever the sale is known, the app looks it up directly by `application_reference` instead: cashier actions, receipts, POS mark-paid, and the console, which names the sales it has shown on each poll so an instance that hasn't indexed a sale yet (it was authorised through another instance) finds it at once. A charger that is busy with no session the index knows, a meter sample for an unknown transaction, or a meter sample without a transaction ID at a station where the index knows no open sale triggers an early rebuild, at most every 15 seconds. So a prepaid sale authorised through another instance is checked within about 15 seconds, not at the next one-minute rebuild. Unpaid sales older than 24 hours drop off the "Unpaid sales" list; they stay in Ivora's records.
 
 ### Point-of-sale integration
 
@@ -225,7 +225,8 @@ Forecourt-Signature: t=1792561776,v1=6dc9ddd4…
 
 - Money is integer minor units; `energy_kwh` is a decimal string from the charger's Wh; times are ISO 8601 UTC. There is no card data and no personal data.
 - The signature is the same scheme as Ivora's `Ivora-Signature`: `v1` is the hex HMAC-SHA256 of `<t>.<raw body>` with `POS_WEBHOOK_SECRET`. Verify it over the raw bytes, in constant time, and reject timestamps more than five minutes old.
-- Answer `2xx` quickly. Failures (network, timeout, `408`, `429`, `5xx`) are retried three times a few seconds apart, then again on the next read of the sale after 1 minute, 5 minutes, 30 minutes and 2 hours. Other `4xx` answers are not retried. Retries carry the same event ID and body with a fresh `t`.
+- Answer `2xx` quickly. Failures (network, timeout, `408`, `429`, `5xx`) are retried three times a few seconds apart, then again after 1 minute, 5 minutes, 30 minutes and 2 hours, on the next read of the sale or the next sweep (`/api/cron/reconcile`), whichever comes first. A delivery cut off by the route's time limit is retried the same way once it has been in flight for 60 seconds. Other `4xx` answers are not retried. Retries carry the same event ID and body with a fresh `t`.
+- Delivery state is kept in memory per server instance, so a restart can lose a pending retry. **Poll `GET /api/pos/sessions?status=due` as a backstop** (every minute or so while the store is open) and treat a sale listed there like a `session_due` event with the same `sale_id`.
 - **De-duplicate by event ID.** It is stable per sale, and a delivery can arrive more than once (a retry, or another server instance).
 
 Verifying in Node.js:
@@ -257,15 +258,15 @@ curl -X POST https://charge.example.com/api/pos/mark-paid \
 # 200 {"sale_id":"post-3fa9c01b77de","status":"paid","amount_minor":1940,"method":"card","pos_reference":"R-1042","currency":"USD"}
 ```
 
-| Answer              | When                                                                                                               |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `200`               | Recorded, or a repeat with the same amount, method and POS reference (the original result, nothing recorded twice) |
-| `409`               | `idempotency_conflict`: the sale is already paid with different values; `session_not_finished`: no final bill yet  |
-| `422`               | `amount_mismatch`: the amount isn't what the final bill leaves to collect                                          |
-| `400`               | Malformed body; `pos_reference` may only use letters, digits, `.`, `-` and `_` (never card or customer data)       |
-| `401`, `404`, `429` | Wrong token; endpoints off or unknown sale; rate limited                                                           |
+| Answer              | When                                                                                                                                                                                                             |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `200`               | Recorded, or a repeat with the same amount, method and POS reference (the original result, nothing recorded twice)                                                                                               |
+| `409`               | `idempotency_conflict`: the sale is already paid with different values; `session_not_finished`: no final bill yet; `nothing_due`: nothing to collect (for example, a prepaid sale with only change to hand back) |
+| `422`               | `amount_mismatch`: the amount isn't what the final bill leaves to collect                                                                                                                                        |
+| `400`               | Malformed body; `pos_reference` may only use letters, digits, `.`, `-` and `_` (never card or customer data)                                                                                                     |
+| `401`, `404`, `429` | Wrong token; endpoints off or unknown sale; rate limited                                                                                                                                                         |
 
-`GET /api/pos/sessions?status=due|charging|paid[&limit=1-50]` lists recent in-store sales (last 24 hours, newest first) for a POS screen. It changes nothing; like every read it may move a sale forward the way a console poll does.
+`GET /api/pos/sessions?status=due|charging|paid[&limit=1-50]` lists recent in-store sales (last 24 hours, newest first) for a POS screen. It never marks a sale paid, but like every read it moves a sale forward the way a console poll does: it may stop a prepaid sale at its limit, finalize the bill when charging ends, and record the prepaid capture in Ivora.
 
 ```sh
 curl "https://charge.example.com/api/pos/sessions?status=due" \
@@ -307,7 +308,7 @@ Payment terminals are out of scope for now. `src/lib/terminal.ts` defines the `C
 - **USD only**, like Ivora bills today.
 - **No database.** Session state lives in Stripe and Ivora; in-store sales live in Ivora only (see [What is stored](#what-is-stored)). The webhook de-duplicates per server instance (reconciling is idempotent, so a duplicate on another instance is harmless).
 - **10,000-session ceiling.** A full read of the session list stops at 100 pages of 100 sessions. The session index, the operator "today" view and the daily sweep use full reads, so in a project with more sessions an open sale can be missed by them: the console shows a red banner when that happens, and the cron response says `"truncated": true`. Sales the app looks up by reference (console sales it has shown, cashier and POS actions, receipts) are unaffected. Use one Ivora project per deployment as the conventions ask, and start a new project before you reach the ceiling.
-- **Webhooks to the POS are per instance.** Each server instance remembers which `session_due` events it delivered, in memory, so a cold start or another instance may send one again. POS systems must de-duplicate by event ID.
+- **Webhooks to the POS are per instance.** Each server instance remembers which `session_due` events it delivered, in memory, so a cold start or another instance may send one again, and a restart can drop a pending retry. POS systems must de-duplicate by event ID and poll `GET /api/pos/sessions?status=due` as a backstop.
 - **Idle after the transaction ends is not billed.** Ivora prices idle time inside the charging transaction. If the driver presses "End session" while still parked, the idle fee stops too.
 - **Idle detection while charging is approximate.** The countdown starts when the app first sees the connector idle; the final idle fee comes from Ivora's bill, which uses the charger's own reports.
 - **Holds expire.** Card authorizations last about 7 days with most issuers. The daily sweep settles abandoned sessions well before that; run it more often on a paid plan.

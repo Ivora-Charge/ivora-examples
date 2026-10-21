@@ -1265,6 +1265,49 @@ describe("the session index", () => {
     expect(ivora.keys("list")).toHaveLength(2);
   });
 
+  it("stops a kWh sale from another instance on samples without a transaction ID, within the rescan interval", async () => {
+    const KWH: SaleTerms = {
+      mode: "prepay",
+      prepaidCents: 2000,
+      limitWh: 30_000,
+    };
+    const instanceA = otherInstance();
+    // Instance B builds its index before the sale exists.
+    expect(
+      await onMeterSample({ transactionId: null, stationId: 7 }, deps),
+    ).toEqual([]);
+    expect(ivora.keys("list")).toHaveLength(1);
+    await authorizeSale(
+      { code: "PUMP-3", connector: 1, terms: KWH, requestId: REQ },
+      instanceA,
+    );
+    const sale = saleIdFor(KWH, REQ);
+    ivora.charging(29_500, 1300, 150_000);
+    // Too soon after B's scan: no rescan on every sample.
+    now += INDEX_RESCAN_MS - 1;
+    expect(
+      await onMeterSample({ transactionId: null, stationId: 7 }, deps),
+    ).toEqual([]);
+    expect(ivora.keys("list")).toHaveLength(1);
+    // 15 s after B's scan, not the 60 s refresh: B finds the sale and stops it.
+    now += 1;
+    const [view] = await onMeterSample(
+      { transactionId: null, stationId: 7 },
+      deps,
+    );
+    expect(view).toMatchObject({
+      sale,
+      stopping: true,
+      limitReached: "energy",
+    });
+    expect(ivora.keys("stop")).toEqual([`forecourt:store:${sale}:stop`]);
+    expect(ivora.keys("list")).toHaveLength(2);
+    // Once B knows a sale there, tx-less samples read the index without rescanning.
+    now += INDEX_RESCAN_MS;
+    await onMeterSample({ transactionId: null, stationId: 7 }, deps);
+    expect(ivora.keys("list")).toHaveLength(2);
+  });
+
   it("shows the console when the listing stopped at its ceiling", async () => {
     expect((await consoleState(deps)).truncated).toBe(false);
     ivora.truncated = true;
@@ -1381,6 +1424,31 @@ describe("POS mark-paid", () => {
     expect(ivora.reportsOf().at(-1)?.operation_reference).toBe(
       `${sale}:extra:cash`,
     );
+  });
+
+  it("answers 409 nothing_due to a prepaid sale with only change to hand back", async () => {
+    await authorize(PREPAY);
+    const sale = saleIdFor(PREPAY, REQ);
+    ivora.charging(15_000, 900);
+    ivora.ended(900, quote(900, 0)); // 1100 change, nothing to collect
+    const before = ivora.reportsOf().length;
+    for (const amount of [0, 900, 1100])
+      await expect(
+        posMarkPaid(
+          {
+            sale_id: sale,
+            amount_minor: amount,
+            method: "cash",
+            pos_reference: null,
+          },
+          markPaid,
+        ),
+      ).rejects.toMatchObject({ status: 409, code: "nothing_due" });
+    // Only the prepaid capture, recorded by reading the sale; no payment.
+    expect(ivora.reportsOf().map((r) => r.operation_reference)).not.toContain(
+      `${sale}:extra:cash`,
+    );
+    expect(ivora.reportsOf().length - before).toBe(1);
   });
 
   it("lists sales by status for GET /api/pos/sessions", async () => {

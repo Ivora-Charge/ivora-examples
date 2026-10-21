@@ -453,6 +453,16 @@ export function paidReport(
     const done = amounts.payments.find((p) => p.step === step);
     if (done && done.amountCents === input.amountCents)
       return { ok: true, report: null };
+    // Never anything to collect, such as a prepaid sale with only change to hand back.
+    if (!done)
+      return {
+        ok: false,
+        code: "nothing_due",
+        message:
+          amounts.changeCents > 0
+            ? "Nothing is due on this sale: hand back the change instead."
+            : "Nothing is due on this sale.",
+      };
     return {
       ok: false,
       code: "already_paid",
