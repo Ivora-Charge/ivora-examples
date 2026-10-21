@@ -31,12 +31,14 @@ import {
 } from "@/lib/ocpi/command-objects";
 import { connectToCpo, invitePeer } from "@/lib/ocpi/handshake";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
+import { setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 import { MemoryPeerStore, type Peer } from "@/lib/ocpi/store";
 import { createAppToken, blockToken } from "@/lib/tokens/manage";
 import { setTokenStoreForTests } from "@/lib/tokens/registry";
 import { MemoryTokenStore } from "@/lib/tokens/store";
 import {
   emspHandler,
+  FAKE_PUBLIC_ADDRESS,
   inProcessNetwork,
   installNetwork,
   LIVE_ENV,
@@ -318,8 +320,11 @@ describe("START_SESSION", () => {
         peerMessage: `Charger says ${result}`,
       });
       expect(view.message).not.toBe("");
+      // A TIMEOUT leaves it unknown whether the charger started: a session may appear.
       expect(releases).toEqual(
-        result === "ACCEPTED" ? [] : [{ id: command.id, uncertain: false }],
+        result === "ACCEPTED"
+          ? []
+          : [{ id: command.id, uncertain: result === "TIMEOUT" }],
       );
       if (result === "NOT_SUPPORTED") {
         expect(view.message).toBe("This charger doesn't accept app starts.");
@@ -491,6 +496,49 @@ describe("START_SESSION", () => {
 });
 
 describe("one tap, one command", () => {
+  it("returns the command of a retried request ID even after its location, EVSE and token changed", async () => {
+    const requestId = newRequestId();
+    const first = await start({ requestId });
+    // Since the tap: the EVSE is removed, the location gone, the token blocked.
+    const location = structuredClone(cpo.state.locations[0]);
+    location.evses![0].status = "REMOVED";
+    location.publish = false;
+    location.last_updated = "2026-10-21T11:00:00Z";
+    await locations.putLocation(
+      one.id,
+      location,
+      T0.toISOString(),
+      (await locations.getLocation({
+        peerId: one.id,
+        countryCode: "ZZ",
+        partyId: "MCK",
+        id: "LOC1",
+      }))!.revision,
+    );
+    const token = (await tokens.listByDriver(DRIVER))[0];
+    await blockToken(token.uid, "APP_USER", {
+      tokens,
+      peers,
+      client,
+      actor: "test",
+    });
+    const again = await start({ requestId });
+    expect(again.state).toBe("replayed");
+    expect(again.command.id).toBe(first.command.id);
+    expect(cpo.state.commands).toHaveLength(1);
+    // The same request ID for another start is still refused, before any other check.
+    await expect(start({ requestId, evseUid: "LOC1-2" })).rejects.toMatchObject(
+      { httpStatus: 409 },
+    );
+    await expect(
+      start({ requestId, evseUid: undefined, connectorId: undefined }),
+    ).rejects.toMatchObject({ httpStatus: 409 });
+    // Case does not make it another start: OCPI IDs are case-insensitive.
+    expect((await start({ requestId, evseUid: "loc1-1" })).command.id).toBe(
+      first.command.id,
+    );
+  });
+
   it("returns the same command for the same request ID, and never sends it twice", async () => {
     const requestId = newRequestId();
     const first = await start({ requestId });
@@ -629,6 +677,29 @@ describe("an unknown outcome", () => {
     expect(await expireCommands(deps())).toBe(0);
   });
 
+  it("ends as failed, at once, when the peer's address is refused and nothing was sent", async () => {
+    // The peer's host now resolves to a private address: the SSRF guard sends nothing.
+    setPeerNetworkForTests({
+      resolve: async () => [{ address: "10.0.0.7", family: 4 }],
+      send: () => {
+        throw new Error("must not connect");
+      },
+    });
+    const { command } = await start();
+    expect(command).toMatchObject({ status: "failed", pending: false });
+    const c = await stored(command.id);
+    expect(c.outcomeUncertain).toBe(false);
+    expect(c.error).toContain("refused");
+    expect(cpo.state.commands).toEqual([]);
+    expect(releases).toEqual([{ id: command.id, uncertain: false }]);
+    // Not stuck for 3 minutes: the driver may try again at once.
+    setPeerNetworkForTests({
+      resolve: async () => [{ address: FAKE_PUBLIC_ADDRESS, family: 4 }],
+      send: (url, init) => net.transport(url.toString(), init),
+    });
+    expect((await start()).state).toBe("created");
+  });
+
   it("ends as failed, at once, when the CPO refuses the request with an OCPI error", async () => {
     vi.spyOn(cpo, "handle").mockImplementationOnce(async () =>
       Response.json(
@@ -745,6 +816,44 @@ describe("our CommandResult endpoint", () => {
     expect((await stored(command.id)).status).toBe("succeeded");
   });
 
+  it("takes a result only from the CPO party the command went to, on a peer with several", async () => {
+    // The peer runs a second CPO party behind the same token.
+    await peers.updatePeer(one.id, {
+      roles: [
+        ...one.roles,
+        {
+          role: "CPO",
+          business_details: { name: "Mock CPO, second brand" },
+          country_code: "ZZ",
+          party_id: "OTH",
+        },
+      ],
+    });
+    const { command } = await start();
+    const url = `${EMSP}/commands/START_SESSION/${command.id}`;
+    const from = (partyId: string) =>
+      ocpiRequest(
+        {
+          method: "POST",
+          url,
+          token: cpo.state.emsp!.token,
+          body: { result: "FAILED" },
+          routing: {
+            from: { countryCode: "ZZ", partyId },
+            to: { countryCode: "NL", partyId: "ABC" },
+          },
+        },
+        { transport: net.transport, retries: 0 },
+      );
+    await expect(from("OTH")).rejects.toMatchObject({
+      statusCode: 2000,
+      httpStatus: 404,
+    });
+    expect((await stored(command.id)).status).toBe("accepted");
+    expect((await from("MCK")).statusCode).toBe(1000);
+    expect((await stored(command.id)).status).toBe("failed");
+  });
+
   it("does not take a result for a command that was never sent", async () => {
     const c = (
       await commands.claim({
@@ -855,6 +964,45 @@ describe("STOP_SESSION", () => {
           deps(),
         ),
       ).toBe(false);
+  });
+
+  it("links a start to one session only, when two links race", async () => {
+    const { command } = await start();
+    await cpo.sendCommandResult("ACCEPTED");
+    const ref = (await stored(command.id)).authorizationReference!;
+    const link = (sessionId: string) =>
+      linkSession(
+        { peerId: one.id, authorizationReference: ref, sessionId },
+        deps(),
+      );
+    const [a, b] = await Promise.all([link("S-A"), link("S-B")]);
+    // The first link wins; the second learns it lost and changes nothing.
+    expect([a, b]).toEqual([true, false]);
+    expect((await stored(command.id)).sessionId).toBe("S-A");
+    expect(await link("S-A")).toBe(true);
+    // So the driver's stop of S-A goes out, and S-B is no session of theirs.
+    const { command: stopped } = await stop({ sessionId: "S-A" });
+    expect(stopped.status).toBe("accepted");
+    await expect(stop({ sessionId: "S-B" })).rejects.toMatchObject({
+      httpStatus: 404,
+    });
+  });
+
+  it("links only a session of the start's own CPO party", async () => {
+    const { command } = await start();
+    const ref = (await stored(command.id)).authorizationReference!;
+    expect(
+      await linkSession(
+        {
+          peerId: one.id,
+          authorizationReference: ref,
+          sessionId: "S-1",
+          party: { countryCode: "ZZ", partyId: "OTH" },
+        },
+        deps(),
+      ),
+    ).toBe(false);
+    expect((await stored(command.id)).sessionId).toBeNull();
   });
 
   it("sends one stop per session at a time, and one per request ID", async () => {

@@ -16,13 +16,14 @@ import {
 import {
   OcpiClientError,
   OcpiError,
+  OcpiNotSentError,
   OcpiUnauthorizedError,
 } from "@/lib/ocpi/errors";
 import { ourParty } from "@/lib/ocpi/identity";
 import { sameId, type DisplayText, type Evse } from "@/lib/ocpi/locations";
 import type { Peer, PeerStore } from "@/lib/ocpi/store";
 import { decryptToken } from "@/lib/ocpi/tokens";
-import type { Party } from "@/lib/ocpi/types";
+import { sameParty, type Party } from "@/lib/ocpi/types";
 import { ocpiUrls } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { toOcpiToken, tokenValid } from "@/lib/tokens/push";
@@ -151,7 +152,7 @@ const REQUEST_ID = /^[A-Za-z0-9._:-]{8,64}$/;
 /** CiString(36). */
 const OCPI_ID = /^[\x21-\x7e]{1,36}$/;
 
-const nowOf = (deps: CommandDeps) => deps.now?.() ?? new Date();
+const nowOf = (deps: Pick<CommandDeps, "now">) => deps.now?.() ?? new Date();
 const later = (now: Date, ms: number) =>
   new Date(now.getTime() + ms).toISOString();
 
@@ -354,8 +355,9 @@ async function finish(
   });
   if (done.type === "START_SESSION" && status !== "succeeded")
     await release(done, deps, {
-      // Our own deadline, without any CommandResult: a session may still appear.
-      uncertain: status === "timed_out" && done.result === null,
+      // Our own deadline without any CommandResult, or the CPO's CommandResult TIMEOUT:
+      // nobody knows whether the charger started, so a session may still appear.
+      uncertain: status === "timed_out",
     });
   return done;
 }
@@ -376,7 +378,10 @@ async function release(
 }
 
 /** The current version, after a compare-and-swap lost to another change. */
-async function reread(id: string, deps: CommandDeps): Promise<Command> {
+async function reread(
+  id: string,
+  deps: Pick<CommandDeps, "commands">,
+): Promise<Command> {
   const c = await deps.commands.get(id);
   if (!c) throw new Error("Command disappeared");
   return c;
@@ -511,11 +516,13 @@ async function send(
   } catch (e) {
     error = errorText(e);
     // The CPO refused the request (an OCPI 2xxx, or our token): it was not forwarded.
-    // Anything thrown before a request goes out is not an OcpiError. Timeouts, network
+    // A peer address we refuse to call (OcpiNotSentError), and anything else thrown
+    // before a request goes out (not an OcpiError), sent nothing. Timeouts, network
     // errors, 5xx, 3xxx and 4xxx (a hub) may have reached the charger: uncertain.
     definitive =
       e instanceof OcpiClientError ||
       e instanceof OcpiUnauthorizedError ||
+      e instanceof OcpiNotSentError ||
       !(e instanceof OcpiError);
     console.error(
       `Command ${c.id} to peer ${peer.id}: ${e instanceof Error ? e.name : "unknown error"}`,
@@ -539,6 +546,34 @@ async function send(
   return waiting ?? reread(c.id, deps);
 }
 
+const sameOptionalId = (held: string | null, input: string | undefined) =>
+  held === null || input === undefined
+    ? held === null && input === undefined
+    : sameId(held, input);
+
+const REUSED_REQUEST_ID = () =>
+  new CommandError(
+    "This request ID was already used for another command.",
+    409,
+  );
+
+/**
+ * The command this driver's request ID already has, before any other check: a retry
+ * gets its command back without anything being sent. Null for a new request ID.
+ */
+async function replay(
+  ref: string,
+  type: CommandKind,
+  reqId: string,
+  same: (held: Command) => boolean,
+  deps: CommandDeps,
+): Promise<CommandOutcome | null> {
+  const held = await deps.commands.findByRequest(ref, type, reqId);
+  if (!held) return null;
+  if (!same(held)) throw REUSED_REQUEST_ID();
+  return { state: "replayed", command: await viewCommand(held, deps) };
+}
+
 /** Claims a command, or returns the one this request (or an open one) already has. */
 async function claim(
   input: NewCommand,
@@ -552,11 +587,7 @@ async function claim(
     await expire(command, deps);
     ({ outcome, command } = await deps.commands.claim(input));
   }
-  if (outcome === "replayed" && !same(command))
-    throw new CommandError(
-      "This request ID was already used for another command.",
-      409,
-    );
+  if (outcome === "replayed" && !same(command)) throw REUSED_REQUEST_ID();
   if (outcome !== "created")
     return {
       done: { state: outcome, command: await viewCommand(command, deps) },
@@ -588,12 +619,31 @@ export async function startSession(
   const reqId = requestId(input.requestId);
   const key = parseLocationAppId(input.locationId.trim());
   if (!key) throw new CommandError("Unknown location.", 404);
+  const evseUid = optionalId(input.evseUid);
+  const connectorId = optionalId(input.connectorId);
+  // A retry of a request we already took gets its command back, even if the location,
+  // the EVSE or the token changed since.
+  const again = await replay(
+    ref,
+    "START_SESSION",
+    reqId,
+    (held) =>
+      held.peerId === key.peerId &&
+      sameParty(
+        { countryCode: held.toCountryCode, partyId: held.toPartyId },
+        key,
+      ) &&
+      sameId(held.locationId!, key.id) &&
+      sameOptionalId(held.evseUid, evseUid) &&
+      sameOptionalId(held.connectorId, connectorId),
+    deps,
+  );
+  if (again) return again;
+
   const peer = await commandPeer(key.peerId, deps);
   const location = (await deps.locations.getLocation(key))?.location;
   if (!location?.publish) throw new CommandError("Unknown location.", 404);
 
-  const evseUid = optionalId(input.evseUid);
-  const connectorId = optionalId(input.connectorId);
   if (connectorId && !evseUid)
     throw new CommandError("Choose the charger of this connector too.");
   let evse: Evse | undefined;
@@ -910,24 +960,38 @@ export async function expireCommands(
 /**
  * Links a CPO session to the start it came from, by the authorization_reference the
  * CPO puts on the session: for the Sessions module. Returns false when the reference
- * is not one of this peer's starts, or the start is linked to another session.
+ * is not one of this peer's starts (of `party`, the CPO party the session runs at,
+ * when given), or the start is linked to another session. A start links to one
+ * session only: of two links racing, the first wins.
  */
 export async function linkSession(
-  input: { peerId: string; authorizationReference: string; sessionId: string },
-  deps: CommandDeps,
+  input: {
+    peerId: string;
+    authorizationReference: string;
+    sessionId: string;
+    party?: Party;
+  },
+  deps: Pick<CommandDeps, "commands" | "now">,
 ): Promise<boolean> {
   const c = await deps.commands.getByAuthorizationReference(
     input.authorizationReference,
   );
   if (!c || c.type !== "START_SESSION" || c.peerId !== input.peerId)
     return false;
+  if (
+    input.party &&
+    !sameParty(input.party, {
+      countryCode: c.toCountryCode,
+      partyId: c.toPartyId,
+    })
+  )
+    return false;
   if (c.sessionId) return c.sessionId === input.sessionId;
-  return (
-    (await deps.commands.transition(
-      c.id,
-      [...OPEN_STATUSES, ...FINAL_STATUSES],
-      { sessionId: input.sessionId },
-      nowOf(deps).toISOString(),
-    )) !== null
+  const linked = await deps.commands.linkSession(
+    c.id,
+    input.sessionId,
+    nowOf(deps).toISOString(),
   );
+  if (linked) return true;
+  return (await reread(c.id, deps)).sessionId === input.sessionId;
 }

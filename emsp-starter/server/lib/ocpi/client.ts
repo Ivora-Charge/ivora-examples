@@ -7,6 +7,7 @@ import {
   OcpiClientError,
   isSuccess,
   OcpiError,
+  OcpiNotSentError,
   OcpiTransportError,
   OcpiUnauthorizedError,
 } from "./errors";
@@ -161,7 +162,7 @@ async function attemptOnce(
     // Demo mode and other deliberate refusals are not network trouble: never retry them.
     if (e instanceof Error && "code" in e && e.code === "demo_mode") throw e;
     if (e instanceof Error && "code" in e && e.code === "peer_address_refused")
-      throw new OcpiTransportError(`${what} refused: ${e.message}`, {
+      throw new OcpiNotSentError(`${what} refused: ${e.message}`, {
         request: what,
       });
     if (e instanceof BodyTooLargeError)

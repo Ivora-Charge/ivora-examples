@@ -16,10 +16,10 @@ import { commandStore } from "./registry";
  *   POST /ocpi/2.2.1/commands/{START_SESSION|STOP_SESSION}/{command id}
  *   body: CommandResult (result, optional message)
  *
- * Only the peer the command went to may answer it; anything else, and a command not yet
- * sent, is `2000 Unknown command` (HTTP 404). An invalid body is 2001. A result for a
- * command that has already ended is acknowledged and changes nothing (one we timed out
- * records it as a late result).
+ * Only the peer and CPO party (OCPI-from) the command went to may answer it; anything
+ * else, and a command not yet sent, is `2000 Unknown command` (HTTP 404). An invalid
+ * body is 2001. A result for a command that has already ended is acknowledged and
+ * changes nothing (one we timed out records it as a late result).
  */
 const PATH =
   /^\/ocpi\/2\.2\.1\/commands\/(START_SESSION|STOP_SESSION)\/([0-9a-f-]{36})$/i;
@@ -71,6 +71,9 @@ export async function commandResultReceiver(
   if (
     !c ||
     c.peerId !== ctx.peer.id ||
+    // The party the command went to: on a platform with several CPO parties behind
+    // one token, one party cannot answer another's command.
+    !sameParty({ countryCode: c.toCountryCode, partyId: c.toPartyId }, from) ||
     c.type !== m[1].toUpperCase() ||
     c.status === "claimed"
   )

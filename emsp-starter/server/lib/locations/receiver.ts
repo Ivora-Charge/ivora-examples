@@ -10,7 +10,16 @@ import {
   type Evse,
   type Location,
 } from "@/lib/ocpi/locations";
-import { ocpiResponse, readJson, type OcpiContext } from "@/lib/ocpi/server";
+import {
+  asObject,
+  bodyOnce,
+  checkIds,
+  invalid,
+  notAllowed,
+  receiverPath,
+  valid,
+} from "@/lib/ocpi/receiver";
+import { ocpiResponse, type OcpiContext } from "@/lib/ocpi/server";
 import { parseTariff, type Tariff } from "@/lib/ocpi/tariffs";
 import { STATUS } from "@/lib/ocpi/types";
 import { locationStore } from "./registry";
@@ -32,68 +41,19 @@ import type { ObjectKey } from "./store";
  * never overwrites newer data. An EVSE is never deleted: a CPO sets it to REMOVED.
  */
 
-const invalid = (message: string) =>
-  new OcpiProblem(400, STATUS.INVALID_PARAMETERS, message);
 const unknown = (what: string) =>
   new OcpiProblem(404, STATUS.UNKNOWN_LOCATION, `Unknown ${what}`);
 /** 2.2.1 has no "unknown tariff" status (2003 is Unknown Location): a client error. */
 const unknownTariff = () =>
   new OcpiProblem(404, STATUS.CLIENT_ERROR, "Unknown tariff");
-const notAllowed = () =>
-  new OcpiProblem(405, STATUS.CLIENT_ERROR, "Method not allowed");
 
-const SEGMENT = /^[\x21-\x7e]{1,36}$/;
-
-/** Path segments after the module's base path, decoded and checked. */
+/** The path after the module's base, as the key of an object of the calling peer. */
 function segments(ctx: OcpiContext, module: "locations" | "tariffs") {
-  const path = new URL(ctx.request.url).pathname;
-  const base = `/ocpi/2.2.1/${module}/`;
-  if (!path.startsWith(base)) throw invalid("Unknown path");
-  let parts: string[];
-  try {
-    parts = path
-      .slice(base.length)
-      .replace(/\/+$/, "")
-      .split("/")
-      .map(decodeURIComponent);
-  } catch {
-    throw invalid("Invalid path");
-  }
-  if (parts.length < 3 || parts.some((p) => !SEGMENT.test(p)))
-    throw invalid(
-      "Path must be /{country_code}/{party_id}/{id}, with IDs of 1 to 36 characters",
-    );
-  const [countryCode, partyId] = parts;
-  if (!/^[A-Za-z]{2}$/.test(countryCode) || !/^[A-Za-z0-9]{3}$/.test(partyId))
-    throw invalid("Invalid country_code or party_id in the path");
-  // Only the peer's own parties: a CPO cannot write another CPO's locations.
-  const own = ctx.peer.roles.some(
-    (r) => sameId(r.country_code, countryCode) && sameId(r.party_id, partyId),
-  );
-  if (!own)
-    throw new OcpiProblem(
-      403,
-      STATUS.CLIENT_ERROR,
-      "The country_code and party_id in the path are not a party of this token",
-    );
+  const { countryCode, partyId, id, rest } = receiverPath(ctx, module);
   return {
-    key: {
-      peerId: ctx.peer.id,
-      countryCode: countryCode.toUpperCase(),
-      partyId: partyId.toUpperCase(),
-      id: parts[2],
-    } satisfies ObjectKey,
-    rest: parts.slice(3),
+    key: { peerId: ctx.peer.id, countryCode, partyId, id } satisfies ObjectKey,
+    rest,
   };
-}
-
-function valid<T>(
-  what: string,
-  parsed: { ok: true; value: T } | { ok: false; errors: string[] },
-): T {
-  if (!parsed.ok)
-    throw invalid(`Invalid ${what}: ${parsed.errors.slice(0, 10).join("; ")}`);
-  return parsed.value;
 }
 
 /** True when `incoming` is older than what we hold: acknowledge, do not apply. */
@@ -102,26 +62,6 @@ const stale = (held: string, incoming: string) =>
 
 const later = (a: string, b: string) =>
   dateTimeMs(a) >= dateTimeMs(b) ? a : b;
-
-/** The identifying fields of a PUT or PATCH body must match the URL. */
-function checkIds(body: Record<string, unknown>, ids: Record<string, string>) {
-  for (const [field, expected] of Object.entries(ids)) {
-    const v = body[field];
-    if (v !== undefined && (typeof v !== "string" || !sameId(v, expected)))
-      throw invalid(`${field} in the body does not match the URL`);
-  }
-}
-
-const asObject = (v: unknown) =>
-  typeof v === "object" && v !== null && !Array.isArray(v)
-    ? (v as Record<string, unknown>)
-    : {};
-
-/** The request body, read once however many times a retry asks for it. */
-function bodyOnce(ctx: OcpiContext) {
-  let body: Promise<unknown> | undefined;
-  return () => (body ??= readJson(ctx.request));
-}
 
 /** What a push does: answer without writing, or write this object. */
 type Change<T> = { reply: unknown } | { write: T };

@@ -273,7 +273,7 @@ export function oneOf<T extends string>(
   return undefined;
 }
 
-function bool(ctx: Ctx, v: unknown, path: string): boolean | undefined {
+export function bool(ctx: Ctx, v: unknown, path: string): boolean | undefined {
   if (typeof v === "boolean") return v;
   ctx.errors.push(`${path} must be a boolean`);
   return undefined;
@@ -323,7 +323,7 @@ export function displayTexts(
   );
 }
 
-function geoLocation(
+export function geoLocation(
   ctx: Ctx,
   v: unknown,
   path: string,

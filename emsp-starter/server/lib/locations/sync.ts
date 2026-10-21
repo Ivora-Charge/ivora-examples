@@ -19,8 +19,9 @@ import type {
 } from "./store";
 
 /**
- * Pulls a peer's locations or tariffs from its Sender interface (OCPI 2.2.1 sections
- * 8.2.1 and 11.2.1).
+ * Pulls a module from a peer's Sender interface: locations and tariffs here (OCPI 2.2.1
+ * sections 8.2.1 and 11.2.1), sessions and CDRs in lib/sessions/pull.ts, all through
+ * `pullModule`.
  *
  * - The first pull is full. Later pulls are incremental: `date_from` is when the last
  *   completed pull started, minus CLOCK_SKEW_MS for the difference between our clock and
@@ -29,8 +30,9 @@ import type {
  *   pull that stops (a timeout, a deployment, `maxPages`) resumes there next time.
  * - One pull per peer and module at a time: a run claims the state with its own ID, and
  *   a run whose heartbeat is older than STALE_RUN_MS counts as interrupted.
- * - A full pull that completes removes the peer's objects it did not see (and that no
- *   push touched meanwhile).
+ * - A full pull of locations or tariffs that completes removes the peer's objects it did
+ *   not see (and that no push touched meanwhile). Modules without `prune` remove
+ *   nothing, and may start a full pull at a date (`since`).
  * - Every object is validated; invalid ones, and ones of another party than the peer's,
  *   are skipped and counted, not stored. A pulled object older than the one we hold
  *   (a push got there first) only counts as seen.
@@ -55,6 +57,37 @@ export type SyncDeps = {
   locations: LocationStore;
   client?: ClientOptions;
   now?: () => Date;
+};
+
+/** Where pulls keep their state: the locations store (emsp_ocpi_sync_state). */
+export type SyncStateStore = Pick<
+  LocationStore,
+  "getSyncState" | "saveSyncState"
+>;
+
+export type PullDeps = {
+  peers: PeerStore;
+  syncState: SyncStateStore;
+  client?: ClientOptions;
+  now?: () => Date;
+};
+
+/** What a pull of one module does with what it reads. */
+export type PullTarget = {
+  module: SyncModule;
+  /**
+   * Validates and stores one page; returns how many objects were stored and how many
+   * skipped as invalid or not of this peer's parties.
+   */
+  storePage(
+    peer: Peer,
+    raw: unknown[],
+    seenAt: string,
+  ): Promise<{ items: number; invalid: number }>;
+  /** After a full pull: removes the peer's objects not seen since `before`. */
+  prune?(peerId: string, before: string): Promise<number>;
+  /** date_from of a full pull. Default: none, everything. */
+  since?(peer: Peer): string;
 };
 
 export type SyncOptions = {
@@ -99,42 +132,68 @@ const ofPeer = (peer: Peer, o: { country_code: string; party_id: string }) =>
   );
 
 /**
- * Validates and stores one page. Returns how many objects were stored and how many
- * were skipped as invalid or not of this peer's parties. The store keeps an object it
- * holds with a newer last_updated (a push got there first), even one pushed while this
- * page is being stored.
+ * Locations or tariffs: every object is validated and must be of the peer's parties.
+ * The store keeps an object it holds with a newer last_updated (a push got there
+ * first), even one pushed while this page is being stored.
  */
-async function storePage(
+function locationTarget(
+  module: "locations" | "tariffs",
   store: LocationStore,
-  peer: Peer,
-  module: SyncModule,
-  raw: unknown[],
-  seenAt: string,
-): Promise<{ items: number; invalid: number }> {
-  if (module === "locations") {
-    const pulled = raw
-      .map((x) => parseLocation(x))
-      .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
-    await store.saveLocations(peer.id, pulled, seenAt);
-    return { items: pulled.length, invalid: raw.length - pulled.length };
-  }
-  const pulled = raw
-    .map((x) => parseTariff(x))
-    .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
-  await store.saveTariffs(peer.id, pulled, seenAt);
-  return { items: pulled.length, invalid: raw.length - pulled.length };
+): PullTarget {
+  return {
+    module,
+    async storePage(peer, raw, seenAt) {
+      if (module === "locations") {
+        const pulled = raw
+          .map((x) => parseLocation(x))
+          .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
+        await store.saveLocations(peer.id, pulled, seenAt);
+        return { items: pulled.length, invalid: raw.length - pulled.length };
+      }
+      const pulled = raw
+        .map((x) => parseTariff(x))
+        .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
+      await store.saveTariffs(peer.id, pulled, seenAt);
+      return { items: pulled.length, invalid: raw.length - pulled.length };
+    },
+    prune: (peerId, before) =>
+      module === "locations"
+        ? store.pruneLocations(peerId, before)
+        : store.pruneTariffs(peerId, before),
+  };
 }
 
-/** Pulls one module of one peer. Refused in demo mode. */
-export async function syncPeer(
+/** Pulls locations or tariffs of one peer. Refused in demo mode. */
+export function syncPeer(
   peerId: string,
-  module: SyncModule,
+  module: "locations" | "tariffs",
   deps: SyncDeps,
   options: SyncOptions = {},
 ): Promise<SyncReport> {
+  return pullModule(
+    peerId,
+    locationTarget(module, deps.locations),
+    {
+      peers: deps.peers,
+      syncState: deps.locations,
+      client: deps.client,
+      now: deps.now,
+    },
+    options,
+  );
+}
+
+/** Pulls one module of one peer. Refused in demo mode. */
+export async function pullModule(
+  peerId: string,
+  target: PullTarget,
+  deps: PullDeps,
+  options: SyncOptions = {},
+): Promise<SyncReport> {
+  const { module } = target;
   assertLive(`pull ${module} from a CPO`);
   const now = deps.now ?? (() => new Date());
-  const store = deps.locations;
+  const store = deps.syncState;
   const peer = await deps.peers.getPeer(peerId);
   if (!peer) throw new SyncError("No such peer");
   if (peer.status !== "registered" || !peer.tokenCiphertext)
@@ -184,7 +243,11 @@ export async function syncPeer(
           dateFrom:
             mode === "incremental" && held.cursor
               ? ocpiTimestamp(new Date(Date.parse(held.cursor) - CLOCK_SKEW_MS))
-              : null,
+              : target.since
+                ? ocpiTimestamp(
+                    new Date(Date.parse(target.since(peer)) - CLOCK_SKEW_MS),
+                  )
+                : null,
           nextUrl: null,
           pages: 0,
           items: 0,
@@ -237,10 +300,8 @@ export async function syncPeer(
       deps.client,
     );
     for await (const page of pages) {
-      const counts = await storePage(
-        store,
+      const counts = await target.storePage(
         peer,
-        module,
         page.items,
         now().toISOString(),
       );
@@ -263,11 +324,9 @@ export async function syncPeer(
 
     const r = state.run!;
     const removed =
-      r.mode !== "full"
-        ? 0
-        : module === "locations"
-          ? await store.pruneLocations(peerId, r.startedAt)
-          : await store.pruneTariffs(peerId, r.startedAt);
+      r.mode === "full" && target.prune
+        ? await target.prune(peerId, r.startedAt)
+        : 0;
     const result: SyncResult = {
       ok: true,
       mode: r.mode,

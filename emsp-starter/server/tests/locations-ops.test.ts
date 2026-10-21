@@ -184,6 +184,15 @@ describe("scheduled pull (cron)", () => {
           ok: true,
         }),
       ],
+      // The mock CPO has no sessions or CDRs yet: both pulls are empty.
+      sessions: [
+        expect.objectContaining({
+          peerId: peer.id,
+          module: "sessions",
+          ok: true,
+        }),
+        expect.objectContaining({ peerId: peer.id, module: "cdrs", ok: true }),
+      ],
     });
     process.env.DEMO_MODE = "true";
     const before = net.calls.length;
