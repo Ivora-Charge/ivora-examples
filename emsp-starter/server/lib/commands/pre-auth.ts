@@ -21,8 +21,9 @@ export type PreAuth = {
    * Releases the hold of a start that ended without charging. Must be safe to call when
    * no hold was placed, and more than once (a hold placed after the start timed out is
    * released again). `uncertain`: we never learnt whether the CPO started a session
-   * (no answer before the deadline); a session may still appear for this
-   * authorization_reference, and part 7 decides how such a session is paid.
+   * (no answer before the deadline, or the CPO's CommandResult TIMEOUT); a session may
+   * still appear for this authorization_reference, and part 7 decides how such a
+   * session is paid.
    */
   release(command: Command, why: { uncertain: boolean }): Promise<void>;
 };

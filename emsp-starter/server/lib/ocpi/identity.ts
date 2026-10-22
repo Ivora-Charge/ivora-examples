@@ -14,12 +14,13 @@ export function ourVersions(): Version[] {
 }
 
 /**
- * Body of our version details endpoint. Later parts add the modules they implement
- * (sessions, cdrs). For commands we are the Sender: the endpoint is where CPOs POST
- * the results of the commands we send them.
+ * Body of our version details endpoint. For commands we are the Sender: the endpoint
+ * is where CPOs POST the results of the commands we send them. For sessions and CDRs
+ * we are the Receiver: CPOs push them to us (and we pull them from their Senders).
  */
 export function ourVersionDetails(): VersionDetails {
-  const { credentials, locations, tariffs, tokens, commands } = ocpiUrls();
+  const { credentials, locations, tariffs, tokens, commands, sessions, cdrs } =
+    ocpiUrls();
   return {
     version: OCPI_VERSION,
     endpoints: [
@@ -29,6 +30,8 @@ export function ourVersionDetails(): VersionDetails {
       { identifier: "tariffs", role: "RECEIVER", url: tariffs },
       { identifier: "tokens", role: "SENDER", url: tokens },
       { identifier: "commands", role: "SENDER", url: commands },
+      { identifier: "sessions", role: "RECEIVER", url: sessions },
+      { identifier: "cdrs", role: "RECEIVER", url: cdrs },
     ],
   };
 }

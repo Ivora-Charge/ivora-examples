@@ -3,6 +3,7 @@ import { randomBytes } from "node:crypto";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { z } from "zod";
 import { atLeast, type Role } from "@/lib/roles";
+import { DEMO_OPERATOR_ID } from "../team/demo";
 import {
   ChargerError,
   notAllowed,
@@ -282,6 +283,9 @@ export function createDemoChargerStore(
         if (c)
           return {
             code,
+            operatorId: DEMO_OPERATOR_ID,
+            stationId: r.stationId,
+            connectorId: c.connectorId,
             connectorNumber: c.connectorNumber,
             chargerName: r.label ?? r.name,
             inService: !r.removedAt,

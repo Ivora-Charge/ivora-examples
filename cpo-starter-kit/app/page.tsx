@@ -10,6 +10,7 @@ import {
   type ChecklistItem,
 } from "@/lib/server/onboarding";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
+import { getPricing, pricingProgress } from "@/lib/server/pricing";
 import { loadOverview } from "@/lib/server/overview";
 import { formatKwh } from "@/lib/units";
 
@@ -22,11 +23,17 @@ export default async function Page() {
   let checklist: ChecklistItem[] | null = null;
   if (atLeast(me.role, "manager")) {
     const d = getOnboarding();
-    const [o, stripe] = await Promise.all([
+    const [o, stripe, prices] = await Promise.all([
       loadOnboarding(d, me),
       loadStripe(d),
+      pricingProgress(getPricing().store, me.operatorId),
     ]);
-    checklist = setupChecklist(o, stripe, r.ok ? r.overview.chargers : null);
+    checklist = setupChecklist(
+      o,
+      stripe,
+      r.ok ? r.overview.chargers : null,
+      prices,
+    );
   }
   return (
     <>

@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { demoSimulate } from "./demo-pricing";
 import { IvoraError } from "./errors";
 import type {
   Branding,
@@ -12,6 +13,7 @@ import type {
   PaymentAccount,
   Station,
   StationInput,
+  Tariff,
   TokenRecord,
   Transaction,
 } from "./types";
@@ -132,6 +134,13 @@ const SAMPLE_FAULTS: Fault[] = [
     cleared_at: "2025-12-31T14:20:00Z",
   },
 ];
+
+/**
+ * Ivora tariff IDs of the demo's sample tariffs (lib/server/pricing/demo.ts). Tariffs a
+ * visitor saves get IDs from 9411 up, kept in their cookie.
+ */
+export const SAMPLE_TARIFF_IDS = [9401, 9402] as const;
+const MAX_TARIFFS = 12;
 
 const SAMPLE_TRANSACTIONS: Transaction[] = [
   {
@@ -288,6 +297,18 @@ const fleetSchema = z.object({
       }),
     )
     .max(2)
+    .optional(),
+  /** Tariffs the visitor's kit created or archived (only what the kit reads back). */
+  tariffs: z
+    .array(
+      z.object({
+        id: z.number().int(),
+        external_reference: z.string().max(128).nullable(),
+        currency: z.string().max(3),
+        archived: z.boolean(),
+      }),
+    )
+    .max(MAX_TARIFFS)
     .optional(),
   transactions: z
     .array(
@@ -799,6 +820,115 @@ export function createDemoClient(
     },
     async getPaymentAccount() {
       return demoPaymentAccount("none");
+    },
+    // Same reference, same tariff, like the API's idempotent replays.
+    async createTariff(input) {
+      demoSimulate(input, {
+        start_at: new Date(now()).toISOString(),
+        time_zone: input.time_zone,
+        duration_minutes: 0,
+        energy_kwh: 0,
+        idle_minutes: 0,
+      });
+      return update((f) => {
+        const tariffs = (f.tariffs ??= []);
+        const seen = tariffs.find(
+          (x) => x.external_reference === input.external_reference,
+        );
+        const record = (x: (typeof tariffs)[number]): Tariff => ({
+          id: x.id,
+          currency: x.currency,
+          rate_minor_per_kwh: 0,
+          authorization_minor: input.authorization_minor,
+          archived: x.archived,
+          external_reference: x.external_reference,
+          is_complex: true,
+          pricing_summary: input.tariff_alt_text[0]?.text ?? null,
+        });
+        if (seen) return record(seen);
+        const created = {
+          id: Math.max(9410, ...tariffs.map((x) => x.id)) + 1,
+          external_reference: input.external_reference,
+          currency: input.currency,
+          archived: false,
+        };
+        tariffs.push(created);
+        // Archived ones go first when the cookie is full; bills never need them here.
+        while (tariffs.length > MAX_TARIFFS)
+          tariffs.splice(
+            Math.max(
+              0,
+              tariffs.findIndex((x) => x.archived),
+            ),
+            1,
+          );
+        return record(created);
+      });
+    },
+    async findTariff(externalReference) {
+      const x = (await fleet.load()).tariffs?.find(
+        (t) => t.external_reference === externalReference,
+      );
+      return x
+        ? {
+            id: x.id,
+            currency: x.currency,
+            rate_minor_per_kwh: 0,
+            authorization_minor: 0,
+            archived: x.archived,
+            external_reference: x.external_reference,
+            is_complex: true,
+          }
+        : null;
+    },
+    async archiveTariff(tariffId, replacementTariffId) {
+      return update((f) => {
+        const tariffs = (f.tariffs ??= []);
+        const known = (id: number) =>
+          (SAMPLE_TARIFF_IDS as readonly number[]).includes(id) ||
+          tariffs.some((x) => x.id === id);
+        if (!known(tariffId))
+          throw new IvoraError(404, "tariff_not_found", "Unknown demo tariff");
+        if (
+          replacementTariffId !== null &&
+          (!known(replacementTariffId) ||
+            tariffs.find((x) => x.id === replacementTariffId)?.archived)
+        )
+          throw new IvoraError(
+            404,
+            "tariff_not_found",
+            "Unknown demo replacement tariff",
+          );
+        const own = tariffs.find((x) => x.id === tariffId);
+        if (own?.archived)
+          throw new IvoraError(409, "tariff_archived", "Already archived");
+        if (own) own.archived = true;
+        else
+          tariffs.push({
+            id: tariffId,
+            external_reference: null,
+            currency: "USD",
+            archived: true,
+          });
+        while (tariffs.length > MAX_TARIFFS)
+          tariffs.splice(
+            Math.max(
+              0,
+              tariffs.findIndex((x) => x.archived),
+            ),
+            1,
+          );
+        return {
+          id: tariffId,
+          archived: true as const,
+          replacement_tariff_id: replacementTariffId,
+          // Demo connectors carry no Ivora tariff, so nothing moves.
+          reassigned_connectors: [],
+        };
+      });
+    },
+    async simulateTariff(tariff, session) {
+      return demoSimulate(tariff, session);
     },
   };
 }

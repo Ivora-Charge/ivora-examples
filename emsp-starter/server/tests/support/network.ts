@@ -7,6 +7,9 @@ import * as tariffsRoute from "@/app/ocpi/2.2.1/tariffs/[...path]/route";
 import * as tokensRoute from "@/app/ocpi/2.2.1/tokens/route";
 import * as tokenRoute from "@/app/ocpi/2.2.1/tokens/[...path]/route";
 import * as commandsRoute from "@/app/ocpi/2.2.1/commands/[...path]/route";
+import * as sessionsRoute from "@/app/ocpi/2.2.1/sessions/[...path]/route";
+import * as cdrsRoute from "@/app/ocpi/2.2.1/cdrs/route";
+import * as cdrRoute from "@/app/ocpi/2.2.1/cdrs/[...path]/route";
 import type { Transport } from "@/lib/ocpi/client";
 import { setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 
@@ -29,6 +32,7 @@ export const emspHandler: Handler = async (request) => {
     "/ocpi/2.2.1": detailsRoute,
     "/ocpi/2.2.1/credentials": credentialsRoute,
     "/ocpi/2.2.1/tokens": tokensRoute,
+    "/ocpi/2.2.1/cdrs": cdrsRoute,
   };
   const path = new URL(request.url).pathname;
   const route =
@@ -41,7 +45,11 @@ export const emspHandler: Handler = async (request) => {
           ? tokenRoute
           : path.startsWith("/ocpi/2.2.1/commands/")
             ? commandsRoute
-            : undefined);
+            : path.startsWith("/ocpi/2.2.1/sessions/")
+              ? sessionsRoute
+              : path.startsWith("/ocpi/2.2.1/cdrs/")
+                ? cdrRoute
+                : undefined);
   const handler = route?.[request.method] as Handler | undefined;
   if (!handler) return new Response("Not found", { status: 404 });
   return handler(request);

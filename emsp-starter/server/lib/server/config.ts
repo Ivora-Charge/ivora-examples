@@ -108,6 +108,8 @@ export function ocpiUrls() {
     tariffs: `${base}/${OCPI_VERSION}/tariffs`,
     tokens: `${base}/${OCPI_VERSION}/tokens`,
     commands: `${base}/${OCPI_VERSION}/commands`,
+    sessions: `${base}/${OCPI_VERSION}/sessions`,
+    cdrs: `${base}/${OCPI_VERSION}/cdrs`,
   };
 }
 

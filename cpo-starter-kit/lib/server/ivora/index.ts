@@ -5,7 +5,12 @@ import { cookieDemoFleet, resetDemoFleetForTests } from "./demo-cookie";
 import { createLiveClient } from "./live";
 import type { IvoraClient } from "./types";
 
-export { describeError, ERRORS_URL, IvoraError } from "./errors";
+export {
+  describeError,
+  ERRORS_URL,
+  IvoraError,
+  tariffProblems,
+} from "./errors";
 export type * from "./types";
 
 const g = globalThis as unknown as {

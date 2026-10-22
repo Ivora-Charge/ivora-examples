@@ -43,8 +43,9 @@ export const MODULES: Module[] = [
     slug: "pricing",
     href: "/pricing",
     label: "Pricing",
-    summary: "Tariffs per site and connector, in your currency.",
-    status: "coming-soon",
+    summary:
+      "Tariffs per charger and connector: per-kWh, time-of-use, idle and session fees, free and private chargers.",
+    status: "ready",
   },
   {
     slug: "reports",

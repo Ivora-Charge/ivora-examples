@@ -115,6 +115,29 @@ describe("Supabase command store on PGlite", () => {
     ).toBe("created");
   });
 
+  it("finds a request's command, and links a start to one session only", async () => {
+    const { command } = await store.claim(start());
+    expect(
+      await store.findByRequest("driver-1", "START_SESSION", "req-000001"),
+    ).toEqual(command);
+    expect(
+      await store.findByRequest("driver-1", "STOP_SESSION", "req-000001"),
+    ).toBeNull();
+    expect(
+      await store.findByRequest("driver-2", "START_SESSION", "req-000001"),
+    ).toBeNull();
+    // Two links at once: one wins, the other changes nothing.
+    const [a, b] = await Promise.all([
+      store.linkSession(command.id, "S-A", "2026-10-21T10:00:01.000Z"),
+      store.linkSession(command.id, "S-B", "2026-10-21T10:00:01.000Z"),
+    ]);
+    expect([a?.sessionId, b?.sessionId].sort()).toEqual(["S-A", undefined]);
+    expect((await store.get(command.id))!.sessionId).toBe("S-A");
+    expect(
+      await store.linkSession(command.id, "S-C", "2026-10-21T10:00:02.000Z"),
+    ).toBeNull();
+  });
+
   it("keeps one open stop per session", async () => {
     expect((await store.claim(stop())).outcome).toBe("created");
     expect(
@@ -298,12 +321,14 @@ describe("Supabase command store on PGlite", () => {
               peerId: "00000000-0000-4000-8000-00000000d3e0",
             }),
           get: (id) => store.get(id),
+          findByRequest: (d, t, r) => store.findByRequest(d, t, r),
           getByAuthorizationReference: (r) =>
             store.getByAuthorizationReference(r),
           findStartBySession: (p, s) => store.findStartBySession(p, s),
           transition: (id, from, patch, now) =>
             store.transition(id, from, patch, now),
           overdue: (now, limit) => store.overdue(now, limit),
+          linkSession: (id, s, now) => store.linkSession(id, s, now),
         },
         peers,
         tokens,

@@ -5,12 +5,18 @@ import type {
   Location,
   ParkingRestriction,
 } from "@/lib/ocpi/locations";
+import type {
+  Amount,
+  Cdr,
+  CdrToken,
+  Session,
+} from "@/lib/ocpi/session-objects";
 import type { Tariff } from "@/lib/ocpi/tariffs";
-import type { Party } from "@/lib/ocpi/types";
+import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 
 /**
- * Sample OCPI 2.2.1 locations and tariffs of a made-up CPO: the mock CPO serves them,
- * and demo mode shows them. Sites, streets and the city are invented. Together they
+ * Sample OCPI 2.2.1 locations, tariffs, sessions and CDRs of a made-up CPO: the mock
+ * CPO serves them, and demo mode shows them. Sites, streets and the city are invented. Together they
  * cover what the search and the price display handle: AC and DC, several connector
  * standards, every EVSE state that matters (available, charging, out of order, planned,
  * removed), facilities, parking restrictions, an unpublished site, and free, energy,
@@ -386,5 +392,168 @@ export function sampleTariffs(
         },
       ],
     },
+  ];
+}
+
+/** The token of a sample driver of `emsp`, as a session or CDR names it. */
+export function sampleCdrToken(emsp: Party, n = 1): CdrToken {
+  const digits = String(n).padStart(8, "0");
+  return {
+    country_code: emsp.countryCode,
+    party_id: emsp.partyId,
+    uid: `SAMPLE${digits}`,
+    type: "APP_USER",
+    contract_id: `${emsp.countryCode}${emsp.partyId}C${digits}`,
+  };
+}
+
+const plus = (iso: string, minutes: number) =>
+  ocpiTimestamp(new Date(Date.parse(iso) + minutes * 60_000));
+
+/**
+ * Three sample sessions of `cpo` for drivers of `emsp`, at the first three sample
+ * locations: S1 completed (it has a CDR, sampleCdrs), S2 completed with no CDR yet, and
+ * S3 still charging.
+ */
+export function sampleSessions(
+  cpo: Party,
+  emsp: Party,
+  options: SampleOptions = {},
+): Session[] {
+  const o = { ...DEFAULTS, ...options };
+  const t0 = o.lastUpdated;
+  const base = {
+    country_code: cpo.countryCode,
+    party_id: cpo.partyId,
+    auth_method: "COMMAND" as const,
+    connector_id: "1",
+    currency: o.currency,
+  };
+  return [
+    {
+      ...base,
+      id: "S1",
+      start_date_time: plus(t0, -180),
+      end_date_time: plus(t0, -140),
+      kwh: 32.5,
+      cdr_token: sampleCdrToken(emsp, 1),
+      location_id: "LOC1",
+      evse_uid: "LOC1-1",
+      charging_periods: [
+        {
+          start_date_time: plus(t0, -180),
+          dimensions: [{ type: "ENERGY", volume: 32.5 }],
+          tariff_id: "DC_FAST",
+        },
+      ],
+      total_cost: { excl_vat: 19.18, incl_vat: 23.21 },
+      status: "COMPLETED",
+      last_updated: plus(t0, -139),
+    },
+    {
+      ...base,
+      id: "S2",
+      start_date_time: plus(t0, -120),
+      end_date_time: plus(t0, -60),
+      kwh: 11,
+      cdr_token: sampleCdrToken(emsp, 2),
+      location_id: "LOC2",
+      evse_uid: "LOC2-1",
+      total_cost: { excl_vat: 4.29, incl_vat: 5.19 },
+      status: "COMPLETED",
+      last_updated: plus(t0, -59),
+    },
+    {
+      ...base,
+      id: "S3",
+      start_date_time: plus(t0, -20),
+      kwh: 4.2,
+      cdr_token: sampleCdrToken(emsp, 3),
+      location_id: "LOC3",
+      evse_uid: "LOC3-1",
+      status: "ACTIVE",
+      last_updated: plus(t0, -1),
+    },
+  ];
+}
+
+/**
+ * A CDR for `session`, as its CPO would send it once it is over: the location, EVSE and
+ * connector from `location`, the session's energy, time, periods and cost.
+ */
+export function cdrForSession(
+  session: Session,
+  location: Location,
+  over: Partial<Cdr> & { totalCost?: Amount } = {},
+): Cdr {
+  const evse =
+    location.evses?.find((e) => e.uid === session.evse_uid) ??
+    location.evses![0];
+  const connector =
+    evse.connectors.find((c) => c.id === session.connector_id) ??
+    evse.connectors[0];
+  const end = session.end_date_time ?? session.last_updated;
+  const { totalCost, ...rest } = over;
+  return {
+    country_code: session.country_code,
+    party_id: session.party_id,
+    id: `CDR-${session.id}`,
+    start_date_time: session.start_date_time,
+    end_date_time: end,
+    session_id: session.id,
+    cdr_token: session.cdr_token,
+    auth_method: session.auth_method,
+    ...(session.authorization_reference
+      ? { authorization_reference: session.authorization_reference }
+      : {}),
+    cdr_location: {
+      id: location.id,
+      ...(location.name ? { name: location.name } : {}),
+      address: location.address,
+      city: location.city,
+      ...(location.postal_code ? { postal_code: location.postal_code } : {}),
+      country: location.country,
+      coordinates: location.coordinates,
+      evse_uid: evse.uid,
+      evse_id: evse.evse_id ?? evse.uid,
+      connector_id: connector.id,
+      connector_standard: connector.standard,
+      connector_format: connector.format,
+      connector_power_type: connector.power_type,
+    },
+    currency: session.currency,
+    charging_periods: session.charging_periods?.length
+      ? session.charging_periods
+      : [
+          {
+            start_date_time: session.start_date_time,
+            dimensions: [{ type: "ENERGY", volume: session.kwh }],
+          },
+        ],
+    total_cost: totalCost ?? session.total_cost ?? { excl_vat: 0 },
+    total_energy: session.kwh,
+    total_time:
+      Math.round(
+        ((Date.parse(end) - Date.parse(session.start_date_time)) / 3_600_000) *
+          10_000,
+      ) / 10_000,
+    last_updated: end,
+    ...rest,
+  };
+}
+
+/** The sample CDRs: one, for the first sample session. */
+export function sampleCdrs(
+  cpo: Party,
+  sessions: Session[],
+  options: SampleOptions = {},
+): Cdr[] {
+  const locations = sampleLocations(cpo, 3, options);
+  const s1 = sessions.find((s) => s.id === "S1")!;
+  return [
+    cdrForSession(
+      s1,
+      locations.find((l) => l.id === s1.location_id)!,
+    ),
   ];
 }

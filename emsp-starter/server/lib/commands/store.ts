@@ -134,6 +134,12 @@ export interface CommandStore {
    */
   claim(command: NewCommand): Promise<ClaimOutcome>;
   get(id: string): Promise<Command | null>;
+  /** The command this driver's request ID already has, of this type. */
+  findByRequest(
+    driverRef: string,
+    type: CommandKind,
+    requestId: string,
+  ): Promise<Command | null>;
   getByAuthorizationReference(ref: string): Promise<Command | null>;
   /** The newest start linked to this session of this peer. */
   findStartBySession(
@@ -152,6 +158,15 @@ export interface CommandStore {
   ): Promise<Command | null>;
   /** Open commands at or past their deadline, oldest deadline first. */
   overdue(now: string, limit: number): Promise<Command[]>;
+  /**
+   * Sets a start's session only while it has none, whatever its status. Null when it
+   * has one already (another link got there first): read it again.
+   */
+  linkSession(
+    id: string,
+    sessionId: string,
+    now: string,
+  ): Promise<Command | null>;
 }
 
 const ms = (iso: string) => Date.parse(iso);
@@ -209,6 +224,17 @@ export class MemoryCommandStore implements CommandStore {
     return c ? structuredClone(c) : null;
   }
 
+  async findByRequest(driverRef: string, type: CommandKind, requestId: string) {
+    for (const c of this.commands.values())
+      if (
+        c.driverRef === driverRef &&
+        c.type === type &&
+        c.requestId === requestId
+      )
+        return structuredClone(c);
+    return null;
+  }
+
   async getByAuthorizationReference(ref: string) {
     for (const c of this.commands.values())
       if (c.authorizationReference === ref) return structuredClone(c);
@@ -245,5 +271,12 @@ export class MemoryCommandStore implements CommandStore {
       .sort((a, b) => ms(a.deadlineAt) - ms(b.deadlineAt))
       .slice(0, limit)
       .map((c) => structuredClone(c));
+  }
+
+  async linkSession(id: string, sessionId: string, now: string) {
+    const c = this.commands.get(id);
+    if (!c || c.sessionId !== null) return null;
+    Object.assign(c, { sessionId, updatedAt: now });
+    return structuredClone(c);
   }
 }

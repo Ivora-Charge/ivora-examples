@@ -4,6 +4,8 @@ import { commandStore } from "@/lib/commands/registry";
 import { locationStore } from "@/lib/locations/registry";
 import { syncAllPeers } from "@/lib/locations/sync";
 import { peerStore } from "@/lib/ocpi/registry";
+import { pullAllSessions } from "@/lib/sessions/pull";
+import { sessionStore } from "@/lib/sessions/registry";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { expireTokens } from "@/lib/tokens/manage";
@@ -32,8 +34,9 @@ function authorised(header: string | null): boolean {
  * 2. Commands: ends the commands past their deadline (at most 100 per call), so a
  *    driver's start that never got an answer times out and releases its payment hold
  *    even when the app stops asking. The app's own reads end them too.
- * 3. The pull of every registered peer's tariffs and locations. Each call pulls at most
- *    20 pages per peer and module; a larger pull resumes on the next call.
+ * 3. The pull of every registered peer's tariffs and locations, then of its sessions and
+ *    CDRs (changes since the last pull). Each call pulls at most 20 pages per peer and
+ *    module; a larger pull resumes on the next call.
  *
  * A failure of one job does not stop the others.
  */
@@ -90,12 +93,36 @@ export async function GET(request: Request) {
     ok = false;
     failed("OCPI pull", e);
   }
+  let sessions: unknown;
+  try {
+    sessions = await pullAllSessions(
+      {
+        sessions: sessionStore(),
+        commands: commandStore(),
+        tokens: tokenStore(),
+        peers: peerStore(),
+        syncState: locationStore(),
+        actor: "cron",
+      },
+      { maxPages: 20 },
+    );
+  } catch (e) {
+    ok = false;
+    failed("sessions and CDRs pull", e);
+  }
   return Response.json(
     ok
-      ? { mode: "live", results, tokens, commands: { ended: commands } }
+      ? {
+          mode: "live",
+          results,
+          sessions,
+          tokens,
+          commands: { ended: commands },
+        }
       : {
           error: "Something went wrong",
           results,
+          sessions,
           tokens,
           commands: { ended: commands },
         },
