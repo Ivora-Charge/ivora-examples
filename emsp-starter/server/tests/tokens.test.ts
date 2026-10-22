@@ -6,7 +6,9 @@ import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore, type Peer } from "@/lib/ocpi/store";
 import { parseToken } from "@/lib/ocpi/token-objects";
 import { clientKey } from "@/lib/server/rate-limit";
-import { decide } from "@/lib/tokens/authorize";
+import { setAccountStoreForTests } from "@/lib/accounts/registry";
+import { MemoryAccountStore } from "@/lib/accounts/store";
+import { decide, driverStanding } from "@/lib/tokens/authorize";
 import { CONTRACT_ID, normalizeRfidUid } from "@/lib/tokens/contract-id";
 import {
   addRfidCard,
@@ -39,6 +41,7 @@ const T0 = new Date("2026-10-21T10:00:00Z");
 
 let peers: MemoryPeerStore;
 let tokens: MemoryTokenStore;
+let accounts: MemoryAccountStore;
 let cpo: MockCpo;
 let cpo2: MockCpo;
 let net: ReturnType<typeof inProcessNetwork>;
@@ -63,6 +66,8 @@ beforeEach(() => {
   tokens = new MemoryTokenStore(peers);
   setPeerStoreForTests(peers);
   setTokenStoreForTests(tokens);
+  accounts = new MemoryAccountStore();
+  setAccountStoreForTests(accounts);
   clock = T0;
   hold = undefined;
   net = inProcessNetwork({
@@ -89,6 +94,7 @@ afterEach(() => {
   uninstallNetwork();
   setPeerStoreForTests(undefined);
   setTokenStoreForTests(undefined);
+  setAccountStoreForTests(undefined);
   process.env = { ...saved };
   vi.restoreAllMocks();
 });
@@ -780,6 +786,27 @@ describe("real-time authorization", () => {
       decide({ ...t, expiresAt: "2020-01-01T00:00:00Z" }, now, "no_credit")
         .allowed,
     ).toBe("EXPIRED");
+  });
+});
+
+describe("driver standing", () => {
+  it("is NOT_ALLOWED for a restricted account and NO_CREDIT without a default card", async () => {
+    const t = (await createAppToken({ driverRef: "d-1" }, deps())).token;
+    // An admin-made driver reference without an account rests on the token.
+    expect(await driverStanding(t, accounts)).toBe("ok");
+    const now = new Date().toISOString();
+    await accounts.ensureDriver("d-1", "d1@example.com", now);
+    expect(await driverStanding(t, accounts)).toBe("no_credit");
+    await accounts.updateDriver(
+      "d-1",
+      { defaultPaymentMethodId: "pm_123" },
+      now,
+    );
+    expect(await driverStanding(t, accounts)).toBe("ok");
+    await accounts.updateDriver("d-1", { status: "restricted" }, now);
+    expect(await driverStanding(t, accounts)).toBe("not_allowed");
+    // The registry's store is the default.
+    expect(await driverStanding(t)).toBe("not_allowed");
   });
 });
 

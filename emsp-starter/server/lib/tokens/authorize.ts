@@ -1,5 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { accountStore } from "@/lib/accounts/registry";
+import type { AccountStore } from "@/lib/accounts/store";
 import { OcpiProblem } from "@/lib/ocpi/errors";
 import { ocpiResponse, readJson, type OcpiContext } from "@/lib/ocpi/server";
 import {
@@ -29,16 +31,21 @@ import type { DriverToken } from "./store";
  */
 
 /**
- * The driver behind a token, as far as charging goes. Driver accounts and saved cards
- * arrive in part 7, which plugs its check in here; until then every driver is "ok" and
- * the answer rests on the token's own status.
+ * The driver behind a token, as far as charging goes: a restricted account may not
+ * charge (NOT_ALLOWED), and an account without a default card has no credit
+ * (NO_CREDIT). A token of a driver reference with no account (one an admin created
+ * before driver sign-in) rests on the token's own status.
  */
 export type DriverStanding = "ok" | "blocked" | "no_credit" | "not_allowed";
 
 export async function driverStanding(
-  _token: DriverToken,
+  token: DriverToken,
+  accounts: AccountStore = accountStore(),
 ): Promise<DriverStanding> {
-  return "ok";
+  const driver = await accounts.getDriver(token.driverRef);
+  if (!driver) return "ok";
+  if (driver.status !== "active") return "not_allowed";
+  return driver.defaultPaymentMethodId ? "ok" : "no_credit";
 }
 
 const INFO: Record<Exclude<AllowedType, "ALLOWED">, string> = {

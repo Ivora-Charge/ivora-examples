@@ -47,7 +47,7 @@ export class TokenError extends Error {
  *   cached copy only when it cannot reach us.
  * - NEVER: must ask us in real time; no answer, no charging.
  *
- * The default, ALLOWED_OFFLINE, keeps every block, expiry and (from part 7) NO_CREDIT
+ * The default, ALLOWED_OFFLINE, keeps every block, expiry and NO_CREDIT
  * checked while we are reachable, and lets drivers charge through an outage.
  */
 export const DEFAULT_WHITELIST: WhitelistType = "ALLOWED_OFFLINE";
