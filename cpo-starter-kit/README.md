@@ -120,9 +120,22 @@ The kit ships as **Ampleaf**, a placeholder brand you are meant to replace. Ever
 
 The design brief, the approved mock and the palette are `brand/BRIEF.md`, `brand/mock.html` and `docs/brief/`. Screenshots of the main screens in light and dark, desktop and phone, are in `docs/screens/`.
 
-The public landing page is `/welcome` (`app/welcome/page.tsx`): signed-out visitors to `/` land there, and in demo mode its "Try the demo" button opens the app. Pages that load data show a skeleton while they load (`app/loading-skeleton.tsx`), and a failed page shows an error reference and what to do next (`app/error.tsx`).
+**Where the screens live.** `app/layout.tsx` is the document, the skip link and the Demo banner, and reads no session. The staff app (sidebar shell, grouped menu, the operator's brand colour) is `app/(staff)/`; the driver pages (`/c/<code>` and the demo checkout, one phone-width column under the operator's name, no staff menu) are `app/(driver)/`; the public landing page is `app/welcome/page.tsx`. A signed-out visitor to `/` lands on `/welcome`; a signed-out deep link goes to `/login` (`proxy.ts`, tested in `tests/proxy.test.ts`). The landing page reads nothing but the public operator name: in demo mode its button is "Try the demo", in live mode "Sign in".
 
-To regenerate the screenshots from the demo (1440 px and 390 px, light and dark), start the built demo and run `npm run screenshots` (`scripts/screenshots.mjs`; set `SCREENSHOT_URL` if it is not on port 3000).
+**States.** Each page that loads data has its own loading boundary with a skeleton shaped like the page (`app/loading-skeleton.tsx`), placed after the checks that answer 404 so a missing page or a module that is off still returns a real 404. A failed page shows the error reference and what to do next (`app/states.tsx`). Motion (skeleton pulse, hover and press transitions) stops when the system asks for reduced motion; every control and row link is at least 44 px tall.
+
+**Screenshots.** `docs/screens/` holds the main screens at 1440 px and 390 px, light and dark. To regenerate them, start the built demo and run `npm run screenshots` (`scripts/screenshots.mjs`; set `SCREENSHOT_URL` if it is not on port 3000). The script fails if a page does not load or scrolls sideways.
+
+| Desktop, light                                                 | Desktop, dark                                                |
+| -------------------------------------------------------------- | ------------------------------------------------------------ |
+| ![Landing page, light](docs/screens/welcome-desktop-light.png) | ![Landing page, dark](docs/screens/welcome-desktop-dark.png) |
+| ![Overview, light](docs/screens/overview-desktop-light.png)    | ![Overview, dark](docs/screens/overview-desktop-dark.png)    |
+| ![Live, light](docs/screens/live-desktop-light.png)            | ![Live, dark](docs/screens/live-desktop-dark.png)            |
+| ![Pricing, light](docs/screens/pricing-desktop-light.png)      | ![Pricing, dark](docs/screens/pricing-desktop-dark.png)      |
+
+| Phone, light                                                       | Phone, dark                                                      | Phone, light                                              | Phone, dark                                             |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------- | --------------------------------------------------------- | ------------------------------------------------------- |
+| ![Driver sticker page, light](docs/screens/driver-phone-light.png) | ![Driver sticker page, dark](docs/screens/driver-phone-dark.png) | ![Chargers, light](docs/screens/chargers-phone-light.png) | ![Chargers, dark](docs/screens/chargers-phone-dark.png) |
 
 ### Fonts and icons
 

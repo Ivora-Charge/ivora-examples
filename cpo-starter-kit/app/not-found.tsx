@@ -1,19 +1,16 @@
-import Link from "next/link";
+import { PublicHeader } from "./public-header";
+import { NotFoundState } from "./states";
 
 export const metadata = { title: "Page not found" };
 
+/** An address no route matches: answered 404 outside the staff shell. */
 export default function NotFound() {
   return (
-    <section className="card state" aria-labelledby="nf-heading">
-      <h1 id="nf-heading">Page not found</h1>
-      <p>
-        That page does not exist, or it is not turned on for this deployment.
-      </p>
-      <div className="actions">
-        <Link className="button" href="/">
-          Back to the overview
-        </Link>
-      </div>
-    </section>
+    <>
+      <PublicHeader />
+      <main id="main" tabIndex={-1} className="public-main">
+        <NotFoundState />
+      </main>
+    </>
   );
 }

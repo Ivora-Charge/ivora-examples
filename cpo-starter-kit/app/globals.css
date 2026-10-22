@@ -1354,42 +1354,391 @@ textarea:focus-visible {
   overflow-wrap: anywhere;
 }
 
-/* Landing page (/welcome) */
-.hero {
-  max-width: 44rem;
-  margin: var(--space-5) 0 var(--space-6);
+/* Navigation groups (Run, Money, Workspace) */
+.nav-group p {
+  margin: var(--space-3) 0 var(--space-1);
+  padding: 0 var(--space-3);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--color-text-muted);
 }
-.hero h1 {
-  font-size: var(--font-size-xl);
-  margin: var(--space-2) 0 var(--space-3);
-}
-.eyebrow {
+.nav-group ul {
   margin: 0;
-  color: var(--color-primary);
+  padding: 0;
+  list-style: none;
+}
+.nav-list a:active,
+.steps a:active {
+  background: color-mix(in srgb, var(--color-primary) 14%, var(--s));
+}
+
+/* Press, hover and live-status changes. Reduced motion turns transitions off above. */
+.link-button:hover {
+  text-decoration-thickness: 2px;
+}
+.button.secondary:active,
+.menu-button:active {
+  transform: translateY(var(--border-width));
+}
+.pill {
+  transition:
+    background-color var(--transition),
+    color var(--transition);
+}
+.rows li {
+  transition: background-color var(--transition);
+}
+.rows li:has(> a:hover, .name a:hover) {
+  background: color-mix(in srgb, var(--color-primary) 4%, transparent);
+}
+/* Row links are targets, not words in a sentence: padding takes their hit area to
+   44 px without moving the text. */
+.rows a,
+main > p > a:only-child,
+.data-table a,
+.pager a,
+.leaflet-control-attribution a {
+  display: inline-block;
+  padding-block: calc((var(--tap-target) - 1lh) / 2);
+  margin-block: calc((1lh - var(--tap-target)) / 2);
+}
+.skip {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-target);
+}
+.live-map .leaflet-control-zoom.leaflet-bar a {
+  width: var(--tap-target);
+  height: var(--tap-target);
+  line-height: var(--tap-target);
+}
+/* A checkbox's label is its target too: 44 px tall, the box itself 24 px. */
+.confirm {
+  align-items: center;
+}
+.confirm label {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-target);
+}
+
+/* Crisp tables: small caps column heads, a hairline per row, a hover tint. */
+.data-table thead th,
+.quote thead th {
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
   letter-spacing: var(--tracking-caps);
   text-transform: uppercase;
 }
+.data-table tbody tr {
+  transition: background-color var(--transition);
+}
+.data-table tbody tr:hover {
+  background: var(--color-surface-hover);
+}
+
+/* Pages outside the staff app: the landing page, a 404 and a failed shell. */
+.public-bar,
+.driver-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-surface);
+  border-bottom: var(--border-width) solid var(--color-border);
+}
+.public-bar .brand {
+  margin-right: auto;
+}
+.public-bar .theme-toggle,
+.driver-bar .theme-toggle {
+  padding: 0;
+  width: var(--tap-target);
+}
+.public-bar .theme-label,
+.driver-bar .theme-label {
+  position: absolute;
+  width: var(--border-width);
+  height: var(--border-width);
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+main.public-main {
+  margin: 0 auto;
+}
+.state-code {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  color: var(--color-primary);
+}
+
+/* Landing page (/welcome) */
+.hero {
+  display: grid;
+  gap: var(--space-6);
+  align-items: center;
+  margin: var(--space-4) 0 var(--space-6);
+}
+.hero h1 {
+  margin: var(--space-2) 0 var(--space-3);
+  font-size: calc(var(--font-size-xl) * 1.25);
+}
+.hero .actions {
+  margin-bottom: var(--space-3);
+}
+.eyebrow {
+  display: inline-block;
+  margin: 0;
+  padding: var(--space-0) var(--space-3);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+  border-radius: var(--leaf-sm);
+}
 .lede {
-  margin: 0 0 var(--space-4);
+  margin: 0 0 var(--space-5);
   font-size: var(--font-size-lg);
+  color: var(--color-text-muted);
+}
+.shot {
+  margin: 0;
+  min-width: 0;
+}
+.shot figcaption {
+  margin-top: var(--space-2);
+  font-size: var(--font-size-sm);
+}
+.shot-frame {
+  display: flex;
+  overflow: hidden;
+  background: var(--color-bg);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+}
+.shot-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-2);
+  background: var(--color-surface);
+  border-right: var(--border-width) solid var(--color-border);
+}
+.shot-side span {
+  display: grid;
+  place-items: center;
+  padding: var(--space-1);
+  color: var(--color-text-muted);
+  border-radius: var(--leaf-sm);
+}
+.shot-side .current {
+  color: var(--color-on-accent);
+  background: var(--color-accent);
+}
+.shot-body {
+  display: grid;
+  flex: 1;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-4);
+}
+.shot-title {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-brand);
+}
+.shot-kpis {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+.shot-kpis p,
+.shot-chart,
+.shot-rows {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-surface);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.shot-kpis p {
+  font-family: var(--font-display);
+  font-size: var(--font-size-lg);
+  overflow-wrap: anywhere;
+}
+.shot-kpis span {
+  display: block;
+  font-family: var(--font-sans);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+.shot-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--space-2);
+  height: calc(var(--space-6) * 3);
+}
+.shot-chart span {
+  flex: 1;
+  background: color-mix(in srgb, var(--color-primary) 30%, var(--s));
+  border-radius: var(--space-1) var(--space-1) 0 0;
+}
+.shot-chart .peak {
+  background: var(--color-primary);
+}
+.shot-rows {
+  list-style: none;
+  font-size: var(--font-size-sm);
+}
+.shot-rows li {
+  display: flex;
+  align-items: center;
+  padding: var(--space-1) 0;
+}
+.shot-rows li + li {
+  border-top: var(--border-width) solid var(--color-border);
+}
+.section-title {
+  margin-bottom: var(--space-4);
+  font-family: var(--font-display);
+  font-size: var(--font-size-brand);
+  font-weight: var(--font-weight-medium);
 }
 .feature-grid {
   display: grid;
   gap: var(--space-3);
-  margin-bottom: var(--space-4);
+  margin: 0 0 var(--space-5);
+  padding: 0;
+  list-style: none;
 }
 .feature-grid .card {
+  margin: 0;
+}
+.feature h3 {
+  margin-top: var(--space-3);
+}
+.feature p {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+.feature-icon {
+  display: inline-grid;
+  place-items: center;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  color: var(--color-primary);
+  background: var(--color-surface-hover);
+  border-radius: var(--leaf);
+}
+.landing-pair {
+  display: grid;
+  align-items: start;
+  gap: 0 var(--space-4);
+}
+.who-list {
+  margin: 0;
+}
+.who-list div {
+  padding: var(--space-3) 0;
+  border-top: var(--border-width) solid var(--color-border);
+}
+.who-list div:first-child {
+  border-top: 0;
+}
+.who-list dt {
+  font-weight: var(--font-weight-bold);
+}
+.who-list dd {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+.module-list {
+  display: grid;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.module-list li {
+  display: flex;
+  gap: var(--space-3);
+}
+.module-list .icon {
+  color: var(--color-primary);
+}
+.module-list .muted {
+  display: block;
+  font-size: var(--font-size-sm);
+}
+.landing-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: var(--border-width) solid var(--color-border);
+}
+.landing-foot p {
   margin: 0;
 }
 @media (min-width: 52rem) {
   .feature-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }
+  .landing-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (min-width: 64rem) {
+  .hero {
+    grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
+  }
+}
+@media (min-width: 900px) {
+  .public-bar,
+  .driver-bar {
+    padding: var(--space-3) var(--space-6);
+  }
+  .public-bar .theme-toggle {
+    width: auto;
+    padding: 0 var(--space-4);
+  }
+  .public-bar .theme-label {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
+  }
 }
 
-/* Loading skeletons and error pages */
+/* Driver pages (/c/<code>, the demo checkout): one phone-width column. */
+.driver-bar {
+  justify-content: space-between;
+}
+.driver-operator {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: var(--font-size-brand);
+  font-weight: var(--font-weight-medium);
+  overflow-wrap: anywhere;
+}
+.driver-shell main {
+  max-width: calc(var(--form-max) * 1.25);
+  margin: 0 auto;
+  padding: var(--space-4);
+}
+
+/* Loading skeletons */
 .skeleton {
   background: linear-gradient(
     90deg,
@@ -1398,19 +1747,24 @@ textarea:focus-visible {
     var(--color-border)
   );
   background-size: 200% 100%;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   animation: skeleton-pulse 1.4s ease-in-out infinite;
 }
 .skeleton-title {
-  width: 12rem;
-  height: 2rem;
+  width: 40%;
+  height: var(--space-6);
   margin-bottom: var(--space-5);
 }
 .skeleton-stat {
-  height: 4.5rem;
+  height: calc(var(--space-6) * 2);
 }
-.skeleton-card {
-  height: 12rem;
+.skeleton-line {
+  height: var(--space-4);
+  margin-top: var(--space-4);
+}
+.skeleton-line.short {
+  width: 30%;
+  margin-top: 0;
 }
 @keyframes skeleton-pulse {
   from {
@@ -1426,5 +1780,25 @@ textarea:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .skeleton {
     animation: none;
+  }
+}
+
+/* Two stats a row on a phone: an odd last one takes the whole row. */
+@media (max-width: 899px) {
+  .stats > :last-child:nth-child(odd) {
+    grid-column: 1 / -1;
+  }
+}
+.charge-board h1 .muted {
+  display: block;
+  margin-top: var(--space-1);
+  font-family: var(--font-sans);
+}
+@media (max-width: 40rem) {
+  .shot-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .shot-kpis p:nth-child(3) {
+    display: none;
   }
 }
