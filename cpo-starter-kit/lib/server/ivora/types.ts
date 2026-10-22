@@ -372,6 +372,95 @@ export interface Quote {
   idle_free_seconds?: number;
 }
 
+// ---- OCPI publishing (roaming placeholder) ----
+
+/** A party: the country of the registry that issued it and its 3-character party ID. */
+export interface OcpiPartyRef {
+  /** ISO 3166-1 alpha-2, capitals, for example US. */
+  country_code: string;
+  /** Three capital letters or digits. */
+  party_id: string;
+}
+
+/** The party locations publish under now. */
+export interface OcpiParty extends OcpiPartyRef {
+  /** True for Ivora's shared party US*IVR. */
+  shared: boolean;
+}
+
+/** The operator's own party request and Ivora's decision on it. */
+export interface OcpiOwnParty extends OcpiPartyRef {
+  /**
+   * approved: locations publish under it. pending_approval or rejected: they publish
+   * under the shared party with the operator's display name.
+   */
+  status: "approved" | "pending_approval" | "rejected" | (string & {});
+  /** Why Ivora rejected the pair, while status is rejected. */
+  rejection_note: string | null;
+}
+
+/** Connector facts for connectors with no hardware data (OCPI 2.2.1 values). */
+export interface OcpiConnectorDefaults {
+  standard: string;
+  format: string;
+  power_type: string;
+  max_voltage: number;
+  max_amperage: number;
+}
+
+/** `GET /v1/tenants/{id}/ocpi`. */
+export interface OcpiSettings {
+  /** The operator's choice; off by default. */
+  publish: boolean;
+  /** Ivora keeps this tenant private: never published, and publish: true is refused. */
+  private: boolean;
+  /** Whether partners receive the locations now. */
+  published: boolean;
+  display_name: string | null;
+  website: string | null;
+  time_zone: string | null;
+  /** Stored defaults merged over the Level 2 ones. */
+  connector_defaults: OcpiConnectorDefaults;
+  excluded_location_ids: number[];
+  own_party: OcpiOwnParty | null;
+  party: OcpiParty;
+  /** Null where this Ivora environment serves no OCPI yet. */
+  versions_url: string | null;
+  updated_at: string | null;
+}
+
+/** `PUT /v1/tenants/{id}/ocpi` replaces every setting: always send the whole object. */
+export interface OcpiSettingsInput {
+  publish: boolean;
+  /** 1 to 100 characters; needed to publish. */
+  display_name: string | null;
+  /** https only. */
+  website: string | null;
+  /** IANA zone for locations without their own. */
+  time_zone: string | null;
+  connector_defaults: Partial<OcpiConnectorDefaults> | null;
+  /** At most 1000. */
+  excluded_location_ids: number[];
+  /** Null publishes under Ivora's shared party. US*IVR itself is refused. */
+  own_party: OcpiPartyRef | null;
+}
+
+/** An EVSE ID imported from the operator's previous CSMS. */
+export interface OcpiEvseId {
+  station_id: number;
+  evse_number: number;
+  evse_id: string;
+  /** Whether partners receive this ID now (its party is the one in use). */
+  applies: boolean;
+  updated_at?: string | null;
+}
+
+/** `GET /v1/tenants/{id}/ocpi/evse-ids`. */
+export interface OcpiEvseIds {
+  party: OcpiParty;
+  data: OcpiEvseId[];
+}
+
 export interface ListOptions {
   /** 1 to 100 (the API's maximum). */
   limit?: number;
@@ -466,4 +555,10 @@ export interface IvoraClient {
     tariff: TariffDefinitionInput,
     session: SessionProfile,
   ): Promise<Quote>;
+  /** OCPI publishing settings (roaming placeholder). */
+  getOcpiSettings(): Promise<OcpiSettings>;
+  /** Replaces every OCPI setting; omitted fields return to their defaults. */
+  putOcpiSettings(input: OcpiSettingsInput, key: string): Promise<OcpiSettings>;
+  /** EVSE IDs imported from a previous CSMS (read only in the kit). */
+  getOcpiEvseIds(): Promise<OcpiEvseIds>;
 }

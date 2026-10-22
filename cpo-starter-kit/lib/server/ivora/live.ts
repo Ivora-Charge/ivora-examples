@@ -9,6 +9,8 @@ import type {
   ListOptions,
   Location,
   LocationInput,
+  OcpiEvseIds,
+  OcpiSettings,
   Operation,
   Page,
   PaymentAccount,
@@ -421,6 +423,15 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         key: undefined,
         readOnly: true,
       });
+    },
+    getOcpiSettings() {
+      return request<OcpiSettings>("GET", "ocpi");
+    },
+    putOcpiSettings(input, key) {
+      return request<OcpiSettings>("PUT", "ocpi", { body: input, key });
+    },
+    getOcpiEvseIds() {
+      return request<OcpiEvseIds>("GET", "ocpi/evse-ids");
     },
   };
 }

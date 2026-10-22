@@ -1,5 +1,12 @@
 import "server-only";
 import { z } from "zod";
+import {
+  demoOcpiEvseIds,
+  demoOcpiRecord,
+  demoPutOcpi,
+  memoryDemoOcpi,
+  type DemoOcpiStore,
+} from "./demo-ocpi";
 import { demoSimulate } from "./demo-pricing";
 import { IvoraError } from "./errors";
 import type {
@@ -511,12 +518,13 @@ const op = (
 
 /**
  * The demo implementation of the Ivora client. It answers from the sample data above
- * and the visitor's own demo fleet (`fleet`), and never sends a request anywhere: no
- * charger commands, no payments, no email, no network.
+ * and the visitor's own demo fleet (`fleet`) and roaming settings (`ocpi`), and never
+ * sends a request anywhere: no charger commands, no payments, no email, no network.
  */
 export function createDemoClient(
   fleet: DemoFleetStore = memoryDemoFleet(),
   now: () => number = Date.now,
+  ocpi: DemoOcpiStore = memoryDemoOcpi(),
 ): IvoraClient {
   const update = async <T>(change: (f: DemoFleet) => T): Promise<T> => {
     const f = await fleet.load();
@@ -929,6 +937,17 @@ export function createDemoClient(
     },
     async simulateTariff(tariff, session) {
       return demoSimulate(tariff, session);
+    },
+    async getOcpiSettings() {
+      return demoOcpiRecord(await ocpi.load());
+    },
+    async putOcpiSettings(input) {
+      const next = demoPutOcpi(await ocpi.load(), input, now());
+      await ocpi.save(next);
+      return demoOcpiRecord(next);
+    },
+    async getOcpiEvseIds() {
+      return demoOcpiEvseIds(await ocpi.load());
     },
   };
 }

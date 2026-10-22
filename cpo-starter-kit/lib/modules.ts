@@ -65,7 +65,7 @@ export const MODULES: Module[] = [
     slug: "settings",
     href: "/settings",
     label: "Settings",
-    summary: "Company details, brand and card payments.",
+    summary: "Company details, brand, card payments and roaming.",
     status: "ready",
   },
 ];

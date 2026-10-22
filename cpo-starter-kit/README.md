@@ -1,6 +1,6 @@
 # CPO Starter Kit
 
-> **In progress.** This is part 6 of the kit: the app shell, demo mode, the Ivora client, the team (staff sign-in and roles on Supabase), onboarding (company details, brand, Stripe status), chargers (add, test, QR stickers), the Live view (map and list, status and faults, remote start, stop, reset and unlock) and pricing (tariffs with per-kWh, time-of-use, idle and session fees; free and private chargers). Sections marked "Coming soon" are filled in by later parts.
+> **In progress.** This is part 6 of the kit: the app shell, demo mode, the Ivora client, the team (staff sign-in and roles on Supabase), onboarding (company details, brand, Stripe status), chargers (add, test, QR stickers), the Live view (map and list, status and faults, remote start, stop, reset and unlock) and pricing (tariffs with per-kWh, time-of-use, idle and session fees; free and private chargers), plus a roaming placeholder (OCPI publishing settings). Sections marked "Coming soon" are filled in by later parts.
 
 An operations app for small charging operators (CPOs) with no developers on staff. You fork it, put your own name on it, connect your Ivora project and go live: onboarding, chargers, live sessions, pricing, reports and your team in one place, on your own domain.
 
@@ -37,6 +37,7 @@ The design brief, the approved mock and the palette are `brand/BRIEF.md`, `brand
 - **Chargers:** add a charger (site, station and a random connection password), run a connection test and an optional remote start and stop test, print a QR sticker per connector, edit and remove. See [Chargers](#chargers) below.
 - **Live:** a map and a list of sites, chargers and connectors with live status (online, offline, faulted; each connector's status), open and recent faults, sessions charging now, and remote start, stop, reset and unlock. See [Live](#live) below.
 - **Pricing:** tariffs with a per-kWh price, time-of-use periods, an idle fee after a grace period and an optional session fee, or free; previews priced by Ivora's own simulation; a new Ivora tariff for every change; a tariff per charger or connector; private chargers. See [Pricing](#pricing) below.
+- **Roaming (placeholder):** Settings → Roaming publishes your sites to Ivora's OCPI roaming partners (off by default), with the operator name, website and time zone partners show, which sites to leave out, and a request for your own party ID with Ivora's approval status. See [Roaming](#roaming-placeholder) below.
 - **Setup checklist** on the Overview, for owners and managers: company details, brand, Stripe ready, first charger and first price (a tariff assigned to a charger).
 - **Sections:** Reports is a placeholder marked "Coming soon".
 
@@ -112,6 +113,22 @@ Owners and managers only (the section, every page and every server action check 
 - **Free and private chargers:** a free tariff has zero price and no hold. A private charger has no public QR checkout: its sticker page says it is for staff and RFID card holders only (who start it with their card, or staff from Live). **"Private" is enforced by the kit only:** Ivora does not know about it, so Ivora-hosted payment pages, a QR code shown on the charger's own screen and roaming partners over OCPI are not blocked by it. So treat it as "no QR checkout from this kit", not as a block on public charging.
 - **Demo mode** starts with two sample tariffs ("Sample: Standard" with an evening peak period, idle and session fees; "Sample: Free staff charging") on the sample chargers, DEMO-MARKET-01 private. Your tariffs and assignments stay in your browser's cookie. Previews are priced offline on the server by a demo stand-in for Ivora's simulation (`lib/server/ivora/demo-pricing.ts`, the documented rules for the elements the kit builds), labelled "Demo". Nothing is sent to Ivora.
 
+### Roaming (placeholder)
+
+A placeholder for OCPI roaming: it sets what Ivora publishes about your network to its roaming partners (maps, navigation apps and other networks' driver apps) and nothing else. **Roaming payments (settling roaming charges with partners) are not part of the kit; they come later as a separate add-on.** Owners and managers only: the page and every server action check the role on the server.
+
+- **One settings object in Ivora:** the page reads `GET /ocpi` and saves with `PUT /ocpi`. The kit keeps no copy (no table, no migration). `PUT` replaces every setting and omitted fields return to their defaults, so every save sends the whole object: what the form edits, unpublished sites the page did not list, and the connector defaults the kit does not edit (sent back as Ivora last answered them).
+- **Publish:** off by default. Publishing needs an operator name (partners show it as the operator and owner of your sites). The page says whether partners receive your sites now (`published`) and why not: publishing off, no operator name, a network Ivora keeps private, or an Ivora environment that does not serve OCPI yet (`versions_url` is null; the settings take effect once it does).
+- **Website and time zone:** an `https` website shown with the operator name, and an IANA zone (Region/City) for sites without their own; a site with neither is not published.
+- **Sites to publish:** every site is listed with a tick; untick one to keep it off roaming maps (`excluded_location_ids`, at most 1,000). New sites are published until you untick them.
+- **Your own party ID:** the country code and party ID a national registry issued you. Ivora checks you hold it before using it; the page shows **Waiting for Ivora**, **Approved** or **Not approved** with Ivora's note. Until it is approved, partners see your sites under Ivora's shared party `US*IVR`, with your operator name. Leave both fields empty to use the shared party.
+- **EVSE IDs (read only):** the IDs partners know each charging point by. Ivora generates `<party>*E<station>*<evse>`; IDs imported from a previous system (after your party is approved) are listed with whether each one is used now. The kit does not import them.
+- **Errors:** `409 ocpi_tenant_private` ("Ivora keeps this network private…": save with publishing off, or contact Ivora support) and `409 ocpi_party_in_use` ("Ivora has already approved party … for another operator…": contact Ivora support with the registry entry, or use the shared party) get their own messages; other errors show Ivora's code and request ID. The form checks the same rules as the API first (operator name to publish, `https` website, two-letter country code, three-character party ID, not `US*IVR`).
+- **Safe saves:** each save names the settings' `updated_at` the page was loaded at; if someone saved in between, the save is refused with "Reload…" rather than overwriting their change. The `Idempotency-Key` is `cpo-ocpi-settings-<hash of that revision and the body>-put`, so a retry of the same save is answered once.
+- **Demo mode** starts with publishing off and no party. Settings stay in your browser's cookie and nothing is sent to Ivora. Demo-only buttons play Ivora staff approving or rejecting your party request, and party `US*ZZZ` belongs to "another sample operator" to show `ocpi_party_in_use`.
+
+![Roaming settings in demo mode](docs/screens/roaming-desktop-light.png)
+
 ### QR codes on your own domain
 
 Stickers stay on a wall for years, so their QR codes point at your own domain, read from `PUBLIC_BASE_URL` (or `APP_URL` if that is not set; never the hosting provider's default URL). Live mode refuses to show printable stickers until it is a stable `https://` origin of your own, and refuses:
@@ -125,12 +142,12 @@ Stickers stay on a wall for years, so their QR codes point at your own domain, r
 
 ### Roles
 
-| Role       | May                                                                                                                          |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Owner      | Everything, including prices and inviting, promoting and removing owners.                                                    |
-| Manager    | Company details, brand and payments; prices and tariffs; remove chargers; invite, change and remove technicians and viewers. |
-| Technician | Add, test and edit chargers, print stickers, and start, stop, reset and unlock chargers in Live.                             |
-| Viewer     | Read the overview, chargers, Live and reports. Cannot change anything.                                                       |
+| Role       | May                                                                                                                                            |
+| ---------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| Owner      | Everything, including prices and inviting, promoting and removing owners.                                                                      |
+| Manager    | Company details, brand and payments; prices and tariffs; roaming settings; remove chargers; invite, change and remove technicians and viewers. |
+| Technician | Add, test and edit chargers, print stickers, and start, stop, reset and unlock chargers in Live.                                               |
+| Viewer     | Read the overview, chargers, Live and reports. Cannot change anything.                                                                         |
 
 Nobody can remove themselves; ask another owner. Roles are stored in the `cpo_staff` table and checked on the server, never read from user metadata. Every page and every server action starts with `requireRole(min)` from [`lib/server/auth.ts`](lib/server/auth.ts), which later modules use too.
 
@@ -233,6 +250,8 @@ All paths are under `/v1/tenants/{tenant_id}` (except the Stripe account, under 
 | Pricing    | Preview, grace check       | `POST /tariffs/simulate` (stores nothing)                                                                                                                  | `billing:read`                                                    |
 | Pricing    | Chargers and connectors    | `GET /stations`, `GET /stations/{station_id}`, `GET /locations`                                                                                            | `stations:read`                                                   |
 | Live       | Webhook registration       | `POST /webhooks`, `GET /webhooks`, `POST /webhooks/{id}/test`, `GET /webhooks/{id}/deliveries`, `DELETE /webhooks/{id}` (script)                           | `webhooks:write`                                                  |
+| Roaming    | Read the settings          | `GET /ocpi`, `GET /ocpi/evse-ids`, `GET /locations`, `GET /stations` (charger names)                                                                       | `stations:read`                                                   |
+| Roaming    | Save the settings          | `PUT /ocpi` (the whole object, with `Idempotency-Key`)                                                                                                     | `stations:write`                                                  |
 | Team       | None                       | Staff and roles live in Supabase                                                                                                                           | None                                                              |
 | Onboarding | Driver-page branding       | `PUT /branding` (with `Idempotency-Key`)                                                                                                                   | `stations:write`                                                  |
 | Onboarding | Logo                       | `PUT /branding/logo` (raw image, with `Idempotency-Key`)                                                                                                   | `stations:write`                                                  |
@@ -252,6 +271,7 @@ So the kit's key needs `stations:read`, `stations:write`, `stations:control` (th
 - Chargers: the connection test reads Ivora's view of the station; it does not ask the charger for a fresh heartbeat. The remote test needs `stations:control`; without it the rest of the module still works. Renaming a charger's connection name, EVSE and connector edits and charger configuration are not in the kit (use the Ivora dashboard). Sticker codes are created per connector Ivora reports; add codes for new connectors from the charger's page.
 - `/c/<code>` shows the price but takes no payment until the driver payment flow lands.
 - Live: sessions come from the latest 100 transactions (the API's largest page), so a session older than the latest 100 is not shown as running. Times are shown in UTC. The map has one marker per site with coordinates; set them on the location in Ivora. Commands are start, stop, reset and unlock; availability, firmware and diagnostics stay in the Ivora dashboard. Demo mode does not simulate an uncertain command; the unit tests cover it.
+- Roaming is a placeholder: publishing settings and the party request only. Roaming payments come later as a separate add-on. Ivora staff approve party IDs and import EVSE IDs; the kit shows both but changes neither. Connector defaults for roaming (`connector_defaults`) are kept as they are, not edited.
 - Next parts: reports and the driver payment flow.
 
 ## Checks
