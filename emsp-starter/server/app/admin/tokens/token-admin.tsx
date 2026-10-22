@@ -154,7 +154,8 @@ export function TokenAdmin() {
       >
         <p className="muted">
           The card joins the driver&apos;s contract. The driver needs an app
-          token first.
+          token first. Until RFID billing is available, cards are pushed as
+          NEVER and refused at authorization: they cannot start charging yet.
         </p>
         <DriverField />
         <label>
@@ -175,7 +176,6 @@ export function TokenAdmin() {
           Expires (optional)
           <input name="expiresAt" type="date" />
         </label>
-        <WhitelistField />
       </TokenCard>
 
       <TokenCard

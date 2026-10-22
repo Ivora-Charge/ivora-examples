@@ -45,6 +45,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <Link href="/">Overview</Link>
             <Link href="/admin/peers">CPO peers</Link>
             <Link href="/admin/tokens">Driver tokens</Link>
+            <Link href="/admin/payments">Payments</Link>
+            <Link href="/admin/sign-in">Sign in</Link>
           </nav>
         </header>
         <main id="main" tabIndex={-1}>

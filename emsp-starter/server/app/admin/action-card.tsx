@@ -5,6 +5,7 @@ import { useActionState, type ReactNode } from "react";
 /** What every admin action returns: a message, plus whatever its form shows. */
 export type CardState = { ok?: boolean; message?: string };
 
+/** Only asked when the admin is not signed in (ADMIN_SECRET deployments). */
 function SecretField() {
   return (
     <label>
@@ -13,13 +14,13 @@ function SecretField() {
         name="adminSecret"
         type="password"
         autoComplete="current-password"
-        required
       />
+      <span className="muted">Leave empty when you are signed in.</span>
     </label>
   );
 }
 
-/** One admin action: a form with the admin secret, and its result below. */
+/** One admin action: a form (with the admin secret field), and its result below. */
 export function ActionCard<S extends CardState>({
   id,
   title,
