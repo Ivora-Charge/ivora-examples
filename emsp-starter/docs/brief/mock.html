@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Plugroam: find a charger (brief mock)</title>
+    <title>Kilolane: find a charger (brief mock)</title>
     <style>
       @font-face {
         font-family: "Bricolage";
@@ -39,6 +39,8 @@
         --busy: #8a5300;
         --down: #b4261f;
         --on-status: #ffffff;
+        /* Focus ring: 3:1 or more against everything it touches (ink here, flare in dark). */
+        --focus: #16132e;
         --line: color-mix(in srgb, var(--ink) 14%, transparent);
         --tint: color-mix(in srgb, var(--accent) 9%, transparent);
         --shadow:
@@ -70,6 +72,7 @@
         --busy: #ffb347;
         --down: #ff8a7e;
         --on-status: #0f0d1e;
+        --focus: #ffc83d;
         --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 12px 32px rgb(0 0 0 / 0.5);
         --land: #15132a;
         --block: #1b1934;
@@ -88,6 +91,8 @@
         height: 100%;
       }
       body {
+        display: flex;
+        flex-direction: column;
         margin: 0;
         background: var(--bg);
         color: var(--ink);
@@ -115,18 +120,18 @@
       }
 
       /* Demo strip: always on top, never hidden */
+      /* Wraps on narrow screens rather than cutting its words off. */
       .demo {
-        height: 34px;
+        flex: none;
+        min-height: 34px;
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 0 20px;
+        padding: 6px 20px;
         background: var(--flare);
         color: var(--on-flare);
         font-size: 0.8125rem;
         font-weight: 600;
-        white-space: nowrap;
-        overflow: hidden;
       }
       .demo b {
         font-family: var(--display);
@@ -137,13 +142,14 @@
         padding: 1px 8px;
         border-radius: 6px;
       }
-      .demo span {
-        overflow: hidden;
-        text-overflow: ellipsis;
+      :focus-visible {
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
       }
 
       .app {
-        height: calc(100% - 34px);
+        flex: 1;
+        min-height: 0;
         display: grid;
         grid-template-columns: 440px 1fr;
       }
@@ -337,8 +343,9 @@
 
       /* Power tile: the shape every charger takes, in list and on map */
       .tile {
-        width: 56px;
-        height: 56px;
+        min-width: 3.5rem;
+        min-height: 3.5rem;
+        padding: 4px;
         border-radius: 16px;
         display: grid;
         place-items: center;
@@ -354,7 +361,7 @@
         font-variant-numeric: tabular-nums;
       }
       .tile small {
-        font-size: 0.625rem;
+        font-size: 0.75rem;
         font-weight: 600;
         letter-spacing: 0.08em;
         text-transform: uppercase;
@@ -520,7 +527,7 @@
         font-size: 1.375rem;
       }
       .cluster small {
-        font-size: 0.6875rem;
+        font-size: 0.75rem;
         font-weight: 600;
       }
       .me {
@@ -558,7 +565,7 @@
         position: absolute;
         right: 8px;
         bottom: 6px;
-        font-size: 0.6875rem;
+        font-size: 0.75rem;
         color: var(--muted);
         background: color-mix(in srgb, var(--surface) 80%, transparent);
         padding: 2px 6px;
@@ -778,6 +785,10 @@
           box-shadow: 0 -10px 30px rgb(0 0 0 / 0.18);
           background: var(--bg);
         }
+        .attrib {
+          z-index: 2;
+          bottom: calc(76px + 420px + 6px);
+        }
         .grab {
           display: block;
           width: 44px;
@@ -806,8 +817,8 @@
           gap: 12px;
         }
         .place .tile {
-          width: 52px;
-          height: 52px;
+          min-width: 3.25rem;
+          min-height: 3.25rem;
         }
         .tabs {
           z-index: 3;
@@ -1019,7 +1030,7 @@
         <div class="grab" aria-hidden="true"></div>
         <div class="rb-head">
           <div class="brand">
-            <svg aria-hidden="true"><use href="#mark" /></svg>plugroam
+            <svg aria-hidden="true"><use href="#mark" /></svg>kilolane
           </div>
           <button class="avatar" aria-label="Account, signed in as Sam">
             S
@@ -1240,7 +1251,7 @@
 
         <div class="phone-top">
           <div class="brand">
-            <svg aria-hidden="true"><use href="#mark" /></svg>plugroam
+            <svg aria-hidden="true"><use href="#mark" /></svg>kilolane
           </div>
           <button class="fab" aria-label="Show my location">
             <svg width="22" height="22"><use href="#i-locate" /></svg>

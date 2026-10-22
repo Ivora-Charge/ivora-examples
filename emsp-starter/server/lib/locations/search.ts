@@ -18,6 +18,7 @@ import {
   displayPrice,
   isFreeTariff,
   primaryTariff,
+  type DisplayComponent,
   type DisplayPrice,
 } from "./pricing";
 import {
@@ -291,14 +292,44 @@ export type LocationSummary = {
   opening_times?: Location["opening_times"];
   evse_count: number;
   available_count: number;
+  /** How many EVSEs are in each status, so an app can tell "in use" from "out of order". */
+  status_counts: Partial<Record<EvseStatus, number>>;
   /** EVSEs matching the search filters. */
   matching_evse_count: number;
   max_power_kw: number;
   connector_standards: ConnectorType[];
-  /** From the cheapest-looking connector tariff; null when no tariff is known. */
-  price: { free: boolean; summary: string } | null;
+  /**
+   * From the cheapest-looking connector tariff; null when no tariff is known. `lead`
+   * is its main price component (energy first), for apps that format prices in the
+   * driver's own language; absent when free.
+   */
+  price: {
+    free: boolean;
+    summary: string;
+    currency: string;
+    lead?: LeadPrice;
+  } | null;
   last_updated: string;
 };
+
+export type LeadPrice = Pick<
+  DisplayComponent,
+  "type" | "unit" | "priceE4" | "vatIncluded"
+>;
+
+/** The component a list shows first: energy, else the first one that costs something. */
+function leadPrice(p: DisplayPrice): LeadPrice | undefined {
+  const paid = p.components.filter((c) => c.priceE4 > 0);
+  const c = paid.find((x) => x.type === "ENERGY") ?? paid[0];
+  return c
+    ? {
+        type: c.type,
+        unit: c.unit,
+        priceE4: c.priceE4,
+        vatIncluded: c.vatIncluded,
+      }
+    : undefined;
+}
 
 export type ConnectorDetail = {
   id: string;
@@ -354,6 +385,8 @@ function summarise(
     .filter((t): t is Tariff => !!t);
   const free = prices.find(isFreeTariff);
   const shown = free ?? prices[0];
+  const display = shown ? displayPrice(shown) : undefined;
+  const lead = display && !display.free ? leadPrice(display) : undefined;
   const summary: LocationSummary = {
     id: locationAppId({
       peerId: s.peerId,
@@ -370,11 +403,20 @@ function summarise(
     time_zone: l.time_zone,
     evse_count: evses.length,
     available_count: evses.filter((e) => e.status === "AVAILABLE").length,
+    status_counts: evses.reduce<Partial<Record<EvseStatus, number>>>(
+      (n, e) => ({ ...n, [e.status]: (n[e.status] ?? 0) + 1 }),
+      {},
+    ),
     matching_evse_count: matching,
     max_power_kw: kw(Math.max(0, ...connectors.map(connectorPowerW))),
     connector_standards: [...new Set(connectors.map((c) => c.standard))],
-    price: shown
-      ? { free: isFreeTariff(shown), summary: displayPrice(shown).summary }
+    price: display
+      ? {
+          free: display.free,
+          summary: display.summary,
+          currency: display.currency,
+          ...(lead ? { lead } : {}),
+        }
       : null,
     last_updated: l.last_updated,
   };

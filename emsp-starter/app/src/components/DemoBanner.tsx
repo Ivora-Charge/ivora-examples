@@ -1,15 +1,41 @@
 import { StyleSheet, Text, View } from "react-native";
-import { color, font, fontSize, fontWeight, space } from "../theme";
+import { t } from "../i18n";
+import { fontSize, radius, space, type, useScale, useTheme } from "../theme";
 
-/** Shown on every screen while the app or its server is in demo mode. */
+/**
+ * The flare strip on every screen while the app or its server is in demo mode. It
+ * cannot be dismissed, and it wraps rather than cuts its text on narrow screens.
+ */
 export function DemoBanner({ offline }: { offline: boolean }) {
+  const { c } = useTheme();
+  const { fs } = useScale();
   return (
-    <View style={styles.banner} role="status" testID="demo-banner">
-      <Text style={styles.text}>
-        <Text style={styles.badge}>Demo</Text>{" "}
-        {offline
-          ? "Offline sample data. Nothing is sent anywhere and no card is charged."
-          : "The server is in demo mode, with sample data from a mock CPO. No card is charged and no charger is contacted."}
+    <View
+      style={[styles.banner, { backgroundColor: c.demoBackground }]}
+      role="status"
+      testID="demo-banner"
+    >
+      <Text
+        style={[
+          type.heading,
+          styles.badge,
+          {
+            backgroundColor: c.onFlare,
+            color: c.flare,
+            fontSize: fs(fontSize.xs),
+          },
+        ]}
+      >
+        {t("demo.badge").toUpperCase()}
+      </Text>
+      <Text
+        style={[
+          type.strong,
+          styles.text,
+          { color: c.demoText, fontSize: fs(fontSize.sm) },
+        ]}
+      >
+        {offline ? t("demo.offline") : t("demo.server")}
       </Text>
     </View>
   );
@@ -17,16 +43,18 @@ export function DemoBanner({ offline }: { offline: boolean }) {
 
 const styles = StyleSheet.create({
   banner: {
-    backgroundColor: color.demoBackground,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: space.sm + space.xs,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
   },
-  text: {
-    color: color.demoText,
-    fontFamily: font.body,
-    fontSize: fontSize.sm,
-  },
   badge: {
-    fontWeight: fontWeight.bold,
+    paddingHorizontal: space.sm,
+    paddingVertical: 2,
+    borderRadius: radius.sm,
+    letterSpacing: 1,
+    overflow: "hidden",
   },
+  text: { flex: 1, flexShrink: 1 },
 });

@@ -15,9 +15,20 @@ describe("brand tokens", () => {
     const css = cssVariables();
     expect(css).toContain(`--color-primary: ${brand.color.primary};`);
     expect(css).toContain("--color-demo-background:");
-    expect(css).toContain("--font-body: system-ui");
+    expect(css).toContain(`--font-body: "Instrument Sans", system-ui`);
     expect(css).toContain("--space-md: 1rem;");
-    expect(css).toContain("--radius-md: 10px;");
+    expect(css).toContain(`--radius-md: ${brand.radius.md}px;`);
+  });
+
+  it("switch every colour in dark mode", () => {
+    expect(Object.keys(brand.colorDark).sort()).toEqual(
+      Object.keys(brand.color).sort(),
+    );
+    const dark = cssVariables().split("@media (prefers-color-scheme: dark)")[1];
+    expect(dark).toContain(`--color-primary: ${brand.colorDark.primary};`);
+    expect(dark).toContain(
+      `--color-background: ${brand.colorDark.background};`,
+    );
   });
 
   it("are the only source of colours in the stylesheet", () => {

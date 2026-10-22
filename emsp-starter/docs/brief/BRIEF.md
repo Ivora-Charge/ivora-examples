@@ -1,12 +1,10 @@
 # SQD-46 brief: eMSP Starter brand (driver app and admin web)
 
-This is the brief stage only. No app or server code changes here. The mock is a static page (`mock.html`), and the screenshots sit next to it. The identity covers the driver app (this part, 10/13) and the admin web (SQD-44 follows it). Building the app starts after the owner approves this brief.
+The owner approved this brief on 2026-10-22, with **Kilolane** as the name. The driver app (part 10/13) is built from it: the tokens are in `server/brand/tokens.json`, and the app's README has screenshots. The mock is a static page (`mock.html`), and its screenshots sit next to it. The identity covers the driver app and the admin web.
 
 ## Name
 
-Lead: **Plugroam** (plug + roam). Roaming is what an eMSP does: one app and one account, charging on any CPO's network over OCPI. It is a coined name, and lowercase in the wordmark. Renaming it means editing `name` and `shortName` in `server/brand/tokens.json`, then running `npm run brand:sync`.
-Alternates: **Wattaway**, **Kilolane**.
-No trademark or collision search has been done, so the release manager's quick check is still needed.
+**Kilolane** (kilowatt + lane): the lane you take to the next charge, sized in kW. It is a coined name, lowercase in the wordmark. The owner chose it from the brief's candidate names. Renaming it means editing `name` and `shortName` in `server/brand/tokens.json`, running `npm run brand:sync`, and setting `expo.name` in `app/app.json`.
 
 ## Mood and audience
 
@@ -25,13 +23,13 @@ The look is deliberately unlike existing charging apps. The brand colour is viol
 | `muted`    | `#57536F` | `#AAA5C8` | Secondary text, labels                              |
 | `accent`   | `#4B2ED3` | `#A597FF` | Brand violet: primary action, clusters, you, active |
 | `onAccent` | `#FFFFFF` | `#160F3A` | Text on accent                                      |
-| `flare`    | `#FFC83D` | `#FFC83D` | Demo strip, selected charger ring, focus ring       |
+| `flare`    | `#FFC83D` | `#FFC83D` | Demo strip, selected charger ring, focus (dark)     |
 | `onFlare`  | `#16132E` | `#16132E` | Text on flare                                       |
 | `free`     | `#0B6B4C` | `#5AD3A2` | Available                                           |
 | `busy`     | `#8A5300` | `#FFB347` | In use / partly available                           |
 | `down`     | `#B4261F` | `#FF8A7E` | Out of order, errors                                |
 
-`onStatus` (text on a filled `free` tile) is `#FFFFFF` / `#0F0D1E`. Lines are `ink` at 14% alpha and tints are `accent` at 9%, not separate colours. `flare` is never used as text on `bg` or `surface` (1.4:1 in light). It only ever fills a shape, with `onFlare` text, or rings one.
+`onStatus` (text on a filled `free` tile) is `#FFFFFF` / `#0F0D1E`. The **focus ring** is 3 px, at least 3:1 against everything it touches: `ink` (`#16132E`) in light mode, where flare would be 1.4:1 on the page, and `flare` in dark mode. Lines are `ink` at 14% alpha and tints are `accent` at 9%, not separate colours. `flare` is never used as text on `bg` or `surface` (1.4:1 in light). It only ever fills a shape, with `onFlare` text, or rings one.
 
 Status is never colour alone, because the tile shape and a glyph carry it too:
 
@@ -67,13 +65,13 @@ These are the AA pairs the brand unit test will check. All are at least 4.5:1 (W
 
 The scale is set in rem from a 16 px base, so dynamic type and browser zoom scale everything:
 
-- 12 px: labels.
+- 12 px: labels. Nothing is smaller.
 - 14 px: secondary text.
 - 16 to 17 px: body and list titles.
 - 22 px: tile kW.
 - 34 to 40 px: headlines and the big price.
 
-Tap targets are at least 44 px. The primary action and the search field are 56 to 60 px.
+Tap targets are at least 44 px. The primary action and the search field are 56 to 60 px. Status tiles have a minimum size, not a fixed one, so they grow with dynamic type.
 
 ## Layout idea
 
@@ -90,7 +88,7 @@ Tap targets are at least 44 px. The primary action and the search field are 56 t
   - The charger detail floats as a card on the right. It has a violet header, the price from the tariff, the connectors with EVSE IDs and status, opening hours, and **Directions** and **Charge here**.
 - **Both:** every charger is a rounded-square **power tile** showing its maximum kW, in the list and on the map. Clusters are violet discs with a count, and you are a violet dot. The selected charger gets a flare ring. Surfaces are flat, with a soft two-layer shadow only on floating things (pins, sheet, detail). Inputs and secondary buttons have a 2 px `ink` outline.
 
-**Demo mode** is a full-width flare strip, "DEMO: Sample chargers from a built-in test network. Nothing charges, no card is charged." It sits on every screen and cannot be dismissed.
+**Demo mode** is a full-width flare strip, "DEMO: Sample chargers from a built-in test network. Nothing charges, no card is charged." It sits on every screen, cannot be dismissed, and wraps onto more lines on narrow screens rather than cutting its words off.
 
 ## Mark concept
 
@@ -99,8 +97,8 @@ The original mark (`logo.svg`) is a map pin tilted 12° (on the move), with the 
 ## Map (for the build stage)
 
 - **Library:** MapLibre (`react-map-gl/maplibre` on the web, `@maplibre/maplibre-react-native` on iOS and Android). It is open source, and the same style JSON works on every platform.
-- **Demo mode** needs no key and no paid service: a keyless vector style (a public OpenFreeMap or MapLibre demo style), with "© OpenStreetMap contributors" attribution always visible. The map's colours are restyled from the tokens above.
-- **Production:** you set the style URL and key per platform from env. The README for part 10 will cover the key requirements for each platform and the tile provider's usage policy.
+- **Demo mode** needs no key and no paid service: the app's own style on OpenFreeMap's keyless vector tiles, coloured from the `map*` tokens, with the OpenStreetMap attribution always visible above the sheet and the tab bar.
+- **Production:** you set the style URL (and its public, restricted key) from env. The app's README covers the key requirements for each platform and the tile provider's usage policy.
 
 ## Mocks
 
@@ -109,4 +107,4 @@ The original mark (`logo.svg`) is a map pin tilted 12° (on the move), with the 
 - `desktop-light.png` and `desktop-dark.png` at 1440 × 900.
 - `phone-light.png` and `phone-dark.png` at 390 × 844.
 
-`scrollWidth` equals the viewport width in all four, so there is no sideways scroll. On the phone, only the chip row scrolls sideways, inside its own container. Prices are the mock CPO's sample tariffs including 21% VAT. Distances and counts are invented for the mock, and the map is a hand-drawn SVG, not real tiles. The fonts the mock uses are in `fonts/`, with their OFL licence texts.
+`scrollWidth` equals the viewport width in all four, so there is no sideways scroll. On the phone, only the chip row scrolls sideways, inside its own container, and the demo strip wraps. Prices are the mock CPO's sample tariffs including 21% VAT. Distances and counts are invented for the mock, and the map is a hand-drawn SVG, not real tiles. The fonts the mock uses are in `fonts/`, with their OFL licence texts.
