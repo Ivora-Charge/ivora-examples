@@ -65,11 +65,17 @@ export default async function Page() {
             <Stat label="Connectors" value={r.overview.connectors} />
             <Stat label="Charging now" value={r.overview.activeSessions} />
             <Stat
-              label="Recent sessions"
-              value={formatKwh(r.overview.recentEnergyKwh)}
+              label="Energy charging now"
+              value={formatKwh(r.overview.activeEnergyKwh)}
               note={sessionsNote(r.overview)}
             />
           </section>
+          {!r.overview.sessionsComplete && (
+            <p className="muted" role="note">
+              The sessions may lag: some chargers have not been checked yet.
+              They are on the next load, or on <Link href="/live">Live</Link>.
+            </p>
+          )}
           <section className="card" aria-labelledby="chargers-heading">
             <h2 id="chargers-heading">
               Chargers

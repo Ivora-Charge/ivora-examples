@@ -65,3 +65,30 @@ test("skip link moves focus to the main content", async ({
   await skip.press("Enter");
   await expect(page.locator("main")).toBeFocused();
 });
+
+test("demo: screenshots of the Overview for the README (SCREENSHOT=1, desktop)", async ({
+  browser,
+  isMobile,
+}) => {
+  test.skip(!process.env.SCREENSHOT || isMobile, "only when asked, on desktop");
+  for (const [device, viewport, scale, fullPage] of [
+    ["desktop", { width: 1440, height: 953 }, 1, false],
+    ["phone", { width: 390, height: 844 }, 2, true],
+  ] as const)
+    for (const colorScheme of ["light", "dark"] as const) {
+      const context = await browser.newContext({
+        viewport,
+        deviceScaleFactor: scale,
+        colorScheme,
+        baseURL: test.info().project.use.baseURL,
+      });
+      const page = await context.newPage();
+      await page.goto("/");
+      await expect(page.getByText("Chargers online")).toBeVisible();
+      await page.screenshot({
+        path: `docs/screens/overview-${device}-${colorScheme}.png`,
+        fullPage,
+      });
+      await context.close();
+    }
+});
