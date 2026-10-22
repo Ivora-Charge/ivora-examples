@@ -150,6 +150,12 @@ export class SupabaseCommandStore implements CommandStore {
     return this.one(`id=${eq(id)}`);
   }
 
+  findByRequest(driverRef: string, type: CommandKind, requestId: string) {
+    return this.one(
+      `driver_ref=${eq(driverRef)}&type=${eq(type)}&request_id=${eq(requestId)}`,
+    );
+  }
+
   getByAuthorizationReference(ref: string) {
     return this.one(`authorization_reference=${eq(ref)}`);
   }
@@ -184,5 +190,16 @@ export class SupabaseCommandStore implements CommandStore {
       `emsp_commands?status=${inList([...OPEN_STATUSES])}&deadline_at=lte.${enc(now)}&select=*&order=deadline_at.asc&limit=${limit}`,
     );
     return rows.map(command);
+  }
+
+  async linkSession(id: string, sessionId: string, now: string) {
+    // Only while unlinked: of two links racing, one wins and the other reads it.
+    const [row] = await this.rest<CommandRow[]>(
+      "PATCH",
+      `emsp_commands?id=${eq(id)}&session_id=is.null&select=*`,
+      { session_id: sessionId, updated_at: now },
+      "return=representation",
+    );
+    return row ? command(row) : null;
   }
 }

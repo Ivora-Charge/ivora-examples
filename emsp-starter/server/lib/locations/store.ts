@@ -30,7 +30,8 @@ export type StoredTariff = {
   revision: string;
 };
 
-export type SyncModule = "locations" | "tariffs";
+/** Modules pulled from a CPO's Sender interface. Sessions and CDRs keep their state here too. */
+export type SyncModule = "locations" | "tariffs" | "sessions" | "cdrs";
 export type SyncMode = "full" | "incremental";
 
 /** A pull in progress, or interrupted: enough to resume at the next page. */

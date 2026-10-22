@@ -49,6 +49,13 @@ export class OcpiUnauthorizedError extends OcpiError {
 export class OcpiTransportError extends OcpiError {
   override name = "OcpiTransportError";
 }
+/**
+ * We refused to send the request at all: the peer's address is not one this server may
+ * call (peer-fetch.ts). Nothing reached the peer.
+ */
+export class OcpiNotSentError extends OcpiTransportError {
+  override name = "OcpiNotSentError";
+}
 
 /** Maps an OCPI status_code that is not a success to its error class. */
 export function errorClassFor(statusCode: number) {

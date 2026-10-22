@@ -360,7 +360,7 @@ describe("OCPI locations and tariffs tables", () => {
       `insert into public.emsp_ocpi_tariffs (peer_id, country_code, party_id, tariff_id,
          data, last_updated, seen_at)
        values ('${id}', 'ZZ', 'MCK', 'T', '[]', now(), now())`,
-      `insert into public.emsp_ocpi_sync_state (peer_id, module) values ('${id}', 'cdrs')`,
+      `insert into public.emsp_ocpi_sync_state (peer_id, module) values ('${id}', 'hubclientinfo')`,
       `insert into public.emsp_ocpi_sync_state (peer_id, module, run_id)
        values ('${id}', 'tariffs', gen_random_uuid())`,
     ];
