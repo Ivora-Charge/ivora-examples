@@ -150,6 +150,7 @@ const CODES: Record<string, [number, number] | "removed"> = {
   [CODE]: [9101, 91011],
   PRVT2345: [9102, 91021],
   FREE2345: [9103, 91031],
+  FRE22345: [9103, 91032],
   NPRC2345: [9104, 91041],
   GHST2345: "removed",
 };
@@ -230,7 +231,10 @@ function fakeIvora() {
     id: 9103,
     name: "CP-3",
     online: true,
-    connectors: [{ id: 91031, number: 1, status: "Available" }],
+    connectors: [
+      { id: 91031, number: 1, status: "Available" },
+      { id: 91032, number: 2, status: "Available" },
+    ],
   };
   const state = {
     progress: "awaiting_payment" as NonNullable<Bill["progress"]>,
@@ -244,6 +248,8 @@ function fakeIvora() {
     startCreatedAt: null as string | null,
     tokens: [] as TokenRecord[],
     transactions: [] as Transaction[],
+    /** Older sessions at the stations (other drivers, other tokens). */
+    history: [] as Transaction[],
   };
   const bill = (): Bill => ({
     id: BILL,
@@ -353,9 +359,20 @@ function fakeIvora() {
       status: "succeeded",
       result: { charger_status: "Accepted" },
     })),
-    listTransactions: vi.fn(async () => structuredClone(state.transactions)),
+    // Like Ivora's GET /transactions: oldest first by ID, paged with `after`, and items
+    // without the ID token or connector (only GET /transactions/{id} has those).
+    listTransactions: vi.fn(
+      async (o: { limit?: number; station_id?: number } = {}) =>
+        listed(o.station_id, 0, o.limit ?? 50).data as Transaction[],
+    ),
+    listTransactionsAfter: vi.fn(
+      async (o: { station_id: number; after: number; limit?: number }) =>
+        listed(o.station_id, o.after, o.limit ?? 100),
+    ),
     getTransaction: vi.fn(async (id: number) => {
-      const t = state.transactions.find((x) => x.id === id);
+      const t = [...state.history, ...state.transactions].find(
+        (x) => x.id === id,
+      );
       if (!t) throw new IvoraError(404, "transaction_not_found", "Unknown");
       return structuredClone(t);
     }),
@@ -373,6 +390,26 @@ function fakeIvora() {
       return t;
     }),
   };
+  function listed(stationId: number | undefined, after: number, limit: number) {
+    const rows = [...state.history, ...state.transactions]
+      .filter(
+        (t) =>
+          (stationId === undefined || t.station_id === stationId) &&
+          t.id > after,
+      )
+      .sort((a, b) => a.id - b.id);
+    const data = rows.slice(0, Math.min(limit, 100)).map((t) => ({
+      id: t.id,
+      station_id: t.station_id,
+      active: t.active,
+      started_at: t.started_at,
+      ended_at: t.ended_at,
+    }));
+    return {
+      data,
+      next_cursor: rows.length > data.length ? data[data.length - 1].id : null,
+    };
+  }
   /** The driver paid: Ivora's bill read then starts the charger. */
   const paid = (progress: NonNullable<Bill["progress"]> = "authorized") => {
     state.payment = "authorized";
@@ -1521,6 +1558,135 @@ describe("free sessions", () => {
     expect(s.detail).toMatch(/Nothing was charged/);
     // The connector is free again.
     expect((await loadChargePage(d, "FREE2345", OPERATOR)).closed).toBeNull();
+  });
+
+  it("finds a live free session behind more than 1,000 older ones, and labels it", async () => {
+    const c = clock();
+    const { d, api, cookie, state, live } = deps({ now: c.now });
+    // 1,200 earlier sessions at this charger, other drivers, oldest first in the list.
+    state.history = Array.from({ length: 1200 }, (_, i) => ({
+      id: i + 1,
+      station_id: 9103,
+      connector_id: 91031,
+      active: false,
+      id_token: "****OTHR",
+      started_at: "2025-06-01T08:00:00Z",
+      ended_at: "2025-06-01T09:00:00Z",
+      energy_wh: 10_000,
+    }));
+    const mine = req();
+    await startFree(d, mine);
+    // The free start itself reads no transactions list.
+    expect(api.listTransactions).not.toHaveBeenCalled();
+    expect(api.listTransactionsAfter).not.toHaveBeenCalled();
+    const token = (await live.getFreeToken(OP))!.idToken;
+    c.add(1);
+    state.transactions = [
+      {
+        id: 1201,
+        station_id: 9103,
+        connector_id: 91031,
+        active: true,
+        id_token: `****${token.slice(-4)}`,
+        started_at: new Date(c.t).toISOString(),
+        ended_at: null,
+        energy_wh: 1_200,
+      },
+    ];
+    expect((await driverSessions(d, "FREE2345", [mine]))[0]).toMatchObject({
+      label: "Charging (free)",
+      canStop: true,
+    });
+    expect(only(cookie)).toMatchObject({
+      kind: "free",
+      phase: "open",
+      transactionId: 1201,
+    });
+    // Only the new session was read in full; the old ones were paged past.
+    expect(
+      api.getTransaction.mock.calls.filter(([id]) => id !== 1201),
+    ).toHaveLength(0);
+    expect(await live.getTransactionMark(9103)).toBe(1200);
+    // Found by ID from now on: no more list pages.
+    const pages = api.listTransactionsAfter.mock.calls.length;
+    c.add(30);
+    state.transactions[0] = {
+      ...state.transactions[0],
+      active: false,
+      ended_at: new Date(c.t).toISOString(),
+    };
+    expect((await settle(d, cookie)).phase).toBe("settled");
+    expect(api.listTransactionsAfter).toHaveBeenCalledTimes(pages);
+  });
+
+  it("finds two free sessions at one station, whichever checkout looks first", async () => {
+    const c = clock();
+    const { d, cookie, state, live } = deps({ now: c.now });
+    const a = req();
+    await startFree(d, a, "FREE2345", "s1");
+    c.add(2);
+    const b = req();
+    await startFree(d, b, "FRE22345", "s2");
+    const token = (await live.getFreeToken(OP))!.idToken;
+    const session = (id: number, connector: number) => ({
+      id,
+      station_id: 9103,
+      connector_id: connector,
+      active: true,
+      id_token: `****${token.slice(-4)}`,
+      started_at: new Date(c.t).toISOString(),
+      ended_at: null,
+    });
+    state.transactions = [session(41, 91031), session(42, 91032)];
+    // B's page looks first; the scan gives A its session too.
+    expect((await driverSessions(d, "FRE22345", [b]))[0]).toMatchObject({
+      label: "Charging (free)",
+    });
+    const byRequest = (r: string) =>
+      cookie.state.records.find((x) => x.requestId === r)!;
+    expect(byRequest(a).transactionId).toBe(41);
+    expect(byRequest(b).transactionId).toBe(42);
+    // Long after, with the mark past both, each is still read by its own ID.
+    c.add(60);
+    expect((await driverSessions(d, "FREE2345", [a]))[0]).toMatchObject({
+      label: "Charging (free)",
+    });
+  });
+
+  it("takes a webhook's transaction ID as a hint, read from the API first", async () => {
+    const { d, api, cookie, state, live } = deps();
+    await startFree(d);
+    const token = (await live.getFreeToken(OP))!.idToken;
+    state.transactions = [
+      {
+        id: 77,
+        station_id: 9103,
+        connector_id: 91031,
+        active: true,
+        id_token: `****${token.slice(-4)}`,
+        started_at: new Date().toISOString(),
+        ended_at: null,
+      },
+    ];
+    await settleOpenCheckouts(d, { stationId: 9103, transactionId: 77 });
+    expect(only(cookie).transactionId).toBe(77);
+    expect(api.listTransactionsAfter).not.toHaveBeenCalled();
+    // Someone else's session in the event is not taken.
+    const other = deps();
+    await startFree(other.d);
+    other.state.transactions = [
+      { ...state.transactions[0], id: 78, id_token: "****OTHR" },
+    ];
+    await settleOpenCheckouts(other.d, { stationId: 9103, transactionId: 78 });
+    expect(only(other.cookie).transactionId).toBeNull();
+  });
+
+  it("stops starting new checkouts once the sweep's time budget is spent", async () => {
+    const { d } = deps();
+    await startFree(d, req(), "FREE2345", "s1");
+    await startFree(d, req(), "FRE22345", "s2");
+    expect(await settleOpenCheckouts(d, { budgetMs: -1 })).toBe(1);
+    expect(await settleOpenCheckouts(d)).toBe(2);
   });
 
   it("frees the connector when no session starts", async () => {

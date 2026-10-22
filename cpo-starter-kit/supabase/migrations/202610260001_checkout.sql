@@ -255,6 +255,36 @@ alter table public.cpo_free_tokens enable row level security;
 revoke all on public.cpo_free_tokens from public, anon, authenticated;
 grant all on public.cpo_free_tokens to service_role;
 
+-- Per-station transaction high-water mark. GET /transactions lists a station's
+-- sessions oldest first, without their ID token or connector, so the kit finds a new
+-- session (a free one, say) by paging on from the highest transaction ID it is already
+-- done with (after=<mark>) and reading each new candidate. The mark only moves up.
+create table if not exists public.cpo_transaction_marks (
+  station_id bigint primary key check (station_id > 0),
+  last_transaction_id bigint not null check (last_transaction_id >= 0),
+  updated_at timestamptz not null default now()
+);
+alter table public.cpo_transaction_marks enable row level security;
+revoke all on public.cpo_transaction_marks from public, anon, authenticated;
+grant all on public.cpo_transaction_marks to service_role;
+
+create or replace function public.cpo_advance_transaction_mark(p_station_id bigint, p_transaction_id bigint)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  if p_station_id is null or p_station_id <= 0
+     or p_transaction_id is null or p_transaction_id < 0 then
+    raise exception 'cpo_invalid' using errcode = 'P0001';
+  end if;
+  insert into public.cpo_transaction_marks (station_id, last_transaction_id)
+    values (p_station_id, p_transaction_id)
+  on conflict (station_id) do update
+    set last_transaction_id = excluded.last_transaction_id, updated_at = now()
+    where public.cpo_transaction_marks.last_transaction_id < excluded.last_transaction_id;
+end;
+$$;
+revoke all on function public.cpo_advance_transaction_mark(bigint, bigint) from public, anon, authenticated;
+grant execute on function public.cpo_advance_transaction_mark(bigint, bigint) to service_role;
+
 -- Pricing: when each tariff version's latest create attempt started. "Discard this
 -- draft" waits until that attempt can no longer be in flight, so a create Ivora
 -- finishes late is found and archived rather than left behind unused.

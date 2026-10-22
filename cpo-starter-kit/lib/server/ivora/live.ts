@@ -23,6 +23,7 @@ import type {
   TokenRecord,
   Transaction,
   TransactionDetail,
+  TransactionListItem,
 } from "./types";
 
 export interface LiveOptions {
@@ -383,6 +384,12 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
           `transactions${query({ limit: o.limit ?? 50, station_id: o.station_id })}`,
         )
       ).data;
+    },
+    listTransactionsAfter(o) {
+      return request<Page<TransactionListItem>>(
+        "GET",
+        `transactions${query({ station_id: o.station_id, after: o.after || undefined, limit: o.limit ?? 100 })}`,
+      );
     },
     // A PUT replaces the whole record, so repeating it is harmless; the key still
     // makes a retried request count once.

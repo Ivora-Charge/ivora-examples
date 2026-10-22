@@ -20,6 +20,7 @@ import {
   running,
   STARTABLE,
 } from "../live/service";
+import { scanNewTransactions } from "../live/transactions";
 import type { LiveStore } from "../live/types";
 import { stripeView } from "../onboarding/stripe";
 import { effectiveTariff } from "../pricing/service";
@@ -50,8 +51,17 @@ export interface CheckoutDeps {
   ivora: IvoraClient;
   chargers: Pick<ChargerStore, "resolveCode">;
   pricing: Pick<PricingStore, "load">;
-  /** Where the operator's free charging token is kept (the Live view's store). */
-  tokens: Pick<LiveStore, "getFreeToken" | "putFreeToken">;
+  /**
+   * Where the operator's free charging token is kept (the Live view's store), and each
+   * station's transaction high-water mark (lib/server/live/transactions.ts).
+   */
+  tokens: Pick<
+    LiveStore,
+    | "getFreeToken"
+    | "putFreeToken"
+    | "getTransactionMark"
+    | "advanceTransactionMark"
+  >;
   limiter: RateLimiter;
   /** Keys the rate-limit digests, so sources and connectors are never stored plain. */
   secret: string;
@@ -991,14 +1001,11 @@ export async function startFreeSession(
     );
 
   if (!rec) {
+    // The connector's own status decides (Available only): the transactions list
+    // carries no connector and runs oldest first, so it can't tell what runs here.
     let station: Station;
-    let txs: Transaction[];
     try {
       station = await d.ivora.getStation(found.stationId);
-      txs = await d.ivora.listTransactions({
-        station_id: found.stationId,
-        limit: 20,
-      });
     } catch (e) {
       if (!(e instanceof IvoraError)) throw e;
       log("check", e);
@@ -1011,10 +1018,7 @@ export async function startFreeSession(
     }
     const state = connectorState(station, found.connectorId);
     if (state.blocked) throw blockedError(state.blocked, state.status);
-    if (
-      !STARTABLE.has(state.status ?? "") ||
-      txs.some((t) => t.connector_id === found.connectorId && running(t))
-    )
+    if (!STARTABLE.has(state.status ?? ""))
       throw new CheckoutError(
         "in_use",
         `This connector reports “${state.status ?? "unknown"}”. A free session starts only on an Available connector: if your car is plugged in, unplug it, tap “Start free session”, then plug in.`,
@@ -1454,34 +1458,88 @@ async function step(d: CheckoutDeps, rec: CheckoutRecord, bill: Bill) {
   }
 }
 
-/** The free session's transaction: this connector, the free token, since the claim. */
+/** How long before its claim a free session's transaction may have started (clocks). */
+const FREE_MATCH_SLACK_MS = 60_000;
+
+/**
+ * Free sessions' transactions at one station, found from the station's high-water
+ * mark (see lib/server/live/transactions.ts): each new session is read in full and
+ * given to the unsettled free checkout it belongs to (the free token, as the API
+ * masks it; the checkout's connector; started at or after its claim). One scan for
+ * every such checkout at the station, so none moves the mark past another's session.
+ * A webhook's transaction ID is offered the same way.
+ */
+export async function findFreeTransactions(
+  d: CheckoutDeps,
+  stationId: number,
+  o: { transactionId?: number } = {},
+): Promise<void> {
+  const waiting = (
+    await d.store.listUnsettled({ stationId, limit: 50 })
+  ).filter((r) => r.kind === "free" && !r.transactionId);
+  if (!waiting.length) return;
+  const tokens = new Map<string, string | null>();
+  const tokenOf = async (operatorId: string) => {
+    if (!tokens.has(operatorId))
+      tokens.set(
+        operatorId,
+        (await d.tokens.getFreeToken(operatorId))?.idToken ?? null,
+      );
+    return tokens.get(operatorId)!;
+  };
+  const offer = async (t: Transaction) => {
+    for (const r of waiting) {
+      if (r.transactionId) continue;
+      if (
+        t.connector_id === r.connectorId &&
+        t.started_at &&
+        Date.parse(t.started_at) >=
+          Date.parse(r.createdAt) - FREE_MATCH_SLACK_MS &&
+        isFreeSession(t, await tokenOf(r.operatorId))
+      ) {
+        await d.store.record(r.operatorId, r.id, { transactionId: t.id });
+        r.transactionId = t.id;
+        return;
+      }
+    }
+  };
+  if (o.transactionId) {
+    try {
+      await offer(await d.ivora.getTransaction(o.transactionId));
+    } catch (e) {
+      if (!(e instanceof IvoraError && e.status === 404)) throw e;
+    }
+    if (waiting.every((r) => r.transactionId)) return;
+  }
+  await scanNewTransactions(
+    { ivora: d.ivora, marks: d.tokens, now: d.now },
+    stationId,
+    {
+      since:
+        Math.min(...waiting.map((r) => Date.parse(r.createdAt))) -
+        FREE_MATCH_SLACK_MS,
+      offer,
+    },
+  );
+}
+
+/** The free session's transaction: found by findFreeTransactions, then read by ID. */
 async function freeTransaction(
   d: CheckoutDeps,
   rec: CheckoutRecord,
 ): Promise<Transaction | null> {
-  if (rec.transactionId) {
-    try {
-      return await d.ivora.getTransaction(rec.transactionId);
-    } catch (e) {
-      if (e instanceof IvoraError && e.status === 404) return null;
-      throw e;
-    }
+  let id = rec.transactionId;
+  if (!id) {
+    await findFreeTransactions(d, rec.stationId);
+    id = (await d.store.get(rec.operatorId, rec.id))?.transactionId ?? null;
   }
-  const token = (await d.tokens.getFreeToken(rec.operatorId))?.idToken ?? null;
-  const since = Date.parse(rec.createdAt) - 60_000;
-  const txs = await d.ivora.listTransactions({
-    station_id: rec.stationId,
-    limit: 20,
-  });
-  return (
-    txs.find(
-      (t) =>
-        t.connector_id === rec.connectorId &&
-        isFreeSession(t, token) &&
-        t.started_at !== null &&
-        Date.parse(t.started_at) >= since,
-    ) ?? null
-  );
+  if (!id) return null;
+  try {
+    return await d.ivora.getTransaction(id);
+  } catch (e) {
+    if (e instanceof IvoraError && e.status === 404) return null;
+    throw e;
+  }
 }
 
 /** A free session: its transaction, if any (returned), and whether it ended. */
@@ -1568,19 +1626,48 @@ export async function settleCheckout(
 }
 
 /**
+ * The sweep starts no new checkout after this long, so it ends inside its route's
+ * maxDuration (60 s): one checkout makes a few Ivora reads, each up to 20 s with 429
+ * waits. Those left wait for the next sweep, least recently checked first.
+ */
+export const SETTLE_BUDGET_MS = 25_000;
+
+/**
  * Settles the checkouts still in progress, least recently checked first: the server's
- * regular sweep (/api/cron/settle) or, with a station, a webhook's cue. Returns how
- * many were looked at.
+ * regular sweep (/api/cron/settle) or, with a station, a webhook's cue (and the
+ * transaction ID the event carries, if any). Returns how many were looked at.
  */
 export async function settleOpenCheckouts(
   d: CheckoutDeps,
-  o: { stationId?: number; limit?: number } = {},
+  o: {
+    stationId?: number;
+    transactionId?: number;
+    limit?: number;
+    budgetMs?: number;
+  } = {},
 ): Promise<number> {
+  const now = d.now ?? Date.now;
+  const started = now();
+  const budget = o.budgetMs ?? SETTLE_BUDGET_MS;
+  if (o.stationId && o.transactionId) {
+    try {
+      await findFreeTransactions(d, o.stationId, {
+        transactionId: o.transactionId,
+      });
+    } catch (e) {
+      // Settlement below finds it from the station's mark instead.
+      if (!(e instanceof IvoraError)) throw e;
+      log("free session", e);
+    }
+  }
   const recs = await d.store.listUnsettled({
     stationId: o.stationId,
     limit: o.limit ?? 25,
   });
+  let checked = 0;
   for (const r of recs) {
+    if (checked > 0 && now() - started > budget) break;
+    checked++;
     try {
       await settleCheckout(d, r);
     } catch (e) {
@@ -1590,7 +1677,7 @@ export async function settleOpenCheckouts(
       });
     }
   }
-  return recs.length;
+  return checked;
 }
 
 // ---- What the operator sees in Live ----

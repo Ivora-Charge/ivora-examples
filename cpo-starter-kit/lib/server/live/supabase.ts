@@ -186,6 +186,24 @@ export function createSupabaseLiveStore(): LiveStore {
     putStaffToken: putToken("cpo_staff_tokens"),
     getFreeToken: getToken("cpo_free_tokens"),
     putFreeToken: putToken("cpo_free_tokens"),
+    async getTransactionMark(stationId) {
+      const { data } = check(
+        await svc()
+          .from("cpo_transaction_marks")
+          .select("last_transaction_id")
+          .eq("station_id", stationId)
+          .maybeSingle(),
+      );
+      return data ? data.last_transaction_id : null;
+    },
+    async advanceTransactionMark(stationId, transactionId) {
+      check(
+        await svc().rpc("cpo_advance_transaction_mark", {
+          p_station_id: stationId,
+          p_transaction_id: transactionId,
+        }),
+      );
+    },
     async recordEvent(e) {
       const { data } = check(
         await svc().rpc("cpo_record_ivora_event", {

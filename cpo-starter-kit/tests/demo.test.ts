@@ -107,6 +107,25 @@ describe("demo mode", () => {
     expect(await ivora.listLocations()).toHaveLength(locations.length + 1);
 
     expect((await ivora.listTransactions()).length).toBeGreaterThan(0);
+    // Shaped like the API's list: oldest first after the cursor, no token or connector.
+    const station = (await ivora.listTransactions())[0].station_id!;
+    const page = await ivora.listTransactionsAfter({
+      station_id: station,
+      after: 0,
+    });
+    expect(page.data.length).toBeGreaterThan(0);
+    const ids = page.data.map((t) => t.id);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    expect(page.data[0]).not.toHaveProperty("id_token");
+    expect(page.data[0]).not.toHaveProperty("connector_id");
+    expect(
+      (
+        await ivora.listTransactionsAfter({
+          station_id: station,
+          after: ids[ids.length - 1],
+        })
+      ).data,
+    ).toHaveLength(0);
     expect((await ivora.listAllStations()).data).toHaveLength(stations.length);
     expect((await ivora.listAllLocations()).truncated).toBe(false);
 
