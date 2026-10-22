@@ -1,16 +1,17 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { adminEnabled } from "@/lib/server/admin";
 import { ocpiUrls } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { DEMO_DRIVER_REF } from "@/lib/tokens/registry";
 import { TokenAdmin } from "./token-admin";
 
-export const metadata: Metadata = { title: "Driver tokens" };
+export const metadata: Metadata = { title: "Drivers and tokens" };
 
 export default function TokensPage() {
   return (
     <>
-      <h1>Driver tokens</h1>
+      <h1>Drivers and tokens</h1>
       <section className="card" aria-labelledby="about">
         <h2 id="about">Who can charge</h2>
         <p>
@@ -26,16 +27,14 @@ export default function TokensPage() {
             CPO. Look up the sample driver <code>{DEMO_DRIVER_REF}</code>.
           </p>
         )}
-        {!adminEnabled() && (
-          <p className="note">
-            Admin actions are disabled until <code>ADMIN_SECRET</code> (at least
-            32 characters) is set on the server.
-          </p>
-        )}
         <p className="note">
-          Temporary: drivers get their app token here until driver sign-in
-          arrives, and these actions ask for <code>ADMIN_SECRET</code> until
-          admin sign-in does.
+          Admin actions need an admin signed in (
+          <Link href="/admin/sign-in">sign in</Link>)
+          {adminEnabled() ? ", or the server's ADMIN_SECRET." : "."}
+        </p>
+        <p className="note">
+          Drivers get their app token at their first sign-in in the app. Use
+          this page for RFID cards, blocks and support.
         </p>
       </section>
       <TokenAdmin />

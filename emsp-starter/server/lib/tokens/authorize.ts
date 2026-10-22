@@ -1,5 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import { accountStore } from "@/lib/accounts/registry";
+import type { AccountStore } from "@/lib/accounts/store";
 import { OcpiProblem } from "@/lib/ocpi/errors";
 import { ocpiResponse, readJson, type OcpiContext } from "@/lib/ocpi/server";
 import {
@@ -29,16 +31,39 @@ import type { DriverToken } from "./store";
  */
 
 /**
- * The driver behind a token, as far as charging goes. Driver accounts and saved cards
- * arrive in part 7, which plugs its check in here; until then every driver is "ok" and
- * the answer rests on the token's own status.
+ * The driver behind a token, as far as charging goes: a restricted account may not
+ * charge (NOT_ALLOWED), and an account without a default card has no credit
+ * (NO_CREDIT). A token of a driver reference with no account (one an admin created
+ * before driver sign-in) rests on the token's own status.
  */
-export type DriverStanding = "ok" | "blocked" | "no_credit" | "not_allowed";
+export type DriverStanding =
+  "ok" | "blocked" | "no_credit" | "not_allowed" | "rfid_unbilled";
 
+/**
+ * Until RFID billing lands (a later part), an RFID card is NOT_ALLOWED: only the app
+ * charges, with a payment hold placed before START_SESSION, and no energy may be
+ * free. RFID cards are pushed with whitelist NEVER (manage.ts RFID_WHITELIST), so a
+ * CPO asks us here and never lets one charge unasked. RFID billing lifts both.
+ */
+export const RFID_CHARGING = false;
+
+/** Fails closed: when the account cannot be read, the driver may not charge. */
 export async function driverStanding(
-  _token: DriverToken,
+  token: DriverToken,
+  accounts: AccountStore = accountStore(),
 ): Promise<DriverStanding> {
-  return "ok";
+  if (token.type === "RFID" && !RFID_CHARGING) return "rfid_unbilled";
+  try {
+    const driver = await accounts.getDriver(token.driverRef);
+    if (!driver) return "ok";
+    if (driver.status !== "active") return "not_allowed";
+    return driver.defaultPaymentMethodId ? "ok" : "no_credit";
+  } catch (e) {
+    console.error(
+      `Reading the account of token ${token.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
+    );
+    return "not_allowed";
+  }
 }
 
 const INFO: Record<Exclude<AllowedType, "ALLOWED">, string> = {
@@ -47,6 +72,8 @@ const INFO: Record<Exclude<AllowedType, "ALLOWED">, string> = {
   NO_CREDIT: "No usable payment method on this account.",
   NOT_ALLOWED: "This driver may not charge here.",
 };
+
+const RFID_INFO = "Cards can't start charging yet. Start from the app.";
 
 /**
  * The answer for a token. Order: the token's own status (blocked, then expired), then
@@ -67,6 +94,11 @@ export function decide(
   else if (standing === "blocked") allowed = "BLOCKED";
   else if (standing === "no_credit") allowed = "NO_CREDIT";
   else if (standing === "not_allowed") allowed = "NOT_ALLOWED";
+  else if (standing === "rfid_unbilled")
+    return {
+      allowed: "NOT_ALLOWED",
+      info: { language: "en", text: RFID_INFO },
+    };
   return allowed === "ALLOWED"
     ? { allowed }
     : { allowed, info: { language: "en", text: INFO[allowed] } };

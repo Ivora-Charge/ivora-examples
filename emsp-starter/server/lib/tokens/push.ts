@@ -72,7 +72,9 @@ export function toOcpiToken(t: DriverToken, now = new Date()): Token {
     issuer: t.issuer,
     group_id: t.groupId,
     valid: tokenValid(t, now),
-    whitelist: t.whitelist,
+    // A card made before RFID billing was enforced may hold another value: a CPO
+    // still only ever sees NEVER for an RFID card (see RFID_WHITELIST).
+    whitelist: t.type === "RFID" ? "NEVER" : t.whitelist,
     last_updated: ocpiTimestamp(new Date(t.lastUpdated)),
   };
   if (t.visualNumber) token.visual_number = t.visualNumber;

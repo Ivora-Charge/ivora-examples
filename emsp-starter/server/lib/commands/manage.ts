@@ -73,7 +73,7 @@ export type CommandDeps = {
   peers: PeerStore;
   tokens: TokenStore;
   locations: LocationStore;
-  /** The payment hold before a start. Default: preAuth(), the stub until part 7. */
+  /** The payment hold before a start. Default: preAuth(), the card hold of lib/payments. */
   preAuth?: PreAuth;
   /** Whose session a CPO session is. Default: the driver whose start it links to. */
   sessionOwner?: SessionOwner;

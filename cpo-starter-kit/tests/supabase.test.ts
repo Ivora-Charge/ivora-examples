@@ -5,6 +5,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
+import { createSupabaseLiveStore } from "@/lib/server/live/supabase";
 import { inviteEmail, MailerError, ResendMailer } from "@/lib/server/mail";
 import {
   createSupabaseBackend,
@@ -185,5 +186,106 @@ describe("Resend mailer", () => {
     await expect(refused.send(email, "k-1")).rejects.toEqual(
       new MailerError(403),
     );
+  });
+});
+
+describe("Supabase session tracker", () => {
+  const saved = { ...process.env };
+  beforeEach(() => {
+    Object.assign(process.env, {
+      IVORA_API_KEY: "test-key",
+      IVORA_TENANT_ID: "42",
+      SUPABASE_URL: "https://supabase.example.test",
+      SUPABASE_ANON_KEY: "test-anon-key",
+      SUPABASE_SERVICE_ROLE_KEY: SERVICE_KEY,
+    });
+    delete process.env.DEMO_MODE;
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    process.env = { ...saved };
+  });
+
+  const sessionRow = (id: number, station: number, active: boolean) => ({
+    transaction_id: id,
+    station_id: station,
+    connector_id: 7,
+    connector_number: 1,
+    id_token: "****ABCD",
+    started_at: "2026-10-22T08:00:00Z",
+    ended_at: active ? null : "2026-10-22T09:00:00Z",
+    energy_wh: "1200",
+    active,
+    checked_at: "2026-10-22T09:59:00Z",
+    changed_at: "2026-10-22T09:59:00Z",
+  });
+
+  /** Answers like PostgREST for the filters the store uses. */
+  function table(rows: ReturnType<typeof sessionRow>[]) {
+    return fakeSupabase(({ url }) => {
+      const p = url.searchParams;
+      const eq = (k: string) => p.get(k)?.replace(/^eq\./, "");
+      const lt = Number(p.get("transaction_id")?.replace(/^lt\./, "") ?? NaN);
+      const out = rows
+        .filter(
+          (r) =>
+            (!p.has("active") || String(r.active) === eq("active")) &&
+            (!p.has("station_id") ||
+              String(r.station_id) === eq("station_id")) &&
+            (Number.isNaN(lt) || r.transaction_id < lt),
+        )
+        .sort((a, b) => b.transaction_id - a.transaction_id)
+        .slice(0, Number(p.get("limit") ?? 1000));
+      return Response.json(out);
+    });
+  }
+
+  it("reads every running session in keyset pages, past any cap, and only them", async () => {
+    const rows = [
+      ...Array.from({ length: 2_300 }, (_, i) => sessionRow(i + 1, 5, true)),
+      ...Array.from({ length: 600 }, (_, i) => sessionRow(5_000 + i, 5, false)),
+    ];
+    const calls = table(rows);
+    const list = await createSupabaseLiveStore().listActiveSessions();
+    expect(list.length).toBe(2_300);
+    expect(list[list.length - 1].transactionId).toBe(1);
+    expect(calls.length).toBe(3);
+    expect(
+      calls.every((c) => c.url.searchParams.get("active") === "eq.true"),
+    ).toBe(true);
+    expect(calls[1].url.searchParams.get("transaction_id")).toBe("lt.1301");
+  });
+
+  it("filters by station in the query, and pages ended sessions", async () => {
+    const calls = table([
+      sessionRow(1, 5, true),
+      sessionRow(2, 6, true),
+      ...Array.from({ length: 30 }, (_, i) => sessionRow(100 + i, 5, false)),
+    ]);
+    const store = createSupabaseLiveStore();
+    expect(
+      (await store.listActiveSessions({ stationId: 5 })).map(
+        (t) => t.transactionId,
+      ),
+    ).toEqual([1]);
+    expect(calls[0].url.searchParams.get("station_id")).toBe("eq.5");
+    const page = await store.listEndedSessions(5, { before: 120, limit: 5 });
+    expect(page.map((t) => t.transactionId)).toEqual([119, 118, 117, 116, 115]);
+  });
+
+  it("skips a row it can't read, with a log, instead of failing", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    table([
+      sessionRow(1, 5, true),
+      { ...sessionRow(2, 5, true), checked_at: "garbage" },
+      { ...sessionRow(3, 5, true), energy_wh: "-4" },
+    ]);
+    const list = await createSupabaseLiveStore().listActiveSessions();
+    expect(list.map((t) => [t.transactionId, t.energyWh])).toEqual([
+      [3, null],
+      [1, 1200],
+    ]);
+    expect(log).toHaveBeenCalledTimes(1);
+    log.mockRestore();
   });
 });

@@ -1,5 +1,6 @@
 import "server-only";
 import { config, isDemo } from "../env";
+import { demoTariffLookup } from "../pricing/demo-tariffs";
 import { createDemoClient } from "./demo";
 import { cookieDemoFleet, resetDemoFleetForTests } from "./demo-cookie";
 import { cookieDemoOcpi, resetDemoOcpiForTests } from "./demo-ocpi-cookie";
@@ -31,7 +32,7 @@ export function getIvora(): IvoraClient {
     return (c.demo ??= createDemoClient(
       cookieDemoFleet(),
       Date.now,
-      undefined,
+      demoTariffLookup,
       { ocpi: cookieDemoOcpi() },
     ));
   const liveFor = `${config.apiBaseUrl}|${config.tenantId}|${config.apiKey}`;

@@ -40,6 +40,7 @@ export function demoTokenStore(): MemoryTokenStore {
     uid: "04A1B2C3D4E5F6",
     type: "RFID",
     visualNumber: "DEMO-0001",
+    whitelist: "NEVER", // RFID cards are NEVER until RFID billing (manage.ts)
   });
   return store;
 }
