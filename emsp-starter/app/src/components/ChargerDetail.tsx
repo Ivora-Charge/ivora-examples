@@ -10,7 +10,7 @@ import {
   View,
 } from "react-native";
 import { i18n, t } from "../i18n";
-import { ApiError, getLocation } from "../lib/api";
+import { ApiError, getFavourites, getLocation, setFavourite } from "../lib/api";
 import { directionsUrl } from "../lib/directions";
 import { present } from "../lib/present";
 import { evseKind, type StatusKind } from "../lib/status";
@@ -66,12 +66,12 @@ export function ChargerDetail({
   const auth = useAuth();
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
-  const [chargeNote, setChargeNote] = useState(false);
+  const [favourite, setFav] = useState<boolean | null>(null);
+  const token = auth.token;
 
   useEffect(() => {
     let live = true;
     setLoad({ state: "loading" });
-    setChargeNote(false);
     getLocation(id).then(
       (location) => live && setLoad({ state: "ready", location }),
       (e: unknown) =>
@@ -85,6 +85,31 @@ export function ChargerDetail({
       live = false;
     };
   }, [id, attempt]);
+
+  // Whether this place is one of the driver's favourites (signed in only).
+  useEffect(() => {
+    setFav(null);
+    if (!token) return;
+    let live = true;
+    getFavourites(token).then(
+      (list) => live && setFav(list.some((f) => f.locationId === id)),
+      () => {},
+    );
+    return () => {
+      live = false;
+    };
+  }, [id, token]);
+
+  const toggleFavourite = async () => {
+    if (!token || favourite === null) return;
+    const next = !favourite;
+    setFav(next);
+    try {
+      await setFavourite(token, id, next);
+    } catch {
+      setFav(!next);
+    }
+  };
 
   const place = load.state === "ready" ? load.location : summary;
   const distance =
@@ -111,6 +136,20 @@ export function ChargerDetail({
         >
           {[place?.operator, distance].filter(Boolean).join(" · ")}
         </Text>
+        {favourite !== null && (
+          <View style={[styles.close, { backgroundColor: `${c.onPrimary}26` }]}>
+            <Pressable
+              role="switch"
+              aria-checked={favourite}
+              aria-label={t("favourites.toggle")}
+              onPress={() => void toggleFavourite()}
+              style={styles.closeHit}
+              testID="favourite-toggle"
+            >
+              <Icon name="star" color={c.onPrimary} filled={favourite} />
+            </Pressable>
+          </View>
+        )}
         <View style={[styles.close, { backgroundColor: `${c.onPrimary}26` }]}>
           <HeaderButton
             icon={variant === "card" ? "close" : "back"}
@@ -397,14 +436,6 @@ export function ChargerDetail({
 
   const actions = place && (
     <View style={styles.gapSm}>
-      {chargeNote && (
-        <Text
-          role="alert"
-          style={[type.body, { color: c.text, fontSize: fs(fontSize.sm + 1) }]}
-        >
-          {t("detail.chargeSoon")}
-        </Text>
-      )}
       <View style={styles.actions}>
         <Button
           label={t("detail.directions")}
@@ -427,13 +458,35 @@ export function ChargerDetail({
           icon="bolt"
           onPress={() =>
             auth.state === "signedIn"
-              ? setChargeNote(true)
+              ? router.push(`/charge/${id}`)
               : router.push("/account")
           }
           style={styles.grow}
           testID="charge"
         />
       </View>
+      {auth.state === "signedIn" && (
+        <Pressable
+          role="link"
+          aria-label={t("report.open")}
+          onPress={() =>
+            router.push({ pathname: "/report", params: { location: id } })
+          }
+          style={styles.link}
+          testID="detail-report"
+        >
+          <Icon name="flag" color={c.text} size={18} />
+          <Text
+            style={[
+              type.strong,
+              styles.underline,
+              { color: c.text, fontSize: fs(fontSize.sm + 1) },
+            ]}
+          >
+            {t("report.open")}
+          </Text>
+        </Pressable>
+      )}
     </View>
   );
 
@@ -541,6 +594,14 @@ const styles = StyleSheet.create({
   },
   status: { flexDirection: "row", alignItems: "center", gap: space.xs + 2 },
   actions: { flexDirection: "row", gap: space.sm + 4, flexWrap: "wrap" },
+  link: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: space.xs + 2,
+    minHeight: 44,
+  },
+  underline: { textDecorationLine: "underline" },
   card: { flex: 1, borderRadius: radius.lg + 6, overflow: "hidden" },
   cardActions: { padding: space.lg, paddingTop: space.md, borderTopWidth: 1 },
   pageContent: { flexGrow: 1 },

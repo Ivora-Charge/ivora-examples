@@ -25,7 +25,30 @@
           "locationWhenInUsePermission": "Show chargers near you."
         }
       ],
-      "@maplibre/maplibre-react-native"
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan a charger's QR code to start charging.",
+          "recordAudioAndroid": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Add a photo when you report a problem at a charger.",
+          "cameraPermission": "Take a photo when you report a problem at a charger.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-notifications",
+      [
+        "@stripe/stripe-react-native",
+        {
+          "enableGooglePay": false
+        }
+      ]
     ]
   }
 }

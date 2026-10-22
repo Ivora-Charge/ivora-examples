@@ -37,6 +37,33 @@ const PATHS = {
   ],
   clock: ["M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18Z", "M12 7v5l3 2"],
   mail: ["M3.5 6.5h17v11h-17z", "m4 7 8 6 8-6"],
+  star: [
+    "m12 3.5 2.6 5.3 5.9.9-4.3 4.1 1 5.8-5.2-2.7-5.2 2.7 1-5.8-4.3-4.1 5.9-.9L12 3.5Z",
+  ],
+  scan: [
+    "M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8",
+    "M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8",
+    "M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16",
+    "M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16",
+    "M8 8h3v3H8z",
+    "M13 13h3v3h-3z",
+    "M13 8h3",
+    "M8 16h3",
+  ],
+  card: ["M3.5 6h17v12h-17z", "M3.5 10h17", "M7 15h4"],
+  receipt: [
+    "M6 3.5h12v17l-2-1.5-2 1.5-2-1.5-2 1.5-2-1.5-2 1.5v-17Z",
+    "M9 8h6",
+    "M9 12h6",
+    "M9 16h3",
+  ],
+  flag: ["M5 21V4", "M5 4h11l-2 4 2 4H5"],
+  stop: ["M7 7h10v10H7z"],
+  camera: [
+    "M4 8h3l1.5-2.5h7L17 8h3v11H4z",
+    "M12 16.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z",
+  ],
+  check: ["m5 12.5 4.5 4.5L19 7.5"],
 } as const;
 
 export type IconName = keyof typeof PATHS;
@@ -45,10 +72,13 @@ export function Icon({
   name,
   color,
   size = 22,
+  filled = false,
 }: {
   name: IconName;
   color: string;
   size?: number;
+  /** Filled as well as outlined: an "on" state, such as a favourite's star. */
+  filled?: boolean;
 }) {
   return (
     <Svg
@@ -64,6 +94,7 @@ export function Icon({
           key={d}
           d={d}
           stroke={color}
+          fill={filled ? color : "none"}
           strokeWidth={2}
           strokeLinecap="round"
           strokeLinejoin="round"

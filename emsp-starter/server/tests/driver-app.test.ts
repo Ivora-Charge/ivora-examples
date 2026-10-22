@@ -287,6 +287,7 @@ describe("charging from the app, in demo mode", () => {
     ).receipt;
     expect(receipt).toMatchObject({
       chargeId: command.id,
+      locationId: LOC1,
       paymentStatus: "captured",
       currency: "EUR",
       stopCode: null,

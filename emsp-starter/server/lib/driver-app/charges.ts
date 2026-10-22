@@ -122,6 +122,8 @@ export async function cdrOfStart(
 
 export type ReceiptView = {
   chargeId: string;
+  /** The app's location ID, to report a problem there; null when the start had none. */
+  locationId: string | null;
   paymentId: string;
   cdrId: string;
   place: {
@@ -163,6 +165,14 @@ export function receiptView(
   const total = cdrAmount(cdr.total_cost, cdr.currency);
   return {
     chargeId: c.id,
+    locationId: c.locationId
+      ? locationAppId({
+          peerId: c.peerId,
+          countryCode: c.toCountryCode,
+          partyId: c.toPartyId,
+          id: c.locationId,
+        })
+      : null,
     paymentId: p.id,
     cdrId: storedCdrId,
     place: {
