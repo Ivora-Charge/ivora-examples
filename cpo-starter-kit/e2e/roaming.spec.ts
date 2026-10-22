@@ -47,7 +47,8 @@ test("demo: publish sites, request a party ID and see Ivora's approval", async (
   await expect(page.locator("main").getByRole("status")).toContainText(
     "Party US*SMP is waiting for Ivora's approval",
   );
-  await expect(status).toContainText("Published");
+  await expect(status).toContainText("Demo: would be published");
+  await expect(status).toContainText("partners would receive your sites");
   const party = page.getByRole("region", { name: "Party ID request" });
   await expect(party).toContainText("Waiting for Ivora");
   await expect(party).toContainText("shared party US*IVR");

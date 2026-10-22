@@ -31,7 +31,8 @@ export function getIvora(): IvoraClient {
     return (c.demo ??= createDemoClient(
       cookieDemoFleet(),
       Date.now,
-      cookieDemoOcpi(),
+      undefined,
+      { ocpi: cookieDemoOcpi() },
     ));
   const liveFor = `${config.apiBaseUrl}|${config.tenantId}|${config.apiKey}`;
   if (!c.live || c.liveFor !== liveFor) {

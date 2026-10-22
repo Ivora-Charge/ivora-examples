@@ -10,7 +10,9 @@ import type { OcpiSettings } from "@/lib/server/ivora/types";
 import { getRoaming } from "@/lib/server/roaming";
 import { parseRoamingForm, type RoamingForm } from "@/lib/server/roaming/input";
 import {
+  connectorOverrides,
   decideDemoParty,
+  LEVEL_2_CONNECTOR,
   loadRoaming,
   roamingKey,
   saveRoaming,
@@ -180,6 +182,7 @@ describe("roaming against the live API", () => {
     });
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     process.env = { ...saved };
   });
@@ -275,16 +278,27 @@ describe("roaming against the live API", () => {
       "GET ocpi": () => json(200, SETTINGS),
       "PUT ocpi": () => json(200, answer),
     });
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
     const r = await saveRoaming(api.deps, manager, FORM);
     expect(r.partyRequested).toBe(true);
+    // Who saved, by staff id only: no email or settings in the log.
+    expect(info).toHaveBeenCalledWith(
+      "cpo-starter-kit: roaming settings saved",
+      {
+        user: manager.userId,
+        action: "ocpi_settings_put",
+      },
+    );
+    expect(JSON.stringify(info.mock.calls)).not.toContain(manager.email);
     const put = api.calls.find((c) => c.method === "PUT")!;
     expect(put.body).toEqual({
       publish: true,
       display_name: "Northside EV",
       website: "https://northside.example",
       time_zone: "America/Chicago",
-      // Not edited by the kit: sent back as Ivora answered, so PUT keeps it.
-      connector_defaults: SETTINGS.connector_defaults,
+      // Not edited by the kit: only the operator's own value (Ivora's Level 2
+      // defaults are left out, so they stay Ivora's).
+      connector_defaults: { max_amperage: 40 },
       // 99 was not listed, so it stays excluded; 8 was unticked; 7 was ticked again.
       excluded_location_ids: [8, 99],
       own_party: { country_code: "US", party_id: "NTH" },
@@ -298,6 +312,17 @@ describe("roaming against the live API", () => {
     );
     expect(key).toMatch(/^cpo-ocpi-settings-[0-9a-f]{32}-put$/);
     expect(put.headers.get("authorization")).toBe(`Bearer ${API_KEY}`);
+  });
+
+  it("sends back only the operator's own connector defaults, never Ivora's", () => {
+    expect(connectorOverrides({ ...LEVEL_2_CONNECTOR })).toBeNull();
+    expect(
+      connectorOverrides({
+        ...LEVEL_2_CONNECTOR,
+        standard: "IEC_62196_T2",
+        max_voltage: 400,
+      }),
+    ).toEqual({ standard: "IEC_62196_T2", max_voltage: 400 });
   });
 
   it("the same save from the same starting point reuses its key; a different one does not", () => {
@@ -427,6 +452,7 @@ describe("roaming in demo mode", () => {
     vi.stubGlobal("fetch", fetchSpy);
   });
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     process.env = { ...saved };
   });
@@ -437,7 +463,8 @@ describe("roaming in demo mode", () => {
       ivora: createDemoClient(
         memoryDemoFleet(),
         () => Date.UTC(2026, 9, 22),
-        ocpi,
+        undefined,
+        { ocpi },
       ),
       demoOcpi: ocpi,
     };

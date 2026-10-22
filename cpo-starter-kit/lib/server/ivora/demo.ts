@@ -516,15 +516,24 @@ const op = (
   result: Record<string, unknown> | null = null,
 ): Operation => ({ id: `demo-op-${id}`, status: "succeeded", result });
 
+/** The visitor's other demo stores; each defaults to an in-memory one. */
+export interface DemoClientStores {
+  /** Roaming (OCPI publishing) settings. */
+  ocpi?: DemoOcpiStore;
+}
+
 /**
  * The demo implementation of the Ivora client. It answers from the sample data above
- * and the visitor's own demo fleet (`fleet`) and roaming settings (`ocpi`), and never
- * sends a request anywhere: no charger commands, no payments, no email, no network.
+ * and the visitor's own demo fleet (`fleet`) and roaming settings (`stores.ocpi`), and
+ * never sends a request anywhere: no charger commands, no payments, no email, no network.
+ * The third parameter is unused for now (`undefined`); it is kept free so other modules
+ * can add theirs without moving `stores`.
  */
 export function createDemoClient(
   fleet: DemoFleetStore = memoryDemoFleet(),
   now: () => number = Date.now,
-  ocpi: DemoOcpiStore = memoryDemoOcpi(),
+  _reserved?: undefined,
+  { ocpi = memoryDemoOcpi() }: DemoClientStores = {},
 ): IvoraClient {
   const update = async <T>(change: (f: DemoFleet) => T): Promise<T> => {
     const f = await fleet.load();

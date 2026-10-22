@@ -50,6 +50,8 @@ function publishingReason(v: RoamingView): string {
   if (!s.display_name) return "Publishing needs an operator name.";
   if (!s.versions_url)
     return "Your settings are saved, but this Ivora environment does not serve OCPI yet. They take effect once it does.";
+  if (v.demo)
+    return "Demo: with these settings in live mode, partners would receive your sites, availability and published prices. Nothing is sent from the demo.";
   return "Partners receive your sites, availability and published prices.";
 }
 
@@ -158,7 +160,9 @@ export default async function Page() {
         <h2 id="status-heading">
           Publishing
           {s.published ? (
-            <span className="pill ok">Published</span>
+            <span className="pill ok">
+              {v.demo ? "Demo: would be published" : "Published"}
+            </span>
           ) : (
             <span className="pill off">Not published</span>
           )}

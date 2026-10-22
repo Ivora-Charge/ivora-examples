@@ -7,6 +7,7 @@ import {
   idempotencyKey,
   IvoraError,
   type IvoraClient,
+  type OcpiConnectorDefaults,
   type OcpiPartyRef,
   type OcpiSettings,
   type OcpiSettingsInput,
@@ -36,6 +37,34 @@ export const MAX_EXCLUDED = 1000;
 
 export const partyLabel = (p: OcpiPartyRef) =>
   `${p.country_code}*${p.party_id}`;
+
+/**
+ * The connector facts Ivora uses where none are set (a North American Level 2 J1772
+ * cable, 240 V, 32 A). GET answers `connector_defaults` merged over these.
+ */
+export const LEVEL_2_CONNECTOR: OcpiConnectorDefaults = {
+  standard: "IEC_62196_T1",
+  format: "CABLE",
+  power_type: "AC_1_PHASE",
+  max_voltage: 240,
+  max_amperage: 32,
+};
+
+/**
+ * The operator's own connector facts, without Ivora's: GET answers them merged over
+ * the Level 2 values, so only the fields that differ are the operator's. Sending the
+ * merged object back would pin Ivora's defaults as the operator's settings.
+ */
+export function connectorOverrides(
+  merged: OcpiConnectorDefaults,
+): Partial<OcpiConnectorDefaults> | null {
+  const own = Object.fromEntries(
+    (Object.keys(LEVEL_2_CONNECTOR) as (keyof OcpiConnectorDefaults)[])
+      .filter((k) => merged[k] !== LEVEL_2_CONNECTOR[k])
+      .map((k) => [k, merged[k]]),
+  ) as Partial<OcpiConnectorDefaults>;
+  return Object.keys(own).length ? own : null;
+}
 
 const revisionOf = (s: OcpiSettings) => s.updated_at ?? "default";
 
@@ -134,8 +163,8 @@ export interface RoamingSaved {
 
 /**
  * Saves the Roaming form. PUT /ocpi replaces every setting, so the whole object is
- * sent: what the form edits, the excluded sites it did not list, and the connector
- * defaults the kit does not edit (as Ivora last answered them).
+ * sent: what the form edits, the excluded sites it did not list, and the operator's
+ * own connector defaults (the kit does not edit them; Ivora's stay Ivora's).
  */
 export async function saveRoaming(
   deps: RoamingDeps,
@@ -171,7 +200,7 @@ export async function saveRoaming(
     display_name: v.displayName,
     website: v.website,
     time_zone: v.timeZone,
-    connector_defaults: current.connector_defaults,
+    connector_defaults: connectorOverrides(current.connector_defaults),
     excluded_location_ids: excludedIds,
     own_party: v.ownParty,
   };
@@ -196,6 +225,10 @@ export async function saveRoaming(
   } catch (e) {
     throw friendly(e, body);
   }
+  console.info("cpo-starter-kit: roaming settings saved", {
+    user: actor.userId,
+    action: "ocpi_settings_put",
+  });
   const after = settings.own_party;
   return {
     settings,
