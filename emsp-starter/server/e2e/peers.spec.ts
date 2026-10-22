@@ -16,7 +16,7 @@ test("demo: an admin invites a CPO and gets a Token A once", async ({
   await invite.getByLabel("Name").fill("Example CPO");
   await invite.getByLabel("Admin secret").fill("wrong");
   await invite.getByRole("button", { name: "Create Token A" }).click();
-  await expect(invite.getByRole("alert")).toHaveText("Wrong admin secret.");
+  await expect(invite.getByRole("alert")).toContainText("Wrong admin secret.");
 
   await invite.getByLabel("Name").fill("Example CPO");
   await invite.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
@@ -39,7 +39,7 @@ test("demo: registering at a CPO is refused, nothing sent", async ({
   await connect.getByLabel("Token A").fill("token-a");
   await connect.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
   await connect.getByRole("button", { name: "Register at the CPO" }).click();
-  await expect(connect.getByRole("alert")).toHaveText(
+  await expect(connect.getByRole("alert")).toContainText(
     "Demo mode: refused to register at a CPO. Nothing was sent.",
   );
 });

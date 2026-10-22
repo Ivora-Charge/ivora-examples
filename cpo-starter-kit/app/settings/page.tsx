@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { atLeast } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
 import {
@@ -26,6 +27,20 @@ export default async function Page() {
       <CompanySection o={o} />
       <BrandSection o={o} demo={me.demo} />
       <PaymentsSection stripe={stripe} demo={me.demo} />
+      <section className="card" aria-labelledby="roaming-link-heading">
+        <h2 id="roaming-link-heading">
+          Roaming <span className="badge">Placeholder</span>
+        </h2>
+        <p className="muted">
+          Publish your sites to OCPI roaming partners, and request your own
+          party ID.
+        </p>
+        <p>
+          <Link className="button secondary" href="/settings/roaming">
+            Roaming settings
+          </Link>
+        </p>
+      </section>
       <section className="card" aria-labelledby="keys-heading">
         <h2 id="keys-heading">API keys and services</h2>
         <p className="muted">

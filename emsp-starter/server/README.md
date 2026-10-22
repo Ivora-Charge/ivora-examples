@@ -19,10 +19,10 @@ The Next.js server of the eMSP Starter: OCPI 2.2.1 eMSP endpoints, the REST API 
 - **Sessions and CDRs:** received on our Receiver interfaces (session PUT and PATCH, in any order; CDR POST) and pulled from each CPO's Sender interfaces, linked to the driver's start command and token, with internal events and reconciliation data per peer and day. CDRs are immutable. See [Sessions and CDRs](#sessions-and-cdrs).
 - **Driver accounts:** passwordless sign-in (Supabase Auth, an email code or link) from the app and the web, an account and app token at the first sign-in, rate limited. See [Driver accounts and sign-in](#driver-accounts-and-sign-in).
 - **Payments:** saved cards on the network's own Stripe account, a card hold before every app start, capture from the session's CDR, release, refunds, admin review, optional incremental authorization, email receipts and a signed webhook. See [Payments](#payments). **The owner merges changes here.**
+- **Live data:** an optional, read-only live-data adapter per CPO peer for what OCPI lacks, such as state of charge. The null adapter is the default; an Ivora API adapter is included. See [Live data](#live-data-state-of-charge).
 - **Admin sign-in** (`/admin/sign-in`): the same passwordless sign-in for users in the admin role table (`emsp_admins`). `ADMIN_SECRET` still works while it is set.
-- **Admin, CPO peers** (`/admin/peers`): connect to a CPO, create a Token A for a CPO to register with us, rotate tokens, unregister, list peers, pull a peer's locations and tariffs.
-- **Admin, driver tokens** (`/admin/tokens`): look up a driver's tokens, create an app token, add an RFID card, block, unblock, change the whitelist, retry missed pushes.
-- **Admin, payments** (`/admin/payments`): payments waiting for review, look up a payment, refund (partial or whole), and decide a held payment (capture up to the hold, release, or mark reviewed).
+- **Admin web**, for admins only (see [Admin web](#admin-web)): CPO peers with their status and the last pull and error of each module; live and recent sessions; payments, refunds and their audit log; CDR reconciliation per peer with a CSV; drivers and tokens, with block and unblock; each peer's live-data adapter. Every error shows its code (the CPO's OCPI status code when it gave one) and a next step.
+- **OCPI e2e suite** (`npm run test:ocpi-e2e`): the whole path from handshake to refund, run against the mock CPO in CI and against any CPO's sandbox when you configure one. See [End-to-end tests against a CPO](#end-to-end-tests-against-a-cpo).
 
 ## Run locally
 
@@ -47,7 +47,7 @@ Copy `.env.example` to `.env.local` and fill it in. All variables are server-sid
 | `SUPABASE_URL`              | Supabase project URL. Required for live mode.                                                                                                                                                                                                                                                                                                                                                        |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Bypasses RLS: never logged, never sent to the app. Required for live mode.                                                                                                                                                                                                                                                                                                |
 | `SUPABASE_DB_URL`           | Postgres connection string, used only by `npm run db:migrate`.                                                                                                                                                                                                                                                                                                                                       |
-| `OCPI_TOKEN_ENCRYPTION_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts the tokens CPO peers give us, at rest. Required for live mode. Losing or changing it means re-registering every peer.                                                                                                                                                                                                                  |
+| `OCPI_TOKEN_ENCRYPTION_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts the tokens CPO peers give us, and live-data API keys, at rest. Required for live mode. Losing or changing it means re-registering every peer and re-entering their keys.                                                                                                                                                               |
 | `ADMIN_SECRET`              | Optional. At least 32 characters (`openssl rand -base64 32`). While set, an admin action also runs for whoever gives it, beside signed-in admins: for the first admin and for demo deployments. Unset it once your admins sign in.                                                                                                                                                                   |
 | `CRON_SECRET`               | Required in live mode once you issue tokens (token expiry and push retries run only with it); otherwise optional. At least 32 characters. Enables the scheduled jobs, `GET /api/cron/ocpi-sync` with `Authorization: Bearer <CRON_SECRET>`: the pulls (locations, tariffs, sessions, CDRs), token push retries and expiry, command timeouts and the payment sweep. Without it the route answers 503. |
 | `STRIPE_SECRET_KEY`         | The network's own Stripe secret key (`sk_live_…`, `sk_test_…`) or a restricted key (`rk_…`). Without it, live mode refuses every app start ("Payments are not set up"). Never logged.                                                                                                                                                                                                                |
@@ -247,9 +247,36 @@ Every body is validated against 2.2.1 (`lib/ocpi/session-objects.ts`): invalid o
 
 **Events** (`events.ts`), for later parts (payments capture on a CDR, the app shows a running session): `session.started` (the first time we hold a session), `session.updated` (a change we applied), `session.completed` (once, when it is `COMPLETED` or `INVALID`, or its CDR arrives) and `cdr.received` (once per CDR). Subscribe with `onSessionEvent`. Each event comes from the one write that made it true, so a push repeated, or pulled after it was pushed, emits nothing again. Listeners run in this process after the write; one that throws is logged and never fails the CPO's request. Events are not queued: a listener that must not miss one also checks the stored sessions and CDRs on a schedule. Started, completed and received go to the audit log, naming the session or CDR and the command, never the driver or the token.
 
-**Reconciliation** (`reconcile.ts`): `reconcile({ from, to, peerId? }, { sessions })` for UTC days `from` to `to` (at most 92), per peer, day (of the start) and currency: counts of sessions (open, completed, invalid) and CDRs (and credit CDRs), `COMPLETED` sessions without a CDR, CDRs that name no session we hold, CDRs of a token we did not issue (no driver of ours to bill) and CDRs in another currency than their session (up to 100 IDs each), and totals (kWh as the sessions say; energy and cost as the CDRs say, net of credit CDRs, the amount including VAT only when every CDR gives one), with totals per peer and currency over the range. Amounts are E4 (ten-thousandths of a kWh or of the currency unit) and add up exactly. The database computes it (`emsp_reconciliation`); the memory store gives the same figures, and a test holds the two together. A session that ended minutes ago has no CDR yet: look at days that are over. The admin web shows it in a later part.
+**Reconciliation** (`reconcile.ts`): `reconcile({ from, to, peerId? }, { sessions })` for UTC days `from` to `to` (at most 92), per peer, day (of the start) and currency: counts of sessions (open, completed, invalid) and CDRs (and credit CDRs), `COMPLETED` sessions without a CDR, CDRs that name no session we hold, CDRs of a token we did not issue (no driver of ours to bill) and CDRs in another currency than their session (up to 100 IDs each), and totals (kWh as the sessions say; energy and cost as the CDRs say, net of credit CDRs, the amount including VAT only when every CDR gives one), with totals per peer and currency over the range. Amounts are E4 (ten-thousandths of a kWh or of the currency unit) and add up exactly. The database computes it (`emsp_reconciliation`); the memory store gives the same figures, and a test holds the two together. A session that ended minutes ago has no CDR yet: look at days that are over. The admin web shows it, with the payment side, on `/admin/reconciliation`.
 
 Demo mode holds the mock CPO's three sample sessions and one CDR in memory, and pulls nothing.
+
+## Admin web
+
+Admin pages read and change data only through server actions behind the admin gate (`lib/server/admin-action.ts`): a signed-in user with the `admin` role in `emsp_admins` (a `viewer` is refused), or, while `ADMIN_SECRET` is set, whoever gives it. A page itself shows no data until an admin asks.
+
+| Page                                             | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **CPO peers** (`/admin/peers`)                   | Every peer with its status, parties, modules, and the last pull of its locations, tariffs, sessions and CDRs: when, how many stored and invalid, the last full pull, and a failed pull's error with its code and next step. Connect to a CPO, create a Token A, rotate tokens, unregister, pull locations and tariffs.                                                                                                                                                              |
+| **Sessions** (`/admin/sessions`)                 | Live (active, pending, reserved) and recent sessions, newest start first, 100 at a time; filter by status, peer ID, driver reference and "started before" (a UTC day or timestamp). The form keeps the filters of the last list, and **Show older sessions** pages back by start time (a page may repeat the last session of the one before, never skip one). Each shows the CPO's session ID, kWh, the CPO's cost, location, driver and charge (command) ID.                       |
+| **Payments and refunds** (`/admin/payments`)     | Payments to review, look up a payment, **refund** part of a payment or everything left, always **with a reason**, capped at what was captured and idempotent by the form's request ID (kept while the outcome is unknown, so sending the form again retries the same refund, with the same amount even for "everything left"; a new one once it is known); the **audit log** of a payment (every hold, capture and refund, who did it and why); decide a held payment under review. |
+| **CDR reconciliation** (`/admin/reconciliation`) | Per peer and UTC day (at most 92 days): sessions vs CDRs vs captured amounts. Totals per peer, then each mismatch with its IDs (completed sessions without a CDR, CDRs without a session, of a token we did not issue or in another currency, CDRs of our drivers with no payment, payments whose capture is not the CDR total), the payments flagged for review (part 7), and a **CSV export** (one row per peer, day and currency).                                               |
+| **Drivers and tokens** (`/admin/tokens`)         | **Block or unblock a driver** (their account: real-time authorization answers `NOT_ALLOWED` and the app refuses to start), look up a driver's tokens, create an app token, add an RFID card, block or unblock a token, change its whitelist, retry missed pushes.                                                                                                                                                                                                                   |
+| **Live data** (`/admin/live-data`)               | Set, list and remove a peer's live-data adapter (see [Live data](#live-data-state-of-charge)).                                                                                                                                                                                                                                                                                                                                                                                      |
+
+Demo-mode screenshots (the admin web has one, light, theme; see [Make it yours](../README.md#make-it-yours-in-5-minutes)):
+
+| CPO peers                                                            | Sessions                                                      |
+| -------------------------------------------------------------------- | ------------------------------------------------------------- |
+| ![CPO peers and their status](docs/admin-peers.png)                  | ![Live and recent sessions](docs/admin-sessions.png)          |
+| **Refund** (an error, with its code and next step)                   | **CDR reconciliation**                                        |
+| ![A refund error with its code and next step](docs/admin-refund.png) | ![CDR reconciliation per peer](docs/admin-reconciliation.png) |
+
+**Errors.** Every failed admin action shows its message, a **code** and a **next step** (`lib/admin/errors.ts`). The code is the CPO's OCPI status code when it answered with one (`OCPI 2001`: invalid or missing parameters; `OCPI 3003`: no matching endpoints, and so on), else the HTTP status it answered with (`HTTP 401`: it refused our token), else our own (`demo_mode`, `invalid_input`, `not_found`, `no_ocpi_response`, `wrong_secret`, `stripe_no_answer`, `above_captured`, ...). A failed pull keeps its OCPI status code with its result, so the peer list shows it later too.
+
+**Audit log.** Refunds record the admin who made them (`admin:<user ID>`, or `admin:secret` for `ADMIN_SECRET`) and their reason, in the refund row and in the audit log, as do blocks and unblocks of drivers. Card data, Stripe IDs and emails never go to the audit log.
+
+**Reconciliation, the payment side** (`emsp_payment_reconciliation`, beside `emsp_reconciliation`): for CDRs (not credit CDRs) per peer, day and the CDR's currency, the CDRs a payment was settled from, the CDRs of our drivers that none was, the CDR totals those payments saw, and what they captured and refunded (minor units; a payment in another currency is not summed, it counts as a mismatch). The memory store gives the same figures, and a PGlite test holds them together. CSV cells a spreadsheet would run as a formula are escaped.
 
 ## Driver accounts and sign-in
 
@@ -304,7 +331,7 @@ All need the driver's Bearer token; answers are JSON, `no-store`.
 2. **Capture** (`settle.ts`), on the session's CDR (the `cdr.received` event, and the cron sweep for any the event missed): the CDR's `total_cost.incl_vat`, rounded **once**, half up, to minor units (12.345 EUR is 1235), **never more than the hold**. A payment captures only from a CDR the Sessions module linked to **its own START_SESSION** (through the start's own session; a CDR of another session with the same `authorization_reference` is the driver's by token only, and charges nothing here).
 3. **CDR above the hold:** the whole hold is captured and the payment goes to **admin review** (`cdr_above_hold`) with the difference (`shortfall_amount`). Nothing more is ever charged automatically.
 4. **Release:** a start that ends without charging (refused, not supported, failed) cancels its hold at once. A start whose outcome we never learnt (no answer, or the CPO's `TIMEOUT`) keeps its hold for 30 minutes in case a session appears; the cron sweep then releases it if none did, or leaves it for the session's CDR. A **zero-cost** CDR releases the hold.
-5. **Refunds**, from `/admin/payments`: partial or whole, never more than was captured in total (reserved in the database under a lock on the payment), one per admin request ID. A refund keeps Stripe's own status: `succeeded`, `failed` (or Stripe's `canceled`), or still open, `pending` or `requires_action`, which keeps its amount reserved until the refund webhook settles it. A refund Stripe has (one with a Stripe refund ID) is never sent again; one whose answer was lost is retried with the same key, or settled by its webhook. Stripe can fail a refund that had succeeded; its amount is then free to refund again.
+5. **Refunds**, from `/admin/payments`: partial or whole, each with a reason (required), never more than was captured in total (reserved in the database under a lock on the payment), one per admin request ID. A refund keeps Stripe's own status: `succeeded`, `failed` (or Stripe's `canceled`), or still open, `pending` or `requires_action`, which keeps its amount reserved until the refund webhook settles it. A refund Stripe has (one with a Stripe refund ID) is never sent again; one whose answer was lost is retried with the same key, or settled by its webhook. Stripe can fail a refund that had succeeded; its amount is then free to refund again.
 
 **Edge cases**, all to admin review and never charged automatically:
 
@@ -362,6 +389,29 @@ Test-mode keys only ever reach test-mode data. Switch to live keys only after yo
 4. Set `CRON_SECRET` and a cron for `/api/cron/ocpi-sync`, so missed CDRs settle and uncertain holds are released.
 5. For receipts, verify your sending domain at Resend and set `RESEND_API_KEY` and `RECEIPT_FROM`.
 
+## Live data (state of charge)
+
+OCPI 2.2.1 has no state of charge (SoC) and no current power. `lib/live-data/` adds them where a CPO can: each CPO peer may have one **live-data adapter**, a read-only source that answers `getLive(session) → { socPercent?, socMeasuredAt?, powerKw?, powerMeasuredAt? }`. Every field is optional, but each value needs the time the charger measured it. The app shows what it gets (`app/src/components/LiveReadout.tsx`) and hides the rest, so a CPO without an adapter looks exactly as before.
+
+**Stale readings are dropped.** A charger that is suspended (`SuspendedEV`) or offline stops sending meter values while its OCPI session stays `ACTIVE`, so an old reading would show a car charging that is not. `cleanLive` (`adapter.ts`) keeps a power only when it was measured in the last 3 minutes and a SoC only when it was measured in the last 15, each by its own time, so a fresh SoC never keeps an old power on screen. A value without a time, or with one more than a minute in the future, is dropped. The app checks again with the same limits, since a screen may show an answer for a while, and labels a SoC older than 2 minutes "last seen … min ago".
+
+- **Default: the null adapter.** A peer without an adapter returns `{}`: OCPI data only.
+- **Ivora API adapter** (`ivora.ts`), for a CPO peer that runs on Ivora. Configured per peer with that CPO's API URL, its tenant ID and a **read-only key** (scope `billing:read` only), which the CPO creates for you in its Ivora developer tools. **Tell the CPO what that key reads:** `billing:read` on Ivora has no per-partner scope, so it reads every transaction, bill and payment of the CPO's tenant, not only your drivers' sessions. This server only ever asks for the sessions of its own drivers, but a CPO may prefer to issue the key from a dedicated tenant or a key it can revoke on its own. It uses public, documented, read-only endpoints only: `GET /v1/tenants/{tenant}/transactions/{id}` and `GET …/transactions/{id}/meter-values` ([OpenAPI](https://api.ivoracharge.com/openapi.json)). On Ivora an OCPI session's ID is the charging transaction's ID. The adapter uses the transaction only when public fields agree with the session: not a test transaction, started within 10 minutes of the session's `start_date_time`, and, when Ivora shows the masked ID token, ending in the same characters as the session's token. Otherwise it returns nothing, because a guess could show another driver's car. From the meter values it takes the newest `SoC` and the newest total `Power.Active.Import` (W or kW), each with its sample's time. A charger that reports no SoC gives none, and a finished transaction gives no power. It reads at most 10 pages of 500 values per call and keeps its place after every page, so a long session catches up over a few calls, even when a read is cut off by the timeout. Answers are cached for 15 seconds, so an app polling every few seconds costs one call per session. **Failures back off:** a `429` pauses every call for that peer until its `Retry-After` has passed (a minute when it gives none, at most 15 minutes); a `401` or `403` (a revoked key) pauses it for 10 minutes; any other failure is remembered per session for 30 seconds. An API URL that resolves to a private address (loopback, `10.x`, cloud metadata and so on) is refused by `peerFetch`, logged as an SSRF refusal and paused for 10 minutes. Saving the peer's settings again starts afresh. Every request is a GET through `peerFetch`: https only, public addresses only, refused in demo mode, with a 5-second timeout and a 1 MB limit. It never sends a charger command and never writes anything.
+- **Demo mode** uses a demo adapter for the mock CPO (`demo.ts`): its charging session shows an invented, rising SoC. Nothing is sent anywhere, and saved adapters are never called.
+
+**Settings** are kept per peer in `emsp_live_data_adapters`. The API key is AES-256-GCM encrypted with `OCPI_TOKEN_ENCRYPTION_KEY`, like peer tokens, and bound to the peer, so a ciphertext copied to another row does not decrypt. It is never logged, returned or shown again. Set, replace, list and remove them in **Admin, live data** (`/admin/live-data`), behind `ADMIN_SECRET` like the other admin actions. Every change goes to the audit log with the adapter kind and API host, never the key.
+
+**For the app:** `sessionLive(id, driverRef, { sessions, adapterFor })` (`live.ts`) gives one of a driver's sessions with its live data. It returns null for a session that is not that driver's. Only a running session asks its adapter. A failing adapter (CPO API down, key revoked) is logged by error code and the session shows without extras. Values out of range (SoC outside 0 to 100, negative power) or too old are dropped. The app's endpoint for it arrives with driver sign-in, like the commands' endpoints: it takes the signed-in driver's reference, never one the app sends.
+
+### Write an adapter for another CPO
+
+1. Create `lib/live-data/<cpo>.ts` exporting a function that returns a `LiveDataAdapter` (`adapter.ts`): a `kind` and `getLive(ref, signal)`. `ref` has the OCPI fields of the session (peer, party, session ID, status, start time, location, EVSE, connector, token UID), never the driver.
+2. Find the CPO's own record of the session **from public fields only**, and check it is the same session before using it. Return `{}` when unsure.
+3. Send requests with `peerFetch` (`lib/server/peer-fetch.ts`) only, so demo mode and private addresses are refused. Use GET only, a timeout (pass `signal` on), a size limit (`readLimitedText`) and a short cache. Put the key in a header only. Throw `LiveDataError(code, message)` on failures, never with the key, URL or body in the message. Back off when the CPO says so (`429` and `Retry-After`, a rejected key) instead of asking again on every poll, and cache failures briefly.
+4. Return each value with the time the charger measured it (`socMeasuredAt`, `powerMeasuredAt`), never the time you read it: `cleanLive` uses these times to drop stale readings, and drops a value without one.
+5. Register it in `ADAPTER_KINDS` (`registry.ts`) with a label, what the account ID means at that CPO, and patterns for the account ID and key. Then add a card for it in `app/admin/live-data/live-data-admin.tsx` (a hidden `kind` field and the same inputs).
+6. Test it with HTTP mocks, as `tests/live-data.test.ts` does for Ivora: the mapping, what a mismatch returns, stale readings, errors and back-off, and that every request is a GET. Never call the real API in tests or CI.
+
 ## Database
 
 Migrations live in `supabase/migrations/`, named `<YYYYMMDDNNNN>_<name>.sql`, and are additive.
@@ -378,7 +428,9 @@ npm run db:migrate         # applies pending migrations using SUPABASE_DB_URL fr
 | `202610210003_ocpi_locations_tariffs.sql` | The locations and tariffs cache (`emsp_ocpi_locations`, `emsp_ocpi_tariffs`, each row with a `revision` for compare-and-swap), the state of each peer's pull (`emsp_ocpi_sync_state`), and the functions that store a pulled page and find search candidates. Service-only: executable by `service_role` alone.                                                                                                                                                                                      |
 | `202610210004_tokens.sql`                 | Our drivers' tokens (`emsp_tokens`: one APP_USER and one contract per driver, unique uid per type, compare-and-swap `revision`; never deleted) and the push outbox (`emsp_token_pushes`, filled by the `emsp_tokens_owe_push` trigger in the same transaction as every token change, cleared when a push lands), with `emsp_tokens_count` for `X-Total-Count` and `emsp_token_push_failed` for the backoff. Service-only.                                                                            |
 | `202610210005_commands.sql`               | The commands we send (`emsp_commands`: one per driver, type and app request ID; one open start per driver and one open stop per session, by partial unique indexes; status changes are compare-and-swap; never deleted) and `emsp_command_claim`, which claims a request in one step under a lock. Service-only.                                                                                                                                                                                     |
+| `202610220001_live_data_adapters.sql`     | Each CPO peer's optional live-data adapter (`emsp_live_data_adapters`: kind, https API URL, account ID and the read-only API key, encrypted only). An admin may replace or remove one. Service-only.                                                                                                                                                                                                                                                                                                 |
 | `202610220007_accounts_payments.sql`      | Driver accounts (`emsp_drivers`: Stripe Customer and default card IDs only), the admin role table (`emsp_admins`, read-only to the server), payments (`emsp_payments`: one per START_SESSION, status by compare-and-swap, never deleted), refunds (`emsp_payment_refunds`, reserved by `emsp_payment_reserve_refund` under a lock and settled by `emsp_payment_settle_refund`), handled Stripe events (`emsp_stripe_events`), and `emsp_sessions.stop_reason`. Amounts in minor units. Service-only. |
+| `202610220008_admin_web.sql`              | For the admin web: indexes for the session list (by status, by peer) and for one subject's audit log, an index on `emsp_payments.cdr_id`, and `emsp_payment_reconciliation`, the payment side of reconciliation. Additive: no new tables. Service-only.                                                                                                                                                                                                                                              |
 | `202610210006_sessions_cdrs.sql`          | Our drivers' sessions (`emsp_sessions`: per peer and CPO party, with each field's update time, the links to the driver and the start command, a compare-and-swap `revision`; never deleted) and CDRs (`emsp_cdrs`: immutable, refused any update or delete by a trigger), the sessions and CDRs pull state beside the locations one, and `emsp_reconciliation`. Amounts in E4 whole numbers. Service-only.                                                                                           |
 
 `db:migrate` runs every pending file in one transaction under an advisory lock and records it in `public.emsp_schema_migrations`. Without `SUPABASE_DB_URL`, run the files in filename order in the Supabase SQL editor.
@@ -395,6 +447,58 @@ The **10-30 rule**, checked by the repository's shared checker, [`tools/check-mi
 
 `tests/migrations.test.ts` applies every migration to an in-memory Postgres ([PGlite](https://pglite.dev)) with Supabase's roles, and checks RLS, table and function grants, `search_path` on `security definer` functions and table behaviour. It runs them twice: on a database like a new Supabase project, and on one with the legacy default grants of older projects. Use `tests/support/pglite.ts` for the tests of new migrations.
 
+## End-to-end tests against a CPO
+
+`tests/e2e/` is one suite that runs this eMSP against one CPO over OCPI 2.2.1, end to end. CI runs it against the [mock CPO](#mock-cpo), so it is never tied to one platform. You can run the same suite against **any** CPO's OCPI 2.2.1 sandbox. Each step uses the server's own code: the OCPI client and endpoints, the driver API the app calls, and the payment flows.
+
+| Step                    | What it checks                                                                                                                                                                                                                                                       |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reachability            | Our versions endpoint answers, without a token, from where the CPO calls it.                                                                                                                                                                                         |
+| Handshake               | We register at the CPO with its versions URL and Token A. It offers 2.2.1 with a CPO role, a locations Sender, a tokens Receiver and a commands Receiver.                                                                                                            |
+| Locations and tariffs   | A full pull (paginated) of both, then the app's search and location detail. With no location given, the suite picks the first `AVAILABLE` EVSE that takes remote starts.                                                                                             |
+| Tokens                  | A driver signs in. Their app token and an RFID card are pushed, and nothing is left owed. The CPO's Tokens Receiver (`GET`) holds both, and the card has `whitelist: NEVER`.                                                                                         |
+| Card                    | A Stripe Customer, with Stripe's test card saved as the default.                                                                                                                                                                                                     |
+| START_SESSION           | `POST /api/v1/charges`. **Accepted:** the hold, the CommandResult and the session linked to the start. **Rejected:** the start ends as "This charger doesn't accept app starts" and the hold is released.                                                            |
+| Session updates         | The session carries the start's `authorization_reference` and the driver's token. It keeps running for `OCPI_E2E_CHARGE_SECONDS` while the CPO pushes (or we pull) its changes.                                                                                      |
+| STOP_SESSION            | `POST /api/v1/charges/{id}/stop`, its CommandResult, and the session completed, with at least one update after the start.                                                                                                                                            |
+| CDR                     | The CDR, pushed or pulled, linked to the start, the session and the driver.                                                                                                                                                                                          |
+| Capture and refund      | The payment is captured from the CDR, never above the hold, and Stripe agrees. A refund of up to 0.50 then goes back to the card. A CDR that costs nothing releases the hold instead.                                                                                |
+| Real-time authorization | The app token gets `ALLOWED` and an RFID card gets `NOT_ALLOWED`. A real CPO asks only when it wants to (at a start, say), so the suite checks our answers about this run's app token and RFID card, and skips the step, saying why, if the CPO asked about neither. |
+| Unregister              | Credentials `DELETE` at the CPO (unless `OCPI_E2E_KEEP_REGISTRATION=1`).                                                                                                                                                                                             |
+
+**Some CPOs disable remote start.** Set `OCPI_E2E_EXPECT_START` to say what the sandbox does:
+
+- `rejected` (the default): START_SESSION must be refused, and the driver API must show the "remote start not available" state. The steps that need a session (session updates, STOP_SESSION, CDR, capture, refund) are then skipped, and each says why. The handshake, the pulls, the token pushes and real-time authorization still run.
+- `accepted`: the full path.
+
+A run that gets the other answer fails, and the message names the setting to change. The mock lane runs both. The eMSP does not send `UNLOCK_CONNECTOR` yet, so that step is listed as skipped.
+
+**Run it against the mock CPO** (offline; CI does this):
+
+```sh
+npm run test:ocpi-e2e
+```
+
+**Run it against a CPO's sandbox.** You need:
+
+1. **The CPO's OCPI 2.2.1 versions URL and a Token A** for your eMSP. These come from the CPO's onboarding, and some sandboxes also need your country code and party ID listed beforehand.
+2. **A public `https://` origin** that reaches this machine. The CPO calls our endpoints (versions, CommandResults, sessions, CDRs, authorization). The suite serves them on `127.0.0.1:OCPI_E2E_LISTEN_PORT` (default 3318), so put a tunnel or reverse proxy in front of that port and set its origin as `OCPI_E2E_PUBLIC_URL`.
+3. **A Stripe test-mode key** (`sk_test_…` or `rk_test_…`). A live key is refused.
+
+Copy [`.env.e2e.example`](.env.e2e.example) to `.env.e2e.local` (git ignores it), fill it in, and run:
+
+```sh
+npm run test:ocpi-e2e   # loads .env.e2e.local; prints the lane, never a value
+```
+
+- The run needs no database. Every store is in memory for the run, sign-in uses the built-in demo sign-in (no email is sent), receipts are off, and the peer's token is encrypted with a new key each run.
+- With `accepted`, a real charger starts and stops: pick the EVSE with `OCPI_E2E_LOCATION_ID`, `OCPI_E2E_EVSE_UID` and `OCPI_E2E_CONNECTOR_ID`.
+- **No charger is left charging.** Before it unregisters, every run checks whether the CPO took a START_SESSION, also one it was expected to refuse, or one whose session never linked in time. It then waits up to `OCPI_E2E_TIMEOUT_SECONDS` for the session link, sends STOP_SESSION, and waits as long again for the result. If it still cannot stop the session, it prints "Stop it on the CPO side" with the start's `authorization_reference`, location and EVSE: stop it there by hand.
+- For CPOs that only offer `GET`, sessions and CDRs are also pulled while the suite waits. Each wait lasts at most `OCPI_E2E_TIMEOUT_SECONDS` (default 300).
+- A CPO on a private network (a lab) also needs `OCPI_ALLOW_PRIVATE_PEERS=1`. It is never honoured in production.
+- **Never in public CI.** The real lane refuses to run when `CI` or `GITHUB_ACTIONS` is set, unless `OCPI_E2E_ALLOW_CI=1`; use that only in a private pipeline that holds the credentials. Never commit a versions URL, a token or a key.
+- Each run registers the eMSP afresh and unregisters at the end. Test tokens, the test Customer and the test payment stay in the CPO's sandbox and in Stripe test mode.
+
 ## Deploy
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter)
@@ -403,7 +507,16 @@ The button deploys the server in demo mode. To go live, apply the migrations, ad
 
 ## What it uses
 
-OCPI 2.2.1 as the eMSP role, with any CPO; Supabase (Postgres and Auth); Stripe on the network's own account; Resend for receipts (replaceable). Nothing from the Ivora API yet; an optional Ivora live-data adapter arrives in a later part.
+OCPI 2.2.1 as the eMSP role, with any CPO; Supabase (Postgres and Auth); Stripe on the network's own account; Resend for receipts (replaceable).
+
+Optionally, for CPO peers that run on Ivora, the [live-data adapter](#live-data-state-of-charge) reads state of charge and power from the public Ivora API, with that CPO's read-only key:
+
+| Endpoint                                                     | Permission     |
+| ------------------------------------------------------------ | -------------- |
+| `GET /v1/tenants/{tenant_id}/transactions/{id}`              | `billing:read` |
+| `GET /v1/tenants/{tenant_id}/transactions/{id}/meter-values` | `billing:read` |
+
+Ask the CPO for a key with `billing:read` and no other scope. The adapter sends GET requests only.
 
 ## Limits and next steps
 
@@ -411,7 +524,8 @@ OCPI 2.2.1 as the eMSP role, with any CPO; Supabase (Postgres and Auth); Stripe 
 - Sign-in rate limits are counted per server instance.
 - **RFID cards cannot charge** until RFID billing lands: they are `NEVER` on every CPO and real-time authorization answers `NOT_ALLOWED`, so no session runs without a payment hold. See [Tokens](#tokens-and-real-time-authorization) for how it will be lifted.
 - A receipt that fails to send is not retried. Payment events and the incremental-authorization check run in the server process on session events; the cron sweep settles CDRs the events missed.
-- The admin web shows payments by ID; reconciliation of payments against CDRs per day arrives with the admin web.
+- The admin web lists sessions and flagged payments, but finds other payments by ID. Admin forms reset after each action (React form actions): fill the filters again for the next search.
+- The admin web shows times in UTC.
 - The OCPI version details list credentials, locations, tariffs, tokens, commands, sessions and CDRs. Charging preferences (an eMSP's `PUT` to a CPO's Sessions Sender) are not sent.
 - Demo mode keeps peers in memory and refuses to contact a CPO; its locations and tariffs are the mock CPO's sample data, loaded in-process, never pulled.
 - Locations with `publish: false` never appear, including those published only to certain tokens (`publish_allowed_to`).
@@ -423,15 +537,17 @@ OCPI 2.2.1 as the eMSP role, with any CPO; Supabase (Postgres and Auth); Stripe 
 - Rotating `OCPI_TOKEN_ENCRYPTION_KEY` needs every peer to be registered again. An expired Token A leaves its peer pending; unregister it to close it.
 - A stop from the app needs the session linked to the driver's start, which the Sessions module does on the first push or pull of the session.
 - Session events run in the server process and are not queued; the payment sweep catches CDRs they missed.
-- Reconciliation has no admin page or API yet: the admin web (a later part) shows it.
+- Reconciliation lists at most 100 IDs per mismatch and day: narrow the days for the rest. Flagged payments are listed for every peer (a payment names its charge, not its peer).
+- Live data has no app endpoint yet: the driver app parts add it. Only an Ivora adapter is included; other CPOs need their own (see [Write an adapter for another CPO](#write-an-adapter-for-another-cpo)). The adapter's cache is per server instance.
 - OCPI 2.2.1 has no capability for Plug & Charge, so a charger that refuses app starts can only be shown as RFID-capable.
-- Next parts: the optional live-data adapter, the driver flows in the app and the admin web.
+- Next parts: the optional live-data adapter and the driver flows in the app.
 
 ## Checks
 
 ```sh
 npm run format:check && npm run typecheck && npm run check:migrations && npm test && npm run build
+npm run test:ocpi-e2e                                 # the OCPI e2e suite, against the mock CPO
 npx playwright install chromium && npm run test:e2e   # offline demo run, desktop and mobile
 ```
 
-Tests never need credentials or network access.
+Tests never need credentials or network access. The OCPI e2e suite talks to a real CPO only when you configure one; see [End-to-end tests against a CPO](#end-to-end-tests-against-a-cpo).

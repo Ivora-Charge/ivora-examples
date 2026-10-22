@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "test:ocpi-e2e": "node --env-file-if-exists=.env.e2e.local scripts/ocpi-e2e.mjs",
     "check:migrations": "node ../../tools/check-migrations supabase/migrations",
     "brand:sync": "node scripts/sync-brand.mjs",
     "db:migrate": "node --env-file=.env.local scripts/migrate.mjs"

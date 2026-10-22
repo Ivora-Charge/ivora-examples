@@ -51,8 +51,9 @@ export const MODULES: Module[] = [
     slug: "reports",
     href: "/reports",
     label: "Reports",
-    summary: "Energy and revenue per site, charger and month, with CSV export.",
-    status: "coming-soon",
+    summary:
+      "Sessions, energy, success rate and billed revenue over a period; a sessions table with CSV export; your Stripe payouts.",
+    status: "ready",
   },
   {
     slug: "team",
@@ -65,7 +66,7 @@ export const MODULES: Module[] = [
     slug: "settings",
     href: "/settings",
     label: "Settings",
-    summary: "Company details, brand and card payments.",
+    summary: "Company details, brand, card payments and roaming.",
     status: "ready",
   },
 ];

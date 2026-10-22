@@ -22,7 +22,7 @@ test("demo: overview shows labelled sample data", async ({ page }) => {
     await page.screenshot({ path: "docs/screenshot.png", fullPage: false });
 });
 
-test("demo: every unbuilt section is reachable from the menu and marked coming soon", async ({
+test("demo: the last section built is reachable from the menu, and none is marked coming soon", async ({
   page,
   isMobile,
 }) => {
@@ -40,7 +40,7 @@ test("demo: every unbuilt section is reachable from the menu and marked coming s
     }
     await nav.getByRole("link", { name: new RegExp(`^${name}`) }).click();
     await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
-    await expect(page.getByText("Coming soon", { exact: true })).toBeVisible();
+    await expect(page.getByText("Coming soon", { exact: true })).toHaveCount(0);
     await expect(page).toHaveTitle(new RegExp(`^${name} · `));
     if (!isMobile)
       await expect(

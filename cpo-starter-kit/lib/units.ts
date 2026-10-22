@@ -10,3 +10,17 @@ export function formatKwh(energyKwh: number, digits = 1): string {
     maximumFractionDigits: digits,
   })} kWh`;
 }
+
+/**
+ * Integer Wh as exact kWh decimal text, the way the API writes energy_kwh: 28941 is
+ * "28.941", 22000 is "22". For exports, where a float could print 28.940999.
+ */
+export function whToKwhText(energyWh: number): string {
+  if (!Number.isSafeInteger(energyWh)) throw new Error("Wh must be an integer");
+  const sign = energyWh < 0 ? "-" : "";
+  const abs = Math.abs(energyWh);
+  const frac = String(abs % 1000)
+    .padStart(3, "0")
+    .replace(/0+$/, "");
+  return `${sign}${Math.floor(abs / 1000)}${frac ? `.${frac}` : ""}`;
+}

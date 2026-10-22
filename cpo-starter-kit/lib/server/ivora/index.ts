@@ -1,7 +1,9 @@
 import "server-only";
 import { config, isDemo } from "../env";
+import { demoTariffLookup } from "../pricing/demo-tariffs";
 import { createDemoClient } from "./demo";
 import { cookieDemoFleet, resetDemoFleetForTests } from "./demo-cookie";
+import { cookieDemoOcpi, resetDemoOcpiForTests } from "./demo-ocpi-cookie";
 import { createLiveClient } from "./live";
 import type { IvoraClient } from "./types";
 
@@ -25,8 +27,14 @@ const cache = () => (g.__cpoIvora ??= {});
  */
 export function getIvora(): IvoraClient {
   const c = cache();
-  // The demo client keeps each visitor's own chargers in their cookie.
-  if (isDemo()) return (c.demo ??= createDemoClient(cookieDemoFleet()));
+  // The demo client keeps each visitor's own chargers and roaming settings in cookies.
+  if (isDemo())
+    return (c.demo ??= createDemoClient(
+      cookieDemoFleet(),
+      Date.now,
+      demoTariffLookup,
+      { ocpi: cookieDemoOcpi() },
+    ));
   const liveFor = `${config.apiBaseUrl}|${config.tenantId}|${config.apiKey}`;
   if (!c.live || c.liveFor !== liveFor) {
     c.live = createLiveClient({
@@ -43,6 +51,7 @@ export function getIvora(): IvoraClient {
 export function resetIvoraForTests() {
   delete g.__cpoIvora;
   resetDemoFleetForTests();
+  resetDemoOcpiForTests();
 }
 
 /**

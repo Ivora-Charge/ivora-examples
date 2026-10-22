@@ -16,6 +16,14 @@ import { formatKwh } from "@/lib/units";
 
 export const metadata = { title: "Overview" };
 
+/** "incl. 2 staff/test, 1 free": sessions that are not paid driver sessions. */
+function sessionsNote(o: { staffSessions: number; freeSessions: number }) {
+  const parts = [];
+  if (o.staffSessions) parts.push(`${o.staffSessions} staff/test`);
+  if (o.freeSessions) parts.push(`${o.freeSessions} free`);
+  return parts.length ? `incl. ${parts.join(", ")}` : undefined;
+}
+
 export default async function Page() {
   const me = await requireRole("viewer");
   const r = await loadOverview(me.operatorId);
@@ -58,11 +66,7 @@ export default async function Page() {
             <Stat
               label="Recent sessions"
               value={formatKwh(r.overview.recentEnergyKwh)}
-              note={
-                r.overview.staffSessions
-                  ? `incl. ${r.overview.staffSessions} staff/test`
-                  : undefined
-              }
+              note={sessionsNote(r.overview)}
             />
           </section>
           <section className="card" aria-labelledby="chargers-heading">

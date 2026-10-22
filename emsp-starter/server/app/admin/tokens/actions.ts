@@ -1,5 +1,7 @@
 "use server";
 
+import { accountStore } from "@/lib/accounts/registry";
+import type { Driver } from "@/lib/accounts/store";
 import { peerStore } from "@/lib/ocpi/registry";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 import { isDemo } from "@/lib/server/demo";
@@ -36,12 +38,32 @@ export type TokenSummary = {
   lastUpdated: string;
 };
 
+/** A driver's account as the admin web shows it: no card details, no Stripe IDs. */
+export type DriverSummary = {
+  id: string;
+  email: string;
+  status: Driver["status"];
+  hasCard: boolean;
+  createdAt: string;
+};
+
 export type TokenActionState = {
   ok?: boolean;
   message?: string;
+  code?: string;
+  nextStep?: string;
   tokens?: TokenSummary[];
   pushes?: PushOutcome[];
+  driver?: DriverSummary;
 };
+
+const driverSummary = (d: Driver): DriverSummary => ({
+  id: d.id,
+  email: d.email,
+  status: d.status,
+  hasCard: d.defaultPaymentMethodId !== null,
+  createdAt: d.createdAt,
+});
 
 function summary(t: DriverToken): TokenSummary {
   return {
@@ -66,7 +88,7 @@ const deps = (): TokenDeps => ({
 
 function asAdmin(
   form: FormData,
-  fn: () => Promise<TokenActionState>,
+  fn: (actor: string) => Promise<TokenActionState>,
 ): Promise<TokenActionState> {
   return gate(form, fn, {
     shown: (e) => e instanceof TokenError,
@@ -191,6 +213,71 @@ export async function retryPushesAction(
     return {
       ok: true,
       message: `Sent ${r.sent}, failed ${r.failed}, dropped ${r.dropped} (peer gone). ${left >= 1000 ? "1,000 or more" : left} push(es) still queued.`,
+    };
+  });
+}
+
+/**
+ * Blocks or unblocks a driver's account. A blocked (restricted) driver may not charge:
+ * real-time authorization answers NOT_ALLOWED and the app's starts are refused before
+ * any card hold. Their tokens keep their own status: block those too to stop a CPO
+ * that lets a whitelisted token charge without asking us.
+ */
+export async function driverAccountAction(
+  _prev: TokenActionState,
+  form: FormData,
+): Promise<TokenActionState> {
+  return asAdmin(form, async (actor) => {
+    const ref = field(form, "driverRef").trim();
+    if (!ref || ref.length > 64)
+      return { ok: false, message: "Enter a driver reference." };
+    const accounts = accountStore();
+    const held = await accounts.getDriver(ref);
+    if (!held)
+      return {
+        ok: false,
+        message: "No such driver account.",
+        code: "not_found",
+        nextStep:
+          "The driver has not signed in to the app yet. Block their tokens instead (below).",
+      };
+    const intent = field(form, "intent");
+    const to =
+      intent === "block"
+        ? "restricted"
+        : intent === "unblock"
+          ? "active"
+          : null;
+    if (intent !== "show" && !to)
+      return { ok: false, message: "Unknown action." };
+    if (!to || held.status === to)
+      return {
+        ok: true,
+        message:
+          to === null
+            ? "Driver found."
+            : `The driver is already ${to === "active" ? "unblocked" : "blocked"}.`,
+        driver: driverSummary(held),
+      };
+    const driver = await accounts.updateDriver(
+      ref,
+      { status: to },
+      new Date().toISOString(),
+    );
+    if (!driver) return { ok: false, message: "No such driver account." };
+    await peerStore().audit({
+      actor,
+      action: to === "restricted" ? "driver.block" : "driver.unblock",
+      subjectId: driver.id,
+      details: { from: held.status, to },
+    });
+    return {
+      ok: true,
+      message:
+        to === "restricted"
+          ? "Driver blocked: they may not charge until unblocked."
+          : "Driver unblocked. Tokens blocked one by one stay blocked.",
+      driver: driverSummary(driver),
     };
   });
 }
