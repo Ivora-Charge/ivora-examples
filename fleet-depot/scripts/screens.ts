@@ -5,8 +5,6 @@ const VIEWPORTS = {
   phone: { width: 390, height: 844 },
 };
 
-let advanced = 0;
-
 for (const [device, viewport] of Object.entries(VIEWPORTS)) {
   for (const scheme of ["light", "dark"] as const) {
     test(`screens: ${device} ${scheme}`, async ({ browser }) => {
@@ -27,9 +25,12 @@ for (const [device, viewport] of Object.entries(VIEWPORTS)) {
       await shot("landing");
       await page.getByRole("link", { name: "Try the demo" }).click();
       await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
-      // The demo clock persists across the four runs: advance it once, from
-      // 16:30 to 21:30, when most vehicles are plugged in and sharing the cap.
-      for (; advanced < 5; advanced++) {
+      // The demo clock is shared by every run: start the night again and advance
+      // it from 16:30 to 21:30, when the late van plugs in and is at risk.
+      const reset = page.waitForResponse("**/api/state");
+      await page.getByRole("button", { name: "Reset demo" }).click();
+      await reset;
+      for (let i = 0; i < 5; i++) {
         const r = page.waitForResponse("**/api/state");
         await page.getByRole("button", { name: "Advance 1 h" }).click();
         await r;
@@ -47,6 +48,14 @@ for (const [device, viewport] of Object.entries(VIEWPORTS)) {
       if (device === "desktop") {
         await page.getByRole("button", { name: /Wall display/ }).click();
         await shot("wall-display");
+        if (scheme === "dark") {
+          // The TV: 1920x1080, dark.
+          await page.setViewportSize({ width: 1920, height: 1080 });
+          await page.screenshot({
+            path: "docs/screens/wall-display-1920x1080-dark.png",
+            animations: "disabled",
+          });
+        }
       }
       await ctx.close();
     });

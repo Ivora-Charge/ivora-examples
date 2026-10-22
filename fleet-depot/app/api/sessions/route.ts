@@ -1,14 +1,16 @@
 import { guard } from "@/lib/auth";
-import { getDepot, logEvent, replan, withLock } from "@/lib/depot";
+import { logEvent, replan, withLock } from "@/lib/depot";
 import { UserError } from "@/lib/drivers";
 import { body, fail, json } from "@/lib/http";
+import { depotOf } from "@/lib/demo-visitor";
 
 /** Assign a session whose card did not match a vehicle: {sessionId, vehicleId}. */
 export async function POST(req: Request) {
   const denied = guard(req, { write: true });
   if (denied) return denied;
   try {
-    const d = await getDepot();
+    // Demo: the visitor's own depot (lib/demo-visitor.ts).
+    const { d } = await depotOf(req);
     const b = await body<{ sessionId: string; vehicleId: string }>(req);
     return await withLock(async () => {
       const sessions = await d.store.list("sessions");

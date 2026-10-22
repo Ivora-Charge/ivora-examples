@@ -20,7 +20,7 @@ export interface Vehicle {
   id: string;
   name: string;
   plate: string;
-  kind: "van" | "bus" | "car";
+  kind: "van" | "bus" | "car" | "truck";
   batteryKwh: number;
   /** The vehicle's own maximum AC charge power, kW. */
   maxKw: number;
