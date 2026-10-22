@@ -18,6 +18,8 @@ The Next.js server of the eMSP Starter: OCPI 2.2.1 eMSP endpoints, the REST API 
 - **Commands:** START_SESSION and STOP_SESSION for a driver, sent to the location's CPO once a payment hold succeeds, one command per app request, with the CommandResponse and the CommandResult on our response_url. See [Commands](#commands-start_session-and-stop_session).
 - **Sessions and CDRs:** received on our Receiver interfaces (session PUT and PATCH, in any order; CDR POST) and pulled from each CPO's Sender interfaces, linked to the driver's start command and token, with internal events and reconciliation data per peer and day. CDRs are immutable. See [Sessions and CDRs](#sessions-and-cdrs).
 - **Admin, CPO peers** (`/admin/peers`): connect to a CPO, create a Token A for a CPO to register with us, rotate tokens, unregister, list peers, pull a peer's locations and tariffs. Temporarily gated by `ADMIN_SECRET`.
+- **Live data:** an optional, read-only live-data adapter per CPO peer for what OCPI lacks, such as state of charge. The null adapter is the default; an Ivora API adapter is included. See [Live data](#live-data-state-of-charge).
+- **Admin, live data** (`/admin/live-data`): set, list and remove a peer's live-data adapter. Temporarily gated by `ADMIN_SECRET`.
 - **Admin, driver tokens** (`/admin/tokens`): look up a driver's tokens, create an app token, add an RFID card, block, unblock, change the whitelist, retry missed pushes. Temporarily gated by `ADMIN_SECRET`.
 
 ## Run locally
@@ -43,7 +45,7 @@ Copy `.env.example` to `.env.local` and fill it in. All variables are server-sid
 | `SUPABASE_URL`              | Supabase project URL. Required for live mode.                                                                                                                                                                                                                                                                                                                                      |
 | `SUPABASE_SERVICE_ROLE_KEY` | Supabase service role key. Bypasses RLS: never logged, never sent to the app. Required for live mode.                                                                                                                                                                                                                                                                              |
 | `SUPABASE_DB_URL`           | Postgres connection string, used only by `npm run db:migrate`.                                                                                                                                                                                                                                                                                                                     |
-| `OCPI_TOKEN_ENCRYPTION_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts the tokens CPO peers give us, at rest. Required for live mode. Losing or changing it means re-registering every peer.                                                                                                                                                                                                |
+| `OCPI_TOKEN_ENCRYPTION_KEY` | 32 random bytes, base64 (`openssl rand -base64 32`). Encrypts the tokens CPO peers give us, and live-data API keys, at rest. Required for live mode. Losing or changing it means re-registering every peer and re-entering their keys.                                                                                                                                             |
 | `ADMIN_SECRET`              | **Temporary**, until admin sign-in (part 7). At least 32 characters (`openssl rand -base64 32`). Every admin action asks for it; without it the admin actions are disabled.                                                                                                                                                                                                        |
 | `CRON_SECRET`               | Required in live mode once you issue tokens (token expiry and push retries run only with it); otherwise optional. At least 32 characters. Enables the scheduled jobs, `GET /api/cron/ocpi-sync` with `Authorization: Bearer <CRON_SECRET>`: the pulls (locations, tariffs, sessions, CDRs), token push retries and expiry, and command timeouts. Without it the route answers 503. |
 | `TRUSTED_PROXY_HEADER`      | Optional. The header your own proxy or CDN sets to the client address, for example `cf-connecting-ip`. When set, it alone keys every rate limit. See **Rate limits without a proxy** below.                                                                                                                                                                                        |
@@ -234,6 +236,26 @@ Every body is validated against 2.2.1 (`lib/ocpi/session-objects.ts`): invalid o
 
 Demo mode holds the mock CPO's three sample sessions and one CDR in memory, and pulls nothing.
 
+## Live data (state of charge)
+
+OCPI 2.2.1 has no state of charge (SoC) and no current power. `lib/live-data/` adds them where a CPO can: each CPO peer may have one **live-data adapter**, a read-only source that answers `getLive(session) → { socPercent?, powerKw?, measuredAt? }`. Every field is optional. The app shows what it gets (`app/src/components/LiveReadout.tsx`) and hides the rest, so a CPO without an adapter looks exactly as before.
+
+- **Default: the null adapter.** A peer without an adapter returns `{}`: OCPI data only.
+- **Ivora API adapter** (`ivora.ts`), for a CPO peer that runs on Ivora. Configured per peer with that CPO's API URL, its tenant ID and a **read-only key** (scope `billing:read` only), which the CPO creates for you in its Ivora developer tools. It uses public, documented, read-only endpoints only: `GET /v1/tenants/{tenant}/transactions/{id}` and `GET …/transactions/{id}/meter-values` ([OpenAPI](https://api.ivoracharge.com/openapi.json)). On Ivora an OCPI session's ID is the charging transaction's ID. The adapter uses the transaction only when public fields agree with the session: not a test transaction, started within 10 minutes of the session's `start_date_time`, and, when Ivora shows the masked ID token, ending in the same characters as the session's token. Otherwise it returns nothing, because a guess could show another driver's car. From the meter values it takes the newest `SoC` and the newest total `Power.Active.Import` (W or kW). A charger that reports no SoC gives none, and a finished transaction gives no power. It reads at most 10 pages of 500 values per call and keeps its place, so a long session catches up over a few calls. Answers are cached for 15 seconds, so an app polling every few seconds costs one call per session. Every request is a GET through `peerFetch`: https only, public addresses only, refused in demo mode, with a 5-second timeout and a 1 MB limit. It never sends a charger command and never writes anything.
+- **Demo mode** uses a demo adapter for the mock CPO (`demo.ts`): its charging session shows an invented, rising SoC. Nothing is sent anywhere, and saved adapters are never called.
+
+**Settings** are kept per peer in `emsp_live_data_adapters`. The API key is AES-256-GCM encrypted with `OCPI_TOKEN_ENCRYPTION_KEY`, like peer tokens, and bound to the peer, so a ciphertext copied to another row does not decrypt. It is never logged, returned or shown again. Set, replace, list and remove them in **Admin, live data** (`/admin/live-data`), behind `ADMIN_SECRET` like the other admin actions. Every change goes to the audit log with the adapter kind and API host, never the key.
+
+**For the app:** `sessionLive(id, driverRef, { sessions, adapterFor })` (`live.ts`) gives one of a driver's sessions with its live data. It returns null for a session that is not that driver's. Only a running session asks its adapter. A failing adapter (CPO API down, key revoked) is logged by error code and the session shows without extras. Values out of range (SoC outside 0 to 100, negative power) are dropped. The app's endpoint for it arrives with driver sign-in, like the commands' endpoints: it takes the signed-in driver's reference, never one the app sends.
+
+### Write an adapter for another CPO
+
+1. Create `lib/live-data/<cpo>.ts` exporting a function that returns a `LiveDataAdapter` (`adapter.ts`): a `kind` and `getLive(ref, signal)`. `ref` has the OCPI fields of the session (peer, party, session ID, status, start time, location, EVSE, connector, token UID), never the driver.
+2. Find the CPO's own record of the session **from public fields only**, and check it is the same session before using it. Return `{}` when unsure.
+3. Send requests with `peerFetch` (`lib/server/peer-fetch.ts`) only, so demo mode and private addresses are refused. Use GET only, a timeout (pass `signal` on), a size limit (`readLimitedText`) and a short cache. Put the key in a header only. Throw `LiveDataError(code, message)` on failures, never with the key, URL or body in the message.
+4. Register it in `ADAPTER_KINDS` (`registry.ts`) with a label, what the account ID means at that CPO, and patterns for the account ID and key. Then add a card for it in `app/admin/live-data/live-data-admin.tsx` (a hidden `kind` field and the same inputs).
+5. Test it with HTTP mocks, as `tests/live-data.test.ts` does for Ivora: the mapping, what a mismatch returns, errors, and that every request is a GET. Never call the real API in tests or CI.
+
 ## Database
 
 Migrations live in `supabase/migrations/`, named `<YYYYMMDDNNNN>_<name>.sql`, and are additive.
@@ -251,6 +273,7 @@ npm run db:migrate         # applies pending migrations using SUPABASE_DB_URL fr
 | `202610210004_tokens.sql`                 | Our drivers' tokens (`emsp_tokens`: one APP_USER and one contract per driver, unique uid per type, compare-and-swap `revision`; never deleted) and the push outbox (`emsp_token_pushes`, filled by the `emsp_tokens_owe_push` trigger in the same transaction as every token change, cleared when a push lands), with `emsp_tokens_count` for `X-Total-Count` and `emsp_token_push_failed` for the backoff. Service-only. |
 | `202610210005_commands.sql`               | The commands we send (`emsp_commands`: one per driver, type and app request ID; one open start per driver and one open stop per session, by partial unique indexes; status changes are compare-and-swap; never deleted) and `emsp_command_claim`, which claims a request in one step under a lock. Service-only.                                                                                                          |
 | `202610210006_sessions_cdrs.sql`          | Our drivers' sessions (`emsp_sessions`: per peer and CPO party, with each field's update time, the links to the driver and the start command, a compare-and-swap `revision`; never deleted) and CDRs (`emsp_cdrs`: immutable, refused any update or delete by a trigger), the sessions and CDRs pull state beside the locations one, and `emsp_reconciliation`. Amounts in E4 whole numbers. Service-only.                |
+| `202610220001_live_data_adapters.sql`     | Each CPO peer's optional live-data adapter (`emsp_live_data_adapters`: kind, https API URL, account ID and the read-only API key, encrypted only). An admin may replace or remove one. Service-only.                                                                                                                                                                                                                      |
 
 `db:migrate` runs every pending file in one transaction under an advisory lock and records it in `public.emsp_schema_migrations`. Without `SUPABASE_DB_URL`, run the files in filename order in the Supabase SQL editor.
 
@@ -274,7 +297,16 @@ The button deploys the server in demo mode. To go live, apply the migrations, ad
 
 ## What it uses
 
-OCPI 2.2.1 as the eMSP role, with any CPO. Nothing from the Ivora API yet; an optional Ivora live-data adapter arrives in a later part.
+OCPI 2.2.1 as the eMSP role, with any CPO. Nothing else is needed.
+
+Optionally, for CPO peers that run on Ivora, the [live-data adapter](#live-data-state-of-charge) reads state of charge and power from the public Ivora API, with that CPO's read-only key:
+
+| Endpoint                                                     | Permission     |
+| ------------------------------------------------------------ | -------------- |
+| `GET /v1/tenants/{tenant_id}/transactions/{id}`              | `billing:read` |
+| `GET /v1/tenants/{tenant_id}/transactions/{id}/meter-values` | `billing:read` |
+
+Ask the CPO for a key with `billing:read` and no other scope. The adapter sends GET requests only.
 
 ## Limits and next steps
 
@@ -293,6 +325,7 @@ OCPI 2.2.1 as the eMSP role, with any CPO. Nothing from the Ivora API yet; an op
 - A stop needs the session linked to the driver's start, which the Sessions module does on the first push or pull of the session; for a session started with an RFID card, the app's endpoints (part 7) pass `sessionOwner(sessionStore())`.
 - Session events run in the server process and are not queued; part 7's payment capture also sweeps CDRs on a schedule.
 - Reconciliation has no admin page or API yet: the admin web (a later part) shows it.
+- Live data has no app endpoint yet: it arrives with driver sign-in (part 7). Only an Ivora adapter is included; other CPOs need their own (see [Write an adapter for another CPO](#write-an-adapter-for-another-cpo)). The adapter's cache is per server instance.
 - OCPI 2.2.1 has no capability for Plug & Charge, so a charger that refuses app starts can only be shown as RFID-capable.
 - Next parts: payments, driver sign-in and the admin web.
 

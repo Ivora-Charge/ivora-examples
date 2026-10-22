@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ocpiUrls } from "@/lib/server/config";
 import { adminEnabled } from "@/lib/server/admin";
 import { isDemo } from "@/lib/server/demo";
@@ -17,6 +18,10 @@ export default function PeersPage() {
           with the Token A it gives you, or create a Token A for a CPO to
           register with us at{" "}
           <code className="wrap">{ocpiUrls().versions}</code>.
+        </p>
+        <p>
+          To show drivers their car&apos;s state of charge, give a peer a{" "}
+          <Link href="/admin/live-data">live-data adapter</Link>.
         </p>
         {isDemo() && (
           <p className="note">
