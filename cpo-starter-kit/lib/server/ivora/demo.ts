@@ -1,6 +1,13 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import {
+  demoOcpiEvseIds,
+  demoOcpiRecord,
+  demoPutOcpi,
+  memoryDemoOcpi,
+  type DemoOcpiStore,
+} from "./demo-ocpi";
 import { demoHistory, demoStats } from "./demo-history";
 import { demoSimulate } from "./demo-pricing";
 import { IvoraError } from "./errors";
@@ -593,6 +600,12 @@ const op = (
   result: Record<string, unknown> | null = null,
 ): Operation => ({ id: `demo-op-${id}`, status: "succeeded", result });
 
+/** The visitor's other demo stores; each defaults to an in-memory one. */
+export interface DemoClientStores {
+  /** Roaming (OCPI publishing) settings. */
+  ocpi?: DemoOcpiStore;
+}
+
 const hex = (s: string, n: number) =>
   createHash("sha256").update(s).digest("hex").slice(0, n);
 
@@ -681,13 +694,16 @@ export async function demoPayment(fleet: DemoFleetStore, paymentId: string) {
 
 /**
  * The demo implementation of the Ivora client. It answers from the sample data above
- * and the visitor's own demo fleet (`fleet`), and never sends a request anywhere: no
- * charger commands, no payments, no email, no network.
+ * and the visitor's own demo fleet (`fleet`) and roaming settings (`stores.ocpi`), and
+ * never sends a request anywhere: no charger commands, no payments, no email, no network.
+ * `tariffs` looks up a demo tariff's definition (the demo keeps tariffs in the pricing
+ * cookie) for quotes and bills.
  */
 export function createDemoClient(
   fleet: DemoFleetStore = memoryDemoFleet(),
   now: () => number = Date.now,
   tariffs: DemoTariffLookup = async () => null,
+  { ocpi = memoryDemoOcpi() }: DemoClientStores = {},
 ): IvoraClient {
   const update = async <T>(change: (f: DemoFleet) => T): Promise<T> => {
     const f = await fleet.load();
@@ -1232,6 +1248,17 @@ export function createDemoClient(
     },
     async simulateTariff(tariff, session) {
       return demoSimulate(tariff, session);
+    },
+    async getOcpiSettings() {
+      return demoOcpiRecord(await ocpi.load());
+    },
+    async putOcpiSettings(input) {
+      const next = demoPutOcpi(await ocpi.load(), input, now());
+      await ocpi.save(next);
+      return demoOcpiRecord(next);
+    },
+    async getOcpiEvseIds() {
+      return demoOcpiEvseIds(await ocpi.load());
     },
     quoteTariff: quote,
     // Same key, same bill, like the API's idempotent replays.
