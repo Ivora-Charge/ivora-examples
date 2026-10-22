@@ -109,7 +109,7 @@ The template ships with its own brand, **Kilolane** (see the [design brief](docs
 1. Edit [`server/brand/tokens.json`](server/brand/tokens.json): `name`, `shortName`, the `color` (light) and `colorDark` palettes with the same keys (including the `map*` colours of the app's map), `font` names, sizes, spacing and radii.
 2. Run `npm run brand:sync` in `server/`. It copies the file to `app/brand/tokens.json`; CI fails if the two differ.
 3. Set the app's display name in [`app/app.json`](app/app.json) (`expo.name`), and its `slug` and `scheme`. Replace the mark in `app/src/components/Logo.tsx` (and `docs/brief/logo.svg`).
-4. For other fonts, set their names in `font` and import their files in `app/src/fonts.ts` (the app bundles them with `expo-font`); the admin web falls back to the system font unless you add `@font-face` or `next/font`.
+4. For other fonts, set their names in `font`, import their files in `app/src/fonts.ts` (the app bundles them with `expo-font`) and replace the files in `server/brand/fonts/` and `server/brand/fonts.ts` (the admin web self-hosts them with `next/font/local`). Keep each font's licence next to its files.
 5. Run `npm test` in `app/`: it checks every text pair for WCAG AA (4.5:1) and the focus ring for 3:1, in light and dark mode, and fails on a colour that does not pass.
 
 ## Data

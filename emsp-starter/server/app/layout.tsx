@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { brand, cssVariables } from "@/brand";
+import { fontFamilies } from "@/brand/fonts";
 import { isDemo } from "@/lib/server/demo";
 import "./globals.css";
 
@@ -24,8 +25,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
-        {/* Brand tokens from brand/tokens.json; globals.css uses only these. */}
-        <style>{cssVariables()}</style>
+        {/* Brand tokens from brand/tokens.json, with the self-hosted brand fonts
+            from brand/fonts.ts; globals.css uses only these. */}
+        <style>{cssVariables(brand, fontFamilies)}</style>
       </head>
       <body>
         <a className="skip" href="#main">

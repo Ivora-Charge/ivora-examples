@@ -1,5 +1,6 @@
 "use client";
 
+import { TableWrap } from "../table-wrap";
 import { ActionCard } from "../action-card";
 import {
   listProblemsAction,
@@ -21,7 +22,7 @@ const CATEGORY_TEXT: Record<ProblemRow["category"], string> = {
 function ProblemTable({ reports }: { reports: ProblemRow[] }) {
   if (!reports.length) return null;
   return (
-    <div className="table-wrap">
+    <TableWrap label="Problem reports table">
       <table>
         <thead>
           <tr>
@@ -68,7 +69,7 @@ function ProblemTable({ reports }: { reports: ProblemRow[] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 

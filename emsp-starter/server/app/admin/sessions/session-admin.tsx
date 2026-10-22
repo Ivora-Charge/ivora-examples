@@ -1,5 +1,6 @@
 "use client";
 
+import { TableWrap } from "../table-wrap";
 import { ActionCard } from "../action-card";
 import {
   listSessionsAction,
@@ -21,7 +22,7 @@ const STATUS_TEXT: Record<(typeof STATUS_FILTERS)[number], string> = {
 function SessionTable({ sessions }: { sessions: SessionRow[] }) {
   if (!sessions.length) return null;
   return (
-    <div className="table-wrap">
+    <TableWrap label="Sessions table">
       <table>
         <thead>
           <tr>
@@ -65,7 +66,7 @@ function SessionTable({ sessions }: { sessions: SessionRow[] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 
