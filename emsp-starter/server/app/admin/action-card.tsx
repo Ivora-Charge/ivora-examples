@@ -63,8 +63,10 @@ export function ActionCard<S extends CardState>({
   id: string;
   title: string;
   action: (prev: S, form: FormData) => Promise<S>;
-  children?: ReactNode;
-  submit: ReactNode;
+  /** The fields; a function gets the last result, e.g. to keep a list's filters. */
+  children?: ReactNode | ((state: S) => ReactNode);
+  /** The buttons; the first is the one Enter presses. */
+  submit: ReactNode | ((state: S) => ReactNode);
   /** What the result shows beside its message. */
   details?: (state: S) => ReactNode;
 }) {
@@ -76,10 +78,10 @@ export function ActionCard<S extends CardState>({
     <section className="card" aria-labelledby={id}>
       <h2 id={id}>{title}</h2>
       <form action={formAction} className="form">
-        {children}
+        {typeof children === "function" ? children(state) : children}
         <SecretField />
         <div className="actions" aria-busy={pending}>
-          {submit}
+          {typeof submit === "function" ? submit(state) : submit}
         </div>
       </form>
       {state.message && (

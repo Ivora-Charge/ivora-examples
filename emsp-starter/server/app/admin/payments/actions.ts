@@ -158,13 +158,18 @@ export async function refundAction(
   return asAdmin(form, async (actor) => {
     const d = paymentDeps(actor);
     const paymentId = field(form, "paymentId").trim().toLowerCase();
+    const requestId = field(form, "requestId");
     let amount = minor(form);
     if (field(form, "full") === "on") {
       if (!UUID.test(paymentId))
         return { ok: false, message: "Enter a payment ID." };
       const p = await d.payments.get(paymentId);
       if (!p) return { ok: false, message: "No such payment." };
-      amount = refundable(p, await d.payments.listRefunds(p.id));
+      const refunds = await d.payments.listRefunds(p.id);
+      // A retry of this form: send the refund it reserved again, with the same amount
+      // and key. Recomputing would count that refund against itself and leave 0.
+      const sent = refunds.find((r) => r.requestId === requestId);
+      amount = sent ? sent.amount : refundable(p, refunds);
       if (amount <= 0)
         return {
           ok: false,
@@ -177,7 +182,7 @@ export async function refundAction(
       {
         paymentId,
         amount,
-        requestId: field(form, "requestId"),
+        requestId,
         reason: field(form, "reason"),
       },
       d,

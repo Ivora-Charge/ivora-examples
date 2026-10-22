@@ -1,10 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// Server actions read the request's cookies (the admin session); tests set them here.
+const requestCookies = new Map<string, string>();
+vi.mock("next/headers", () => ({
+  cookies: async () => ({
+    get: (name: string) =>
+      requestCookies.has(name)
+        ? { name, value: requestCookies.get(name) }
+        : undefined,
+  }),
+  headers: async () => new Headers(),
+}));
+
 import { listPeersAction, syncPeerAction } from "@/app/admin/peers/actions";
 import { paymentAuditAction, refundAction } from "@/app/admin/payments/actions";
+import { requestIdSpent } from "@/app/admin/payments/request-id";
 import { reconcileAction } from "@/app/admin/reconciliation/actions";
 import { listSessionsAction } from "@/app/admin/sessions/actions";
 import { driverAccountAction } from "@/app/admin/tokens/actions";
-import { setAccountStoreForTests } from "@/lib/accounts/registry";
+import { ADMIN_COOKIE } from "@/lib/accounts/admin-session";
+import type { AuthProvider } from "@/lib/accounts/auth";
+import {
+  setAccountStoreForTests,
+  setAuthProviderForTests,
+} from "@/lib/accounts/registry";
 import { MemoryAccountStore } from "@/lib/accounts/store";
 import { explain, explainMessage, OCPI_NEXT_STEP } from "@/lib/admin/errors";
 import {
@@ -34,9 +53,13 @@ import {
 } from "@/lib/ocpi/errors";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore } from "@/lib/ocpi/store";
-import { setPaymentStoreForTests } from "@/lib/payments/registry";
+import {
+  setPaymentStoreForTests,
+  setStripeForTests,
+} from "@/lib/payments/registry";
 import { PaymentError } from "@/lib/payments/settle";
 import { MemoryPaymentStore, type Payment } from "@/lib/payments/store";
+import { StripeUnknownError, type StripeApi } from "@/lib/payments/stripe";
 import { resetAdminLimitForTests } from "@/lib/server/admin";
 import { DemoModeError } from "@/lib/server/demo";
 import { setSessionStoreForTests } from "@/lib/sessions/registry";
@@ -78,6 +101,9 @@ afterEach(() => {
   setSessionStoreForTests(undefined);
   setPaymentStoreForTests(undefined);
   setAccountStoreForTests(undefined);
+  setAuthProviderForTests(undefined);
+  setStripeForTests(undefined);
+  requestCookies.clear();
   vi.unstubAllGlobals();
   process.env = { ...saved };
   expect(fetchSpy).not.toHaveBeenCalled();
@@ -312,6 +338,75 @@ describe("sessions: live and recent, by peer, status and driver", () => {
         )
       ).message,
     ).toBe("No sessions match.");
+  });
+
+  it("pages by start timestamp, never skipping sessions that started together", async () => {
+    const s = new MemorySessionStore();
+    const [template] = sampleSessions(
+      { countryCode: "ZZ", partyId: "MCK" },
+      { countryCode: "NL", partyId: "DMO" },
+    );
+    // 103 sessions, one a minute; the 100th and 101st newest start at the same time.
+    const T = Date.parse("2026-10-01T00:00:00Z");
+    for (let i = 0; i < 103; i++) {
+      const minutes = i === 100 ? 99 : i;
+      await s.insertSession(
+        PEER,
+        {
+          session: {
+            ...template,
+            id: `S-${i}`,
+            status: "COMPLETED",
+            start_date_time: new Date(T - minutes * 60_000).toISOString(),
+          },
+          fieldTimes: {},
+          driverRef: null,
+          commandId: null,
+          completedAt: null,
+        },
+        "2026-10-01T00:00:00.000Z",
+      );
+    }
+    setSessionStoreForTests(s);
+
+    const first = await listSessionsAction({}, form({ status: "all" }));
+    expect(first.sessions).toHaveLength(100);
+    expect(first.message).toContain("Show older sessions");
+    expect(first.filters).toEqual({
+      status: "all",
+      peerId: "",
+      driverRef: "",
+      before: "",
+    });
+    expect(first.nextBefore).toBe("2026-09-30T22:21:00.001Z");
+
+    const next = await listSessionsAction(
+      {},
+      form({ status: "all", older: first.nextBefore! }),
+    );
+    const seen = new Set(first.sessions!.map((r) => r.ref));
+    const refs = next.sessions!.map((r) => r.ref);
+    // The one that started with the oldest listed is on the next page, as is the rest.
+    expect(new Set([...seen, ...refs]).size).toBe(103);
+    expect(refs).toHaveLength(4);
+    expect(next.nextBefore).toBeUndefined();
+    expect(next.filters!.before).toBe(first.nextBefore);
+
+    // A UTC timestamp or day is taken as "Started before"; anything else is refused.
+    expect(
+      (
+        await listSessionsAction(
+          {},
+          form({ status: "all", before: "2026-09-30T23:00:00Z" }),
+        )
+      ).sessions,
+    ).toHaveLength(42);
+    expect(
+      await listSessionsAction(
+        {},
+        form({ status: "all", before: "2026-09-30 10:00" }),
+      ),
+    ).toMatchObject({ ok: false, code: "invalid_input" });
   });
 
   it("refuses an unknown status or a malformed peer ID", async () => {
@@ -584,6 +679,192 @@ describe("refunds: partial or full, with a reason and an audit log", () => {
     ]);
     expect(audit.audit![0].details).toContain("reason: Goodwill");
     expect(audit.audit![1].details).toContain("amount: 500");
+  });
+
+  it("retries a full refund Stripe never answered with its own amount and key", async () => {
+    Object.assign(process.env, LIVE_ENV);
+    delete process.env.DEMO_MODE;
+    const { payments, p } = await captured();
+    await payments.transition(
+      p.id,
+      ["captured"],
+      { paymentIntentId: "pi_test_1" },
+      "2026-10-01T07:00:00.000Z",
+    );
+    const keys: string[] = [];
+    const refund = vi.fn(async (input: { amount: number }, key: string) => {
+      keys.push(key);
+      if (keys.length === 1) throw new StripeUnknownError("refund: no answer");
+      return { id: "re_test_1", status: "succeeded", amount: input.amount };
+    });
+    setStripeForTests({ refund } as unknown as StripeApi);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const full = form({
+      paymentId: p.id,
+      full: "on",
+      requestId: "refund-full-1",
+      reason: "Charger fault",
+    });
+
+    const first = await refundAction({}, full);
+    expect(first).toMatchObject({ ok: false, code: "stripe_no_answer" });
+    expect(requestIdSpent(first)).toBe(false);
+    // 1,500 is reserved by the pending refund, with no Stripe ID yet.
+    expect(await payments.listRefunds(p.id)).toEqual([
+      expect.objectContaining({
+        amount: 1500,
+        status: "pending",
+        stripeRefundId: null,
+      }),
+    ]);
+
+    // The same form again: the same 1,500 and the same key, not "nothing left".
+    const again = await refundAction({}, full);
+    expect(again).toMatchObject({
+      ok: true,
+      message: "Refunded 1500 (minor units).",
+    });
+    expect(requestIdSpent(again)).toBe(true);
+    expect(refund.mock.calls.map(([input]) => input.amount)).toEqual([
+      1500, 1500,
+    ]);
+    expect(keys[1]).toBe(keys[0]);
+    expect(await payments.listRefunds(p.id)).toEqual([
+      expect.objectContaining({ amount: 1500, status: "succeeded" }),
+    ]);
+    expect((await payments.get(p.id))!.refundedAmount).toBe(1500);
+
+    // A third send replays the settled refund: Stripe is not called again.
+    expect(await refundAction({}, full)).toMatchObject({ ok: true });
+    expect(refund).toHaveBeenCalledTimes(2);
+    // A new request ID finds nothing left.
+    expect(
+      await refundAction(
+        {},
+        form({
+          paymentId: p.id,
+          full: "on",
+          requestId: "refund-full-2",
+          reason: "Again",
+        }),
+      ),
+    ).toMatchObject({ ok: false, code: "above_captured" });
+  });
+
+  it("spends the form's request ID once the outcome is known, keeps it otherwise", () => {
+    const shown = { payments: [] };
+    for (const r of [
+      { ok: true, ...shown },
+      { ok: false, code: "refund_failed", ...shown },
+      { ok: false, code: "refund_pending", ...shown },
+      { ok: false, code: "refund_requires_action", ...shown },
+      { ok: false, code: "stripe_card_declined" },
+      { ok: false, code: "request_reused" },
+    ])
+      expect(requestIdSpent(r)).toBe(true);
+    for (const r of [
+      { ok: false, code: "stripe_no_answer" },
+      { ok: false, code: "unexpected" },
+      { ok: false, code: "invalid_input" },
+      { ok: false, code: "above_captured" },
+      { ok: false, code: "wrong_secret" },
+    ])
+      expect(requestIdSpent(r)).toBe(false);
+  });
+});
+
+describe("the admin gate on reconciliation, audit, driver and refund actions", () => {
+  const actions = {
+    reconcileAction,
+    paymentAuditAction,
+    driverAccountAction,
+    refundAction,
+  };
+  const raw = (fields: Record<string, string>) => {
+    const f = new FormData();
+    for (const [k, v] of Object.entries(fields)) f.set(k, v);
+    return f;
+  };
+  /** Signs a user in with `role` (an auth provider that knows one token). */
+  function signIn(role: "admin" | "viewer") {
+    const user = { id: crypto.randomUUID(), email: `${role}@example.com` };
+    const token = `token-${user.id}`;
+    setAuthProviderForTests({
+      getUser: async (t: string) => (t === token ? user : null),
+    } as unknown as AuthProvider);
+    const accounts = new MemoryAccountStore();
+    accounts.admins.set(user.id, role);
+    setAccountStoreForTests(accounts);
+    requestCookies.set(ADMIN_COOKIE, token);
+    return { user, accounts };
+  }
+  const GATE = ["wrong_secret", "read_only", "admin_disabled", "rate_limited"];
+
+  for (const [name, action] of Object.entries(actions)) {
+    it(`${name}: refuses a missing or wrong secret and a viewer, lets an admin in`, async () => {
+      setPaymentStoreForTests(new MemoryPaymentStore());
+      expect(await action({}, raw({}))).toMatchObject({
+        ok: false,
+        code: "wrong_secret",
+      });
+      expect(
+        await action({}, raw({ adminSecret: "x".repeat(32) })),
+      ).toMatchObject({ ok: false, code: "wrong_secret" });
+
+      // Without ADMIN_SECRET, nobody gets in without signing in.
+      delete process.env.ADMIN_SECRET;
+      expect(await action({}, raw({ adminSecret: SECRET }))).toMatchObject({
+        ok: false,
+        code: "admin_disabled",
+      });
+
+      signIn("viewer");
+      expect(await action({}, raw({}))).toMatchObject({
+        ok: false,
+        code: "read_only",
+      });
+
+      signIn("admin");
+      const r = await action({}, raw({}));
+      expect(GATE).not.toContain(r.code);
+    });
+  }
+
+  it("records the signed-in admin, not the secret, on a refund", async () => {
+    delete process.env.ADMIN_SECRET;
+    const { user } = signIn("admin");
+    const payments = new MemoryPaymentStore();
+    setPaymentStoreForTests(payments);
+    const p = (await payments.insert(
+      {
+        commandId: crypto.randomUUID(),
+        driverRef: "driver-1",
+        currency: "EUR",
+        holdAmount: 2500,
+        paymentMethodId: null,
+      },
+      "2026-10-01T06:00:00.000Z",
+    ))!;
+    await payments.transition(
+      p.id,
+      ["pending"],
+      { status: "captured", authorizedAmount: 2500, capturedAmount: 1500 },
+      "2026-10-01T07:00:00.000Z",
+    );
+    expect(
+      await refundAction(
+        {},
+        raw({
+          paymentId: p.id,
+          amount: "200",
+          requestId: "refund-admin-1",
+          reason: "Charger fault",
+        }),
+      ),
+    ).toMatchObject({ ok: true });
+    expect((await payments.listRefunds(p.id))[0].actor).toBe(
+      `admin:${user.id}`,
+    );
   });
 });
 

@@ -36,6 +36,18 @@ export type SessionsState = {
   code?: string;
   nextStep?: string;
   sessions?: SessionRow[];
+  /** The filters of this list, so the form keeps them for the next one. */
+  filters?: {
+    status: string;
+    peerId: string;
+    driverRef: string;
+    before: string;
+  };
+  /**
+   * When the list is full: where the next page starts, as a UTC timestamp (the
+   * "Started before" of the sessions older than these).
+   */
+  nextBefore?: string;
 };
 
 /** Rows per list. */
@@ -43,6 +55,14 @@ const SESSION_LIST_LIMIT = 100;
 
 const UUID = /^[0-9a-f-]{36}$/i;
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
+const TIMESTAMP = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+
+/** "Started before": a UTC day (its midnight) or a UTC timestamp, as an ISO string. */
+function startedBefore(v: string): string | null {
+  if (!DAY.test(v) && !TIMESTAMP.test(v)) return null;
+  const ms = Date.parse(DAY.test(v) ? `${v}T00:00:00Z` : v);
+  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
+}
 
 const costOf = (s: StoredSession["session"]) =>
   s.total_cost
@@ -79,7 +99,8 @@ export async function listSessionsAction(
       const peerId = field(form, "peerId").trim();
       const status = field(form, "status") || "live";
       const driverRef = field(form, "driverRef").trim();
-      const before = field(form, "before").trim();
+      // "Show older sessions" sends the oldest start of the last list as `older`.
+      const before = (field(form, "older") || field(form, "before")).trim();
       if (peerId && !UUID.test(peerId) && peerId !== DEMO_PEER_ID)
         return { ok: false, message: "Peer ID must be a UUID." };
       if (!(STATUS_FILTERS as readonly string[]).includes(status))
@@ -89,8 +110,13 @@ export async function listSessionsAction(
           ok: false,
           message: "A driver reference is 64 characters at most.",
         };
-      if (before && (!DAY.test(before) || Number.isNaN(Date.parse(before))))
-        return { ok: false, message: "Started before must be a date." };
+      const beforeAt = before ? startedBefore(before) : null;
+      if (before && !beforeAt)
+        return {
+          ok: false,
+          message:
+            "Started before must be a UTC day (2026-10-01) or timestamp (2026-10-01T06:00:00Z).",
+        };
 
       const sessions = await sessionStore().listSessions({
         peerId: peerId.toLowerCase() || undefined,
@@ -101,7 +127,7 @@ export async function listSessionsAction(
               ? undefined
               : [status],
         driverRef: driverRef || undefined,
-        before: before ? `${before}T00:00:00Z` : undefined,
+        before: beforeAt ?? undefined,
         limit: SESSION_LIST_LIMIT,
       });
       const labels = new Map<string, string>([
@@ -110,12 +136,22 @@ export async function listSessionsAction(
           (p) => [p.id, p.label] as [string, string],
         ),
       ]);
+      const full = sessions.length === SESSION_LIST_LIMIT;
+      const oldest = sessions.at(-1)?.session.start_date_time;
       return {
         ok: true,
         message: sessions.length
-          ? `${sessions.length} session(s)${sessions.length === SESSION_LIST_LIMIT ? `, the newest ${SESSION_LIST_LIMIT}: narrow the filters or set "Started before" to see older ones` : ""}.`
+          ? `${sessions.length} session(s)${full ? `, the newest ${SESSION_LIST_LIMIT}: "Show older sessions" lists the ones that started before these` : ""}.`
           : "No sessions match.",
         sessions: sessions.map((s) => row(s, labels)),
+        filters: { status, peerId, driverRef, before: beforeAt ?? "" },
+        // One millisecond after the oldest start, so sessions that started at the same
+        // time and did not fit are on the next page too: it may repeat a row, but never
+        // skips one.
+        ...(full &&
+          oldest && {
+            nextBefore: new Date(Date.parse(oldest) + 1).toISOString(),
+          }),
       };
     },
     {

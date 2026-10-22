@@ -12,6 +12,7 @@ import {
   type PaymentActionState,
   type PaymentSummary,
 } from "./actions";
+import { requestIdSpent } from "./request-id";
 
 const REVIEW_TEXT: Record<string, string> = {
   cdr_above_hold: "CDR above the hold: the hold was captured, the rest was not",
@@ -150,7 +151,7 @@ function AmountField({ required = true }: { required?: boolean }) {
 
 export function PaymentAdmin() {
   // One request ID per refund the admin means: a retry of the same form never
-  // refunds twice. A new one after each refund that went through.
+  // refunds twice. A new one once that refund's outcome is known (request-id.ts).
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   return (
     <>
@@ -173,7 +174,7 @@ export function PaymentAdmin() {
         title="Refund"
         action={async (prev, form) => {
           const r = await refundAction(prev, form);
-          if (r.ok) setRequestId(crypto.randomUUID());
+          if (requestIdSpent(r)) setRequestId(crypto.randomUUID());
           return r;
         }}
         submit={<button type="submit">Refund</button>}

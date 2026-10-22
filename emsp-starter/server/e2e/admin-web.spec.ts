@@ -17,11 +17,23 @@ test("demo: an admin lists live and recent sessions with filters", async ({
   await expect(list.getByRole("status")).toContainText("1 session(s)");
   await expect(list.getByRole("cell", { name: "ACTIVE" })).toBeVisible();
 
-  // The form resets after each action: fill it again.
   await list.getByLabel("Status").selectOption("all");
   await list.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
   await list.getByRole("button", { name: "Show sessions" }).click();
   await expect(list.getByRole("status")).toContainText("3 session(s)");
+
+  // The form keeps the filters of the last list; "Started before" takes a timestamp.
+  await expect(list.getByLabel("Status")).toHaveValue("all");
+  await list
+    .getByLabel("Started before (optional)")
+    .fill("2000-01-01T00:00:00Z");
+  await list.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
+  await list.getByRole("button", { name: "Show sessions" }).click();
+  await expect(list.getByRole("status")).toContainText("No sessions match.");
+  await expect(list.getByLabel("Started before (optional)")).toHaveValue(
+    "2000-01-01T00:00:00.000Z",
+  );
+  await list.getByLabel("Started before (optional)").fill("");
 
   await list.getByLabel("Peer ID (optional)").fill("not a peer");
   await list.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);

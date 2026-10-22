@@ -75,31 +75,65 @@ export function SessionAdmin() {
       id="list"
       title="Live and recent sessions"
       action={listSessionsAction}
-      submit={<button type="submit">Show sessions</button>}
+      submit={(state) => (
+        <>
+          <button type="submit">Show sessions</button>
+          {state.nextBefore && (
+            <button type="submit" name="older" value={state.nextBefore}>
+              Show older sessions
+            </button>
+          )}
+        </>
+      )}
       details={(state) => <SessionTable sessions={state.sessions ?? []} />}
     >
-      <label>
-        Status
-        <select name="status" defaultValue="live">
-          {STATUS_FILTERS.map((s) => (
-            <option key={s} value={s}>
-              {STATUS_TEXT[s]}
-            </option>
-          ))}
-        </select>
-      </label>
-      <label>
-        Peer ID (optional)
-        <input name="peerId" maxLength={36} autoComplete="off" />
-      </label>
-      <label>
-        Driver reference (optional)
-        <input name="driverRef" maxLength={64} autoComplete="off" />
-      </label>
-      <label>
-        Started before (optional)
-        <input name="before" type="date" />
-      </label>
+      {(state) => {
+        // The form resets after each list; it keeps the filters of the last one.
+        const f = state.filters;
+        return (
+          <div key={JSON.stringify(f ?? {})} style={{ display: "contents" }}>
+            <label>
+              Status
+              <select name="status" defaultValue={f?.status ?? "live"}>
+                {STATUS_FILTERS.map((s) => (
+                  <option key={s} value={s}>
+                    {STATUS_TEXT[s]}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label>
+              Peer ID (optional)
+              <input
+                name="peerId"
+                maxLength={36}
+                autoComplete="off"
+                defaultValue={f?.peerId}
+              />
+            </label>
+            <label>
+              Driver reference (optional)
+              <input
+                name="driverRef"
+                maxLength={64}
+                autoComplete="off"
+                defaultValue={f?.driverRef}
+              />
+            </label>
+            <label>
+              Started before (optional)
+              <input
+                name="before"
+                maxLength={24}
+                autoComplete="off"
+                placeholder="2026-10-01 or 2026-10-01T06:00:00Z"
+                defaultValue={f?.before}
+              />
+              <span className="muted">A UTC day or timestamp.</span>
+            </label>
+          </div>
+        );
+      }}
     </ActionCard>
   );
 }

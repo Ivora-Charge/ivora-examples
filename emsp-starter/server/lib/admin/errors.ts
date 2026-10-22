@@ -148,13 +148,13 @@ function explainPayment(e: Error): Explained {
     return {
       code: "request_reused",
       nextStep:
-        "This form's request ID was used for another amount. Reload the page and send the refund again.",
+        "This form's request ID was used for another amount; the form now has a new one. Look the payment up, then send the refund again if it is still needed.",
     };
   if (httpStatus === 502)
     return {
       code: "stripe_no_answer",
       nextStep:
-        "Send the same form again: it retries the same refund and never refunds twice.",
+        "Stripe did not answer, so the outcome is unknown. Look the payment up, then send the same form again if it is still needed.",
     };
   if (httpStatus === 503)
     return {
