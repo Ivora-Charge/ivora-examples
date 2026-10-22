@@ -10,6 +10,7 @@ import { authCookieOptions } from "@/lib/server/supabase";
  * checks its bearer secret itself).
  */
 const PUBLIC = [
+  "/welcome",
   "/login",
   "/setup",
   "/invite",
@@ -48,7 +49,10 @@ export async function proxy(request: NextRequest) {
   const { data } = await supabase.auth.getClaims();
   const path = request.nextUrl.pathname;
   if (!data?.claims?.sub && !PUBLIC.some((p) => path.startsWith(p))) {
-    const login = NextResponse.redirect(new URL("/login", request.url));
+    // Signed-out visitors to the root see the landing page; deeper links ask for sign-in.
+    const login = NextResponse.redirect(
+      new URL(path === "/" ? "/welcome" : "/login", request.url),
+    );
     for (const c of response.cookies.getAll()) login.cookies.set(c);
     response = login;
   }

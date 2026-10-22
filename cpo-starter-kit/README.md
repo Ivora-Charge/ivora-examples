@@ -120,6 +120,10 @@ The kit ships as **Ampleaf**, a placeholder brand you are meant to replace. Ever
 
 The design brief, the approved mock and the palette are `brand/BRIEF.md`, `brand/mock.html` and `docs/brief/`. Screenshots of the main screens in light and dark, desktop and phone, are in `docs/screens/`.
 
+The public landing page is `/welcome` (`app/welcome/page.tsx`): signed-out visitors to `/` land there, and in demo mode its "Try the demo" button opens the app. Pages that load data show a skeleton while they load (`app/loading-skeleton.tsx`), and a failed page shows an error reference and what to do next (`app/error.tsx`).
+
+To regenerate the screenshots from the demo (1440 px and 390 px, light and dark), start the built demo and run `npm run screenshots` (`scripts/screenshots.mjs`; set `SCREENSHOT_URL` if it is not on port 3000).
+
 ### Fonts and icons
 
 - [Manrope](https://github.com/sharanda/manrope), Copyright 2019 The Manrope Project Authors, SIL Open Font License 1.1 (`brand/fonts/OFL-Manrope.txt`).

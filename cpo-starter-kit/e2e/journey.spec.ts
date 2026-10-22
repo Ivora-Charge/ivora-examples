@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
 
 // The whole kit in one go, the way a new operator meets it: onboarding, a first
@@ -226,6 +227,19 @@ test("demo journey: onboarding to a first charger and price, a paid session, Liv
     await expect(
       page.getByRole("list", { name: "Pending invites" }),
     ).toContainText("journey-tech@example.com");
+  });
+
+  await test.step("accessibility: the pages the journey ended on pass axe", async () => {
+    for (const path of ["/", "/chargers", "/pricing", "/reports", "/team"]) {
+      await page.goto(path);
+      const results = await new AxeBuilder({ page })
+        .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
+        .analyze();
+      expect(
+        results.violations.map((v) => `${v.id}: ${v.nodes[0]?.target}`),
+        path,
+      ).toEqual([]);
+    }
   });
 
   // Offline all the way: no map tiles, Stripe, Ivora or anything else.
