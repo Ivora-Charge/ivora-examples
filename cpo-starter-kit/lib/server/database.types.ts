@@ -219,8 +219,18 @@ export type Database = {
           settled_at: Timestamp | null;
           created_at: Timestamp;
           updated_at: Timestamp;
+          session_started_at: Timestamp | null;
+          session_ended_at: Timestamp | null;
+          energy_wh: number | null;
+          connector_number: number | null;
+          stop_reason: string | null;
+          detail_at: Timestamp | null;
+          detail_checked_at: Timestamp | null;
+          refunded_minor: number | null;
+          refund_checked_at: Timestamp | null;
         };
-        // Written only through cpo_claim_checkout and cpo_record_checkout.
+        // Written only through cpo_claim_checkout, cpo_record_checkout and the
+        // reports' cpo_record_checkout_details and cpo_record_checkout_payment.
         Insert: { operator_id: string; request_id: string };
         Update: { [_ in never]: never };
         Relationships: [];
@@ -619,6 +629,55 @@ export type Database = {
       };
       cpo_record_checkout: {
         Args: { p_operator_id: string; p_id: string; p_changes: Json };
+        Returns: boolean;
+      };
+      cpo_report_checkouts: {
+        Args: {
+          p_operator_id: string;
+          p_from: Timestamp;
+          p_to: Timestamp;
+          p_station_id: number | null;
+          p_status: string;
+          p_limit: number;
+          p_offset: number;
+          p_after_created_at: Timestamp | null;
+          p_after_id: string | null;
+        };
+        Returns: Database["public"]["Tables"]["cpo_checkouts"]["Row"][];
+      };
+      cpo_report_totals: {
+        Args: {
+          p_operator_id: string;
+          p_from: Timestamp;
+          p_to: Timestamp;
+          p_station_id: number | null;
+          p_status: string;
+        };
+        Returns: Json;
+      };
+      cpo_record_checkout_details: {
+        Args: {
+          p_operator_id: string;
+          p_id: string;
+          p_started_at: Timestamp | null;
+          p_ended_at: Timestamp | null;
+          p_energy_wh: number | null;
+          p_connector_number: number | null;
+          p_stop_reason: string | null;
+        };
+        Returns: boolean;
+      };
+      cpo_report_payments_due: {
+        Args: { p_limit: number };
+        Returns: { id: string; operator_id: string; payment_id: string }[];
+      };
+      cpo_record_checkout_payment: {
+        Args: {
+          p_operator_id: string;
+          p_id: string;
+          p_captured_minor: number;
+          p_refunded_minor: number;
+        };
         Returns: boolean;
       };
     };

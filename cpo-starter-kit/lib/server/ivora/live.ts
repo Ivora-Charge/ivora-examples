@@ -17,10 +17,12 @@ import type {
   Quote,
   Station,
   StationInput,
+  Stats,
   Tariff,
   TariffArchived,
   TokenRecord,
   Transaction,
+  TransactionDetail,
   TransactionListItem,
 } from "./types";
 
@@ -352,7 +354,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       );
     },
     getTransaction(transactionId) {
-      return request<Transaction>("GET", `transactions/${transactionId}`);
+      return request<TransactionDetail>("GET", `transactions/${transactionId}`);
     },
     async findToken(externalReference) {
       return (
@@ -498,6 +500,12 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         "POST",
         `bills/${encodeURIComponent(billId)}/alerts`,
         { body: { kind: "hold_stop" }, key, root: "billing" },
+      );
+    },
+    getStats(q) {
+      return request<Stats>(
+        "GET",
+        `stats${query({ from: q.from, to: q.to, bucket: q.bucket, time_zone: q.time_zone, top: q.top })}`,
       );
     },
   };
