@@ -52,7 +52,7 @@ Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its READ
 5. **Commands**: START_SESSION and STOP_SESSION with the CommandResponse and the asynchronous CommandResult, one command per app request, a payment-hold hook before every start, and a clear state for chargers that refuse app starts.
 6. **Sessions and CDRs**: received (PUT, PATCH in any order, CDR POST) and pulled from CPOs that only offer GET, CDRs kept as immutable records, linked to the driver's start command and token, internal events, and reconciliation data per peer and day.
 7. **Accounts and payments** (this part): passwordless sign-in for drivers and admins (Supabase Auth) with an admin role table; saved cards on the network's own Stripe account; a card hold before every start, captured from the start's own CDR (never above the hold), released when nothing charged; refunds; admin review for every case the rules cannot settle; optional incremental authorization; email receipts (Resend); a signed Stripe webhook. **Money and auth: the owner merges.**
-8. to 13. The optional live-data adapter, the driver flows and the admin web. Each part updates this README.
+8. to 13. The optional live-data adapter, the driver flows and the admin web, and an **end-to-end suite**: the whole OCPI path from handshake, locations and tariffs, token push and real-time authorization, through START_SESSION, STOP_SESSION, session updates and the CDR, to capture and refund in Stripe test mode. CI runs the suite against the mock CPO. You can run the same suite against any CPO's sandbox (never in public CI), with a switch for CPOs that disable remote start; see [End-to-end tests against a CPO](server/README.md#end-to-end-tests-against-a-cpo). Each part updates this README.
 
 ## License
 
