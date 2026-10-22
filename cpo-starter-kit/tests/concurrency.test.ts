@@ -440,4 +440,34 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
       await a`select 1 from cpo_checkouts where connector_id = 91011`;
     expect(rows).toHaveLength(1);
   });
+
+  it("keeps a session ended when a late running report races its end", async () => {
+    const track = (
+      c: postgres.Sql | postgres.TransactionSql,
+      active: boolean,
+    ) =>
+      c`select cpo_track_session(9201, 9101, 91011, 1, '****ABCD', now(), null, 5, ${active})`;
+    await track(a, true);
+    const secondPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let ended!: () => void;
+    const endedFirst = new Promise<void>((r) => (ended = r));
+    // The end is written but not committed yet.
+    const tx = a.begin(async (t) => {
+      await track(t, false);
+      ended();
+      await released;
+    });
+    await endedFirst;
+    // The late report waits on the row, then sees it ended and changes nothing.
+    const late = track(b, true);
+    await waitingForLock(secondPid);
+    release();
+    await tx;
+    await late;
+    const rows =
+      await a`select active from cpo_active_sessions where transaction_id = 9201`;
+    expect(rows).toEqual([{ active: false }]);
+  });
 });

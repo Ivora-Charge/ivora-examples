@@ -201,8 +201,13 @@ export default async function Page({
 
       <section className="card" aria-labelledby="sessions-heading">
         <h2 id="sessions-heading">Sessions</h2>
+        {!d.sessionsComplete && (
+          <p className="notice" role="note">
+            This list may be incomplete: Ivora was slow or refused a read.
+          </p>
+        )}
         {d.recent.length === 0 ? (
-          <p className="muted">No sessions yet.</p>
+          <p className="muted">No running or recent sessions.</p>
         ) : (
           <ul className="rows" aria-label="Sessions">
             {d.recent.map((x) => (

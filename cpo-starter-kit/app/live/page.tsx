@@ -59,6 +59,12 @@ export default async function Page() {
           sites and chargers.
         </p>
       )}
+      {!live.sessionsComplete && (
+        <p className="notice" role="note">
+          The list of running sessions may be incomplete: Ivora was slow or
+          refused a read. It catches up on the next refresh.
+        </p>
+      )}
       {(alerts === null || alerts.length > 0) && (
         <section className="card" aria-labelledby="checkout-alerts-heading">
           <h2 id="checkout-alerts-heading">Driver sessions that need you</h2>

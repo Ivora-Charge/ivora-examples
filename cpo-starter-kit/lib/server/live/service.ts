@@ -18,6 +18,12 @@ import {
 } from "../ivora";
 import type { Staff } from "../team/types";
 import {
+  asTransaction,
+  syncActiveSessions,
+  trackTransaction,
+  trackTransactionById,
+} from "./active";
+import {
   COMMAND_ACTIONS,
   LiveError,
   notAllowed,
@@ -53,8 +59,6 @@ export const freeTokenReference = (operatorId: string) =>
   `cpo-free-${operatorId}`;
 /** OCPP 1.6 ID tags are at most 20 characters. */
 const STAFF_TOKEN_FORMAT = /^[A-Z0-9-]{8,20}$/;
-/** Sessions read for the Live view (the API's maximum page). */
-export const SESSION_LIMIT = 100;
 /** Commands shown, newest first. */
 const COMMAND_LIMIT = 15;
 /** Pending commands whose operation a page load re-reads, at most. */
@@ -265,6 +269,8 @@ export interface LiveSnapshot {
   };
   /** More sites or chargers than the client pages through. */
   truncated: boolean;
+  /** False when the session list may lag (Ivora was slow or refused a read). */
+  sessionsComplete: boolean;
 }
 
 /**
@@ -456,15 +462,21 @@ async function refreshPending(
 /** Everything the Live page shows. Reads only (it re-reads pending operations). */
 export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
   let locations, stations, txs: Transaction[], commands, token, free;
+  let sessionsComplete = true;
   try {
-    [locations, stations, txs, commands, token, free] = await Promise.all([
+    [locations, stations, commands, token, free] = await Promise.all([
       d.ivora.listAllLocations(),
       d.ivora.listAllStations(),
-      d.ivora.listTransactions({ limit: SESSION_LIMIT }),
       d.store.listCommands(staff.operatorId, { limit: COMMAND_LIMIT }),
       d.store.getStaffToken(staff.operatorId),
       d.store.getFreeToken(staff.operatorId),
     ]);
+    const sync = await syncActiveSessions(
+      d,
+      stations.data.map((s) => s.id),
+    );
+    txs = sync.sessions.map(asTransaction);
+    sessionsComplete = sync.complete;
     commands = await refreshPending(d, staff.operatorId, commands);
   } catch (e) {
     if (!(e instanceof IvoraError)) throw e;
@@ -553,6 +565,7 @@ export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
         connectors: views.reduce((n, v) => n + v.connectors.length, 0),
       },
       truncated: stations.truncated || locations.truncated,
+      sessionsComplete,
     },
   };
 }
@@ -567,6 +580,8 @@ export interface StationDetail {
   /** Open and recent faults (`GET /stations/{id}/faults`). */
   faults: FaultView[];
   commands: CommandView[];
+  /** False when the session list may lag (Ivora was slow or refused a read). */
+  sessionsComplete: boolean;
   /** A command on this charger is still waiting for an answer. */
   pending: CommandView | null;
 }
@@ -579,6 +594,7 @@ export async function loadStation(
 ): Promise<{ ok: true; detail: StationDetail | null } | LiveFailure> {
   let s: Station,
     txs: Transaction[],
+    sessionsComplete: boolean,
     faults: Fault[],
     locations,
     commands,
@@ -594,8 +610,10 @@ export async function loadStation(
     return { ok: false, error: describeError(e), retryAfter: retryAfter(e) };
   }
   try {
-    [txs, faults, locations, commands, token, free] = await Promise.all([
-      d.ivora.listTransactions({ station_id: stationId, limit: 20 }),
+    const sync = await syncActiveSessions(d, [stationId]);
+    txs = [...sync.sessions, ...sync.ended].map(asTransaction);
+    sessionsComplete = sync.complete;
+    [faults, locations, commands, token, free] = await Promise.all([
       d.ivora.listFaults(stationId, { limit: 20 }),
       d.ivora.listAllLocations(),
       d.store.listCommands(staff.operatorId, { stationId, limit: 10 }),
@@ -640,6 +658,7 @@ export async function loadStation(
         .sort((a, b) => Number(b.active) - Number(a.active)),
       faults: faults.map((f) => faultView(f, s)),
       commands: views,
+      sessionsComplete,
       pending: views.find((c) => c.phase === "pending") ?? null,
     },
   };
@@ -973,9 +992,7 @@ export async function sendCommand(
   if (!atLeast(actor.role, "technician")) throw notAllowed();
   const input = parse(raw);
   const s = await d.ivora.getStation(input.stationId);
-  const txs = (
-    await d.ivora.listTransactions({ station_id: s.id, limit: 20 })
-  ).filter(running);
+  const txs = await runningAt(d, s.id);
   const connector = input.connectorId
     ? s.connectors.find((c) => c.id === input.connectorId)
     : undefined;
@@ -1053,7 +1070,30 @@ export async function sendCommand(
   // already made. Read-only: the first request is still sending it.
   if (!created) return command;
   await send(d, actor.operatorId, command, staffToken);
+  // A stop names its session: read it again so the Live counts follow at once.
+  if (input.action === "stop")
+    await trackTransactionById(d, input.transactionId!).catch((e) => {
+      if (!(e instanceof IvoraError)) throw e;
+    });
   return reload(d, actor.operatorId, command.id);
+}
+
+/**
+ * The sessions running at a station, every one read again from Ivora: a command that
+ * starts or ends a session decides on this. If a read failed the list may be missing a
+ * session, so the command is refused rather than sent on a guess.
+ */
+async function runningAt(
+  d: LiveDeps,
+  stationId: number,
+): Promise<Transaction[]> {
+  const sync = await syncActiveSessions(d, [stationId], { fresh: true });
+  if (!sync.complete)
+    throw new LiveError(
+      "not_ready",
+      "Ivora could not confirm which sessions are running on this charger just now. Try again in a moment; nothing was sent.",
+    );
+  return sync.sessions.map(asTransaction).filter(running);
 }
 
 const ageOf = (d: LiveDeps, c: LiveCommand) =>
@@ -1129,9 +1169,7 @@ export async function resendCommand(
   if (ageOf(d, c) > RESEND_WINDOW_MS)
     return closeUnknown(d, actor.operatorId, c, LATE);
   const s = await d.ivora.getStation(c.stationId);
-  const txs = (
-    await d.ivora.listTransactions({ station_id: s.id, limit: 20 })
-  ).filter(running);
+  const txs = await runningAt(d, s.id);
   // Read again after the session check: the minute may have passed meanwhile.
   if (ageOf(d, c) > RESEND_WINDOW_MS)
     return closeUnknown(d, actor.operatorId, c, LATE);
@@ -1203,7 +1241,13 @@ export function eventStation(e: IvoraEvent): number | null {
  */
 export function eventTransaction(e: IvoraEvent): number | null {
   const tx = e.data.transaction as { id?: unknown } | undefined;
-  const v = e.data.transaction_id ?? tx?.id;
+  const v =
+    e.data.transaction_id ??
+    tx?.id ??
+    (e.type.startsWith("charging_session.") &&
+    /^\d{1,15}$/.test(e.resource_id ?? "")
+      ? Number(e.resource_id)
+      : undefined);
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
 }
 
@@ -1221,6 +1265,21 @@ export async function handleEvent(d: LiveDeps, e: IvoraEvent): Promise<void> {
       const changes = fromOperation(await d.ivora.getOperation(opId!));
       if (changes.phase !== "pending")
         await d.store.record(found.operatorId, found.command.id, changes);
+    }
+  }
+  // A session event is news about one session: read it and keep it (or its end).
+  // Best effort: the next scan or refresh repairs a read that failed, and it must not
+  // hold back the rest of the event's work.
+  const transactionId = eventTransaction(e);
+  if (transactionId) {
+    try {
+      const tx = await d.ivora.getTransaction(transactionId);
+      const station = eventStation(e);
+      if (station == null || tx.station_id === station)
+        await trackTransaction(d, tx);
+    } catch (err) {
+      if (!(err instanceof IvoraError && err.status === 404))
+        logIvora("webhook session", err);
     }
   }
   await d.store.markProcessed(e.id);

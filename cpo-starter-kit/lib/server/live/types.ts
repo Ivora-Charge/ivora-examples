@@ -61,6 +61,26 @@ export interface StaffToken {
   tokenId: number | null;
 }
 
+/**
+ * A session the kit tracks (cpo_active_sessions): what Ivora's `GET /transactions/{id}`
+ * reported when it was last read. `active` false is final (the session ended); ended
+ * sessions are kept for a day so a station page can show them.
+ */
+export interface TrackedSession {
+  transactionId: number;
+  stationId: number;
+  connectorId: number | null;
+  connectorNumber: number | null;
+  /** As Ivora shows it: masked to the last 4 characters behind ****. */
+  idToken: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  energyWh: number | null;
+  active: boolean;
+  /** When the kit last read the session from Ivora (ISO 8601). */
+  checkedAt: string;
+}
+
 /** One webhook delivery, as the kit stores it to deduplicate. */
 export interface StoredEvent {
   id: string;
@@ -129,6 +149,23 @@ export interface LiveStore {
     stationId: number,
     transactionId: number,
   ): Promise<void>;
+  /**
+   * Tracked sessions (see TrackedSession), newest transaction first. Running ones
+   * only unless `ended` is set.
+   */
+  listTrackedSessions(o?: {
+    stationId?: number;
+    ended?: boolean;
+  }): Promise<TrackedSession[]>;
+  /**
+   * Records a session read from Ivora. Idempotent; a session that ended stays ended
+   * (a late report of it as running is ignored). checkedAt is stamped by the store.
+   */
+  trackSession(s: Omit<TrackedSession, "checkedAt">): Promise<void>;
+  /** The session tracker's own high-water mark for a station (not the checkout one). */
+  getTrackerMark(stationId: number): Promise<number | null>;
+  /** Moves the tracker mark up to transactionId; never down. */
+  advanceTrackerMark(stationId: number, transactionId: number): Promise<void>;
   /** True for a new event, false for a redelivery. */
   recordEvent(e: StoredEvent): Promise<boolean>;
   markProcessed(eventId: string): Promise<void>;

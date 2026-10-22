@@ -22,6 +22,9 @@ const MAX_COMMANDS = 8;
 /** Browsers keep about 4 KB per cookie. */
 export const DEMO_LIVE_COOKIE_MAX = 3_800;
 
+/** Tracked sessions kept in the cookie; ended ones are dropped first. */
+const MAX_TRACKED = 12;
+
 const text = (max: number) => z.string().max(max);
 const commandSchema = z.object({
   id: text(40),
@@ -49,6 +52,28 @@ const stateSchema = z.object({
     .optional(),
   freeToken: z
     .object({ idToken: text(20), tokenId: z.number().int().nullable() })
+    .optional(),
+  /** Tracked sessions (the session tracker's rows; few, see MAX_TRACKED). */
+  tracked: z
+    .array(
+      z.object({
+        transactionId: z.number().int(),
+        stationId: z.number().int(),
+        connectorId: z.number().int().nullable(),
+        connectorNumber: z.number().int().nullable(),
+        idToken: text(40).nullable(),
+        startedAt: text(40).nullable(),
+        endedAt: text(40).nullable(),
+        energyWh: z.number().nullable(),
+        active: z.boolean(),
+        checkedAt: text(40),
+      }),
+    )
+    .max(MAX_TRACKED)
+    .optional(),
+  /** The session tracker's marks by station ID. */
+  trackerMarks: z
+    .record(z.string().max(12), z.number().int().nonnegative())
     .optional(),
   /** Transaction high-water marks by station ID. */
   marks: z
@@ -236,6 +261,43 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
     async advanceTransactionMark(stationId, transactionId) {
       await update((s) => {
         const marks = (s.marks ??= {});
+        const k = String(stationId);
+        marks[k] = Math.max(marks[k] ?? 0, transactionId);
+      });
+    },
+    async listTrackedSessions(o = {}) {
+      return ((await cookie.load()).tracked ?? [])
+        .filter(
+          (t) =>
+            (o.ended || t.active) &&
+            (o.stationId === undefined || t.stationId === o.stationId),
+        )
+        .sort((a, b) => b.transactionId - a.transactionId);
+    },
+    trackSession(t) {
+      return update((s) => {
+        const rows = (s.tracked ??= []);
+        const i = rows.findIndex((x) => x.transactionId === t.transactionId);
+        // An ended session stays ended.
+        if (i >= 0 && !rows[i].active) return;
+        const row = { ...t, checkedAt: new Date().toISOString() };
+        if (i >= 0) rows[i] = row;
+        else rows.push(row);
+        // Over the cookie's room: ended sessions go first, oldest first.
+        rows.sort(
+          (a, b) =>
+            Number(b.active) - Number(a.active) ||
+            b.transactionId - a.transactionId,
+        );
+        rows.length = Math.min(rows.length, MAX_TRACKED);
+      });
+    },
+    async getTrackerMark(stationId) {
+      return (await cookie.load()).trackerMarks?.[String(stationId)] ?? null;
+    },
+    async advanceTrackerMark(stationId, transactionId) {
+      await update((s) => {
+        const marks = (s.trackerMarks ??= {});
         const k = String(stationId);
         marks[k] = Math.max(marks[k] ?? 0, transactionId);
       });

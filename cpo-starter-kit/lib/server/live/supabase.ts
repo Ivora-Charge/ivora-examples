@@ -204,6 +204,63 @@ export function createSupabaseLiveStore(): LiveStore {
         }),
       );
     },
+    async listTrackedSessions(o = {}) {
+      let q = svc()
+        .from("cpo_active_sessions")
+        .select(
+          "transaction_id, station_id, connector_id, connector_number, id_token, started_at, ended_at, energy_wh, active, checked_at",
+        )
+        .order("transaction_id", { ascending: false })
+        .limit(500);
+      if (!o.ended) q = q.eq("active", true);
+      if (o.stationId !== undefined) q = q.eq("station_id", o.stationId);
+      const { data } = check(await q);
+      return (data ?? []).map((r) => ({
+        transactionId: r.transaction_id,
+        stationId: r.station_id,
+        connectorId: r.connector_id,
+        connectorNumber: r.connector_number,
+        idToken: r.id_token,
+        startedAt: r.started_at,
+        endedAt: r.ended_at,
+        energyWh: r.energy_wh === null ? null : Number(r.energy_wh),
+        active: r.active,
+        checkedAt: r.checked_at,
+      }));
+    },
+    async trackSession(s) {
+      check(
+        await svc().rpc("cpo_track_session", {
+          p_transaction_id: s.transactionId,
+          p_station_id: s.stationId,
+          p_connector_id: s.connectorId,
+          p_connector_number: s.connectorNumber,
+          p_id_token: s.idToken,
+          p_started_at: s.startedAt,
+          p_ended_at: s.endedAt,
+          p_energy_wh: s.energyWh,
+          p_active: s.active,
+        }),
+      );
+    },
+    async getTrackerMark(stationId) {
+      const { data } = check(
+        await svc()
+          .from("cpo_active_marks")
+          .select("last_transaction_id")
+          .eq("station_id", stationId)
+          .maybeSingle(),
+      );
+      return data ? data.last_transaction_id : null;
+    },
+    async advanceTrackerMark(stationId, transactionId) {
+      check(
+        await svc().rpc("cpo_advance_active_mark", {
+          p_station_id: stationId,
+          p_transaction_id: transactionId,
+        }),
+      );
+    },
     async recordEvent(e) {
       const { data } = check(
         await svc().rpc("cpo_record_ivora_event", {

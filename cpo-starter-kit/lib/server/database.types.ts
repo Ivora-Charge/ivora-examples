@@ -278,6 +278,36 @@ export type Database = {
         Update: { [_ in never]: never };
         Relationships: [];
       };
+      cpo_active_sessions: {
+        Row: {
+          transaction_id: number;
+          station_id: number;
+          connector_id: number | null;
+          connector_number: number | null;
+          id_token: string | null;
+          started_at: Timestamp | null;
+          ended_at: Timestamp | null;
+          energy_wh: number | null;
+          active: boolean;
+          checked_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        // Written only through cpo_track_session.
+        Insert: { transaction_id: number; station_id: number };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
+      cpo_active_marks: {
+        Row: {
+          station_id: number;
+          last_transaction_id: number;
+          updated_at: Timestamp;
+        };
+        // Written only through cpo_advance_active_mark.
+        Insert: { station_id: number; last_transaction_id: number };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
       cpo_tariffs: {
         Row: {
           id: string;
@@ -528,6 +558,24 @@ export type Database = {
       };
       cpo_advance_transaction_mark: {
         Args: { p_station_id: number; p_transaction_id: number };
+        Returns: undefined;
+      };
+      cpo_advance_active_mark: {
+        Args: { p_station_id: number; p_transaction_id: number };
+        Returns: undefined;
+      };
+      cpo_track_session: {
+        Args: {
+          p_transaction_id: number;
+          p_station_id: number;
+          p_connector_id: number | null;
+          p_connector_number: number | null;
+          p_id_token: string | null;
+          p_started_at: string | null;
+          p_ended_at: string | null;
+          p_energy_wh: number | null;
+          p_active: boolean;
+        };
         Returns: undefined;
       };
       cpo_record_ivora_event: {
