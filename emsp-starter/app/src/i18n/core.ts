@@ -120,6 +120,7 @@ export function createI18n(
     const total = Math.max(0, Math.floor(seconds / 60));
     const h = Math.floor(total / 60);
     const m = total % 60;
+    if (!h && !m && seconds > 0) return t("unit.underMinute");
     return h
       ? t("unit.hoursMinutes", {
           h: integer.format(h),

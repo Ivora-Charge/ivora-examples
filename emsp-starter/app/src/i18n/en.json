@@ -339,6 +339,7 @@
 
   "unit.kwh": "{n} kWh",
   "unit.minutes": "{m} min",
+  "unit.underMinute": "under 1 min",
   "unit.hoursMinutes": "{h} h {m} min",
 
   "charging.scan": "Scan or enter a charger",

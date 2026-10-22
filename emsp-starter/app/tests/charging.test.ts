@@ -325,6 +325,7 @@ describe("words and formats for charging", () => {
     expect(en.kwh(12.3456)).toBe("12.35 kWh");
     expect(de.kwh(12.3456)).toBe("12,35 kWh");
     expect(en.duration(45 * 60)).toBe("45 min");
+    expect(en.duration(20)).toBe("under 1 min");
     expect(en.duration(65 * 60 + 30)).toBe("1 h 05 min");
     expect(en.t("charge.declined", { amount: en.minor(2500, "EUR") })).toBe(
       "Your card didn't approve more charging; session stopped at €25.00.",

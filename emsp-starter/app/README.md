@@ -1,6 +1,6 @@
 # eMSP Starter: driver app (Kilolane)
 
-> **In progress** (part 10 of 13). See the [template README](../README.md) for what the eMSP Starter is and how the server and the app fit together.
+> **In progress** (part 11 of 13). See the [template README](../README.md) for what the eMSP Starter is and how the server and the app fit together.
 
 The driver app of the eMSP Starter, built with Expo and expo-router: iOS, Android and a web build from one codebase. It talks only to your eMSP Starter server's API; it holds no keys and never reads the database. Its brand, **Kilolane**, comes from the [design brief](../docs/brief/BRIEF.md) and lives in `brand/tokens.json`.
 
@@ -11,13 +11,28 @@ The driver app of the eMSP Starter, built with Expo and expo-router: iOS, Androi
 ![Desktop, light mode: list panel, map, and a charger's detail card](docs/desktop-light.png)
 ![Desktop, dark mode: list panel, map, and a charger's detail card](docs/desktop-dark.png)
 
+Charging (offline demo):
+
+| Phone, light                                                                    | Phone, dark                                                                   |
+| ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| ![A charge in progress on a phone, light mode](docs/charging-phone-light.png)   | ![A charge in progress on a phone, dark mode](docs/charging-phone-dark.png)   |
+| ![A charge in progress on desktop, light mode](docs/charging-desktop-light.png) | ![A charge in progress on desktop, dark mode](docs/charging-desktop-dark.png) |
+
 ## What it does today
 
-- **Shell:** four tabs (Map, Charging, Wallet, Account), at the bottom on phones and in a rail on wide screens. Charging and Wallet say what arrives in later parts.
+- **Shell:** four tabs (Map, Charging, Wallet, Account), at the bottom on phones and in a rail on wide screens.
 - **Map first:** a map of chargers with clusters, and the same places in a list. On phones the list, search and filters sit in a bottom sheet in thumb reach (drag the handle, or tap it); on wide screens they sit in a panel beside the map.
 - **Search:** one box for a place, a charger's reference (for example `A1`) or an EVSE ID (for example `ZZ*MCK*E11`; separators and case do not matter). **Filters:** open now, available, minimum power (22, 50, 150 kW), connector (CCS, Type 2, CHAdeMO), step-free access, and no fee or paid. "Show chargers near me" sorts by distance.
-- **Charger page:** connectors with their EVSE IDs and status, the price from the CPO's tariff, rounded to the currency's minor unit (€0.71; with VAT when the CPO gives the rate, and every other component and condition), opening hours with "open now", directions in the device's maps app, and **Charge here** (sign in first; starting a charge arrives in the next part).
+- **Charger page:** connectors with their EVSE IDs and status, the price from the CPO's tariff, rounded to the currency's minor unit (€0.71; with VAT when the CPO gives the rate, and every other component and condition), opening hours with "open now", directions in the device's maps app, **Charge here** (sign in first), a **favourite** star and **Report a problem**.
 - **Passwordless sign-in** with the server's email code ([server README](../server/README.md#driver-accounts-and-sign-in)): the same answer for every address, so the app never tells who has an account; rate limits are the server's, and a `429` shows how long to wait. Sessions are kept in the keychain or keystore on phones and in `sessionStorage` on the web (see "Sessions on the web" below). The app refreshes the session shortly before its access token expires; being offline or a server error keeps the driver signed in and tries again later, and only a refresh token the server turns down (`400` or `401`) signs the driver out.
+- **Start charging** (Charging tab, "Scan or enter a charger"): scan the charger's QR code with the camera (phones; a bare EVSE ID, a link with one, or a charger reference) or type the charger or EVSE ID. The confirm screen picks the scanned EVSE's connector (or the first free one), and shows its price, **the hold the server will place** on the card (from `GET /api/v1/charges/quote`) and the card that pays. **Start charging** sends one request with its own request ID: the server places the hold, then sends START_SESSION. A refused card, a charger that refuses app starts, one in use or out of order, and no answer each have their own words; a refused card is never told as a charger fault.
+- **Live session** (Charging tab): starting, charging, stopping, finished; kWh, time, the cost so far as the CPO reports it, and the battery and power when the CPO's live-data adapter gives them (part 9). **Stop charging** sends STOP_SESSION through the server. The tab asks the server every 3 seconds and finds the charge again after a restart (`GET /api/v1/charges/active`).
+- **Declined higher hold:** when the server reports `hold_increment_declined`, the live screen, the history entry and the receipt say "Your card didn't approve more charging; session stopped at €25.00." (the amount in the device's locale and the payment's currency), never as a charger fault, and the phone gets the same push notification.
+- **Push notifications** (iOS and Android, Expo notifications): charging finished, a start or stop that failed, a declined higher hold. The app asks for permission when the driver starts a charge (or from Account), saves the device's Expo push token on the server with the device's language, and forgets it at sign-out. While the app is open it shows the news itself. The web build has no push; the offline demo saves nothing.
+- **Wallet:** saved cards (brand, last 4, expiry) as Stripe holds them, choose the card that pays, remove one, and **Add a card** with Stripe's PaymentSheet (phones; the web build says to add cards in the phone app). Receipts of past charges.
+- **Receipts and history:** recent charges on the Charging tab, receipts in the Wallet; a receipt from the CPO's CDR with the payment's own figures (held, charged, refunded; the app never computes them), and **Email me this receipt**.
+- **Favourites:** the star on a charger's page; favourites are listed on the Charging tab.
+- **Report a problem:** from a charger's page, a live charge or a receipt: which charger, what went wrong, the driver's words and an optional photo (resized to 1280 px and re-encoded as JPEG, so it carries no location data). It goes to the admin web's Reported problems.
 - **Light and dark mode**, following the device.
 - **Demo strip:** on every screen while the app runs its offline demo or the server reports demo mode. It cannot be dismissed and wraps on narrow screens.
 
@@ -45,7 +60,7 @@ npm run web       # in a browser
 npm run dev       # Expo dev server; press i or a for a simulator (development build, see below)
 ```
 
-With no `EXPO_PUBLIC_API_URL` the app runs its **offline demo**: the mock CPO's sample chargers (made by the server's own code; `npm run app:demo-data` in `server/` refreshes them), sign-in with the code `000000`, and no request to any server. "Near me" puts you beside the sample chargers instead of asking for your location. The map's tiles are the one thing it loads from outside the device (public map data from OpenFreeMap, below).
+With no `EXPO_PUBLIC_API_URL` the app runs its **offline demo**: the mock CPO's sample chargers (made by the server's own code; `npm run app:demo-data` in `server/` refreshes them), sign-in with the code `000000`, and no request to any server. Charging runs on the device (`src/lib/demo-charge.ts`): starts are accepted at once, energy rises at 0.2 kWh per second, the hold is €25.00 and nothing is charged. Two demo cards: Visa •••• 4242, and Mastercard •••• 0341, which declines a higher hold once the cost reaches a tenth of it, to show `hold_increment_declined`. Against a server in demo mode the server plays the same part. "Near me" puts you beside the sample chargers instead of asking for your location. The map's tiles are the one thing it loads from outside the device (public map data from OpenFreeMap, below).
 
 The map needs MapLibre Native on iOS and Android, so the native app runs as a [development build](https://docs.expo.dev/develop/development-builds/introduction/) (`npx expo run:ios`, `npx expo run:android`, or EAS Build), not in Expo Go.
 
@@ -82,6 +97,12 @@ Usually that means one key per platform, each with its own usage limits. Keep th
 
 On the web, MapLibre runs its tile work in a Web Worker from its own file; `npm ci` (and `npm run build`) copy it to `public/maplibre-gl-worker.mjs`.
 
+## Payments and push on phones
+
+- **Stripe PaymentSheet** (`@stripe/stripe-react-native`, `src/components/AddCard.tsx`): the server makes the SetupIntent and the ephemeral key and gives the publishable key; set `STRIPE_PUBLISHABLE_KEY` on the server, nothing in the app. For Apple Pay, add your `merchantIdentifier` to the Stripe plugin in `app.json`.
+- **Push** (`expo-notifications`, `src/lib/push.ts`): needs an EAS project (`npx eas init` writes `extra.eas.projectId` into `app.json`), APNs and FCM credentials in your Expo account (`eas credentials`), and `EXPO_ACCESS_TOKEN` on the server. Without a project ID the app says notifications are not available.
+- Both need a development build (as the map does), not Expo Go.
+
 ## Deploy
 
 - **Web:** `npm run build` writes a static single-page site to `dist/`. Host it anywhere that serves static files, with a rewrite of unknown paths to `/index.html` so links such as `/account` open the app.
@@ -96,7 +117,8 @@ The stronger model is an `httpOnly`, `Secure`, `SameSite` cookie that page scrip
 
 ## Limits and next steps
 
-- Starting and stopping a charge, the Charging tab, cards and receipts arrive in parts 11 to 13.
+- The web build cannot add cards (PaymentSheet is native) and has no push notifications or QR scanner; it starts charges from a typed ID.
+- The live screen asks the server every 3 seconds while it is open.
 - Search finds places by the words of their name, street, postcode and city. Searching any address (geocoding) needs a geocoder service and is not included.
 - RFID cards still cannot charge (owner decision): the app is the only way to charge.
 
