@@ -28,6 +28,7 @@ type SessionRow = {
   driver_ref: string | null;
   command_id: string | null;
   completed_at: string | null;
+  stop_reason?: string | null;
   revision: string;
   created_at: string;
   updated_at: string;
@@ -80,6 +81,7 @@ const session = (r: SessionRow): StoredSession => ({
   driverRef: r.driver_ref,
   commandId: r.command_id,
   completedAt: isoOrNull(r.completed_at),
+  stopReason: r.stop_reason ?? null,
   revision: r.revision,
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
@@ -238,6 +240,20 @@ export class SupabaseSessionStore implements SessionStore {
       "resolution=ignore-duplicates,return=representation",
     );
     return row ? cdr(row) : null;
+  }
+
+  findCdrsByCommand(commandId: string) {
+    return this.cdrs(`command_id=${eq(commandId)}&order=received_at.asc`);
+  }
+
+  async setStopReason(id: string, reason: string, now: string) {
+    // Not the revision: the CPO's writes never touch stop_reason, so they never race it.
+    await this.rest(
+      "PATCH",
+      `emsp_sessions?id=${eq(id)}`,
+      { stop_reason: reason, updated_at: now },
+      "return=minimal",
+    );
   }
 
   async hasCdr(k: SessionKey) {

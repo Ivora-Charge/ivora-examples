@@ -71,6 +71,7 @@ code {
 
 .topbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: var(--space-sm);
   min-height: var(--min-tap-target);
@@ -129,7 +130,8 @@ main:focus {
 
 .nav {
   display: flex;
-  gap: var(--space-md);
+  flex-wrap: wrap;
+  column-gap: var(--space-md);
   margin-left: auto;
 }
 .nav a {

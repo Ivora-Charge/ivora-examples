@@ -55,6 +55,12 @@ export type StoredSession = SessionWrite & {
   revision: string;
   createdAt: string;
   updatedAt: string;
+  /**
+   * Why we stopped it, when we did (a declined raise of the payment hold, say), for
+   * the driver's history and receipt. Set apart from the CPO's data: a write of the
+   * session never changes it.
+   */
+  stopReason?: string | null;
 };
 
 export type CdrSource = "push" | "pull";
@@ -145,6 +151,10 @@ export interface SessionStore {
   ): Promise<StoredCdr | null>;
   /** True when a CDR (not a credit CDR) names this session. */
   hasCdr(key: SessionKey): Promise<boolean>;
+  /** The CDRs linked to this START_SESSION command, oldest first. */
+  findCdrsByCommand(commandId: string): Promise<StoredCdr[]>;
+  /** Records why we stopped a session. */
+  setStopReason(id: string, reason: string, now: string): Promise<void>;
   reconcile(query: ReconciliationQuery): Promise<ReconciliationRow[]>;
 }
 
@@ -278,6 +288,18 @@ export class MemorySessionStore implements SessionStore {
         c.cdr.party_id === key.partyId.toUpperCase() &&
         c.cdr.session_id === key.sessionId,
     );
+  }
+
+  async findCdrsByCommand(commandId: string) {
+    return [...this.cdrs.values()]
+      .filter((c) => c.commandId === commandId)
+      .sort((a, b) => Date.parse(a.receivedAt) - Date.parse(b.receivedAt))
+      .map((c) => structuredClone(c));
+  }
+
+  async setStopReason(id: string, reason: string, now: string) {
+    for (const s of this.sessions.values())
+      if (s.id === id) Object.assign(s, { stopReason: reason, updatedAt: now });
   }
 
   /** The same figures as the database function emsp_reconciliation. */
