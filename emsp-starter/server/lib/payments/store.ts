@@ -175,7 +175,10 @@ export type PaymentReconciliationRow = {
   refundedAmount: number;
   /** Payments whose capture is not their CDR's total, or in another currency. */
   amountMismatches: number;
-  /** Payment IDs, at most RECONCILIATION_ID_LIMIT. */
+  /**
+   * Payment IDs, at most RECONCILIATION_ID_LIMIT, in the order of their CDR's
+   * `country_code/party_id/cdr_id`, then the payment ID.
+   */
   amountMismatchIds: string[];
 };
 
@@ -429,6 +432,8 @@ export class MemoryPaymentStore implements PaymentStore {
   /** The same figures as the database function emsp_payment_reconciliation. */
   async reconcileCdrs(q: ReconciliationQuery) {
     const rows = new Map<string, PaymentReconciliationRow>();
+    // Mismatches by row, with their CDR's reference to sort by (as the SQL does).
+    const mismatches = new Map<PaymentReconciliationRow, [string, string][]>();
     for (const c of this.cdrs()) {
       const d = c.cdr;
       if (d.credit || (q.peerId && c.peerId !== q.peerId)) continue;
@@ -454,10 +459,11 @@ export class MemoryPaymentStore implements PaymentStore {
           }),
         );
       const p = this.find((x) => x.cdrId === c.id);
+      const ref = `${d.country_code}/${d.party_id}/${d.id}`;
       if (!p) {
         if (c.driverRef !== null) {
           r.cdrsUnpaid++;
-          r.cdrsUnpaidIds.push(`${d.country_code}/${d.party_id}/${d.id}`);
+          r.cdrsUnpaidIds.push(ref);
         }
         continue;
       }
@@ -470,7 +476,7 @@ export class MemoryPaymentStore implements PaymentStore {
       }
       if (!same || p.capturedAmount !== p.cdrAmount) {
         r.amountMismatches++;
-        r.amountMismatchIds.push(p.id);
+        mismatches.set(r, [...(mismatches.get(r) ?? []), [ref, p.id]]);
       }
     }
     return [...rows.values()]
@@ -479,9 +485,10 @@ export class MemoryPaymentStore implements PaymentStore {
         cdrsUnpaidIds: r.cdrsUnpaidIds
           .sort(byCode)
           .slice(0, RECONCILIATION_ID_LIMIT),
-        amountMismatchIds: r.amountMismatchIds
-          .sort(byCode)
-          .slice(0, RECONCILIATION_ID_LIMIT),
+        amountMismatchIds: (mismatches.get(r) ?? [])
+          .sort((a, b) => byCode(a[0], b[0]) || byCode(a[1], b[1]))
+          .slice(0, RECONCILIATION_ID_LIMIT)
+          .map(([, id]) => id),
       }))
       .sort(
         (a, b) =>

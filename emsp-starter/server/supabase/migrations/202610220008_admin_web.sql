@@ -20,7 +20,8 @@ create index emsp_audit_log_subject_id_idx
 -- saw, and what they captured and refunded, in minor units of the CDR's currency (a
 -- payment in another currency is not summed: it counts as a mismatch); and the payments
 -- whose capture is not the CDR's total, or in another currency. At most 100 IDs per list:
--- `country_code/party_id/cdr_id` for CDRs, the payment ID for payments.
+-- `country_code/party_id/cdr_id` for CDRs, the payment ID for payments. Both lists are in
+-- the order of the CDR's reference (bytewise), then the payment ID, so they are stable.
 create function public.emsp_payment_reconciliation(
   p_from timestamptz,
   p_to timestamptz,
@@ -72,7 +73,8 @@ as $$
     coalesce(sum(c.refunded_amount) filter (where c.same_currency), 0)::bigint,
     count(*) filter (where c.mismatch)::integer,
     coalesce(
-      (array_agg(c.payment_id order by c.payment_id collate "C") filter (where c.mismatch))[1:100],
+      (array_agg(c.payment_id order by c.ref collate "C", c.payment_id collate "C")
+        filter (where c.mismatch))[1:100],
       '{}'::text[]
     )
   from c

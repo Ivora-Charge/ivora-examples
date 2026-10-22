@@ -203,9 +203,11 @@ describe("emsp_payment_reconciliation", () => {
         cdrAmount: 1500 + 2321 + 1500,
         amountMismatches: 2,
       });
-      expect(
-        (await byCommand(rows, payments))[0].amountMismatchIds.sort(),
-      ).toEqual([commands[1], commands[2]].sort());
+      // In the order of their CDR (CDR-1, then CDR-2), not of the random payment IDs.
+      expect((await byCommand(rows, payments))[0].amountMismatchIds).toEqual([
+        commands[1],
+        commands[2],
+      ]);
       expect(await payments.reconcileCdrs({ ...q, peerId: B })).toEqual([]);
     },
   );
