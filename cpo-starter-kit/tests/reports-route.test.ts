@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetIvoraForTests } from "@/lib/server/ivora";
+import { resetDemoCheckoutForTests } from "@/lib/server/checkout/demo-cookie";
 import { resetDemoLiveForTests } from "@/lib/server/live/demo-cookie";
 import type { Staff } from "@/lib/server/team/types";
 
@@ -28,6 +29,7 @@ describe("GET /reports/export", () => {
     process.env.DEMO_MODE = "true";
     resetIvoraForTests();
     resetDemoLiveForTests();
+    resetDemoCheckoutForTests();
     vi.stubGlobal("fetch", () => {
       throw new Error("demo mode must not call fetch");
     });
@@ -46,18 +48,23 @@ describe("GET /reports/export", () => {
   it("streams the CSV to a viewer, as an attachment that is never cached", async () => {
     who.staff = staff("viewer");
     const res = await GET(
-      new Request(
-        "http://localhost/reports/export?period=custom&from=2026-01-01&to=2026-01-31&bucket=day",
-      ),
+      new Request("http://localhost/reports/export?period=90d"),
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("text/csv; charset=utf-8");
-    expect(res.headers.get("content-disposition")).toBe(
-      'attachment; filename="sessions-2026-01-01-to-2026-01-31.csv"',
+    expect(res.headers.get("content-disposition")).toMatch(
+      /^attachment; filename="sessions-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.csv"$/,
     );
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     const text = await res.text();
-    expect(text.startsWith("session_id,started_at_utc,")).toBe(true);
+    expect(text.startsWith("session_ref,session_type,status,")).toBe(true);
+    expect(text.split("\r\n").length).toBeGreaterThan(20);
+  });
+
+  it("refuses a staff member without a role", async () => {
+    who.staff = { ...staff("viewer"), role: "none" as Staff["role"] };
+    const res = await GET(new Request("http://localhost/reports/export"));
+    expect(res.status).toBe(403);
   });
 
   it("refuses filters it can't read instead of exporting another period", async () => {

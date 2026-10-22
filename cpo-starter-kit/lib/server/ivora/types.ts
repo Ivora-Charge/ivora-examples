@@ -175,7 +175,7 @@ export interface Transaction {
   energy_wh?: number | null;
 }
 
-/** The bill a transaction settles, as the transaction list and detail show it. */
+/** The bill a transaction settles, as `GET /transactions/{id}` shows it. */
 export interface TransactionBill {
   id: string;
   status: "open" | "final";
@@ -186,23 +186,17 @@ export interface TransactionBill {
 }
 
 /**
- * A transaction as `GET /transactions` lists it, with the fields reports read. `bill`
- * is absent from an API that does not list it (reports then read `GET /bills`), and
- * null when the transaction settles no bill.
+ * `GET /transactions/{id}` (needs billing:read): the session with its stop reason,
+ * duration and bill. The list (`GET /transactions`) carries none of these, has no date
+ * filter and lists oldest first, so reports never scan it for a period.
  */
-export interface TransactionRecord extends Transaction {
+export interface TransactionDetail extends Transaction {
   /** The station's OCPP connection name. */
   station_name?: string | null;
+  /** From started_at to ended_at, or until now while the session is active. */
   duration_seconds?: number | null;
   stop_reason?: string | null;
   bill?: TransactionBill | null;
-}
-
-/** A list page whose cursor is an opaque string (`GET /bills`). */
-export interface StringPage<T> {
-  data: T[];
-  /** Pass as `after` for the next page; null or empty on the last page. */
-  next_cursor?: string | null;
 }
 
 // ---- Overview statistics (`GET /stats`) ----
@@ -636,7 +630,7 @@ export interface IvoraClient {
     limit?: number;
     station_id?: number;
   }): Promise<Transaction[]>;
-  getTransaction(transactionId: number): Promise<Transaction>;
+  getTransaction(transactionId: number): Promise<TransactionDetail>;
   /** The token with this external_reference, if any (`GET /tokens`). */
   findToken(externalReference: string): Promise<TokenRecord | null>;
   /** Adopts the token by external_reference when the create may already have happened. */
@@ -729,17 +723,4 @@ export interface IvoraClient {
    * stats_range_too_large.
    */
   getStats(q: StatsQuery): Promise<Stats>;
-  /** One page of transactions (`after` is the previous page's next_cursor). */
-  listTransactionPage(o: {
-    after?: number;
-    limit?: number;
-    station_id?: number;
-  }): Promise<Page<TransactionRecord>>;
-  /** One page of bills, in the API's order (by bill ID, not by time). */
-  listBillPage(o: {
-    after?: string;
-    limit?: number;
-    station_id?: number;
-    status?: "open" | "final";
-  }): Promise<StringPage<Bill>>;
 }

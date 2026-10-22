@@ -4,18 +4,16 @@ import {
   describeError,
   ERRORS_URL,
   IvoraError,
-  type Bill,
   type IvoraClient,
   type Location,
   type Station,
   type Stats,
   type StatsBucketSize,
-  type TransactionBill,
-  type TransactionRecord,
+  type TransactionDetail,
 } from "../ivora";
-import { isFreeSession, isStaffSession } from "../live/service";
 import type { OnboardingStore } from "../onboarding/types";
 import type { Staff } from "../team/types";
+import { reportStatus } from "./records";
 import {
   bucketCeil,
   bucketFloor,
@@ -31,8 +29,12 @@ import {
   PRESETS,
   STATUS_FILTERS,
   type Preset,
+  type ReportCheckout,
+  type ReportFilter,
   type ReportQuery,
-  type SessionKind,
+  type ReportsStore,
+  type ReportTotals,
+  type SessionDetails,
   type SessionRow,
   type StatusFilter,
 } from "./types";
@@ -40,28 +42,19 @@ import {
 const HOUR_MS = 3_600_000;
 
 /**
- * What reports read. Every read goes to Ivora (or the demo client); the kit's own
- * database only gives the company's time zone and the staff and free charging tokens,
- * so staff/test and free sessions are labelled and never counted as driver revenue.
+ * What reports read. Period figures for every session on the operator's chargers come
+ * from Ivora's GET /stats. Session rows, their totals and driver revenue come from the
+ * kit's own checkout records (`store`): Ivora's transaction list has no date filter,
+ * so the kit never scans it.
  */
 export interface ReportsDeps {
   ivora: IvoraClient;
   company: Pick<OnboardingStore, "load">;
-  /** The operator's staff and free charging tokens (demo mode adds its samples'). */
-  tokens(operatorId: string): Promise<{ staff: string[]; free: string[] }>;
+  store: ReportsStore;
   now: () => number;
 }
 
-/** How far one session scan reads: pages of 100 transactions, and seconds in total. */
-export interface ScanLimits {
-  maxPages: number;
-  seconds: number;
-}
-/** The Reports page: up to 1,000 transactions (and 1,000 bills when needed). */
-export const PAGE_SCAN: ScanLimits = { maxPages: 10, seconds: 20 };
-/** The CSV export: up to 5,000. */
-export const CSV_SCAN: ScanLimits = { maxPages: 50, seconds: 50 };
-/** Rows the page shows; the CSV has every matching row the scan read. */
+/** Rows per page of the sessions table. */
 export const PAGE_ROWS = 50;
 
 // ---- Period and filters ----
@@ -146,6 +139,7 @@ export function parseReportQuery(
   const station = params.get("station");
   let status = (params.get("status") ?? "all") as StatusFilter;
   if (!STATUS_FILTERS.includes(status)) status = "all";
+  const page = params.get("page");
   return {
     query: {
       preset,
@@ -158,13 +152,17 @@ export function parseReportQuery(
       stationId:
         station && /^[1-9]\d{0,11}$/.test(station) ? Number(station) : null,
       status,
+      page: page && /^[1-9]\d{0,5}$/.test(page) ? Number(page) : 1,
     },
     error,
   };
 }
 
-/** The query as URL parameters, for the CSV link (the same period and filters). */
-export function reportSearch(q: ReportQuery): string {
+/**
+ * The query as URL parameters: the same period and filters, for the CSV link (without
+ * a page) and the table's pages.
+ */
+export function reportSearch(q: ReportQuery, page?: number): string {
   const p = new URLSearchParams({ period: q.preset });
   if (q.preset === "custom") {
     p.set("from", q.fromDate);
@@ -173,6 +171,7 @@ export function reportSearch(q: ReportQuery): string {
   }
   if (q.stationId !== null) p.set("station", String(q.stationId));
   if (q.status !== "all") p.set("status", q.status);
+  if (page !== undefined && page > 1) p.set("page", String(page));
   return p.toString();
 }
 
@@ -247,26 +246,23 @@ export async function loadStats(
   }
 }
 
-// ---- Sessions ----
+// ---- Sessions (the kit's own checkouts) ----
 
-/** Stations and sites by ID, and the tokens that mark staff/test and free sessions. */
-export interface ScanContext {
+/** Stations and sites by ID: names and time zones for the rows. */
+export interface StationContext {
   stations: Map<
     number,
     { name: string; siteName: string | null; timeZone: string | null }
   >;
-  staffTokens: string[];
-  freeTokens: string[];
   /** The report's time zone, for sessions whose site has none. */
   timeZone: string;
 }
 
-export function scanContext(
+export function stationContext(
   stations: Station[],
   locations: Location[],
-  tokens: { staff: string[]; free: string[] },
   timeZone: string,
-): ScanContext {
+): StationContext {
   const sites = new Map(locations.map((l) => [l.id, l]));
   return {
     stations: new Map(
@@ -283,285 +279,101 @@ export function scanContext(
         ];
       }),
     ),
-    staffTokens: tokens.staff,
-    freeTokens: tokens.free,
     timeZone,
   };
 }
 
-/** Staff/test and free first (they never carry revenue), then any session with a bill. */
-export function sessionKind(
-  t: { id_token?: string | null },
-  bill: TransactionBill | null,
-  ctx: Pick<ScanContext, "staffTokens" | "freeTokens">,
-): SessionKind {
-  if (ctx.staffTokens.some((x) => isStaffSession(t, x))) return "staff";
-  if (ctx.freeTokens.some((x) => isFreeSession(t, x))) return "free";
-  return bill ? "driver" : "other";
-}
-
-/** The bills a scan joins to transactions when the list does not carry them. */
-interface BillIndex {
-  byTransaction: Map<number, TransactionBill>;
-  /** Open bills by connector ID, newest first: an active session's bill. */
-  openByConnector: Map<number, Bill[]>;
-}
-
-const asTransactionBill = (b: Bill): TransactionBill => ({
-  id: b.id,
-  status: b.status,
-  currency: b.currency,
-  total_minor: b.total_minor,
-  finalized_at: b.finalized_at,
+/** What the kit's records are filtered by, for the signed-in operator. */
+export const reportFilter = (staff: Staff, q: ReportQuery): ReportFilter => ({
+  operatorId: staff.operatorId,
+  fromMs: q.fromMs,
+  toMs: q.toMs,
+  stationId: q.stationId,
+  status: q.status,
 });
 
-async function readBills(
-  ivora: IvoraClient,
-  stationId: number | null,
-  limits: ScanLimits,
-  deadline: number,
-  now: () => number,
-): Promise<{ index: BillIndex; truncated: boolean }> {
-  const index: BillIndex = {
-    byTransaction: new Map(),
-    openByConnector: new Map(),
-  };
-  let after: string | undefined;
-  for (let page = 0; ; page++) {
-    if (page >= limits.maxPages || (page > 0 && now() > deadline))
-      return { index, truncated: true };
-    const res = await ivora.listBillPage({
-      after,
-      limit: 100,
-      station_id: stationId ?? undefined,
-    });
-    for (const b of res.data) {
-      if (b.transaction_id !== null)
-        index.byTransaction.set(b.transaction_id, asTransactionBill(b));
-      else if (b.status === "open") {
-        const list = index.openByConnector.get(b.connector_id) ?? [];
-        list.push(b);
-        index.openByConnector.set(b.connector_id, list);
-      }
-    }
-    const next = res.next_cursor;
-    if (!next || !res.data.length || next === after)
-      return { index, truncated: false };
-    after = next;
-  }
-}
+const safeInt = (v: number | null | undefined) =>
+  typeof v === "number" && Number.isSafeInteger(v) ? v : null;
 
 /**
- * A transaction's bill: the one the list carries, else the bill finalized with it,
- * else (while it charges) the open bill on its connector made in the two hours before
- * it started. Null for a session that settles no bill.
+ * One row from a checkout. Money is the paid session's: the hold, the final bill
+ * (billed), what was captured, what was refunded and the net (captured minus
+ * refunded). Free sessions carry none.
  */
-function billFor(
-  t: TransactionRecord,
-  index: BillIndex | null,
-): TransactionBill | null {
-  if (t.bill !== undefined) return t.bill;
-  if (!index) return null;
-  const found = index.byTransaction.get(t.id);
-  if (found) return found;
-  const start = Date.parse(t.started_at ?? "");
-  if (t.ended_at || t.connector_id === null || Number.isNaN(start)) return null;
-  const open = (index.openByConnector.get(t.connector_id) ?? [])
-    .filter((b) => {
-      const made = Date.parse(b.created_at);
-      return made <= start && start - made <= 2 * HOUR_MS;
-    })
-    .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))[0];
-  return open ? asTransactionBill(open) : null;
-}
-
-export function toRow(
-  t: TransactionRecord,
-  bill: TransactionBill | null,
-  ctx: ScanContext,
-): SessionRow | null {
-  const start = Date.parse(t.started_at ?? "");
-  if (Number.isNaN(start)) return null;
-  const end = t.ended_at ? Date.parse(t.ended_at) : NaN;
-  const st = t.station_id !== null ? ctx.stations.get(t.station_id) : undefined;
-  const ended = !Number.isNaN(end) || t.active === false;
+export function toRow(c: ReportCheckout, ctx: StationContext): SessionRow {
+  const st = ctx.stations.get(c.stationId);
+  const start = c.sessionStartedAt ? Date.parse(c.sessionStartedAt) : NaN;
+  const end = c.sessionEndedAt ? Date.parse(c.sessionEndedAt) : NaN;
+  const status = reportStatus(c);
+  const paid = c.kind === "paid";
+  const captured = paid ? safeInt(c.capturedMinor) : null;
+  const refunded = paid ? safeInt(c.refundedMinor) : null;
   return {
-    id: t.id,
-    stationId: t.station_id,
-    stationName:
-      st?.name ??
-      t.station_name ??
-      (t.station_id !== null ? `Charger ${t.station_id}` : "Unknown charger"),
+    reference: c.reference,
+    kind: c.kind,
+    status,
+    phase: c.phase,
+    stationId: c.stationId,
+    stationName: st?.name ?? `Charger ${c.stationId}`,
     siteName: st?.siteName ?? null,
     timeZone: st?.timeZone ?? ctx.timeZone,
-    connectorId: t.connector_id,
-    connectorNumber: t.connector_number ?? null,
-    startedAt: new Date(start).toISOString(),
+    connectorId: c.connectorId,
+    connectorNumber: c.connectorNumber,
+    createdAt: c.createdAt,
+    startedAt: Number.isNaN(start) ? null : new Date(start).toISOString(),
     endedAt: Number.isNaN(end) ? null : new Date(end).toISOString(),
     durationSeconds:
-      typeof t.duration_seconds === "number"
-        ? t.duration_seconds
-        : Number.isNaN(end)
-          ? null
-          : Math.round((end - start) / 1000),
-    energyWh:
-      typeof t.energy_wh === "number" && Number.isSafeInteger(t.energy_wh)
-        ? t.energy_wh
-        : null,
-    kind: sessionKind(t, bill, ctx),
-    status: ended ? "ended" : "charging",
-    stopReason: t.stop_reason ?? null,
-    billId: bill?.id ?? null,
-    billStatus: bill?.status ?? null,
-    amountMinor:
-      bill?.status === "final" && Number.isSafeInteger(bill.total_minor)
-        ? bill.total_minor
-        : null,
-    currency: bill?.currency ?? null,
-  };
-}
-
-export function matchesStatus(r: SessionRow, status: StatusFilter): boolean {
-  switch (status) {
-    case "all":
-      return true;
-    case "charging":
-      return r.status === "charging";
-    case "ended":
-      return r.status === "ended";
-    case "billed":
-      return r.status === "ended" && r.billStatus === "final";
-    case "unbilled":
-      return r.status === "ended" && r.billStatus !== "final";
-  }
-}
-
-/**
- * The period's sessions that match the filters, one array per page of transactions,
- * in the order Ivora lists them. Transactions have no date filter in the API, so the
- * scan reads page after page (with the station filter when one is chosen) and keeps
- * those that started in the period. It stops at the last page, at the limits
- * (returning truncated), or, when pages come newest first, at the first page that
- * ends before the period. Bills are read only if the list does not carry them.
- */
-export async function* scanSessions(
-  d: Pick<ReportsDeps, "ivora" | "now">,
-  q: ReportQuery,
-  ctx: ScanContext,
-  limits: ScanLimits,
-): AsyncGenerator<SessionRow[], { truncated: boolean }> {
-  const deadline = d.now() + limits.seconds * 1000;
-  let index: BillIndex | null = null;
-  let billsTruncated = false;
-  let after: number | undefined;
-  for (let page = 0; ; page++) {
-    if (page >= limits.maxPages || (page > 0 && d.now() > deadline))
-      return { truncated: true };
-    const res = await d.ivora.listTransactionPage({
-      after,
-      limit: 100,
-      station_id: q.stationId ?? undefined,
-    });
-    if (!index && res.data.some((t) => t.bill === undefined)) {
-      const read = await readBills(
-        d.ivora,
-        q.stationId,
-        limits,
-        deadline,
-        d.now,
-      );
-      index = read.index;
-      billsTruncated = read.truncated;
-    }
-    const rows: SessionRow[] = [];
-    const starts: number[] = [];
-    for (const t of res.data) {
-      const start = Date.parse(t.started_at ?? "");
-      if (!Number.isNaN(start)) starts.push(start);
-      if (Number.isNaN(start) || start < q.fromMs || start >= q.toMs) continue;
-      if (q.stationId !== null && t.station_id !== q.stationId) continue;
-      const row = toRow(t, billFor(t, index), ctx);
-      if (row && matchesStatus(row, q.status)) rows.push(row);
-    }
-    if (rows.length) yield rows;
-    const next = res.next_cursor;
-    if (!next || !res.data.length || (after !== undefined && next === after))
-      return { truncated: billsTruncated };
-    const newestFirst = starts.every((s, i) => i === 0 || s <= starts[i - 1]);
-    if (newestFirst && starts.length && starts[starts.length - 1] < q.fromMs)
-      return { truncated: billsTruncated };
-    after = next;
-  }
-}
-
-/** The table's totals: driver revenue counts final bills of driver sessions only. */
-export interface SessionSummary {
-  sessions: number;
-  energyWh: number;
-  byKind: Record<SessionKind, number>;
-  /** Final bills of driver sessions, per currency, integer minor units. */
-  driverRevenue: { currency: string; amountMinor: number; bills: number }[];
-}
-
-export function summarize(rows: SessionRow[]): SessionSummary {
-  const byKind: Record<SessionKind, number> = {
-    driver: 0,
-    free: 0,
-    staff: 0,
-    other: 0,
-  };
-  const revenue = new Map<string, { amountMinor: number; bills: number }>();
-  let energyWh = 0;
-  for (const r of rows) {
-    byKind[r.kind] += 1;
-    energyWh += r.energyWh ?? 0;
-    if (r.kind === "driver" && r.amountMinor !== null && r.currency) {
-      const line = revenue.get(r.currency) ?? { amountMinor: 0, bills: 0 };
-      line.amountMinor += r.amountMinor;
-      line.bills += 1;
-      revenue.set(r.currency, line);
-    }
-  }
-  return {
-    sessions: rows.length,
-    energyWh,
-    byKind,
-    driverRevenue: [...revenue.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([currency, v]) => ({ currency, ...v })),
+      Number.isNaN(start) || Number.isNaN(end)
+        ? null
+        : Math.max(0, Math.round((end - start) / 1000)),
+    energyWh: c.detailAt ? safeInt(c.energyWh) : null,
+    energySoFarWh: status === "in_progress" ? safeInt(c.meterWh) : null,
+    stopReason: c.stopReason,
+    transactionId: c.transactionId,
+    billId: c.billId,
+    currency: c.currency,
+    holdMinor: paid ? c.holdMinor : null,
+    billedMinor: paid ? safeInt(c.finalMinor) : null,
+    capturedMinor: captured,
+    refundedMinor: refunded,
+    netMinor: captured === null ? null : captured - (refunded ?? 0),
+    refundCheckedAt: paid ? c.refundCheckedAt : null,
+    detailsPending: c.transactionId !== null && c.detailAt === null,
   };
 }
 
 export type SessionsResult =
   | {
       ok: true;
-      /** Newest first, at most PAGE_ROWS. */
+      /** This page's rows, newest first. */
       rows: SessionRow[];
-      summary: SessionSummary;
-      truncated: boolean;
+      totals: ReportTotals;
+      page: number;
+      pages: number;
     }
   | { ok: false; error: string };
 
+/** The table's page and the totals of every checkout that matches the filters. */
 export async function loadSessions(
-  d: Pick<ReportsDeps, "ivora" | "now">,
-  q: ReportQuery,
-  ctx: ScanContext,
-  limits = PAGE_SCAN,
+  d: Pick<ReportsDeps, "store">,
+  f: ReportFilter,
+  page: number,
+  ctx: StationContext,
 ): Promise<SessionsResult> {
   try {
-    const all: SessionRow[] = [];
-    const scan = scanSessions(d, q, ctx, limits);
-    let step = await scan.next();
-    while (!step.done) {
-      all.push(...step.value);
-      step = await scan.next();
-    }
-    all.sort((a, b) => b.startedAt.localeCompare(a.startedAt) || b.id - a.id);
+    const totals = await d.store.totals(f);
+    const pages = Math.max(1, Math.ceil(totals.checkouts / PAGE_ROWS));
+    const at = Math.min(page, pages);
+    const rows = await d.store.list(f, {
+      limit: PAGE_ROWS,
+      offset: (at - 1) * PAGE_ROWS,
+    });
     return {
       ok: true,
-      rows: all.slice(0, PAGE_ROWS),
-      summary: summarize(all),
-      truncated: step.value.truncated,
+      rows: rows.map((c) => toRow(c, ctx)),
+      totals,
+      page: at,
+      pages,
     };
   } catch (e) {
     logFailure("sessions", e);
@@ -580,12 +392,12 @@ export interface ReportsContext {
   stations: { id: number; name: string }[];
   /** More stations or sites than the client pages through. */
   truncated: boolean;
-  scan: ScanContext;
+  places: StationContext;
 }
 
 /**
  * What the page and the export need before reading sessions: the time zone, the
- * period, the stations (names, sites, the station filter) and the tokens.
+ * period and the stations (names, sites, the station filter).
  */
 export async function loadReportsContext(
   d: ReportsDeps,
@@ -595,11 +407,10 @@ export async function loadReportsContext(
   { ok: true; context: ReportsContext } | { ok: false; error: string }
 > {
   try {
-    const [profile, stations, locations, tokens] = await Promise.all([
+    const [profile, stations, locations] = await Promise.all([
       d.company.load(staff.operatorId).catch(() => null),
       d.ivora.listAllStations(),
       d.ivora.listAllLocations(),
-      d.tokens(staff.operatorId),
     ]);
     const tz = reportTimeZone(profile?.timeZone ?? null, locations.data);
     const { query, error } = parseReportQuery(params, tz.zone, d.now());
@@ -614,7 +425,7 @@ export async function loadReportsContext(
           .map((s) => ({ id: s.id, name: s.name }))
           .sort((a, b) => a.name.localeCompare(b.name)),
         truncated: stations.truncated || locations.truncated,
-        scan: scanContext(stations.data, locations.data, tokens, tz.zone),
+        places: stationContext(stations.data, locations.data, tz.zone),
       },
     };
   } catch (e) {
@@ -631,7 +442,10 @@ export async function loadReportsContext(
  * in integer minor units with the ISO 4217 currency.
  */
 export const CSV_COLUMNS = [
-  "session_id",
+  "session_ref",
+  "session_type",
+  "status",
+  "created_at_utc",
   "started_at_utc",
   "ended_at_utc",
   "time_zone",
@@ -645,43 +459,51 @@ export const CSV_COLUMNS = [
   "connector_number",
   "energy_wh",
   "energy_kwh",
-  "session_type",
-  "status",
   "stop_reason",
+  "transaction_id",
   "bill_id",
-  "bill_status",
-  "amount_minor",
   "currency",
+  "hold_minor",
+  "billed_minor",
+  "captured_minor",
+  "refunded_minor",
+  "net_minor",
+  "refunds_checked_at_utc",
+  "details",
 ] as const;
 
-const CSV_KIND: Record<SessionKind, string> = {
-  driver: "driver",
-  free: "free",
-  staff: "staff_test",
-  other: "other",
-};
+/** Rows in one file: more is refused (422) before anything is sent. */
+export const CSV_MAX_ROWS = 10_000;
+/** Rows read from the database at a time. */
+const CSV_PAGE = 500;
+/** The export stops (and the download fails) past this, within the route's maxDuration. */
+export const CSV_SECONDS = 45;
 
 /**
  * One CSV field (RFC 4180): quoted when it holds a comma, quote or line break. Text
- * that a spreadsheet would run as a formula (=, +, -, @, tab, CR first) gets a leading
- * apostrophe; numbers are written as they are.
+ * that a spreadsheet might run as a formula gets a leading apostrophe: text starting
+ * with =, +, -, @, their full-width forms (＝＋－＠), or any space, tab or line break
+ * (some spreadsheets trim it and read what follows). Numbers are written as they are.
  */
 export function csvField(v: string | number | null): string {
   if (v === null) return "";
   if (typeof v === "number") return String(v);
-  const safe = /^[=+\-@\t\r]/.test(v) ? `'${v}` : v;
+  const safe = /^[\s=+\-@＝＋－＠]/u.test(v) ? `'${v}` : v;
   return /[",\r\n]/.test(safe) ? `"${safe.replaceAll('"', '""')}"` : safe;
 }
 
 export function csvLine(r: SessionRow): string {
-  const start = Date.parse(r.startedAt);
+  const start = r.startedAt ? Date.parse(r.startedAt) : null;
   const end = r.endedAt ? Date.parse(r.endedAt) : null;
   const fields: Record<(typeof CSV_COLUMNS)[number], string | number | null> = {
-    session_id: r.id,
+    session_ref: r.reference,
+    session_type: r.kind,
+    status: r.status,
+    created_at_utc: r.createdAt,
     started_at_utc: r.startedAt,
     ended_at_utc: r.endedAt,
     time_zone: r.timeZone,
-    started_at_local: isoInZone(start, r.timeZone),
+    started_at_local: start === null ? null : isoInZone(start, r.timeZone),
     ended_at_local: end === null ? null : isoInZone(end, r.timeZone),
     duration_seconds: r.durationSeconds,
     site: r.siteName,
@@ -691,62 +513,99 @@ export function csvLine(r: SessionRow): string {
     connector_number: r.connectorNumber,
     energy_wh: r.energyWh,
     energy_kwh: r.energyWh === null ? null : whToKwhText(r.energyWh),
-    session_type: CSV_KIND[r.kind],
-    status: r.status,
     stop_reason: r.stopReason,
+    transaction_id: r.transactionId,
     bill_id: r.billId,
-    bill_status: r.billStatus,
-    amount_minor: r.amountMinor,
-    currency: r.currency,
+    currency: r.kind === "paid" ? r.currency : null,
+    hold_minor: r.holdMinor,
+    billed_minor: r.billedMinor,
+    captured_minor: r.capturedMinor,
+    refunded_minor: r.refundedMinor,
+    net_minor: r.netMinor,
+    refunds_checked_at_utc: r.refundCheckedAt
+      ? new Date(r.refundCheckedAt).toISOString()
+      : null,
+    details: r.detailsPending
+      ? "pending"
+      : r.transactionId === null
+        ? "no_session"
+        : "recorded",
   };
   return `${CSV_COLUMNS.map((c) => csvField(fields[c])).join(",")}\r\n`;
 }
 
 export const csvHeader = () => `${CSV_COLUMNS.join(",")}\r\n`;
 
+export type CsvResult =
+  | { ok: true; body: ReadableStream<Uint8Array>; rows: number }
+  | { ok: false; status: 422 | 502; error: string };
+
 /**
- * The export as a stream: the header, then each page's rows as soon as it is read.
- * The first page is read before the response starts, so an API error becomes an
- * error status rather than a cut-off file.
+ * The export as a stream: the header, then the rows, CSV_PAGE at a time, newest
+ * first, each page after the last row of the one before (so checkouts made meanwhile
+ * shift nothing). It counts the matching rows first: more than CSV_MAX_ROWS, or a
+ * database error, is an error status before anything is sent. Once streaming, a failed
+ * read or a run past CSV_SECONDS errors the stream, so the download fails instead of
+ * ending as a clean file that is missing rows. Only the kit's database is read: no
+ * Ivora request per row.
  */
 export async function sessionsCsv(
-  d: Pick<ReportsDeps, "ivora" | "now">,
-  q: ReportQuery,
-  ctx: ScanContext,
-  limits = CSV_SCAN,
-): Promise<ReadableStream<Uint8Array>> {
-  const scan = scanSessions(d, q, ctx, limits);
-  const first = await scan.next();
+  d: Pick<ReportsDeps, "store" | "now">,
+  f: ReportFilter,
+  ctx: StationContext,
+  limits = { maxRows: CSV_MAX_ROWS, seconds: CSV_SECONDS, pageRows: CSV_PAGE },
+): Promise<CsvResult> {
+  let expected: number;
+  try {
+    expected = (await d.store.totals(f)).checkouts;
+  } catch (e) {
+    logFailure("export", e);
+    return { ok: false, status: 502, error: describeError(e) };
+  }
+  if (expected > limits.maxRows)
+    return {
+      ok: false,
+      status: 422,
+      error: `${expected.toLocaleString("en-US")} sessions match, and one file holds up to ${limits.maxRows.toLocaleString("en-US")}. Pick a shorter period, one charger or one status, and download each part.`,
+    };
+  const deadline = d.now() + limits.seconds * 1000;
   const enc = new TextEncoder();
-  let pending: IteratorResult<SessionRow[], { truncated: boolean }> | null =
-    first;
-  return new ReadableStream<Uint8Array>({
-    start(controller) {
-      controller.enqueue(enc.encode(csvHeader()));
-    },
-    async pull(controller) {
-      try {
-        const step = pending ?? (await scan.next());
-        pending = null;
-        if (step.done) {
-          if (step.value.truncated)
-            console.warn(
-              "cpo-starter-kit: reports export stopped at its page limit",
+  let after: { createdAt: string; id: string } | undefined;
+  let done = false;
+  return {
+    ok: true,
+    rows: expected,
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(enc.encode(csvHeader()));
+      },
+      async pull(controller) {
+        try {
+          if (done) {
+            controller.close();
+            return;
+          }
+          if (d.now() > deadline)
+            throw new Error(`export ran past ${limits.seconds} seconds`);
+          const rows = await d.store.list(f, {
+            limit: limits.pageRows,
+            after,
+          });
+          const last = rows.at(-1);
+          if (last) after = { createdAt: last.createdAt, id: last.id };
+          done = rows.length < limits.pageRows;
+          if (rows.length)
+            controller.enqueue(
+              enc.encode(rows.map((c) => csvLine(toRow(c, ctx))).join("")),
             );
-          controller.close();
-          return;
+        } catch (e) {
+          logFailure("export", e);
+          // A cut-off download must not look complete.
+          controller.error(e);
         }
-        controller.enqueue(enc.encode(step.value.map(csvLine).join("")));
-      } catch (e) {
-        logFailure("export", e);
-        // A cut-off download must not look complete.
-        controller.error(e);
-      }
-    },
-    async cancel() {
-      await scan.return({ truncated: true });
-    },
-  });
+      },
+    }),
+  };
 }
 
 /** The export's file name: sessions-2026-10-01-to-2026-10-31.csv. */
@@ -759,10 +618,81 @@ export function csvFileName(q: ReportQuery): string {
 /**
  * The payouts page of the operator's own Stripe dashboard (test-mode payouts for a
  * test-mode account). Stripe pays out to the operator's bank; the kit holds no Stripe
- * keys and reads no payouts, so it links there.
+ * keys and reads no payouts, so it links there. Stripe asks the operator to sign in.
  */
 export function payoutsUrl(livemode: boolean | null): string {
   return livemode === false
     ? "https://dashboard.stripe.com/test/payouts"
     : "https://dashboard.stripe.com/payouts";
+}
+
+// ---- The sweep: session details and refunds ----
+
+/** Per sweep run (every minute): well inside Ivora's 180 requests a minute per key. */
+export const SWEEP_DETAILS = 10;
+export const SWEEP_REFUNDS = 10;
+const SWEEP_SECONDS = 20;
+
+/** An ended session's details from GET /transactions/{id}; endedAt null while it runs. */
+export function sessionDetails(t: TransactionDetail): SessionDetails {
+  const ended = t.active !== true && t.ended_at ? t.ended_at : null;
+  const wh = safeInt(t.energy_wh);
+  return {
+    startedAt: t.started_at,
+    endedAt: ended,
+    energyWh: wh !== null && wh >= 0 ? wh : null,
+    connectorNumber:
+      safeInt(t.connector_number) !== null && t.connector_number! > 0
+        ? t.connector_number!
+        : null,
+    stopReason: t.stop_reason ? t.stop_reason.slice(0, 60) : null,
+  };
+}
+
+const NOTHING: SessionDetails = {
+  startedAt: null,
+  endedAt: null,
+  energyWh: null,
+  connectorNumber: null,
+  stopReason: null,
+};
+
+/**
+ * Called by the settlement sweep after it settles: copies the details of ended
+ * sessions (GET /transactions/{id}, once each) and re-reads charged payments for
+ * refunds (GET /payments/{id}, once a day for 90 days), a few per run. Read-only
+ * towards Ivora: it sends no command and moves no money. A failed read is noted and
+ * tried again on a later run, after the others.
+ */
+export async function refreshReportRecords(
+  d: Pick<ReportsDeps, "ivora" | "store" | "now">,
+  o = { details: SWEEP_DETAILS, refunds: SWEEP_REFUNDS },
+): Promise<{ details: number; refunds: number }> {
+  const deadline = d.now() + SWEEP_SECONDS * 1000;
+  let details = 0;
+  let refunds = 0;
+  for (const due of await d.store.detailsDue(o.details)) {
+    if (d.now() > deadline) break;
+    let found = NOTHING;
+    try {
+      found = sessionDetails(await d.ivora.getTransaction(due.transactionId));
+    } catch (e) {
+      logFailure("session details", e);
+    }
+    await d.store.recordDetails(due.operatorId, due.id, found);
+    if (found.endedAt) details++;
+  }
+  for (const due of await d.store.refundsDue(o.refunds)) {
+    if (d.now() > deadline) break;
+    try {
+      const p = await d.ivora.getPayment(due.paymentId);
+      const refunded = safeInt(p.refunded_minor) ?? 0;
+      await d.store.recordRefund(due.operatorId, due.id, Math.max(0, refunded));
+      refunds++;
+    } catch (e) {
+      // Not recorded: the payment is read again on a later run.
+      logFailure("refund check", e);
+    }
+  }
+  return { details, refunds };
 }

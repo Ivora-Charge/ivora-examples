@@ -2,8 +2,9 @@ import AxeBuilder from "@axe-core/playwright";
 import { readFile } from "node:fs/promises";
 import { expect, test, type Page } from "@playwright/test";
 
-// Demo mode: six months of sample sessions and bills on the sample chargers, made up
-// offline (lib/server/ivora/demo-history.ts). Nothing is sent to Ivora or Stripe.
+// Demo mode: six months of sample sessions, bills and payments on the sample chargers,
+// made up offline (lib/server/ivora/demo-history.ts). Nothing is sent to Ivora or
+// Stripe.
 
 async function openReports(page: Page, isMobile: boolean) {
   await page.goto("/");
@@ -16,9 +17,12 @@ async function openReports(page: Page, isMobile: boolean) {
 }
 
 const CSV_HEADER =
-  "session_id,started_at_utc,ended_at_utc,time_zone,started_at_local,ended_at_local,duration_seconds,site,station_id,station,connector_id,connector_number,energy_wh,energy_kwh,session_type,status,stop_reason,bill_id,bill_status,amount_minor,currency";
+  "session_ref,session_type,status,created_at_utc,started_at_utc,ended_at_utc,time_zone,started_at_local,ended_at_local,duration_seconds,site,station_id,station,connector_id,connector_number,energy_wh,energy_kwh,stop_reason,transaction_id,bill_id,currency,hold_minor,billed_minor,captured_minor,refunded_minor,net_minor,refunds_checked_at_utc,details";
 
-test("demo: figures, series, top chargers and labelled sessions for the last 30 days", async ({
+const yours = (page: Page) =>
+  page.getByRole("region", { name: /^Your sessions \(this kit\)/ });
+
+test("demo: Ivora's figures for every session, then your sessions with what was collected", async ({
   page,
   isMobile,
 }) => {
@@ -32,10 +36,13 @@ test("demo: figures, series, top chargers and labelled sessions for the last 30 
     "Energy",
     "Success rate",
     "Average duration",
-    "Billed revenue",
+    "Billed (final bills)",
   ])
     await expect(figures.getByText(label, { exact: false })).toBeVisible();
   await expect(figures).toContainText("$");
+  await expect(
+    page.getByText("Every session on your chargers, as Ivora counts them"),
+  ).toContainText("sessions started outside this kit");
   await expect(page.getByRole("heading", { name: "By day" })).toBeVisible();
   await expect(page.getByText("America/New_York").first()).toBeVisible();
   await expect(
@@ -45,39 +52,52 @@ test("demo: figures, series, top chargers and labelled sessions for the last 30 
     "Faulted",
   );
 
-  const sessions = page.getByRole("region", { name: "Sessions" });
-  await expect(sessions).toContainText("Driver revenue in this table");
+  const sessions = yours(page);
+  const totals = sessions.getByRole("region", {
+    name: "Totals of your sessions",
+  });
+  for (const label of [
+    "Collected (captured minus refunds)",
+    "Refunded",
+    "Billed (their final bills)",
+    "Needs you",
+  ])
+    await expect(totals.getByText(label, { exact: false })).toBeVisible();
   await expect(sessions).toContainText(
-    "Staff/test and free sessions are labelled and never counted as driver revenue",
+    "staff/test sessions and sessions started outside this kit",
   );
   const table = sessions.getByRole("table");
-  await expect(table.getByText("Staff/test").first()).toBeVisible();
   await expect(table.getByText("Free", { exact: true }).first()).toBeVisible();
   await expect(table.getByText("Driver (paid)").first()).toBeVisible();
+  await expect(table.getByText("Staff/test")).toHaveCount(0);
   await expect(table.getByText(/UTC$/).first()).toBeVisible();
+  await expect(table.getByText(/^ck_[0-9a-f]{32}$/).first()).toBeVisible();
 
   const payouts = page.getByRole("region", { name: "Payouts" });
   await expect(payouts).toContainText("The kit holds no Stripe keys");
+  await expect(payouts).toContainText("Stripe asks you to sign in");
 });
 
-test("demo: filter by status and charger, then download the same sessions as CSV", async ({
+test("demo: refunded sessions, pages, and the same sessions as CSV", async ({
   page,
   isMobile,
 }) => {
   await openReports(page, isMobile);
-  await page.getByLabel("Status (sessions)").selectOption("billed");
-  await page.getByLabel("Charger (sessions)").selectOption({
-    label: "DEMO-MARKET-01",
-  });
+  await page.getByLabel("Period", { exact: true }).selectOption("90d");
   await page.getByRole("button", { name: "Show report" }).click();
-  await expect(page).toHaveURL(/status=billed/);
-  const table = page
-    .getByRole("region", { name: "Sessions" })
-    .getByRole("table");
-  await expect(table.getByText("DEMO-MARKET-01").first()).toBeVisible();
-  await expect(table.getByText("DEMO-HARBOUR-01")).toHaveCount(0);
-  await expect(table.getByText("Staff/test")).toHaveCount(0);
-  await expect(table.getByText("Final bill").first()).toBeVisible();
+  await expect(
+    yours(page).getByRole("navigation", { name: "Session pages" }),
+  ).toContainText("Page 1 of");
+  await yours(page).getByRole("link", { name: "Older" }).click();
+  await expect(page).toHaveURL(/page=2/);
+  await expect(yours(page)).toContainText("Page 2 of");
+
+  await page.getByLabel("Status (your sessions)").selectOption("refunded");
+  await page.getByRole("button", { name: "Show report" }).click();
+  await expect(page).toHaveURL(/status=refunded/);
+  const table = yours(page).getByRole("table");
+  await expect(table.getByText(/refunded$/).first()).toBeVisible();
+  await expect(table.getByText("Free", { exact: true })).toHaveCount(0);
 
   const [download] = await Promise.all([
     page.waitForEvent("download"),
@@ -90,9 +110,15 @@ test("demo: filter by status and charger, then download the same sessions as CSV
   const lines = csv.trimEnd().split("\r\n");
   expect(lines[0]).toBe(CSV_HEADER);
   expect(lines.length).toBeGreaterThan(1);
+  const col = (name: string) => CSV_HEADER.split(",").indexOf(name);
   for (const line of lines.slice(1)) {
-    expect(line).toContain(",DEMO-MARKET-01,");
-    expect(line).toMatch(/,driver,ended,[^,]*,bill_[0-9a-f]+,final,\d+,USD$/);
+    const f = line.split(",");
+    expect(f[col("session_type")]).toBe("paid");
+    const captured = Number(f[col("captured_minor")]);
+    const refunded = Number(f[col("refunded_minor")]);
+    expect(refunded).toBeGreaterThan(0);
+    expect(Number(f[col("net_minor")])).toBe(captured - refunded);
+    expect(f[col("currency")]).toBe("USD");
   }
 });
 
@@ -126,6 +152,10 @@ test("demo: the Reports page passes axe in light and dark and fits a phone", asy
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.goto("/reports");
+    if (process.env.SCREENSHOT)
+      await page.screenshot({
+        path: `docs/screens/reports-phone-${scheme}.png`,
+      });
     const results = await new AxeBuilder({ page })
       .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
       .analyze();
@@ -137,5 +167,22 @@ test("demo: the Reports page passes axe in light and dark and fits a phone", asy
       () => document.documentElement.scrollWidth - window.innerWidth,
     );
     expect(overflow, "the page scrolls sideways").toBeLessThanOrEqual(0);
+  }
+});
+
+test("demo: screenshots of Reports for the README (SCREENSHOT=1, desktop)", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!process.env.SCREENSHOT || isMobile, "only when asked, on desktop");
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.goto("/reports?period=7d");
+    const top = await yours(page).boundingBox();
+    await page.screenshot({
+      path: `docs/screens/reports-desktop-${scheme}.png`,
+      fullPage: true,
+      clip: { x: 0, y: 0, width: 1280, height: (top?.y ?? 0) + 900 },
+    });
   }
 });

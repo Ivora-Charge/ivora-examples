@@ -3,15 +3,11 @@ import {
   getIvora,
   IvoraError,
   resetIvoraForTests,
-  type Bill,
   type IvoraClient,
-  type TransactionRecord,
+  type TransactionDetail,
 } from "@/lib/server/ivora";
 import { createLiveClient } from "@/lib/server/ivora/live";
-import {
-  DEMO_HISTORY_TOKENS,
-  demoHistory,
-} from "@/lib/server/ivora/demo-history";
+import { demoHistory } from "@/lib/server/ivora/demo-history";
 import {
   csvField,
   csvHeader,
@@ -23,16 +19,25 @@ import {
   loadStats,
   parseReportQuery,
   payoutsUrl,
+  refreshReportRecords,
+  reportFilter,
   reportSearch,
   reportTimeZone,
-  scanContext,
-  scanSessions,
+  sessionDetails,
   sessionsCsv,
-  summarize,
-  type ReportQuery,
-  type ScanContext,
-  type SessionRow,
+  stationContext,
+  toRow,
+  type ReportCheckout,
+  type ReportFilter,
+  type ReportsStore,
+  type SessionDetails,
 } from "@/lib/server/reports";
+import {
+  matchesFilter,
+  newestFirst,
+  totalsOf,
+} from "@/lib/server/reports/records";
+import { resetDemoCheckoutForTests } from "@/lib/server/checkout/demo-cookie";
 import {
   bucketFloor,
   bucketNext,
@@ -121,7 +126,8 @@ describe("report periods", () => {
         to: "2026-03-05",
         bucket: "month",
         station: "9101",
-        status: "billed",
+        status: "refunded",
+        page: "3",
       }),
       NY,
       NOW,
@@ -133,11 +139,14 @@ describe("report periods", () => {
       fromDate: "2026-01-01",
       toDate: "2026-03-31",
       stationId: 9101,
-      status: "billed",
+      status: "refunded",
+      page: 3,
     });
+    // The CSV link has no page; the table's links do.
     expect(reportSearch(custom.query)).toBe(
-      "period=custom&from=2026-01-01&to=2026-03-31&bucket=month&station=9101&status=billed",
+      "period=custom&from=2026-01-01&to=2026-03-31&bucket=month&station=9101&status=refunded",
     );
+    expect(reportSearch(custom.query, 2)).toMatch(/&page=2$/);
     for (const bad of <Record<string, string>[]>[
       { period: "custom", from: "2026-02-30", to: "2026-03-01" },
       { period: "custom", from: "2026-03-02", to: "2026-03-01" },
@@ -148,12 +157,13 @@ describe("report periods", () => {
       expect(r.query.preset).toBe("30d");
     }
     const odd = parseReportQuery(
-      params({ station: "1 OR 1", status: "drop" }),
+      params({ station: "1 OR 1", status: "drop", page: "-1" }),
       "UTC",
       NOW,
     );
     expect(odd.query.stationId).toBeNull();
     expect(odd.query.status).toBe("all");
+    expect(odd.query.page).toBe(1);
   });
 
   it("uses the company's time zone, else the sites' shared one, else UTC", () => {
@@ -188,7 +198,7 @@ describe("report periods", () => {
   });
 });
 
-describe("live client: stats, transactions and bills", () => {
+describe("live client: stats, transaction detail and payments", () => {
   const saved = { ...process.env };
   beforeEach(() => {
     process.env.IVORA_API_KEY = "test-key-not-real";
@@ -242,19 +252,18 @@ describe("live client: stats, transactions and bills", () => {
     expect(headers[0].get("idempotency-key")).toBeNull();
   });
 
-  it("pages transactions and bills with their cursors", async () => {
-    const { ivora, urls } = client([
-      { data: [], next_cursor: null },
-      { data: [], next_cursor: null },
+  it("reads one transaction's detail and one payment, without a key", async () => {
+    const { ivora, urls, headers } = client([
+      { id: 812, active: false },
+      { id: "pay_1", status: "captured", refunded_minor: 0 },
     ]);
-    await ivora.listTransactionPage({ after: 900, station_id: 7 });
-    await ivora.listBillPage({ after: "b_9", status: "final" });
+    await ivora.getTransaction(812);
+    await ivora.getPayment("pay_1");
     expect(urls[0]).toBe(
-      "https://api.example.test/v1/tenants/42/transactions?limit=100&after=900&station_id=7",
+      "https://api.example.test/v1/tenants/42/transactions/812",
     );
-    expect(urls[1]).toBe(
-      "https://api.example.test/v1/tenants/42/bills?limit=100&after=b_9&status=final",
-    );
+    expect(urls[1]).toMatch(/\/payments\/pay_1$/);
+    expect(headers.every((h) => h.get("idempotency-key") === null)).toBe(true);
   });
 
   it("shows stats_range_too_large as such, with the limits and what to pick", async () => {
@@ -304,492 +313,686 @@ describe("live client: stats, transactions and bills", () => {
   });
 });
 
-// ---- Session scans against a fake client ----
+// ---- The kit's own records ----
 
-const STAFF = "STAFFABCDEFGHJKLMNP";
-const FREE = "FREEQRSTUVWXYZ2345";
-
-function tx(
-  id: number,
-  startedAt: string,
-  o: Partial<TransactionRecord> = {},
-): TransactionRecord {
-  const start = Date.parse(startedAt);
+let n = 0;
+/** A checkout as the reports store returns it: a settled $12.40 paid session. */
+function checkout(o: Partial<ReportCheckout> = {}): ReportCheckout {
+  n++;
   return {
-    id,
-    station_id: 7,
-    connector_id: 71,
-    connector_number: 1,
-    active: false,
-    id_token: "****C3D4",
-    started_at: startedAt,
-    ended_at: new Date(start + 3_600_000).toISOString(),
-    energy_wh: 10_500,
+    id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+    reference: `ck_${String(n).padStart(32, "0")}`,
+    kind: "paid",
+    stationId: 7,
+    connectorId: 71,
+    phase: "settled",
+    alert: null,
+    createdAt: "2026-10-10T14:00:00.000Z",
+    settledAt: "2026-10-10T15:05:00.000Z",
+    transactionId: 500 + n,
+    billId: `bill_${"a".repeat(32)}`,
+    holdMinor: 2500,
+    currency: "USD",
+    finalMinor: 1240,
+    capturedMinor: 1240,
+    refundedMinor: 0,
+    refundCheckedAt: "2026-10-10T16:00:00.000Z",
+    meterWh: 28_100,
+    sessionStartedAt: "2026-10-10T14:01:30.000Z",
+    sessionEndedAt: "2026-10-10T15:00:00.000Z",
+    energyWh: 28_941,
+    connectorNumber: 1,
+    stopReason: "EVDisconnected",
+    detailAt: "2026-10-10T15:06:00.000Z",
     ...o,
   };
 }
 
-const finalBill = (id: string, total: number) => ({
-  id,
-  status: "final" as const,
-  currency: "USD",
-  total_minor: total,
-  finalized_at: null,
-});
-
-function fakeClient(
-  pages: TransactionRecord[][],
-  bills: Bill[][] = [],
-): IvoraClient & { calls: string[] } {
-  const calls: string[] = [];
-  return {
-    mode: "live",
-    calls,
-    async listTransactionPage(o: { after?: number }) {
-      calls.push(`tx:${o.after ?? 0}`);
-      const i = o.after ?? 0;
-      return {
-        data: pages[i] ?? [],
-        next_cursor: i + 1 < pages.length ? i + 1 : null,
-      };
-    },
-    async listBillPage(o: { after?: string }) {
-      calls.push(`bills:${o.after ?? ""}`);
-      const i = Number(o.after ?? 0);
-      return {
-        data: bills[i] ?? [],
-        next_cursor: i + 1 < bills.length ? String(i + 1) : null,
-      };
-    },
-  } as unknown as IvoraClient & { calls: string[] };
-}
-
-const ctx: ScanContext = scanContext(
+const places = stationContext(
   [{ id: 7, name: "CP-07", online: true, location_id: 3, connectors: [] }],
   [{ id: 3, name: "Main Street", time_zone: "America/Chicago" }],
-  { staff: [STAFF], free: [FREE] },
   NY,
 );
 
-const october = (o: Record<string, string> = {}): ReportQuery =>
-  parseReportQuery(
-    params({
-      period: "custom",
-      from: "2026-10-01",
-      to: "2026-10-21",
-      ...o,
-    }),
-    NY,
-    NOW,
-  ).query;
+const october = (o: Partial<ReportFilter> = {}): ReportFilter => ({
+  operatorId: "op-1",
+  fromMs: Date.parse("2026-10-01T04:00:00Z"),
+  toMs: Date.parse("2026-10-22T04:00:00Z"),
+  stationId: null,
+  status: "all",
+  ...o,
+});
 
-async function collect(
-  ivora: IvoraClient,
-  q: ReportQuery,
-  limits = { maxPages: 10, seconds: 20 },
-) {
-  const rows: SessionRow[] = [];
-  const scan = scanSessions({ ivora, now: () => NOW }, q, ctx, limits);
-  let step = await scan.next();
-  while (!step.done) {
-    rows.push(...step.value);
-    step = await scan.next();
-  }
-  return { rows, truncated: step.value.truncated };
+/** A reports store over an array, with the same rules as the database. */
+function memoryStore(rows: ReportCheckout[]): ReportsStore & {
+  details: [string, SessionDetails][];
+  refunds: [string, number][];
+} {
+  const details: [string, SessionDetails][] = [];
+  const refunds: [string, number][] = [];
+  return {
+    mode: "live",
+    details,
+    refunds,
+    async list(f, page) {
+      let all = rows.filter((c) => matchesFilter(c, f)).sort(newestFirst);
+      if (page.after) {
+        const at = Date.parse(page.after.createdAt);
+        const id = page.after.id;
+        all = all.filter((c) => {
+          const t = Date.parse(c.createdAt);
+          return t < at || (t === at && c.id < id);
+        });
+      }
+      const from = page.offset ?? 0;
+      return all.slice(from, from + page.limit);
+    },
+    async totals(f) {
+      return totalsOf(rows.filter((c) => matchesFilter(c, f)));
+    },
+    async detailsDue() {
+      return [];
+    },
+    async recordDetails(_op, id, d) {
+      details.push([id, d]);
+      return true;
+    },
+    async refundsDue() {
+      return [];
+    },
+    async recordRefund(_op, id, minor) {
+      refunds.push([id, minor]);
+      return true;
+    },
+  };
 }
 
+describe("driver revenue: captured minus refunded, never the bill", () => {
+  it("counts a $0.30 bill released under Stripe's minimum as nothing collected", () => {
+    const r = toRow(
+      checkout({ finalMinor: 30, capturedMinor: 0, refundCheckedAt: null }),
+      places,
+    );
+    expect(r).toMatchObject({
+      status: "no_charge",
+      billedMinor: 30,
+      capturedMinor: 0,
+      netMinor: 0,
+    });
+  });
+
+  it("leaves a $27.40 bill above the $25 hold to the operator: billed, not collected", () => {
+    const c = checkout({
+      phase: "attention",
+      finalMinor: 2740,
+      capturedMinor: null,
+      refundedMinor: null,
+      refundCheckedAt: null,
+    });
+    expect(toRow(c, places)).toMatchObject({
+      status: "attention",
+      billedMinor: 2740,
+      capturedMinor: null,
+      netMinor: null,
+    });
+    const t = totalsOf([c]);
+    expect(t.currencies).toEqual([
+      {
+        currency: "USD",
+        charged: 0,
+        billedMinor: 2740,
+        capturedMinor: 0,
+        refundedMinor: 0,
+      },
+    ]);
+    expect(t.byStatus.attention).toBe(1);
+  });
+
+  it("takes refunds off, and keeps free sessions out of the money", () => {
+    const rows = [
+      checkout(),
+      checkout({ refundedMinor: 1240 }),
+      checkout({ finalMinor: 830, capturedMinor: 830, refundedMinor: 300 }),
+      checkout({
+        kind: "free",
+        holdMinor: 0,
+        billId: null,
+        finalMinor: null,
+        capturedMinor: null,
+        refundedMinor: null,
+        refundCheckedAt: null,
+      }),
+      checkout({ currency: "EUR", finalMinor: 500, capturedMinor: 500 }),
+    ];
+    const t = totalsOf(rows);
+    const usd = t.currencies.find((l) => l.currency === "USD")!;
+    expect(usd).toEqual({
+      currency: "USD",
+      charged: 3,
+      billedMinor: 1240 + 1240 + 830,
+      capturedMinor: 1240 + 1240 + 830,
+      refundedMinor: 1240 + 300,
+    });
+    expect(usd.capturedMinor - usd.refundedMinor).toBe(1240 + 530);
+    expect(t.currencies.map((l) => l.currency)).toEqual(["EUR", "USD"]);
+    expect(t).toMatchObject({ paid: 4, free: 1, checkouts: 5 });
+    expect(t.byStatus).toEqual({
+      in_progress: 0,
+      charged: 4,
+      no_charge: 1,
+      attention: 0,
+    });
+    const free = toRow(rows[3], places);
+    expect(free).toMatchObject({
+      kind: "free",
+      holdMinor: null,
+      billedMinor: null,
+      capturedMinor: null,
+      netMinor: null,
+    });
+    expect(toRow(rows[2], places).netMinor).toBe(530);
+  });
+
+  it("shows a running session's energy so far, and pending details as pending", () => {
+    const running = toRow(
+      checkout({
+        phase: "open",
+        finalMinor: null,
+        capturedMinor: null,
+        refundedMinor: null,
+        refundCheckedAt: null,
+        transactionId: null,
+        sessionStartedAt: null,
+        sessionEndedAt: null,
+        energyWh: null,
+        detailAt: null,
+      }),
+      places,
+    );
+    expect(running).toMatchObject({
+      status: "in_progress",
+      energyWh: null,
+      energySoFarWh: 28_100,
+      detailsPending: false,
+    });
+    const pending = toRow(
+      checkout({ detailAt: null, energyWh: null, sessionEndedAt: null }),
+      places,
+    );
+    expect(pending).toMatchObject({ detailsPending: true, energyWh: null });
+    const t = totalsOf([checkout({ detailAt: null }), checkout()]);
+    expect(t.detailsPending).toBe(1);
+    // Only recorded energy counts.
+    expect(t.energyWh).toBe(28_941);
+  });
+
+  it("puts a session in the period it was tapped in, and filters by charger and status", () => {
+    const rows = [
+      checkout({ createdAt: "2026-10-01T03:59:59.000Z" }),
+      checkout({ createdAt: "2026-10-01T04:00:00.000Z" }),
+      checkout({ createdAt: "2026-10-22T03:59:59.999Z", stationId: 8 }),
+      checkout({ createdAt: "2026-10-22T04:00:00.000Z" }),
+      checkout({ refundedMinor: 100 }),
+    ];
+    expect(rows.filter((c) => matchesFilter(c, october()))).toHaveLength(3);
+    expect(
+      rows.filter((c) => matchesFilter(c, october({ stationId: 8 }))),
+    ).toHaveLength(1);
+    expect(
+      rows.filter((c) => matchesFilter(c, october({ status: "refunded" }))),
+    ).toEqual([rows[4]]);
+  });
+
+  it("labels sessions from the kit's own record, never from a token", () => {
+    // Ivora masks id_token; the kind is the checkout's (paid or free). Staff/test
+    // sessions have no checkout, so they are never in this table or its money.
+    const free = checkout({ kind: "free" });
+    expect(toRow(free, places).kind).toBe("free");
+    expect(totalsOf([free]).currencies).toEqual([]);
+  });
+});
+
 describe("sessions table", () => {
-  it("labels staff/test and free sessions and keeps them out of driver revenue", async () => {
-    const ivora = fakeClient([
-      [
-        tx(5, "2026-10-20T14:00:00Z", { bill: finalBill("bill_a", 1250) }),
-        tx(4, "2026-10-19T14:00:00Z", {
-          id_token: `****${STAFF.slice(-4)}`,
-          bill: null,
-        }),
-        tx(3, "2026-10-18T14:00:00Z", {
-          id_token: `****${FREE.slice(-4)}`,
-          bill: null,
-        }),
-        // Even with a bill, a staff-token session is never driver revenue.
-        tx(2, "2026-10-17T14:00:00Z", {
-          id_token: `****${STAFF.slice(-4)}`,
-          bill: finalBill("bill_b", 900),
-        }),
-        tx(1, "2026-10-16T14:00:00Z", { bill: null }),
-      ],
-    ]);
-    const { rows } = await collect(ivora, october());
-    expect(rows.map((r) => [r.id, r.kind])).toEqual([
-      [5, "driver"],
-      [4, "staff"],
-      [3, "free"],
-      [2, "staff"],
-      [1, "other"],
-    ]);
-    const s = summarize(rows);
-    expect(s.byKind).toEqual({ driver: 1, free: 1, staff: 2, other: 1 });
-    expect(s.driverRevenue).toEqual([
-      { currency: "USD", amountMinor: 1250, bills: 1 },
-    ]);
-    expect(s.energyWh).toBe(5 * 10_500);
-    expect(rows[0]).toMatchObject({
+  it("pages newest first, with totals of every matching session", async () => {
+    const rows = Array.from({ length: 120 }, (_, i) =>
+      checkout({
+        createdAt: new Date(
+          Date.parse("2026-10-05T00:00:00Z") + i * 3_600_000,
+        ).toISOString(),
+      }),
+    );
+    const store = memoryStore(rows);
+    const first = await loadSessions({ store }, october(), 1, places);
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(first).toMatchObject({ page: 1, pages: 3 });
+    expect(first.rows).toHaveLength(50);
+    expect(first.rows[0].createdAt).toBe(rows[119].createdAt);
+    expect(first.totals.checkouts).toBe(120);
+    // A page past the end shows the last one.
+    const last = await loadSessions({ store }, october(), 9, places);
+    if (!last.ok) throw new Error("expected rows");
+    expect(last).toMatchObject({ page: 3, pages: 3 });
+    expect(last.rows).toHaveLength(20);
+    expect(last.rows.at(-1)!.createdAt).toBe(rows[0].createdAt);
+  });
+
+  it("writes UTC and the site's local time, and the charger and site", () => {
+    const r = toRow(checkout(), places);
+    expect(r).toMatchObject({
       stationName: "CP-07",
       siteName: "Main Street",
       timeZone: "America/Chicago",
-      durationSeconds: 3600,
-      amountMinor: 1250,
-      currency: "USD",
-      billStatus: "final",
-      status: "ended",
+      startedAt: "2026-10-10T14:01:30.000Z",
+      durationSeconds: 3510,
+    });
+    expect(toRow(checkout({ stationId: 99 }), places)).toMatchObject({
+      stationName: "Charger 99",
+      timeZone: NY,
     });
   });
 
-  it("keeps the period and filters by status and charger", async () => {
-    const page = [
-      tx(9, "2026-10-22T04:30:00Z"), // after the period (Oct 21 ends 04:00 UTC)
-      tx(8, "2026-10-20T10:00:00Z", {
-        active: true,
-        ended_at: null,
-        bill: { ...finalBill("bill_o", 0), status: "open", total_minor: null },
-      }),
-      tx(7, "2026-10-19T10:00:00Z", { bill: finalBill("bill_c", 500) }),
-      tx(6, "2026-10-18T10:00:00Z", { bill: null, station_id: 8 }),
-      tx(5, "2026-10-01T03:59:00Z", { bill: null }), // Sep 30 in New York
-    ];
-    const ids = async (o: Record<string, string>) =>
-      (await collect(fakeClient([page]), october(o))).rows.map((r) => r.id);
-    expect(await ids({})).toEqual([8, 7, 6]);
-    expect(await ids({ status: "charging" })).toEqual([8]);
-    expect(await ids({ status: "ended" })).toEqual([7, 6]);
-    expect(await ids({ status: "billed" })).toEqual([7]);
-    expect(await ids({ status: "unbilled" })).toEqual([6]);
-    expect(await ids({ station: "7" })).toEqual([8, 7]);
-  });
-
-  it("stops at the first newest-first page that ends before the period", async () => {
-    const ivora = fakeClient([
-      [tx(30, "2026-10-20T10:00:00Z", { bill: null })],
-      [tx(20, "2026-09-20T10:00:00Z", { bill: null })],
-      [tx(10, "2026-08-20T10:00:00Z", { bill: null })],
-    ]);
-    const r = await collect(ivora, october());
-    expect(r.rows.map((x) => x.id)).toEqual([30]);
-    expect(r.truncated).toBe(false);
-    expect(ivora.calls).toEqual(["tx:0", "tx:1"]);
-  });
-
-  it("says when it stopped at its page limit", async () => {
-    const pages = Array.from({ length: 5 }, (_, i) => [
-      tx(100 - i, `2026-10-${String(20 - i).padStart(2, "0")}T10:00:00Z`, {
-        bill: null,
-      }),
-    ]);
-    const r = await collect(fakeClient(pages), october(), {
-      maxPages: 3,
-      seconds: 20,
-    });
-    expect(r.rows).toHaveLength(3);
-    expect(r.truncated).toBe(true);
-  });
-
-  it("reads GET /bills when the list carries no bill, and joins them", async () => {
-    const bill = (o: Partial<Bill>): Bill => ({
-      id: "bill_x",
-      station_id: 7,
-      connector_id: 71,
-      tariff_id: 1,
-      hold_minor: 2500,
-      currency: "USD",
-      status: "final",
-      total_minor: 830,
-      transaction_id: 2,
-      created_at: "2026-10-18T09:59:00Z",
-      finalized_at: "2026-10-18T11:05:00Z",
-      ...o,
-    });
-    const t1 = tx(1, "2026-10-19T10:00:00Z", { active: true, ended_at: null });
-    const t2 = tx(2, "2026-10-18T10:00:00Z");
-    delete t1.bill;
-    delete t2.bill;
-    const ivora = fakeClient(
-      [[t1, t2]],
-      [
-        [
-          bill({}),
-          // The open bill on the same connector, made just before t1 started.
-          bill({
-            id: "bill_open",
-            status: "open",
-            total_minor: null,
-            transaction_id: null,
-            created_at: "2026-10-19T09:58:00Z",
-            finalized_at: null,
-          }),
-        ],
-      ],
-    );
-    const { rows } = await collect(ivora, october());
-    expect(ivora.calls).toEqual(["tx:0", "bills:"]);
-    expect(rows.map((r) => [r.id, r.kind, r.billId, r.amountMinor])).toEqual([
-      [1, "driver", "bill_open", null],
-      [2, "driver", "bill_x", 830],
-    ]);
-  });
-
-  it("sorts the page newest first and reports errors with their code", async () => {
-    const ivora = fakeClient([
-      [
-        tx(1, "2026-10-02T10:00:00Z", { bill: null }),
-        tx(2, "2026-10-05T10:00:00Z", { bill: null }),
-      ],
-    ]);
-    const r = await loadSessions({ ivora, now: () => NOW }, october(), ctx);
-    expect(r.ok && r.rows.map((x) => x.id)).toEqual([2, 1]);
-    const failing = {
-      mode: "live",
-      async listTransactionPage() {
-        throw new IvoraError(403, "forbidden", "Missing billing:read");
-      },
-    } as unknown as IvoraClient;
+  it("reports a store error with its message", async () => {
+    const store = memoryStore([]);
+    store.totals = async () => {
+      throw new IvoraError(0, "timeout", "slow");
+    };
     vi.spyOn(console, "error").mockImplementation(() => {});
-    const bad = await loadSessions(
-      { ivora: failing, now: () => NOW },
-      october(),
-      ctx,
-    );
-    expect(bad.ok).toBe(false);
-    if (!bad.ok) expect(bad.error).toContain("forbidden");
+    const r = await loadSessions({ store }, october(), 1, places);
+    expect(r.ok).toBe(false);
   });
 });
 
 describe("CSV export", () => {
-  it("has stable, documented columns", () => {
-    expect(csvHeader()).toBe(
-      "session_id,started_at_utc,ended_at_utc,time_zone,started_at_local,ended_at_local,duration_seconds,site,station_id,station,connector_id,connector_number,energy_wh,energy_kwh,session_type,status,stop_reason,bill_id,bill_status,amount_minor,currency\r\n",
-    );
+  it("has stable, documented columns", async () => {
+    expect(csvHeader()).toBe(`${CSV_COLUMNS.join(",")}\r\n`);
+    const readme = (await import("node:fs")).readFileSync("README.md", "utf8");
+    for (const c of CSV_COLUMNS) expect(readme).toContain(`\`${c}\``);
   });
 
   it("writes UTC and local times, exact kWh and integer minor units", () => {
-    const row: SessionRow = {
-      id: 31,
-      stationId: 7,
-      stationName: "CP-07",
-      siteName: 'Main St, "North"',
-      timeZone: "America/Chicago",
-      connectorId: 71,
-      connectorNumber: 1,
-      startedAt: "2026-10-01T15:00:00.000Z",
-      endedAt: "2026-10-01T16:30:00.000Z",
-      durationSeconds: 5400,
-      energyWh: 6941,
-      kind: "staff",
-      status: "ended",
-      stopReason: "=HYPERLINK(1)",
-      billId: null,
-      billStatus: null,
-      amountMinor: null,
-      currency: null,
-    };
-    const line = csvLine(row);
-    expect(line.endsWith("\r\n")).toBe(true);
-    expect(line.trimEnd()).toBe(
-      [
-        "31",
-        "2026-10-01T15:00:00.000Z",
-        "2026-10-01T16:30:00.000Z",
-        "America/Chicago",
-        "2026-10-01T10:00:00-05:00",
-        "2026-10-01T11:30:00-05:00",
-        "5400",
-        '"Main St, ""North"""',
-        "7",
-        "CP-07",
-        "71",
-        "1",
-        "6941",
-        "6.941",
-        "staff_test",
-        "ended",
-        "'=HYPERLINK(1)",
-        "",
-        "",
-        "",
-        "",
-      ].join(","),
+    const line = csvLine(
+      toRow(
+        checkout({ refundedMinor: 240, reference: `ck_${"b".repeat(32)}` }),
+        places,
+      ),
     );
-    expect(line.split(",").length).toBeGreaterThanOrEqual(CSV_COLUMNS.length);
-    expect(csvField("-1+1")).toBe("'-1+1");
-    expect(csvField("@SUM")).toBe("'@SUM");
+    const f = line.trimEnd().split(",");
+    const at = (c: (typeof CSV_COLUMNS)[number]) => f[CSV_COLUMNS.indexOf(c)];
+    expect(at("session_ref")).toBe(`ck_${"b".repeat(32)}`);
+    expect(at("session_type")).toBe("paid");
+    expect(at("status")).toBe("charged");
+    expect(at("started_at_utc")).toBe("2026-10-10T14:01:30.000Z");
+    expect(at("started_at_local")).toBe("2026-10-10T09:01:30-05:00");
+    expect(at("time_zone")).toBe("America/Chicago");
+    expect(at("energy_wh")).toBe("28941");
+    expect(at("energy_kwh")).toBe("28.941");
+    expect(at("billed_minor")).toBe("1240");
+    expect(at("captured_minor")).toBe("1240");
+    expect(at("refunded_minor")).toBe("240");
+    expect(at("net_minor")).toBe("1000");
+    expect(at("currency")).toBe("USD");
+    expect(at("details")).toBe("recorded");
+    expect(line.endsWith("\r\n")).toBe(true);
+    const free = csvLine(toRow(checkout({ kind: "free" }), places));
+    const g = free.trimEnd().split(",");
+    expect(g[CSV_COLUMNS.indexOf("currency")]).toBe("");
+    expect(g[CSV_COLUMNS.indexOf("captured_minor")]).toBe("");
+  });
+
+  it("quotes and defuses text a spreadsheet would run as a formula", () => {
+    expect(csvField("=HYPERLINK(1)")).toBe("'=HYPERLINK(1)");
+    expect(csvField("+1")).toBe("'+1");
+    expect(csvField("-2")).toBe("'-2");
+    expect(csvField("@SUM(A1)")).toBe("'@SUM(A1)");
+    expect(csvField("\tx")).toBe("'\tx");
+    expect(csvField(" =1+1")).toBe("' =1+1");
+    expect(csvField("＝1+1")).toBe("'＝1+1");
+    expect(csvField("＋1")).toBe("'＋1");
+    expect(csvField('Bay "A", north')).toBe('"Bay ""A"", north"');
+    expect(csvField("\r\n=1")).toBe('"\'\r\n=1"');
     expect(csvField(-5)).toBe("-5");
-    expect(csvField("a\nb")).toBe('"a\nb"');
+    expect(csvField(null)).toBe("");
+    expect(csvField("Main Street")).toBe("Main Street");
   });
 
-  it("streams page by page, and fails before the response on a first-page error", async () => {
-    const ivora = fakeClient([
-      [tx(3, "2026-10-20T10:00:00Z", { bill: finalBill("bill_a", 700) })],
-      [tx(2, "2026-10-19T10:00:00Z", { bill: null })],
-    ]);
-    const stream = await sessionsCsv({ ivora, now: () => NOW }, october(), ctx);
-    // The first page is read before the response starts; the second only when pulled.
-    expect(ivora.calls).toEqual(["tx:0"]);
-    const csv = await new Response(stream).text();
-    const lines = csv.trimEnd().split("\r\n");
-    expect(lines[0]).toBe(CSV_COLUMNS.join(","));
-    expect(lines.slice(1).map((l) => l.split(",")[0])).toEqual(["3", "2"]);
-    expect(lines[1].endsWith(",bill_a,final,700,USD")).toBe(true);
-
-    const failing = {
-      mode: "live",
-      async listTransactionPage() {
-        throw new IvoraError(503, "outcome_unknown", "busy");
-      },
-    } as unknown as IvoraClient;
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(
-      sessionsCsv({ ivora: failing, now: () => NOW }, october(), ctx),
-    ).rejects.toMatchObject({ code: "outcome_unknown" });
+  const csvDeps = (store: ReportsStore, clock = { t: NOW }) => ({
+    store,
+    now: () => clock.t,
   });
 
-  it("errors the stream (never a file that looks complete) when a later page fails", async () => {
-    let n = 0;
-    const ivora = {
-      mode: "live",
-      async listTransactionPage() {
-        if (n++ === 0)
-          return {
-            data: [tx(3, "2026-10-20T10:00:00Z", { bill: null })],
-            next_cursor: 1,
-          };
-        throw new IvoraError(429, "rate_limited", "slow down");
-      },
-    } as unknown as IvoraClient;
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const stream = await sessionsCsv({ ivora, now: () => NOW }, october(), ctx);
-    await expect(new Response(stream).text()).rejects.toMatchObject({
-      code: "rate_limited",
+  it("streams every matching row in pages that new checkouts can't shift", async () => {
+    const rows = Array.from({ length: 7 }, (_, i) =>
+      checkout({
+        createdAt: new Date(
+          Date.parse("2026-10-05T00:00:00Z") + i * 60_000,
+        ).toISOString(),
+      }),
+    );
+    const store = memoryStore(rows);
+    const list = vi.spyOn(store, "list");
+    const r = await sessionsCsv(csvDeps(store), october(), places, {
+      maxRows: 100,
+      seconds: 45,
+      pageRows: 3,
     });
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const reader = r.body.getReader();
+    const dec = new TextDecoder();
+    let text = dec.decode((await reader.read()).value); // header
+    text += dec.decode((await reader.read()).value); // first page
+    // A checkout made while the file streams: by offset it would repeat a row.
+    rows.push(checkout({ createdAt: "2026-10-06T00:00:00.000Z" }));
+    for (let s = await reader.read(); !s.done; s = await reader.read())
+      text += dec.decode(s.value);
+    const lines = text.trimEnd().split("\r\n");
+    expect(lines).toHaveLength(8);
+    expect(new Set(lines.slice(1)).size).toBe(7);
+    expect(list.mock.calls.map((c) => c[1].after?.createdAt ?? null)).toEqual([
+      null,
+      rows[4].createdAt,
+      rows[1].createdAt,
+    ]);
+  });
+
+  it("refuses more rows than one file holds before sending anything", async () => {
+    const store = memoryStore([checkout(), checkout(), checkout()]);
+    const r = await sessionsCsv(csvDeps(store), october(), places, {
+      maxRows: 2,
+      seconds: 45,
+      pageRows: 500,
+    });
+    expect(r).toMatchObject({ ok: false, status: 422 });
+    if (!r.ok) expect(r.error).toMatch(/3 sessions match.*up to 2/);
+  });
+
+  it("answers an error status when the count can't be read", async () => {
+    const store = memoryStore([]);
+    store.totals = async () => {
+      throw new Error("db down");
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await sessionsCsv(csvDeps(store), october(), places)).toMatchObject({
+      ok: false,
+      status: 502,
+    });
+  });
+
+  it("fails the download (never a clean partial file) when a later page fails", async () => {
+    const store = memoryStore(
+      Array.from({ length: 5 }, (_, i) =>
+        checkout({ createdAt: `2026-10-05T00:0${i}:00.000Z` }),
+      ),
+    );
+    const real = store.list.bind(store);
+    let calls = 0;
+    store.list = async (f, p) => {
+      if (++calls === 2) throw new Error("connection reset");
+      return real(f, p);
+    };
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await sessionsCsv(csvDeps(store), october(), places, {
+      maxRows: 100,
+      seconds: 45,
+      pageRows: 2,
+    });
+    if (!r.ok) throw new Error("expected a stream");
+    await expect(new Response(r.body).text()).rejects.toThrow();
+  });
+
+  it("fails the download when it runs out of time", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const clock = { t: NOW };
+    const slow = memoryStore(
+      Array.from({ length: 4 }, (_, i) =>
+        checkout({ createdAt: `2026-10-05T00:0${i}:00.000Z` }),
+      ),
+    );
+    const real = slow.list.bind(slow);
+    slow.list = async (f, p) => {
+      clock.t += 30_000;
+      return real(f, p);
+    };
+    const t = await sessionsCsv(csvDeps(slow, clock), october(), places, {
+      maxRows: 100,
+      seconds: 45,
+      pageRows: 1,
+    });
+    if (!t.ok) throw new Error("expected a stream");
+    await expect(new Response(t.body).text()).rejects.toThrow(/45 seconds/);
   });
 });
 
+describe("the sweep: session details and refunds", () => {
+  /** GET /transactions/{id} as the published API returns it. */
+  const detail = (o: Partial<TransactionDetail> = {}): TransactionDetail =>
+    ({
+      id: 812,
+      transaction_id: "1234",
+      station_id: 7,
+      station_name: "CP-07",
+      evse_number: 1,
+      connector_id: 71,
+      connector_number: 2,
+      id_token: "****C3D4",
+      id_token_type: "Central",
+      active: false,
+      charging_state: null,
+      started_at: "2026-10-10T14:01:30Z",
+      ended_at: "2026-10-10T15:00:00Z",
+      duration_seconds: 3510,
+      stop_reason: "EVDisconnected",
+      energy_kwh: "28.941",
+      energy_wh: 28_941,
+      meter_start_kwh: "100.000",
+      meter_start_wh: 100_000,
+      billing: null,
+      bill: null,
+      ...o,
+    }) as TransactionDetail;
+
+  it("reads an ended session's start, end, energy, connector and stop reason", () => {
+    expect(sessionDetails(detail())).toEqual({
+      startedAt: "2026-10-10T14:01:30Z",
+      endedAt: "2026-10-10T15:00:00Z",
+      energyWh: 28_941,
+      connectorNumber: 2,
+      stopReason: "EVDisconnected",
+    });
+    // Still charging: nothing to keep yet (duration_seconds counts to now).
+    expect(
+      sessionDetails(detail({ active: true, ended_at: null })).endedAt,
+    ).toBeNull();
+    expect(sessionDetails(detail({ energy_wh: -5 })).energyWh).toBeNull();
+  });
+
+  function sweepClient(
+    tx: Record<number, TransactionDetail | Error>,
+    pay: Record<string, { refunded_minor?: number } | Error>,
+  ) {
+    const calls: string[] = [];
+    const ivora = {
+      mode: "live",
+      async getTransaction(id: number) {
+        calls.push(`tx:${id}`);
+        const t = tx[id];
+        if (t instanceof Error) throw t;
+        return t;
+      },
+      async getPayment(id: string) {
+        calls.push(`pay:${id}`);
+        const p = pay[id];
+        if (p instanceof Error) throw p;
+        return { id, status: "captured", ...p };
+      },
+    } as unknown as IvoraClient;
+    return { ivora, calls };
+  }
+
+  it("copies ended sessions, notes running and missing ones, and records refunds", async () => {
+    const store = memoryStore([]);
+    store.detailsDue = async () => [
+      { operatorId: "op-1", id: "a", transactionId: 1 },
+      { operatorId: "op-1", id: "b", transactionId: 2 },
+      { operatorId: "op-1", id: "c", transactionId: 3 },
+    ];
+    store.refundsDue = async () => [
+      { operatorId: "op-1", id: "d", paymentId: "pay_d" },
+      { operatorId: "op-1", id: "e", paymentId: "pay_e" },
+      { operatorId: "op-1", id: "f", paymentId: "pay_f" },
+    ];
+    const { ivora, calls } = sweepClient(
+      {
+        1: detail(),
+        2: detail({ active: true, ended_at: null }),
+        3: new IvoraError(404, "transaction_not_found", "gone"),
+      },
+      {
+        pay_d: { refunded_minor: 1240 },
+        pay_e: {},
+        pay_f: new IvoraError(429, "rate_limited", "slow down"),
+      },
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await refreshReportRecords(
+      { ivora, store, now: () => NOW },
+      { details: 10, refunds: 10 },
+    );
+    expect(r).toEqual({ details: 1, refunds: 2 });
+    expect(calls).toEqual([
+      "tx:1",
+      "tx:2",
+      "tx:3",
+      "pay:pay_d",
+      "pay:pay_e",
+      "pay:pay_f",
+    ]);
+    // Every detail check is noted (so others get their turn); only ended ones keep data.
+    expect(store.details.map(([id, d]) => [id, d.endedAt])).toEqual([
+      ["a", "2026-10-10T15:00:00Z"],
+      ["b", null],
+      ["c", null],
+    ]);
+    // A payment that couldn't be read is not recorded: it is read again later.
+    expect(store.refunds).toEqual([
+      ["d", 1240],
+      ["e", 0],
+    ]);
+  });
+
+  it("never writes to Ivora: it only reads transactions and payments", async () => {
+    const store = memoryStore([]);
+    store.detailsDue = async () => [
+      { operatorId: "op-1", id: "a", transactionId: 1 },
+    ];
+    store.refundsDue = async () => [
+      { operatorId: "op-1", id: "d", paymentId: "pay_d" },
+    ];
+    const used = new Set<string>();
+    const ivora = new Proxy(sweepClient({ 1: detail() }, { pay_d: {} }).ivora, {
+      get(target, prop, recv) {
+        used.add(String(prop));
+        return Reflect.get(target, prop, recv);
+      },
+    });
+    await refreshReportRecords({ ivora, store, now: () => NOW });
+    expect([...used].sort()).toEqual(["getPayment", "getTransaction"]);
+  });
+});
+
+// ---- Demo mode ----
+
 describe("reports in demo mode", () => {
   const saved = { ...process.env };
-  let fetchSpy: ReturnType<typeof vi.fn>;
   beforeEach(() => {
-    for (const k of [
-      "IVORA_API_KEY",
-      "IVORA_TENANT_ID",
-      "SUPABASE_URL",
-      "SUPABASE_ANON_KEY",
-      "SUPABASE_SERVICE_ROLE_KEY",
-    ])
-      delete process.env[k];
+    process.env.DEMO_MODE = "true";
     resetIvoraForTests();
     resetDemoLiveForTests();
-    fetchSpy = vi.fn(() => {
+    resetDemoCheckoutForTests();
+    vi.stubGlobal("fetch", () => {
       throw new Error("demo mode must not call fetch");
     });
-    vi.stubGlobal("fetch", fetchSpy);
   });
   afterEach(() => {
     vi.unstubAllGlobals();
     process.env = { ...saved };
   });
 
+  const demoStaff: Staff = { ...viewer, operatorId: "demo", demo: true };
+
   it("runs stats, the sessions table and the CSV export on sample data, offline", async () => {
     const d = getReports();
-    expect(d.ivora.mode).toBe("demo");
-    const r = await loadReportsContext(d, viewer, params({ period: "90d" }));
+    expect(d.store.mode).toBe("demo");
+    const r = await loadReportsContext(d, demoStaff, params({ period: "90d" }));
     expect(r.ok).toBe(true);
     if (!r.ok) return;
-    const c = r.context;
-    // The sample sites' time zone (no company time zone is set in the demo).
-    expect(c.query.timeZone).toBe(NY);
-    expect(c.timeZoneSource).toBe("sites");
-    expect(c.stations.every((s) => s.name.startsWith("DEMO-"))).toBe(true);
-
-    const stats = await loadStats(d.ivora, c.query);
+    const q = r.context.query;
+    const stats = await loadStats(d.ivora, q);
     expect(stats.ok).toBe(true);
-    if (!stats.ok) return;
-    expect(stats.stats.series).toHaveLength(90);
-    expect(stats.stats.totals.sessions).toBeGreaterThan(200);
-    expect(stats.stats.revenue?.currencies[0].currency).toBe("USD");
-    expect(stats.stats.top_stations[0].name).toMatch(/^DEMO-/);
-
-    const sessions = await loadSessions(d, c.query, c.scan);
-    expect(sessions.ok).toBe(true);
-    if (!sessions.ok) return;
-    const s = sessions.summary;
-    expect(s.byKind.staff).toBeGreaterThan(0);
-    expect(s.byKind.free).toBeGreaterThan(0);
-    expect(s.byKind.driver).toBeGreaterThan(0);
-    // Driver revenue is exactly the final bills of driver sessions.
-    const history = demoHistory(Date.now());
-    const driverBills = new Set(
-      history.transactions
-        .filter(
-          (t) =>
-            t.bill &&
-            Date.parse(t.started_at!) >= c.query.fromMs &&
-            Date.parse(t.started_at!) < c.query.toMs,
-        )
-        .map((t) => t.bill!.id),
+    const sessions = await loadSessions(
+      d,
+      reportFilter(demoStaff, q),
+      1,
+      r.context.places,
     );
-    expect(s.driverRevenue[0].bills).toBe(driverBills.size);
-    expect(
-      history.transactions.some((t) =>
-        t.id_token?.endsWith(DEMO_HISTORY_TOKENS.staff.slice(-4)),
-      ),
-    ).toBe(true);
-
-    const csv = await new Response(
-      await sessionsCsv(d, c.query, c.scan),
-    ).text();
-    const lines = csv.trimEnd().split("\r\n");
+    if (!sessions.ok) throw new Error(sessions.error);
+    const t = sessions.totals;
+    expect(t.withSession).toBeGreaterThan(100);
+    expect(t.free).toBeGreaterThan(0);
+    // Ivora's figures count more: staff/test and RFID sessions are not the kit's.
+    if (stats.ok)
+      expect(stats.stats.totals.sessions).toBeGreaterThan(t.withSession);
+    const usd = t.currencies.find((l) => l.currency === "USD")!;
+    expect(usd.refundedMinor).toBeGreaterThan(0);
+    expect(usd.capturedMinor).toBeLessThan(usd.billedMinor);
+    const csv = await sessionsCsv(
+      d,
+      reportFilter(demoStaff, q),
+      r.context.places,
+    );
+    if (!csv.ok) throw new Error(csv.error);
+    const lines = (await new Response(csv.body).text()).trimEnd().split("\r\n");
     expect(lines[0]).toBe(CSV_COLUMNS.join(","));
-    expect(lines.length - 1).toBe(s.sessions);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(lines).toHaveLength(t.checkouts + 1);
+  });
+
+  it("includes every outcome: charged, refunded, released and above the hold", () => {
+    const { checkouts } = demoHistory(NOW);
+    const t = totalsOf(checkouts);
+    expect(t.byStatus.charged).toBeGreaterThan(0);
+    expect(t.byStatus.no_charge).toBeGreaterThan(0);
+    expect(t.byStatus.attention).toBeGreaterThan(0);
+    expect(checkouts.some((c) => (c.refundedMinor ?? 0) > 0)).toBe(true);
+    // Every sample is made up: sample chargers, made-up references.
+    expect(
+      checkouts.every((c) => [9101, 9102, 9103].includes(c.stationId)),
+    ).toBe(true);
   });
 
   it("answers a period that is too long like Ivora: stats_range_too_large", async () => {
     const d = getReports();
-    const r = await loadReportsContext(
-      d,
-      viewer,
+    const { query } = parseReportQuery(
       params({
         period: "custom",
         from: "2026-01-01",
-        to: "2026-06-30",
-        bucket: "day",
+        to: "2026-10-20",
+        bucket: "hour",
       }),
+      "UTC",
+      NOW,
     );
-    if (!r.ok) throw new Error(r.error);
-    const stats = await loadStats(d.ivora, r.context.query);
-    expect(stats).toMatchObject({ ok: false, tooLarge: true });
-    if (!stats.ok) expect(stats.error).toContain("stats_range_too_large");
-    // The same months by month are fine.
-    const months = await loadReportsContext(
-      d,
-      viewer,
-      params({
-        period: "custom",
-        from: "2026-01-01",
-        to: "2026-06-30",
-        bucket: "month",
-      }),
-    );
-    if (!months.ok) throw new Error(months.error);
-    expect((await loadStats(d.ivora, months.context.query)).ok).toBe(true);
-    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const r = await loadStats(d.ivora, query);
+    expect(r).toMatchObject({ ok: false, tooLarge: true });
+    // The sessions table still works for the same period.
+    const s = await loadSessions(d, reportFilter(demoStaff, query), 1, places);
+    expect(s.ok).toBe(true);
   });
 
-  it("serves the demo client's report methods only from sample data", async () => {
-    const ivora = getIvora();
-    const page = await ivora.listTransactionPage({ limit: 5 });
-    expect(page.data).toHaveLength(5);
-    expect(page.next_cursor).toBe(5);
-    const bills = await ivora.listBillPage({ status: "final", limit: 3 });
-    expect(bills.data.every((b) => b.status === "final")).toBe(true);
-    expect(fetchSpy).not.toHaveBeenCalled();
+  it("has no Ivora client methods that scan the transaction or bill lists", () => {
+    const ivora = getIvora() as unknown as Record<string, unknown>;
+    expect(ivora.listTransactionPage).toBeUndefined();
+    expect(ivora.listBillPage).toBeUndefined();
   });
 });

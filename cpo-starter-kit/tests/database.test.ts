@@ -1,6 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
+import { totalsOf } from "@/lib/server/reports/records";
+import {
+  toReportCheckout,
+  toReportTotals,
+} from "@/lib/server/reports/supabase";
 
 // The migrations run in an in-process Postgres (PGlite) with the Supabase roles,
 // default privileges and auth.uid() stubbed, so RLS and grants are tested without a
@@ -211,6 +216,10 @@ describe("row level security", () => {
           `select cpo_claim_checkout('${operatorA}','${OWNER_A}','paid','ABCD2345',1,11,1,2500,'USD')`,
           `select cpo_record_checkout('${operatorA}','${OWNER_A}','{}')`,
           `select cpo_next_tariff_attempt('${operatorA}','${OWNER_A}','${OWNER_A}',1)`,
+          `select * from cpo_report_checkouts('${operatorA}',now()-interval '1 day',now(),null,'all',50,0,null,null)`,
+          `select cpo_report_totals('${operatorA}',now()-interval '1 day',now(),null,'all')`,
+          `select cpo_record_checkout_details('${operatorA}','${OWNER_A}',now(),now(),1,1,'Local')`,
+          `select cpo_record_checkout_refund('${operatorA}','${OWNER_A}',0)`,
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -1603,5 +1612,247 @@ describe("driver checkouts", () => {
           ),
         ).rejects.toThrow(/permission denied/);
       });
+  });
+});
+
+describe("reports", () => {
+  const call = <T = unknown>(sql: string, params: unknown[]) =>
+    as("service_role", null, () =>
+      pg.query<T & Record<string, unknown>>(sql, params),
+    );
+  let r = 0;
+  /** A checkout written directly (the table's own checks still apply). */
+  async function insert(o: Record<string, unknown>) {
+    const row: Record<string, unknown> = {
+      operator_id: operatorB,
+      request_id: `30000000-0000-4000-8000-${String(++r).padStart(12, "0")}`,
+      kind: "paid",
+      sticker_code: "ABCD2345",
+      station_id: 9101,
+      connector_id: 9000 + r,
+      tariff_id: 9401,
+      hold_minor: 2500,
+      currency: "USD",
+      phase: "settled",
+      created_at: "2025-10-10T12:00:00Z",
+      ...o,
+    };
+    const cols = Object.keys(row);
+    const { rows } = await pg.query<{ id: string }>(
+      `insert into cpo_checkouts (${cols.join(",")}) values (${cols.map((_, i) => `$${i + 1}`).join(",")}) returning id`,
+      Object.values(row),
+    );
+    return rows[0].id;
+  }
+  const FROM = "2025-10-01T00:00:00Z";
+  const TO = "2025-11-01T00:00:00Z";
+  const totals = (status = "all", station: number | null = null) =>
+    call<{ t: unknown }>("select cpo_report_totals($1,$2,$3,$4,$5) as t", [
+      operatorB,
+      FROM,
+      TO,
+      station,
+      status,
+    ]).then((x) => toReportTotals(x.rows[0].t));
+  const list = (
+    o: {
+      status?: string;
+      limit?: number;
+      offset?: number;
+      after?: [string, string];
+    } = {},
+  ) =>
+    call<Record<string, unknown>>(
+      "select * from cpo_report_checkouts($1,$2,$3,null,$4,$5,$6,$7,$8)",
+      [
+        operatorB,
+        FROM,
+        TO,
+        o.status ?? "all",
+        o.limit ?? 50,
+        o.offset ?? 0,
+        o.after?.[0] ?? null,
+        o.after?.[1] ?? null,
+      ],
+    ).then((x) => x.rows);
+
+  const ids: Record<string, string> = {};
+  beforeAll(async () => {
+    // $12.40 captured, $3.00 of it refunded.
+    ids.refunded = await insert({
+      transaction_id: 1,
+      final_minor: 1240,
+      captured_minor: 1240,
+      refunded_minor: 300,
+      created_at: "2025-10-10T12:00:00Z",
+    });
+    // A $0.30 bill under Stripe's minimum: released, nothing captured.
+    ids.small = await insert({
+      transaction_id: 2,
+      final_minor: 30,
+      captured_minor: 0,
+      created_at: "2025-10-11T12:00:00Z",
+    });
+    // A $27.40 bill above the $25 hold: needs the operator, nothing captured by the kit.
+    ids.above = await insert({
+      phase: "attention",
+      transaction_id: 3,
+      final_minor: 2740,
+      created_at: "2025-10-12T12:00:00Z",
+    });
+    ids.free = await insert({
+      kind: "free",
+      hold_minor: 0,
+      transaction_id: 4,
+      created_at: "2025-10-13T12:00:00Z",
+    });
+    ids.open = await insert({
+      phase: "open",
+      created_at: "2025-10-14T12:00:00Z",
+    });
+    ids.eur = await insert({
+      currency: "EUR",
+      transaction_id: 5,
+      final_minor: 500,
+      captured_minor: 500,
+      station_id: 9102,
+      created_at: "2025-10-15T12:00:00Z",
+    });
+    // Outside the period, and another operator's.
+    await insert({ created_at: "2025-11-01T00:00:00Z", captured_minor: 999 });
+    await insert({ operator_id: operatorA, captured_minor: 999 });
+  });
+
+  it("totals collected money as captured minus refunded, never the bill", async () => {
+    const t = await totals();
+    expect(t).toMatchObject({
+      checkouts: 6,
+      paid: 5,
+      free: 1,
+      withSession: 5,
+      byStatus: { in_progress: 1, charged: 2, no_charge: 2, attention: 1 },
+      refundsUnchecked: 2,
+    });
+    expect(t.currencies).toEqual([
+      {
+        currency: "EUR",
+        charged: 1,
+        billedMinor: 500,
+        capturedMinor: 500,
+        refundedMinor: 0,
+      },
+      {
+        currency: "USD",
+        charged: 1,
+        billedMinor: 1240 + 30 + 2740,
+        capturedMinor: 1240,
+        refundedMinor: 300,
+      },
+    ]);
+    expect((await totals("refunded")).checkouts).toBe(1);
+    expect((await totals("all", 9102)).checkouts).toBe(1);
+  });
+
+  it("agrees with the demo store's rules on the same records", async () => {
+    for (const status of [
+      "all",
+      "in_progress",
+      "charged",
+      "refunded",
+      "no_charge",
+      "attention",
+    ]) {
+      const rows = (await list({ status, limit: 500 })).map((x) =>
+        toReportCheckout(x as never),
+      );
+      expect(totalsOf(rows)).toEqual(await totals(status));
+    }
+  });
+
+  it("lists newest first, by offset or after a row, at most 500", async () => {
+    const all = await list();
+    expect(all.map((x) => x.id)).toEqual([
+      ids.eur,
+      ids.open,
+      ids.free,
+      ids.above,
+      ids.small,
+      ids.refunded,
+    ]);
+    expect((await list({ limit: 2, offset: 2 })).map((x) => x.id)).toEqual([
+      ids.free,
+      ids.above,
+    ]);
+    const third = all[2] as { created_at: string; id: string };
+    const after = await list({
+      limit: 2,
+      after: [new Date(third.created_at).toISOString(), third.id],
+    });
+    expect(after.map((x) => x.id)).toEqual([ids.above, ids.small]);
+    expect((await list({ status: "attention" })).map((x) => x.id)).toEqual([
+      ids.above,
+    ]);
+  });
+
+  it("keeps an ended session's details once, and notes every check", async () => {
+    const record = (ended: string | null, wh: number) =>
+      call<{ ok: boolean }>(
+        "select cpo_record_checkout_details($1,$2,'2025-10-10T12:01:00Z',$3,$4,2,'Local') as ok",
+        [operatorB, ids.small, ended, wh],
+      ).then((x) => x.rows[0].ok);
+    const row = async () =>
+      (
+        await pg.query<{
+          energy_wh: number | null;
+          detail_at: string | null;
+          detail_checked_at: string | null;
+        }>(
+          "select energy_wh, detail_at, detail_checked_at from cpo_checkouts where id=$1",
+          [ids.small],
+        )
+      ).rows[0];
+    // Still running: nothing kept, but the check is noted.
+    expect(await record(null, 100)).toBe(true);
+    expect(await row()).toMatchObject({ energy_wh: null, detail_at: null });
+    expect((await row()).detail_checked_at).not.toBeNull();
+    expect(await record("2025-10-10T13:00:00Z", 860)).toBe(true);
+    expect((await row()).energy_wh).toBe(860);
+    // Once kept, never overwritten.
+    await record("2025-10-10T14:00:00Z", 999);
+    expect((await row()).energy_wh).toBe(860);
+    // Another operator's call changes nothing.
+    expect(
+      (
+        await call<{ ok: boolean }>(
+          "select cpo_record_checkout_details($1,$2,now(),now(),1,1,'x') as ok",
+          [operatorA, ids.small],
+        )
+      ).rows[0].ok,
+    ).toBe(false);
+  });
+
+  it("records refunds only on charged, settled paid checkouts, capped at the capture", async () => {
+    const refund = (id: string, minor: number, op = operatorB) =>
+      call<{ ok: boolean }>(
+        "select cpo_record_checkout_refund($1,$2,$3) as ok",
+        [op, id, minor],
+      ).then((x) => x.rows[0].ok);
+    const refunded = async (id: string) =>
+      (
+        await pg.query<{ refunded_minor: number | null }>(
+          "select refunded_minor from cpo_checkouts where id=$1",
+          [id],
+        )
+      ).rows[0].refunded_minor;
+    expect(await refund(ids.refunded, 5000)).toBe(true);
+    expect(await refunded(ids.refunded)).toBe(1240);
+    // A refund that failed in the end: the payment says 0 again.
+    expect(await refund(ids.refunded, 0)).toBe(true);
+    expect(await refunded(ids.refunded)).toBe(0);
+    for (const id of [ids.small, ids.above, ids.free, ids.open])
+      expect(await refund(id, 10)).toBe(false);
+    expect(await refund(ids.eur, 10, operatorA)).toBe(false);
+    await expect(refund(ids.eur, -1)).rejects.toThrow(/cpo_invalid/);
+    await refund(ids.refunded, 300);
   });
 });

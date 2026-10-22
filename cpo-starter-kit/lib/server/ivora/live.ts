@@ -18,12 +18,11 @@ import type {
   Station,
   StationInput,
   Stats,
-  StringPage,
   Tariff,
   TariffArchived,
   TokenRecord,
   Transaction,
-  TransactionRecord,
+  TransactionDetail,
 } from "./types";
 
 export interface LiveOptions {
@@ -354,7 +353,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       );
     },
     getTransaction(transactionId) {
-      return request<Transaction>("GET", `transactions/${transactionId}`);
+      return request<TransactionDetail>("GET", `transactions/${transactionId}`);
     },
     async findToken(externalReference) {
       return (
@@ -500,18 +499,6 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       return request<Stats>(
         "GET",
         `stats${query({ from: q.from, to: q.to, bucket: q.bucket, time_zone: q.time_zone, top: q.top })}`,
-      );
-    },
-    listTransactionPage(o) {
-      return request<Page<TransactionRecord>>(
-        "GET",
-        `transactions${query({ limit: o.limit ?? 100, after: o.after || undefined, station_id: o.station_id })}`,
-      );
-    },
-    listBillPage(o) {
-      return request<StringPage<Bill>>(
-        "GET",
-        `bills${query({ limit: o.limit ?? 100, after: o.after || undefined, station_id: o.station_id, status: o.status })}`,
       );
     },
   };

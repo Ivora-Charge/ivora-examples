@@ -10,6 +10,7 @@ import {
   MAX_STATS_SESSIONS,
 } from "../reports/time";
 import { whToKwhText } from "../../units";
+import type { ReportCheckout } from "../reports/types";
 import { IvoraError } from "./errors";
 import type {
   Bill,
@@ -18,25 +19,19 @@ import type {
   Stats,
   StatsFigures,
   StatsQuery,
-  TransactionRecord,
+  TransactionDetail,
 } from "./types";
 
 // Six months of sample charging history for demo-mode reports, made up offline from a
 // hash of each day (the same days always get the same sessions). Every station is a
-// DEMO- sample charger; every amount is a sample bill that nobody paid.
+// DEMO- sample charger; every amount is a sample bill that nobody paid. Driver-paid and
+// free sessions also get the kit's own checkout record (what the sessions table and
+// the CSV read); staff/test and RFID sessions are only in Ivora's figures, as they
+// would be for a real operator.
 
 const DAY_MS = 86_400_000;
+const MINUTE_MS = 60_000;
 export const DEMO_HISTORY_DAYS = 180;
-
-/**
- * The tokens the sample history's staff/test and free sessions started with, as if
- * they were the operator's staff and free charging tokens. Reports label them that
- * way in demo mode only.
- */
-export const DEMO_HISTORY_TOKENS = {
-  staff: "SAMPLESTAFF1",
-  free: "SAMPLEFREE01",
-} as const;
 
 /** The sample chargers' connectors: station, connector ID and number, power (W). */
 const CONNECTORS = [
@@ -67,27 +62,37 @@ const FAILED_STOPS = new Set([
 ]);
 
 export interface DemoHistory {
-  transactions: TransactionRecord[];
+  /** Every sample session, as Ivora's statistics count them. */
+  transactions: TransactionDetail[];
+  /** Final bills of driver-paid sessions. */
   bills: Bill[];
+  /** The kit's checkout records (paid and free), newest first. */
+  checkouts: ReportCheckout[];
 }
 
 const bytes = (s: string) => createHash("sha256").update(s).digest();
 const ISO = (ms: number) => new Date(ms).toISOString();
-const mask = (token: string) => `****${token.slice(-4)}`;
+/** A stable, made-up UUID for a sample record (never a real checkout's). */
+const uuid = (b: Buffer) => {
+  const h = b.toString("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-4${h.slice(13, 16)}-8${h.slice(17, 20)}-${h.slice(20, 32)}`;
+};
 
 let cached: { day: number; history: DemoHistory } | null = null;
 
 /**
- * The sample sessions and bills up to `now`, newest first: 3 to 7 sessions a day over
- * DEMO_HISTORY_DAYS days, about two thirds paid by drivers (with a final bill), the
- * rest free, staff/test or other (an RFID card). One session in 16 ends on a power
- * loss and one in 16 delivers nothing.
+ * The sample sessions up to `now`: 3 to 7 a day over DEMO_HISTORY_DAYS days. About
+ * 60% are paid by drivers, 10% free, 10% staff/test and the rest RFID cards. Of the
+ * paid ones: one tap in 20 never paid (the hold was released, no session), a bill above
+ * the $25 hold needs the operator, and one charged session in 25 was refunded. One
+ * session in 16 ends on a power loss and one in 16 delivers nothing.
  */
 export function demoHistory(now: number): DemoHistory {
   const today = Math.floor(now / DAY_MS);
   if (cached?.day === today) return filterToNow(cached.history, now);
-  const transactions: TransactionRecord[] = [];
+  const transactions: TransactionDetail[] = [];
   const bills: Bill[] = [];
+  const checkouts: ReportCheckout[] = [];
   for (let d = 0; d < DEMO_HISTORY_DAYS; d++) {
     const day = today - d;
     const count = 3 + (bytes(`demo-day-${day}`)[0] % 5);
@@ -95,9 +100,9 @@ export function demoHistory(now: number): DemoHistory {
       const b = bytes(`demo-session-${day}-${i}`);
       const c = CONNECTORS[b[0] % CONNECTORS.length];
       const start =
-        day * DAY_MS + (6 + (b[1] % 16)) * 3_600_000 + (b[2] % 60) * 60_000;
+        day * DAY_MS + (6 + (b[1] % 16)) * 3_600_000 + (b[2] % 60) * MINUTE_MS;
       const minutes = 15 + ((b[3] * 256 + b[4]) % 210);
-      const end = start + minutes * 60_000;
+      const end = start + minutes * MINUTE_MS;
       const fault = b[6] % 16 === 0;
       const empty = b[6] % 16 === 1;
       const energyWh = empty
@@ -105,91 +110,139 @@ export function demoHistory(now: number): DemoHistory {
         : Math.min(75_000, Math.round((c.w * minutes) / 60));
       const roll = b[7] % 100;
       const kind =
-        roll < 68
-          ? "driver"
-          : roll < 78
-            ? "free"
-            : roll < 86
-              ? "staff"
-              : "other";
+        roll < 60 ? "paid" : roll < 70 ? "free" : roll < 80 ? "staff" : "rfid";
       const id = day * 10 + i;
       const billId = `bill_${b.subarray(8, 24).toString("hex")}`;
-      const token =
-        kind === "driver"
-          ? `****D${billId.slice(-3).toUpperCase()}`
-          : kind === "free"
-            ? mask(DEMO_HISTORY_TOKENS.free)
-            : kind === "staff"
-              ? mask(DEMO_HISTORY_TOKENS.staff)
-              : `****R${b[5].toString(16).toUpperCase().padStart(3, "0")}`;
-      const total =
-        kind === "driver"
-          ? Math.min(
-              HOLD_MINOR,
-              SESSION_FEE_MINOR +
-                Math.round((RATE_MINOR_PER_KWH * energyWh) / 1000),
-            )
-          : null;
-      const finalizedAt = end + 2 * 60_000;
+      const tapped = start - 90_000;
+      const settledAt = end + 2 * MINUTE_MS;
+      const base: ReportCheckout = {
+        id: uuid(bytes(`demo-checkout-${day}-${i}`)),
+        reference: `ck_${b.subarray(16, 32).toString("hex")}`,
+        kind: kind === "free" ? "free" : "paid",
+        stationId: c.station,
+        connectorId: c.id,
+        phase: "settled",
+        alert: null,
+        createdAt: ISO(tapped),
+        settledAt: ISO(settledAt),
+        transactionId: id,
+        billId: null,
+        holdMinor: kind === "free" ? 0 : HOLD_MINOR,
+        currency: "USD",
+        finalMinor: null,
+        capturedMinor: null,
+        refundedMinor: null,
+        refundCheckedAt: null,
+        meterWh: null,
+        sessionStartedAt: ISO(start),
+        sessionEndedAt: ISO(end),
+        energyWh,
+        connectorNumber: c.number,
+        stopReason: fault ? "PowerLoss" : empty ? "EVDisconnected" : "Local",
+        detailAt: ISO(settledAt + MINUTE_MS),
+      };
+      if (kind === "paid" && b[5] % 20 === 0) {
+        // The driver never paid: the hold was released and nothing charged.
+        checkouts.push({
+          ...base,
+          phase: "released",
+          settledAt: ISO(tapped + 30 * MINUTE_MS),
+          transactionId: null,
+          billId,
+          sessionStartedAt: null,
+          sessionEndedAt: null,
+          energyWh: null,
+          connectorNumber: null,
+          stopReason: null,
+          detailAt: null,
+        });
+        continue;
+      }
       transactions.push({
         id,
         station_id: c.station,
         station_name: c.name,
         connector_id: c.id,
         connector_number: c.number,
-        id_token: token,
         active: false,
         started_at: ISO(start),
         ended_at: ISO(end),
         duration_seconds: minutes * 60,
-        stop_reason: fault ? "PowerLoss" : empty ? "EVDisconnected" : "Local",
+        stop_reason: base.stopReason,
         energy_wh: energyWh,
-        bill:
-          total === null
-            ? null
-            : {
-                id: billId,
-                status: "final",
-                currency: "USD",
-                total_minor: total,
-                finalized_at: ISO(finalizedAt),
-              },
       });
-      if (total !== null)
-        bills.push({
-          id: billId,
-          station_id: c.station,
-          connector_id: c.id,
-          tariff_id: 9401,
-          hold_minor: HOLD_MINOR,
-          currency: "USD",
-          status: "final",
-          total_minor: total,
-          transaction_id: id,
-          created_at: ISO(start - 60_000),
-          finalized_at: ISO(finalizedAt),
-        });
+      if (kind === "free") checkouts.push(base);
+      if (kind !== "paid") continue;
+      const total =
+        SESSION_FEE_MINOR + Math.round((RATE_MINOR_PER_KWH * energyWh) / 1000);
+      bills.push({
+        id: billId,
+        station_id: c.station,
+        connector_id: c.id,
+        tariff_id: 9401,
+        hold_minor: HOLD_MINOR,
+        currency: "USD",
+        status: "final",
+        total_minor: total,
+        transaction_id: id,
+        created_at: ISO(tapped),
+        finalized_at: ISO(settledAt),
+      });
+      const above = total > HOLD_MINOR;
+      const refunded = !above && b[5] % 25 === 1;
+      const checked = settledAt + 3_600_000;
+      checkouts.push({
+        ...base,
+        billId,
+        phase: above ? "attention" : "settled",
+        finalMinor: total,
+        capturedMinor: above ? null : total,
+        refundedMinor: above ? null : refunded ? total : 0,
+        refundCheckedAt: above ? null : ISO(checked),
+      });
     }
   }
   transactions.sort(
     (a, b) => Date.parse(b.started_at!) - Date.parse(a.started_at!),
   );
-  cached = { day: today, history: { transactions, bills } };
+  checkouts.sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
+  cached = { day: today, history: { transactions, bills, checkouts } };
   return filterToNow(cached.history, now);
 }
 
-/** Today's sessions that have not ended yet are left out (the demo has its own live ones). */
+/**
+ * Leaves out what has not happened by `now`: today's later sessions (the demo has its
+ * own live ones), and records the sweep would not have written yet.
+ */
 function filterToNow(h: DemoHistory, now: number): DemoHistory {
-  const ended = (t: TransactionRecord) => Date.parse(t.ended_at!) + 120_000;
-  const done = h.transactions.filter((t) => ended(t) <= now);
+  const by = (iso: string | null) => iso !== null && Date.parse(iso) <= now;
+  const done = h.transactions.filter(
+    (t) => Date.parse(t.ended_at!) + 2 * MINUTE_MS <= now,
+  );
   const ids = new Set(done.map((t) => t.id));
   return {
     transactions: done,
     bills: h.bills.filter((b) => ids.has(b.transaction_id!)),
+    checkouts: h.checkouts
+      .filter((c) => by(c.settledAt))
+      .map((c) => ({
+        ...c,
+        ...(by(c.detailAt) ? {} : NO_DETAILS),
+        refundCheckedAt: by(c.refundCheckedAt) ? c.refundCheckedAt : null,
+      })),
   };
 }
 
-function figures(txs: TransactionRecord[]): StatsFigures & {
+const NO_DETAILS = {
+  sessionStartedAt: null,
+  sessionEndedAt: null,
+  energyWh: null,
+  connectorNumber: null,
+  stopReason: null,
+  detailAt: null,
+} satisfies Partial<ReportCheckout>;
+
+function figures(txs: TransactionDetail[]): StatsFigures & {
   active: number;
   unknown: number;
 } {
@@ -252,7 +305,7 @@ function revenue(bills: Bill[]): RevenueLine[] {
  */
 export function demoStats(
   q: StatsQuery,
-  transactions: TransactionRecord[],
+  transactions: TransactionDetail[],
   bills: Bill[],
   stations: Station[],
   now: number,

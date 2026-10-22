@@ -1,41 +1,33 @@
 import "server-only";
+import { cookieDemoCheckout } from "../checkout/demo-cookie";
 import { isDemo } from "../env";
 import { getIvora } from "../ivora";
-import { DEMO_HISTORY_TOKENS } from "../ivora/demo-history";
-import { getLive } from "../live";
 import { getOnboarding } from "../onboarding";
+import { createDemoReportsStore } from "./demo";
 import type { ReportsDeps } from "./service";
+import { createSupabaseReportsStore } from "./supabase";
 
 export * from "./service";
 export * from "./types";
 
 /**
  * The one place that picks what reports read. In demo mode that is the demo Ivora
- * client (sample history and the visitor's own sessions, all offline) and the
- * visitor's cookie, so nothing reaches Ivora or Supabase.
+ * client and sample history plus the visitor's own demo checkouts (their cookie), so
+ * nothing reaches Ivora or Supabase.
  */
 export function getReports(): ReportsDeps {
-  const demo = isDemo();
-  const live = getLive().store;
+  const ivora = getIvora();
+  const now = Date.now;
   return {
-    ivora: getIvora(),
+    ivora,
     company: getOnboarding().store,
-    async tokens(operatorId) {
-      const [staff, free] = await Promise.all([
-        live.getStaffToken(operatorId),
-        live.getFreeToken(operatorId),
-      ]);
-      return {
-        staff: [
-          ...(staff ? [staff.idToken] : []),
-          ...(demo ? [DEMO_HISTORY_TOKENS.staff] : []),
-        ],
-        free: [
-          ...(free ? [free.idToken] : []),
-          ...(demo ? [DEMO_HISTORY_TOKENS.free] : []),
-        ],
-      };
-    },
-    now: Date.now,
+    store: isDemo()
+      ? createDemoReportsStore({
+          ivora,
+          own: async () => (await cookieDemoCheckout().load()).records,
+          now,
+        })
+      : createSupabaseReportsStore(now),
+    now,
   };
 }

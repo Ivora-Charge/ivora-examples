@@ -9,18 +9,19 @@ import {
   loadSessions,
   loadStats,
   PAGE_ROWS,
-  PAGE_SCAN,
   payoutsUrl,
   PRESET_LABELS,
   PRESETS,
+  REPORT_STATUS_LABELS,
+  reportFilter,
   reportSearch,
   SESSION_KIND_LABELS,
   STATUS_FILTER_LABELS,
   STATUS_FILTERS,
   type ReportQuery,
+  type ReportTotals,
   type SessionRow,
   type SessionsResult,
-  type SessionSummary,
   type StatsResult,
 } from "@/lib/server/reports";
 import { shortInZone } from "@/lib/server/reports/time";
@@ -65,7 +66,7 @@ export default async function Page({
   const q = c.query;
   const [stats, sessions, stripe] = await Promise.all([
     loadStats(d.ivora, q),
-    loadSessions(d, q, c.scan),
+    loadSessions(d, reportFilter(me, q), q.page, c.places),
     loadStripe(getOnboarding()),
   ]);
   return (
@@ -73,8 +74,9 @@ export default async function Page({
       <h1>Reports</h1>
       {c.mode === "demo" && (
         <p className="notice" role="note">
-          Demo: six months of sample sessions and bills on the sample chargers,
-          made up offline. Nobody paid anything.
+          Demo: six months of sample sessions, bills and payments on the sample
+          chargers, made up offline, plus your own demo sessions. Nobody paid
+          anything.
         </p>
       )}
       <Filters
@@ -102,8 +104,8 @@ export default async function Page({
         </p>
       )}
       <StatsSection result={stats} />
-      <Payouts stripe={stripe} />
       <Sessions result={sessions} q={q} />
+      <Payouts stripe={stripe} />
     </>
   );
 }
@@ -174,7 +176,7 @@ function Filters({
           </select>
         </div>
         <div className="field">
-          <label htmlFor="station">Charger (sessions)</label>
+          <label htmlFor="station">Charger (your sessions)</label>
           <select
             id="station"
             name="station"
@@ -189,7 +191,7 @@ function Filters({
           </select>
         </div>
         <div className="field">
-          <label htmlFor="status">Status (sessions)</label>
+          <label htmlFor="status">Status (your sessions)</label>
           <select id="status" name="status" defaultValue={q.status}>
             {STATUS_FILTERS.map((s) => (
               <option key={s} value={s}>
@@ -205,8 +207,8 @@ function Filters({
       <p id="custom-hint" className="muted">
         From, To and Group by apply to &quot;Custom dates&quot; (dates in {zone}
         , both included). Ivora reports up to 7 days by hour, 92 days by day or
-        24 months by month. Charger and status filter the sessions table; the
-        figures above it cover every charger.
+        24 months by month. Charger and status filter your sessions (the table,
+        its totals and the CSV); Ivora&apos;s figures cover every charger.
       </p>
     </section>
   );
@@ -283,6 +285,7 @@ function StatsSection({ result }: { result: StatsResult }) {
   const maxWh = Math.max(1, ...s.series.map((b) => b.energy_wh));
   return (
     <>
+      <h2 className="section-heading">All sessions on your chargers (Ivora)</h2>
       <section className="stats" aria-label="Figures for the period">
         <Stat
           label="Sessions"
@@ -308,7 +311,7 @@ function StatsSection({ result }: { result: StatsResult }) {
           value={duration(t.average_duration_seconds)}
         />
         <Stat
-          label="Billed revenue"
+          label="Billed (final bills)"
           value={revenueText(s.revenue?.currencies ?? null)}
           note={
             s.revenue
@@ -318,10 +321,13 @@ function StatsSection({ result }: { result: StatsResult }) {
         />
       </section>
       <p className="muted">
-        Billed revenue is the total of Ivora&apos;s final bills finalized in the
-        period, per currency: what drivers were billed, not what Stripe paid out
-        (refunds are in Stripe). Staff/test and free sessions have no bill, so
-        they are never in it. Session figures as of{" "}
+        Every session on your chargers, as Ivora counts them: also staff/test
+        sessions and sessions started outside this kit (RFID cards, roaming).
+        Billed is the total of Ivora&apos;s final bills finalized in the period:
+        what was billed, not what was collected (a bill under Stripe&apos;s
+        minimum is not charged, a bill above the card hold is charged up to the
+        hold, refunds come off). What drivers paid is under{" "}
+        <a href="#sessions-heading">Your sessions</a>. Session figures as of{" "}
         {shortInZone(Date.parse(s.sessions_as_of), "UTC")} UTC.
       </p>
       <section className="card" aria-labelledby="series-heading">
@@ -446,22 +452,23 @@ function Stat({
   );
 }
 
-// ---- Sessions table ----
+// ---- Your sessions (the kit's own records) ----
 
-function summaryText(s: SessionSummary): string {
-  const parts = [
-    `${s.sessions.toLocaleString("en-US")} ${s.sessions === 1 ? "session" : "sessions"}`,
-    kwh(s.energyWh),
-  ];
-  const kinds = (["driver", "free", "staff", "other"] as const)
-    .filter((k) => s.byKind[k])
-    .map((k) => `${s.byKind[k]} ${SESSION_KIND_LABELS[k].toLowerCase()}`);
-  if (kinds.length) parts.push(kinds.join(", "));
-  return parts.join(" · ");
+function money(minor: number | null, currency: string) {
+  return minor === null ? "–" : formatMinor(minor, currency);
+}
+
+function moneyText(
+  lines: ReportTotals["currencies"],
+  pick: (l: ReportTotals["currencies"][number]) => number,
+) {
+  return lines.length
+    ? lines.map((l) => formatMinor(pick(l), l.currency)).join(" · ")
+    : "None";
 }
 
 function When({ iso, zone }: { iso: string | null; zone: string }) {
-  if (!iso) return <span className="muted">Charging</span>;
+  if (!iso) return <span className="muted">–</span>;
   const ms = Date.parse(iso);
   return (
     <>
@@ -474,18 +481,121 @@ function When({ iso, zone }: { iso: string | null; zone: string }) {
   );
 }
 
-function Amount({ r }: { r: SessionRow }) {
-  if (r.amountMinor !== null && r.currency)
-    return <>{formatMinor(r.amountMinor, r.currency)}</>;
-  if (r.billStatus === "open") return <span className="muted">Open bill</span>;
-  return <span className="muted">No bill</span>;
+function Started({ r }: { r: SessionRow }) {
+  if (r.startedAt) return <When iso={r.startedAt} zone={r.timeZone} />;
+  return (
+    <>
+      <When iso={r.createdAt} zone={r.timeZone} />
+      <br />
+      <span className="muted">
+        {r.detailsPending ? "Tapped; details pending" : "Tapped; no session"}
+      </span>
+    </>
+  );
+}
+
+function Energy({ r }: { r: SessionRow }) {
+  if (r.energyWh !== null) return <>{kwh(r.energyWh)}</>;
+  if (r.energySoFarWh !== null)
+    return <span className="muted">{kwh(r.energySoFarWh)} so far</span>;
+  return <span className="muted">–</span>;
+}
+
+function Totals({ t }: { t: ReportTotals }) {
+  const sessions = t.withSession;
+  return (
+    <>
+      <section className="stats" aria-label="Totals of your sessions">
+        <Stat
+          label="Sessions"
+          value={sessions.toLocaleString("en-US")}
+          note={`of ${t.checkouts} taps: ${t.paid} paid, ${t.free} free`}
+        />
+        <Stat
+          label="Energy"
+          value={kwh(t.energyWh)}
+          note={
+            t.detailsPending ? `${t.detailsPending} still pending` : undefined
+          }
+        />
+        <Stat
+          label="Collected (captured minus refunds)"
+          value={moneyText(
+            t.currencies,
+            (l) => l.capturedMinor - l.refundedMinor,
+          )}
+          note={`${t.byStatus.charged} charged`}
+        />
+        <Stat
+          label="Refunded"
+          value={moneyText(t.currencies, (l) => l.refundedMinor)}
+        />
+        <Stat
+          label="Billed (their final bills)"
+          value={moneyText(t.currencies, (l) => l.billedMinor)}
+        />
+        <Stat
+          label="Needs you"
+          value={t.byStatus.attention.toLocaleString("en-US")}
+          note={
+            t.byStatus.in_progress
+              ? `${t.byStatus.in_progress} in progress`
+              : undefined
+          }
+        />
+      </section>
+      <p className="muted">
+        Sessions drivers paid for or started from your QR stickers, by when they
+        tapped. Collected is what was captured from drivers&apos; cards minus
+        refunds, before Stripe&apos;s and Ivora&apos;s fees: a bill under
+        Stripe&apos;s 50-cent minimum captures nothing, and a bill above the
+        card hold is not captured by the kit (it needs you). Free sessions never
+        carry money, and staff/test sessions and sessions started outside this
+        kit (RFID cards, roaming) are not listed here: they are in Ivora&apos;s
+        figures above.
+        {t.detailsPending > 0 &&
+          " Energy and times of sessions that ended in the last few minutes are copied from Ivora by the settlement sweep."}
+        {t.refundsUnchecked > 0 &&
+          ` Refunds of ${t.refundsUnchecked} charged ${t.refundsUnchecked === 1 ? "session have" : "sessions have"} not been checked yet; the sweep reads each payment once a day for 90 days.`}
+      </p>
+    </>
+  );
+}
+
+function Pager({
+  q,
+  page,
+  pages,
+}: {
+  q: ReportQuery;
+  page: number;
+  pages: number;
+}) {
+  if (pages <= 1) return null;
+  return (
+    <nav className="pager" aria-label="Session pages">
+      {page > 1 ? (
+        <Link href={`/reports?${reportSearch(q, page - 1)}`}>Newer</Link>
+      ) : (
+        <span />
+      )}
+      <span className="muted">
+        Page {page} of {pages}
+      </span>
+      {page < pages ? (
+        <Link href={`/reports?${reportSearch(q, page + 1)}`}>Older</Link>
+      ) : (
+        <span />
+      )}
+    </nav>
+  );
 }
 
 function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
   return (
     <section className="card" aria-labelledby="sessions-heading">
       <h2 id="sessions-heading">
-        Sessions
+        Your sessions (this kit)
         <a
           className="button secondary"
           href={`/reports/export?${reportSearch(q)}`}
@@ -500,28 +610,7 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
         </p>
       ) : (
         <>
-          <p>{summaryText(result.summary)}</p>
-          <p className="muted">
-            Driver revenue in this table (final bills):{" "}
-            {result.summary.driverRevenue.length
-              ? result.summary.driverRevenue
-                  .map(
-                    (l) =>
-                      `${formatMinor(l.amountMinor, l.currency)} (${l.bills} ${l.bills === 1 ? "bill" : "bills"})`,
-                  )
-                  .join(" · ")
-              : "none"}
-            . Staff/test and free sessions are labelled and never counted as
-            driver revenue.
-          </p>
-          {result.truncated && (
-            <p className="notice" role="note">
-              This period has more history than one report reads (
-              {(PAGE_SCAN.maxPages * 100).toLocaleString("en-US")} sessions):
-              the table and its totals are partial. Pick a shorter period or one
-              charger. The CSV reads up to 5,000.
-            </p>
-          )}
+          <Totals t={result.totals} />
           {result.rows.length === 0 ? (
             <p className="muted">No sessions match these filters.</p>
           ) : (
@@ -533,8 +622,8 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
             >
               <table className="data-table sessions-table">
                 <caption className="muted">
-                  {result.summary.sessions > result.rows.length
-                    ? `The newest ${PAGE_ROWS} of ${result.summary.sessions.toLocaleString("en-US")}; the CSV has them all.`
+                  {result.totals.checkouts > PAGE_ROWS
+                    ? `Newest first, ${PAGE_ROWS} a page; the CSV has all ${result.totals.checkouts.toLocaleString("en-US")}.`
                     : "Newest first."}
                 </caption>
                 <thead>
@@ -546,7 +635,10 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
                       Energy
                     </th>
                     <th scope="col" className="num">
-                      Amount
+                      Billed
+                    </th>
+                    <th scope="col" className="num">
+                      Collected
                     </th>
                     <th scope="col">Type</th>
                     <th scope="col">Status</th>
@@ -554,9 +646,9 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
                 </thead>
                 <tbody>
                   {result.rows.map((r) => (
-                    <tr key={r.id}>
+                    <tr key={r.reference}>
                       <td>
-                        <When iso={r.startedAt} zone={r.timeZone} />
+                        <Started r={r} />
                       </td>
                       <td>
                         <When iso={r.endedAt} zone={r.timeZone} />
@@ -565,26 +657,33 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
                         {r.stationName}
                         <br />
                         <span className="muted">
-                          Connector{" "}
-                          {r.connectorNumber ?? r.connectorId ?? "unknown"}
+                          Connector {r.connectorNumber ?? r.connectorId}
                           {r.siteName ? ` · ${r.siteName}` : ""}
                         </span>
                       </td>
                       <td className="num">
-                        {r.energyWh === null ? "–" : kwh(r.energyWh)}
+                        <Energy r={r} />
                       </td>
                       <td className="num">
-                        <Amount r={r} />
+                        {money(r.billedMinor, r.currency)}
+                      </td>
+                      <td className="num">
+                        {money(r.netMinor, r.currency)}
+                        {r.refundedMinor ? (
+                          <>
+                            <br />
+                            <span className="muted">
+                              {formatMinor(r.refundedMinor, r.currency)}{" "}
+                              refunded
+                            </span>
+                          </>
+                        ) : null}
                       </td>
                       <td>{SESSION_KIND_LABELS[r.kind]}</td>
                       <td>
-                        {r.status === "charging" ? "Charging" : "Ended"}
-                        {r.billStatus === "final" && (
-                          <>
-                            <br />
-                            <span className="muted">Final bill</span>
-                          </>
-                        )}
+                        {REPORT_STATUS_LABELS[r.status]}
+                        <br />
+                        <span className="muted mono">{r.reference}</span>
                       </td>
                     </tr>
                   ))}
@@ -592,6 +691,7 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
               </table>
             </div>
           )}
+          <Pager q={q} page={result.page} pages={result.pages} />
         </>
       )}
     </section>
@@ -611,8 +711,10 @@ function Payouts({
       <h2 id="payouts-heading">Payouts</h2>
       <p>
         Drivers pay through Ivora Checkout into your own Stripe account, and
-        Stripe pays out to your bank. The kit holds no Stripe keys and does not
-        read payouts: see them in your Stripe dashboard.
+        Stripe pays out to your bank, after Stripe&apos;s and Ivora&apos;s fees.
+        The kit holds no Stripe keys and does not read payouts: see them in your
+        Stripe dashboard (Stripe asks you to sign in; with several Stripe
+        accounts, pick the one connected in Onboarding).
       </p>
       {view?.state === "none" ? (
         <p className="muted">

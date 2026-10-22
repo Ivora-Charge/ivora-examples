@@ -1,14 +1,17 @@
 import { checkRole, currentStaff } from "@/lib/server/auth";
-import { describeError } from "@/lib/server/ivora";
 import {
   csvFileName,
   getReports,
   loadReportsContext,
+  reportFilter,
   sessionsCsv,
 } from "@/lib/server/reports";
 
 export const dynamic = "force-dynamic";
-/** The export reads up to CSV_SCAN (50 pages, 50 seconds) before it ends. */
+/**
+ * The export reads only the kit's database and stops at CSV_SECONDS (45), so the
+ * download fails visibly rather than running into this limit.
+ */
 export const maxDuration = 60;
 
 const text = (body: string, status: number) =>
@@ -22,7 +25,7 @@ const text = (body: string, status: number) =>
 
 /**
  * GET /reports/export: the Reports page's sessions (same period and filters) as CSV,
- * streamed page by page. Viewers and above; the columns are in the README.
+ * streamed. Viewers and above; the columns are in the README.
  */
 export async function GET(request: Request) {
   let staff;
@@ -40,13 +43,13 @@ export async function GET(request: Request) {
   );
   if (!r.ok) return text(r.error, 502);
   if (r.context.queryError) return text(r.context.queryError, 400);
-  let body: ReadableStream<Uint8Array>;
-  try {
-    body = await sessionsCsv(d, r.context.query, r.context.scan);
-  } catch (e) {
-    return text(describeError(e), 502);
-  }
-  return new Response(body, {
+  const csv = await sessionsCsv(
+    d,
+    reportFilter(staff, r.context.query),
+    r.context.places,
+  );
+  if (!csv.ok) return text(csv.error, csv.status);
+  return new Response(csv.body, {
     headers: {
       "content-type": "text/csv; charset=utf-8",
       "content-disposition": `attachment; filename="${csvFileName(r.context.query)}"`,
