@@ -5,6 +5,8 @@ export interface Module {
   label: string;
   summary: string;
   status: "ready" | "coming-soon";
+  /** An optional module, shown only when its flag is on (FLEET_MODULE for "fleet"). */
+  optional?: "fleet";
 }
 
 export const MODULES: Module[] = [
@@ -56,6 +58,15 @@ export const MODULES: Module[] = [
     status: "ready",
   },
   {
+    slug: "cards",
+    href: "/cards",
+    label: "Cards",
+    summary:
+      "RFID cards per driver or vehicle: add, import, block or expire them, with each card's sessions and energy.",
+    status: "ready",
+    optional: "fleet",
+  },
+  {
     slug: "team",
     href: "/team",
     label: "Team",
@@ -70,6 +81,11 @@ export const MODULES: Module[] = [
     status: "ready",
   },
 ];
+
+/** The sections to show: optional ones only when their flag is on. */
+export function visibleModules(flags: { fleet: boolean }): Module[] {
+  return MODULES.filter((m) => m.optional !== "fleet" || flags.fleet);
+}
 
 export function moduleBySlug(slug: string): Module {
   const m = MODULES.find((x) => x.slug === slug);

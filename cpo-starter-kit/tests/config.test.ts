@@ -135,3 +135,28 @@ describe("Stripe settings link", () => {
     expect(config.stripeSettingsUrl).toBe("https://dash.example.com");
   });
 });
+
+describe("fleet module flag", () => {
+  const saved = { ...process.env };
+  afterEach(() => {
+    process.env = { ...saved };
+  });
+
+  it("is off by default and on only with FLEET_MODULE=1 or true", () => {
+    delete process.env.FLEET_MODULE;
+    expect(config.fleetModule).toBe(false);
+    for (const [v, on] of [
+      ["1", true],
+      ["true", true],
+      ["TRUE", true],
+      [" 1 ", true],
+      ["", false],
+      ["0", false],
+      ["false", false],
+      ["yes", false],
+    ] as const) {
+      process.env.FLEET_MODULE = v;
+      expect(config.fleetModule, v).toBe(on);
+    }
+  });
+});

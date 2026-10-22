@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { config, isDemo } from "@/lib/server/env";
 import { currentStaff } from "@/lib/server/auth";
-import { MODULES } from "@/lib/modules";
+import { visibleModules } from "@/lib/modules";
 import { ROLE_LABELS } from "@/lib/roles";
 import { brandThemeCss } from "@/lib/brand-colors";
 import { getOnboarding } from "@/lib/server/onboarding";
@@ -122,12 +122,14 @@ export default async function RootLayout({
                   {config.operatorName}
                 </p>
                 <Nav
-                  items={MODULES.map(({ slug, href, label, status }) => ({
-                    slug,
-                    href,
-                    label,
-                    soon: status === "coming-soon",
-                  }))}
+                  items={visibleModules({ fleet: config.fleetModule }).map(
+                    ({ slug, href, label, status }) => ({
+                      slug,
+                      href,
+                      label,
+                      soon: status === "coming-soon",
+                    }),
+                  )}
                 />
                 <div className="who">
                   <span>

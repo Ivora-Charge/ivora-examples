@@ -419,6 +419,41 @@ export type Database = {
         Update: { tariff_id?: string };
         Relationships: [];
       };
+      cpo_card_sessions: {
+        Row: {
+          transaction_id: number;
+          station_id: number;
+          connector_number: number | null;
+          token_key: string;
+          started_at: Timestamp | null;
+          ended_at: Timestamp | null;
+          energy_wh: number | null;
+          active: boolean;
+          checked_at: Timestamp;
+          read_failures: number;
+          updated_at: Timestamp;
+        };
+        // Written only through cpo_record_card_session and cpo_defer_card_session.
+        Insert: {
+          transaction_id: number;
+          station_id: number;
+          token_key: string;
+        };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
+      cpo_card_marks: {
+        Row: {
+          station_id: number;
+          last_transaction_id: number;
+          scanned_at: Timestamp | null;
+          updated_at: Timestamp;
+        };
+        // Written only through cpo_advance_card_mark.
+        Insert: { station_id: number; last_transaction_id: number };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -747,6 +782,53 @@ export type Database = {
           p_refunded_minor: number;
         };
         Returns: boolean;
+      };
+      cpo_record_card_session: {
+        Args: {
+          p_transaction_id: number;
+          p_station_id: number;
+          p_connector_number: number | null;
+          p_token_key: string;
+          p_started_at: Timestamp | null;
+          p_ended_at: Timestamp | null;
+          p_energy_wh: number | null;
+          p_active: boolean;
+        };
+        Returns: undefined;
+      };
+      cpo_forget_card_session: {
+        Args: { p_transaction_id: number };
+        Returns: undefined;
+      };
+      cpo_defer_card_session: {
+        Args: { p_transaction_id: number };
+        Returns: undefined;
+      };
+      cpo_advance_card_mark: {
+        Args: {
+          p_station_id: number;
+          p_transaction_id: number;
+          p_scanned?: boolean;
+        };
+        Returns: undefined;
+      };
+      cpo_card_usage: {
+        Args: { p_since: Timestamp; p_until: Timestamp };
+        Returns: {
+          token_key: string;
+          sessions: number;
+          running: number;
+          energy_wh: number;
+        }[];
+      };
+      cpo_card_session_list: {
+        Args: {
+          p_token_key: string;
+          p_since: Timestamp;
+          p_until: Timestamp;
+          p_limit: number;
+        };
+        Returns: Database["public"]["Tables"]["cpo_card_sessions"]["Row"][];
       };
     };
     Enums: { [_ in never]: never };

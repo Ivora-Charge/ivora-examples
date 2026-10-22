@@ -11,6 +11,7 @@ import {
 } from "../reports/time";
 import { whToKwhText } from "../../units";
 import type { ReportCheckout } from "../reports/types";
+import { SAMPLE_SESSION_CARDS } from "./demo-cards";
 import { IvoraError } from "./errors";
 import type {
   Bill,
@@ -27,7 +28,8 @@ import type {
 // DEMO- sample charger; every amount is a sample bill that nobody paid. Driver-paid and
 // free sessions also get the kit's own checkout record (what the sessions table and
 // the CSV read); staff/test and RFID sessions are only in Ivora's figures, as they
-// would be for a real operator.
+// would be for a real operator. RFID sessions carry one of the sample cards (masked,
+// as the API shows it), so the Cards module's per-card figures match.
 
 const DAY_MS = 86_400_000;
 const MINUTE_MS = 60_000;
@@ -171,6 +173,10 @@ export function demoHistory(now: number): DemoHistory {
         duration_seconds: minutes * 60,
         stop_reason: base.stopReason,
         energy_wh: energyWh,
+        id_token:
+          kind === "rfid"
+            ? `****${SAMPLE_SESSION_CARDS[b[9] % SAMPLE_SESSION_CARDS.length].slice(-4)}`
+            : null,
       });
       if (kind === "free") checkouts.push(base);
       if (kind !== "paid") continue;

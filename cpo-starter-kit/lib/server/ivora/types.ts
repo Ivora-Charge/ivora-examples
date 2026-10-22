@@ -146,19 +146,64 @@ export interface TokenRecord {
   id: number;
   id_token: string;
   type?: string | null;
+  /** Accepted, Blocked or Expired through the API; other tools may set another OCPP status. */
   status: "Accepted" | "Blocked" | "Expired" | (string & {});
+  /** After it Ivora answers Expired at the charger; null for no expiry. */
+  expires_at?: string | null;
   label?: string | null;
   external_reference?: string | null;
+  /** False when the value is longer than the 20 characters an OCPP 1.6 idTag allows. */
+  ocpp16_compatible?: boolean;
+  created_at?: string | null;
+  /** Moves with every change: the Cards forms name the one they were loaded at. */
+  updated_at?: string | null;
 }
 
-/** `POST /tokens`: registers an ID token, found again by its external_reference. */
+/**
+ * `POST /tokens`: registers an ID token, found again by its external_reference. The
+ * staff and free charging tokens are `Central`; RFID cards are `ISO14443`. A value is
+ * unique per project regardless of case (`409 token_exists`).
+ */
 export interface TokenInput {
   id_token: string;
-  type: "Central";
+  type: "Central" | "ISO14443";
   status: "Accepted";
   label: string;
   /** Derived from our own record, so a retry finds the token instead of duplicating it. */
   external_reference: string;
+}
+
+/** `PATCH /tokens/{id}`: only the fields sent change; null clears expires_at or label. */
+export interface TokenUpdate {
+  status?: "Accepted" | "Blocked" | "Expired";
+  expires_at?: string | null;
+  label?: string | null;
+}
+
+/**
+ * One row of `POST /tokens/import`. Rows match existing tokens by id_token
+ * (case-insensitive); absent fields keep their value (new tokens: ISO14443, Accepted).
+ */
+export interface TokenImportRow {
+  id_token: string;
+  label: string;
+}
+
+/** What `POST /tokens/import` did (or, with dry_run, would do) with each row. */
+export interface TokenImportResult {
+  dry_run: boolean;
+  /** Rows per action: create, update, unchanged, error. */
+  counts: Record<string, number>;
+  /** Every error row, and every row that changes or would change a token. */
+  rows: {
+    /** 1-based data row. */
+    row: number;
+    id_token: string | null;
+    action: "create" | "update" | "unchanged" | "error";
+    token_id?: number | null;
+    code?: string | null;
+    message?: string | null;
+  }[];
 }
 
 export interface Transaction {
@@ -703,7 +748,8 @@ export interface IvoraClient {
   listAllLocations(): Promise<Listed<Location>>;
   createLocation(input: LocationInput, key: string): Promise<Location>;
   listStations(o?: ListOptions): Promise<Station[]>;
-  listAllStations(): Promise<Listed<Station>>;
+  /** With `limits`, every page stays within its deadline (and hands back a 429). */
+  listAllStations(limits?: ReadLimits): Promise<Listed<Station>>;
   getStation(stationId: number): Promise<Station>;
   /** Adopts the station by external_reference when the create may already have happened. */
   createStation(input: StationInput, key: string): Promise<Station>;
@@ -757,6 +803,27 @@ export interface IvoraClient {
   findToken(externalReference: string): Promise<TokenRecord | null>;
   /** Adopts the token by external_reference when the create may already have happened. */
   createToken(input: TokenInput, key: string): Promise<TokenRecord>;
+  /**
+   * Every token in the project's list, up to MAX_LIST_PAGES pages (Cards). Payment
+   * flow charging tokens and roaming partners' tokens are never listed.
+   */
+  listAllTokens(): Promise<Listed<TokenRecord>>;
+  getToken(tokenId: number): Promise<TokenRecord>;
+  /** Blocks, unblocks, expires or relabels a token. The value and type never change. */
+  updateToken(
+    tokenId: number,
+    input: TokenUpdate,
+    key: string,
+  ): Promise<TokenRecord>;
+  /**
+   * Imports up to 5,000 rows (`POST /tokens/import`). With `dryRun` it only plans
+   * and takes no key. After `503 outcome_unknown` some rows may be applied: it is not
+   * repeated with the same key; run the same rows again with a new one.
+   */
+  importTokens(
+    rows: TokenImportRow[],
+    o: { dryRun: true } | { dryRun: false; key: string },
+  ): Promise<TokenImportResult>;
   /** Open and recent faults of one station, newest first (cleared ones kept 90 days). */
   listFaults(
     stationId: number,

@@ -105,6 +105,14 @@ export const config = {
   get cronSecret() {
     return env("CRON_SECRET") ?? "";
   },
+  /**
+   * The optional fleet and RFID cards module (Cards), off by default: on with
+   * FLEET_MODULE=1 (or true). Demo mode honours it too.
+   */
+  get fleetModule() {
+    const v = env("FLEET_MODULE")?.toLowerCase();
+    return v === "1" || v === "true";
+  },
   /** One-time secret that unlocks the setup screen for the first owner. */
   get setupSecret() {
     return env("SETUP_SECRET") ?? "";
