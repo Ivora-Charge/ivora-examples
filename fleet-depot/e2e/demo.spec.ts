@@ -11,6 +11,52 @@ async function openDepot(page: Page) {
   await expect(page.locator(".top .clock")).toHaveText("16:30");
 }
 
+// Pairs of child elements whose bounding boxes overlap, or that spill out
+// of their parent, for every element matching `rows`.
+function overlaps(page: Page, rows: string, kids = ":scope > *") {
+  return page.evaluate(
+    ([rows, kids]) => {
+      const out: string[] = [];
+      for (const row of document.querySelectorAll(rows)) {
+        const p = row.getBoundingClientRect();
+        // The drawn extent: the element's box joined with its text, which
+        // can spill out of a too-narrow grid cell.
+        const boxes = [...row.querySelectorAll(kids)]
+          .filter((e) => e.getClientRects().length > 0)
+          .map((e) => {
+            const range = document.createRange();
+            range.selectNodeContents(e);
+            const a = e.getBoundingClientRect();
+            const t = range.getBoundingClientRect();
+            const r = t.width
+              ? {
+                  left: Math.min(a.left, t.left),
+                  right: Math.max(a.right, t.right),
+                  top: Math.min(a.top, t.top),
+                  bottom: Math.max(a.bottom, t.bottom),
+                }
+              : a;
+            return { text: e.textContent ?? "", r };
+          });
+        for (const [i, a] of boxes.entries()) {
+          if (a.r.left < p.left - 1 || a.r.right > p.right + 1)
+            out.push(`${a.text} leaves its row`);
+          for (const b of boxes.slice(i + 1))
+            if (
+              a.r.left < b.r.right &&
+              b.r.left < a.r.right &&
+              a.r.top < b.r.bottom &&
+              b.r.top < a.r.bottom
+            )
+              out.push(`${a.text} / ${b.text}`);
+        }
+      }
+      return out;
+    },
+    [rows, kids],
+  );
+}
+
 async function advance(page: Page, hours: number) {
   for (let i = 0; i < hours; i++) {
     const r = state(page);
@@ -191,7 +237,7 @@ for (const [width, height] of [
   }) => {
     await page.setViewportSize({ width, height });
     await openDepot(page);
-    await advance(page, 5);
+    await advance(page, 8);
     await page.getByRole("tab", { name: "Settings" }).click();
     await page.getByRole("button", { name: /Wall display/ }).click();
     await expect(
@@ -203,10 +249,37 @@ for (const [width, height] of [
       return w.scrollHeight <= w.clientHeight && w.scrollWidth <= w.clientWidth;
     });
     expect(fits).toBe(true);
+    expect(await overlaps(page, ".nextlist li")).toEqual([]);
     await page.keyboard.press("Escape");
     await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
   });
 }
+
+test("desktop 1440: the status column stays inside the timeline card", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openDepot(page);
+  await advance(page, 8);
+  await expect(page.locator(".row .st small.num").first()).toContainText(
+    "(simulated)",
+  );
+  const spill = await page.evaluate(() => {
+    const out: string[] = [];
+    for (const row of document.querySelectorAll(".tl-rows .row")) {
+      const card = row.closest(".panel")!.getBoundingClientRect();
+      for (const e of row.querySelectorAll(".st > *")) {
+        const range = document.createRange();
+        range.selectNodeContents(e);
+        const r = range.getBoundingClientRect();
+        if (r.right > card.right - 8) out.push(e.textContent ?? "");
+      }
+    }
+    return out;
+  });
+  expect(spill).toEqual([]);
+  expect(await overlaps(page, ".tl-rows .row")).toEqual([]);
+});
 
 test("refuses cross-origin writes", async ({ request }) => {
   const r = await request.post("/api/state", {
@@ -313,6 +386,7 @@ test("wall display opens from a direct link and keeps the visitor's night", asyn
   ).toBeVisible();
   await expect(page.locator(".wall .top .clock")).toHaveText("18:30");
   await expect(page.locator(".nextlist li").first()).toContainText("% now");
+  expect(await overlaps(page, ".nextlist li")).toEqual([]);
   await page.keyboard.press("Escape");
   await expect(page).toHaveURL(/\/depot$/);
 });

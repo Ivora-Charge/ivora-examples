@@ -448,7 +448,7 @@ button.danger {
 .tl-head,
 .row {
   display: grid;
-  grid-template-columns: 170px minmax(0, 1fr) 70px 120px;
+  grid-template-columns: 170px minmax(0, 1fr) 70px 150px;
   align-items: center;
   column-gap: var(--space);
   padding: 0 var(--space);
@@ -568,6 +568,11 @@ button.danger {
   display: grid;
   gap: 2px;
   justify-items: start;
+  min-width: 0;
+}
+.st small {
+  max-width: 100%;
+  overflow-wrap: anywhere;
 }
 .tl-lab {
   display: none;
@@ -1061,12 +1066,17 @@ svg .cap-l {
 .nextlist li {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 5ch 8ch auto;
+  grid-template-columns: minmax(0, 1fr) max-content max-content max-content;
   align-items: center;
   gap: 16px;
+  white-space: nowrap;
   padding: 0 var(--space);
   border-top: 1px solid var(--line);
   font-size: clamp(1.125rem, 3.4vh, 2rem);
+}
+.nextlist li > b {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .nextlist li:first-child {
   border-top: 0;
