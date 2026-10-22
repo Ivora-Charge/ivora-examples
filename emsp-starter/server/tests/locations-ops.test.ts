@@ -17,6 +17,8 @@ import {
 } from "@/lib/server/admin";
 import { clientAddress } from "@/lib/server/rate-limit";
 import { setTokenStoreForTests } from "@/lib/tokens/registry";
+import { setCommandStoreForTests } from "@/lib/commands/registry";
+import { MemoryCommandStore } from "@/lib/commands/store";
 import { MemoryTokenStore } from "@/lib/tokens/store";
 import {
   emspHandler,
@@ -73,6 +75,7 @@ beforeEach(() => {
   setPeerStoreForTests(peers);
   setLocationStoreForTests(locations);
   setTokenStoreForTests(new MemoryTokenStore());
+  setCommandStoreForTests(new MemoryCommandStore());
   net = inProcessNetwork({
     "emsp.example.test": emspHandler,
     "mock-cpo.example.test": (r) => cpo.handle(r),
@@ -87,6 +90,7 @@ afterEach(() => {
   setPeerStoreForTests(undefined);
   setLocationStoreForTests(undefined);
   setTokenStoreForTests(undefined);
+  setCommandStoreForTests(undefined);
   process.env = { ...saved };
   vi.restoreAllMocks();
 });
@@ -167,6 +171,7 @@ describe("scheduled pull (cron)", () => {
     expect(await res.json()).toEqual({
       mode: "live",
       tokens: { expired: 0, pushes: { sent: 0, failed: 0, dropped: 0 } },
+      commands: { ended: 0 },
       results: [
         expect.objectContaining({
           peerId: peer.id,
@@ -178,6 +183,15 @@ describe("scheduled pull (cron)", () => {
           module: "locations",
           ok: true,
         }),
+      ],
+      // The mock CPO has no sessions or CDRs yet: both pulls are empty.
+      sessions: [
+        expect.objectContaining({
+          peerId: peer.id,
+          module: "sessions",
+          ok: true,
+        }),
+        expect.objectContaining({ peerId: peer.id, module: "cdrs", ok: true }),
       ],
     });
     process.env.DEMO_MODE = "true";

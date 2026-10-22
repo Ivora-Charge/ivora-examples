@@ -1,6 +1,7 @@
 import { isStickerCode } from "@/lib/sticker-codes";
 import { getChargers } from "@/lib/server/chargers";
 import { config, isDemo } from "@/lib/server/env";
+import { connectorPricing, getPricing } from "@/lib/server/pricing";
 
 export const metadata = { title: "Charge here" };
 
@@ -19,6 +20,15 @@ export default async function Page({
   const found = isStickerCode(normal)
     ? await getChargers().store.resolveCode(normal)
     : null;
+  const pricing =
+    found?.inService && found.stationId !== null
+      ? await connectorPricing(
+          getPricing().store,
+          found.operatorId,
+          found.stationId,
+          found.connectorId,
+        )
+      : null;
   return (
     <section className="card" aria-labelledby="charge-heading">
       {isDemo() && (
@@ -33,10 +43,24 @@ export default async function Page({
             <strong>{found.operatorName ?? config.operatorName}</strong>,{" "}
             {found.chargerName}, connector {found.connectorNumber}.
           </p>
-          <p className="muted">
-            Paying by card here comes with a later part of this kit. Until then,
-            ask the site operator how to start charging.
-          </p>
+          {pricing?.private ? (
+            <p>
+              This is a private charger: it can&apos;t be paid for here. Staff
+              and RFID card holders start it with their card.
+            </p>
+          ) : (
+            <>
+              {pricing?.tariff?.driverText && (
+                <p>
+                  <strong>Price:</strong> {pricing.tariff.driverText}
+                </p>
+              )}
+              <p className="muted">
+                Paying by card here comes with a later part of this kit. Until
+                then, ask the site operator how to start charging.
+              </p>
+            </>
+          )}
         </>
       ) : found ? (
         <p>

@@ -6,7 +6,17 @@ import {
   parseVersionDetails,
   parseVersions,
 } from "@/lib/ocpi/schema";
+import {
+  COMMAND_TYPES,
+  parseStartSession,
+  parseStopSession,
+  type CommandResponse,
+  type CommandResultType,
+  type StartSession,
+  type StopSession,
+} from "@/lib/ocpi/command-objects";
 import type { EvseStatus, Location } from "@/lib/ocpi/locations";
+import type { Cdr, Session, SessionStatus } from "@/lib/ocpi/session-objects";
 import type { Tariff } from "@/lib/ocpi/tariffs";
 import {
   parseAuthorizationInfo,
@@ -24,6 +34,7 @@ import {
   type Party,
 } from "@/lib/ocpi/types";
 import {
+  cdrForSession,
   SAMPLE_SITE_COUNT,
   sampleLocations,
   sampleTariffs,
@@ -37,8 +48,13 @@ import {
  * also what demo mode shows) from paginated Sender interfaces with date_from and
  * date_to, and pushes changes to the eMSP's Receiver interfaces. Its Tokens Receiver
  * keeps the tokens the eMSP pushes (validated against 2.2.1), and it can pull the
- * eMSP's Tokens Sender and ask for real-time authorization. Later parts give it
- * sessions and CDRs.
+ * eMSP's Tokens Sender and ask for real-time authorization. Its Commands Receiver
+ * validates START_SESSION and STOP_SESSION against 2.2.1, answers with the
+ * CommandResponse a test sets (or none at all), and POSTs any CommandResult to the
+ * eMSP's response_url when a test asks. It runs sessions for the commands it accepted
+ * (or any a test makes), serves them and their CDRs from paginated Sender interfaces
+ * (sessions need date_from, as in 2.2.1), and pushes them to the eMSP's Receiver
+ * interfaces when a test asks: a session PUT, PATCHes in any order, a CDR POST.
  *
  * `handle(request)` is the CPO's HTTP server. To reach the eMSP it uses `transport`
  * (in tests, an in-process router), never the network.
@@ -65,6 +81,18 @@ export type RecordedRequest = {
   headers: Record<string, string>;
 };
 
+export type ReceivedCommand =
+  | {
+      type: "START_SESSION";
+      body: StartSession;
+      headers: Record<string, string>;
+    }
+  | {
+      type: "STOP_SESSION";
+      body: StopSession;
+      headers: Record<string, string>;
+    };
+
 export type MockCpo = ReturnType<typeof createMockCpo>;
 
 export function createMockCpo(options: MockCpoOptions) {
@@ -82,6 +110,9 @@ export function createMockCpo(options: MockCpoOptions) {
     locations: `${baseUrl}/ocpi/2.2.1/locations`,
     tariffs: `${baseUrl}/ocpi/2.2.1/tariffs`,
     tokens: `${baseUrl}/ocpi/2.2.1/tokens`,
+    commands: `${baseUrl}/ocpi/2.2.1/commands`,
+    sessions: `${baseUrl}/ocpi/2.2.1/sessions`,
+    cdrs: `${baseUrl}/ocpi/2.2.1/cdrs`,
   };
   const pageLimit = options.pageLimit ?? 2;
 
@@ -106,6 +137,18 @@ export function createMockCpo(options: MockCpoOptions) {
     tariffs: sampleTariffs(party, options.sample),
     /** Tokens the eMSP pushed to our Tokens Receiver, by `cc/party/uid/type`. */
     tokens: new Map<string, Token>(),
+    /** Commands the eMSP sent us, oldest first. */
+    commands: [] as ReceivedCommand[],
+    /** What the Sessions and CDRs Sender interfaces serve. Change freely in tests. */
+    sessions: [] as Session[],
+    cdrs: [] as Cdr[],
+    /**
+     * How the Commands Receiver answers: a CommandResponse, or "hang" (no answer until
+     * the eMSP gives up). With `resultFirst`, that CommandResult is POSTed to the
+     * response_url before the CommandResponse goes back, as a fast charger can.
+     */
+    commandAnswer: { result: "ACCEPTED", timeout: 30 } as
+      (CommandResponse & { resultFirst?: CommandResultType }) | "hang",
   };
 
   const credentialsFor = (token: string): Credentials => ({
@@ -285,7 +328,7 @@ export function createMockCpo(options: MockCpoOptions) {
 
   /** Sends one push to the eMSP's Receiver interface, with routing headers. */
   async function push(
-    module: "locations" | "tariffs",
+    module: "locations" | "tariffs" | "sessions",
     method: "PUT" | "PATCH" | "DELETE",
     path: string[],
     body?: unknown,
@@ -359,6 +402,9 @@ export function createMockCpo(options: MockCpoOptions) {
           { identifier: "locations", role: "SENDER", url: urls.locations },
           { identifier: "tariffs", role: "SENDER", url: urls.tariffs },
           { identifier: "tokens", role: "RECEIVER", url: urls.tokens },
+          { identifier: "commands", role: "RECEIVER", url: urls.commands },
+          { identifier: "sessions", role: "SENDER", url: urls.sessions },
+          { identifier: "cdrs", role: "SENDER", url: urls.cdrs },
         ],
       });
     if (path === "/ocpi/2.2.1/credentials")
@@ -371,9 +417,28 @@ export function createMockCpo(options: MockCpoOptions) {
       if (!state.issued.has(token)) return unauthorized();
       return senderPage(url, urls.tariffs, state.tariffs);
     }
+    if (path === "/ocpi/2.2.1/sessions" && request.method === "GET") {
+      if (!state.issued.has(token)) return unauthorized();
+      // 2.2.1: date_from is required for sessions.
+      if (!url.searchParams.get("date_from"))
+        return reply(undefined, {
+          status: 400,
+          code: STATUS.INVALID_PARAMETERS,
+          message: "date_from is required",
+        });
+      return senderPage(url, urls.sessions, state.sessions);
+    }
+    if (path === "/ocpi/2.2.1/cdrs" && request.method === "GET") {
+      if (!state.issued.has(token)) return unauthorized();
+      return senderPage(url, urls.cdrs, state.cdrs);
+    }
     if (path.startsWith("/ocpi/2.2.1/tokens/")) {
       if (!state.issued.has(token)) return unauthorized();
       return tokensReceiver(request, url, path);
+    }
+    if (path.startsWith("/ocpi/2.2.1/commands/")) {
+      if (!state.issued.has(token)) return unauthorized();
+      return commandsReceiver(request, path);
     }
     return reply(undefined, {
       status: 404,
@@ -440,6 +505,71 @@ export function createMockCpo(options: MockCpoOptions) {
       return invalid("Token does not match the URL");
     state.tokens.set(key, t);
     return reply(undefined);
+  }
+
+  /**
+   * Our Commands Receiver: POST /ocpi/2.2.1/commands/{command}. START_SESSION and
+   * STOP_SESSION must be valid 2.2.1 objects; other commands are NOT_SUPPORTED.
+   */
+  async function commandsReceiver(request: Request, path: string) {
+    const type = path.split("/")[4];
+    if (request.method !== "POST" || path.split("/").length !== 5)
+      return notAllowed("Method not allowed");
+    if (!(COMMAND_TYPES as readonly string[]).includes(type))
+      return reply(undefined, {
+        status: 404,
+        code: STATUS.CLIENT_ERROR,
+        message: "Unknown command",
+      });
+    if (type !== "START_SESSION" && type !== "STOP_SESSION")
+      return reply({ result: "NOT_SUPPORTED", timeout: 0 });
+    const body = await request.json().catch(() => undefined);
+    const parsed =
+      type === "START_SESSION"
+        ? parseStartSession(body)
+        : parseStopSession(body);
+    if (!parsed.ok)
+      return reply(undefined, {
+        status: 400,
+        code: STATUS.INVALID_PARAMETERS,
+        message: parsed.errors.join("; "),
+      });
+    const received = {
+      type,
+      body: parsed.value,
+      headers: Object.fromEntries(request.headers),
+    } as ReceivedCommand;
+    state.commands.push(received);
+    const answer = state.commandAnswer;
+    if (answer === "hang")
+      return new Promise<Response>((_, reject) => {
+        if (request.signal.aborted) reject(request.signal.reason);
+        request.signal.addEventListener("abort", () =>
+          reject(request.signal.reason),
+        );
+      });
+    const { resultFirst, ...response } = answer;
+    if (resultFirst) await sendResult(received, resultFirst);
+    return reply(response);
+  }
+
+  /** POSTs a CommandResult to a command's response_url. */
+  async function sendResult(
+    command: ReceivedCommand,
+    result: CommandResultType,
+    message?: { language: string; text: string }[],
+  ) {
+    if (!state.emsp) throw new Error("Mock CPO is not registered with an eMSP");
+    return ocpiRequest(
+      {
+        method: "POST",
+        url: command.body.response_url,
+        token: state.emsp.token,
+        body: message ? { result, message } : { result },
+        routing: toEmsp(),
+      },
+      { transport, retries: 0 },
+    );
   }
 
   /** The eMSP's credentials endpoint, from its version details. */
@@ -582,6 +712,164 @@ export function createMockCpo(options: MockCpoOptions) {
 
     /** A raw push, for tests of what the eMSP refuses. */
     push,
+
+    /** How the Commands Receiver answers from now on. */
+    answerCommands(answer: (typeof state)["commandAnswer"]) {
+      state.commandAnswer = answer;
+    },
+
+    /** POSTs a CommandResult for a command we received (default: the last one). */
+    sendCommandResult(
+      result: CommandResultType,
+      {
+        command = state.commands.at(-1),
+        message,
+      }: {
+        command?: ReceivedCommand;
+        message?: { language: string; text: string }[];
+      } = {},
+    ) {
+      if (!command) throw new Error("Mock CPO received no command");
+      return sendResult(command, result, message);
+    },
+
+    /**
+     * A session for a START_SESSION we received (default: the last one), as a charger
+     * starts it: the command's token, location, EVSE, connector and
+     * authorization_reference, 0 kWh. Not stored or sent: see putSession.
+     */
+    sessionForCommand({
+      command = state.commands.at(-1),
+      id = "SESSION-1",
+      at = new Date(),
+      status = "ACTIVE",
+    }: {
+      command?: ReceivedCommand;
+      id?: string;
+      at?: Date;
+      status?: SessionStatus;
+    } = {}): Session {
+      if (command?.type !== "START_SESSION")
+        throw new Error("Mock CPO received no START_SESSION");
+      const { body } = command;
+      const evse = findLocation(body.location_id).evses!.find(
+        (e) => !body.evse_uid || e.uid === body.evse_uid,
+      )!;
+      const session: Session = {
+        country_code: party.countryCode,
+        party_id: party.partyId,
+        id,
+        start_date_time: ocpiTimestamp(at),
+        kwh: 0,
+        cdr_token: {
+          country_code: body.token.country_code,
+          party_id: body.token.party_id,
+          uid: body.token.uid,
+          type: body.token.type,
+          contract_id: body.token.contract_id,
+        },
+        auth_method: "COMMAND",
+        location_id: body.location_id,
+        evse_uid: evse.uid,
+        connector_id: body.connector_id ?? evse.connectors[0].id,
+        currency: options.sample?.currency ?? "EUR",
+        status,
+        last_updated: ocpiTimestamp(at),
+      };
+      if (body.authorization_reference)
+        session.authorization_reference = body.authorization_reference;
+      return session;
+    },
+
+    /** Adds or replaces a session here, and with `push` PUTs it to the eMSP. */
+    async putSession(session: Session, { push: send = false } = {}) {
+      const i = state.sessions.findIndex((x) => x.id === session.id);
+      if (i >= 0) state.sessions[i] = structuredClone(session);
+      else state.sessions.push(structuredClone(session));
+      if (send)
+        await push(
+          "sessions",
+          "PUT",
+          [session.country_code, session.party_id, session.id],
+          session,
+        );
+    },
+
+    /**
+     * Changes a session here: the fields of `patch`, its charging periods added to ours,
+     * and last_updated `at`. With `push`, PATCHes the eMSP with `patch` and
+     * last_updated. Returns that body, so a test can send it again, late.
+     */
+    async patchSession(
+      id: string,
+      patch: Partial<Omit<Session, "last_updated">>,
+      { push: send = false, at = new Date() } = {},
+    ) {
+      const i = state.sessions.findIndex((x) => x.id === id);
+      if (i < 0) throw new Error(`Mock CPO has no session ${id}`);
+      const held = state.sessions[i];
+      const body = { ...patch, last_updated: ocpiTimestamp(at) };
+      state.sessions[i] = {
+        ...held,
+        ...structuredClone(body),
+        ...(patch.charging_periods
+          ? {
+              charging_periods: [
+                ...(held.charging_periods ?? []),
+                ...structuredClone(patch.charging_periods),
+              ],
+            }
+          : {}),
+      };
+      if (send)
+        await push(
+          "sessions",
+          "PATCH",
+          [held.country_code, held.party_id, id],
+          body,
+        );
+      return body;
+    },
+
+    /** A raw session PATCH, for tests of out-of-order and invalid pushes. */
+    sendSessionPatch(id: string, body: unknown) {
+      return push(
+        "sessions",
+        "PATCH",
+        [party.countryCode, party.partyId, id],
+        body,
+      );
+    },
+
+    /** A CDR for one of our sessions, as we would send it once it is over. */
+    cdrFor(sessionId: string, over: Parameters<typeof cdrForSession>[2] = {}) {
+      const session = state.sessions.find((x) => x.id === sessionId);
+      if (!session) throw new Error(`Mock CPO has no session ${sessionId}`);
+      return cdrForSession(session, findLocation(session.location_id), over);
+    },
+
+    /**
+     * Adds a CDR here, and with `push` POSTs it to the eMSP's CDRs Receiver. Returns
+     * the Location the eMSP answered with.
+     */
+    async postCdr(cdr: Cdr, { push: send = false } = {}) {
+      if (!state.cdrs.some((x) => x.id === cdr.id))
+        state.cdrs.push(structuredClone(cdr));
+      if (!send) return undefined;
+      if (!state.emsp)
+        throw new Error("Mock CPO is not registered with an eMSP");
+      const res = await ocpiRequest(
+        {
+          method: "POST",
+          url: emspReceiver("cdrs"),
+          token: state.emsp.token,
+          body: cdr,
+          routing: toEmsp(),
+        },
+        { transport, retries: 0 },
+      );
+      return res.headers.get("Location") ?? undefined;
+    },
 
     /** A token the eMSP pushed to us, if any. */
     pushedToken(

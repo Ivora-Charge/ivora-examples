@@ -1,13 +1,15 @@
 import { guard } from "@/lib/auth";
-import { getDepot, now, report } from "@/lib/depot";
+import { now, report } from "@/lib/depot";
 import { reportToCsv } from "@/lib/reports";
+import { depotOf } from "@/lib/demo-visitor";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const denied = guard(req, { write: false });
   if (denied) return denied;
-  const d = await getDepot();
+  // Demo: the visitor's own depot (lib/demo-visitor.ts).
+  const { d } = await depotOf(req);
   const q = new URL(req.url).searchParams;
   const month = q.get("month") ?? now(d).toISOString().slice(0, 7);
   if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month))
