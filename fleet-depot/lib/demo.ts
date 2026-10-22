@@ -19,8 +19,8 @@ interface Charger {
   outlets: number;
 }
 export const CHARGERS: Charger[] = [
-  { id: 1, name: "AC-1", type: "L2 AC", kw: 19, outlets: 2 },
-  { id: 2, name: "AC-2", type: "L2 AC", kw: 19, outlets: 2 },
+  { id: 1, name: "AC-1", type: "L2 AC", kw: 19.2, outlets: 2 },
+  { id: 2, name: "AC-2", type: "L2 AC", kw: 11, outlets: 2 },
   { id: 3, name: "AC-3", type: "L2 AC", kw: 11, outlets: 2 },
   { id: 4, name: "AC-4", type: "L2 AC", kw: 11, outlets: 2 },
   { id: 5, name: "AC-5", type: "L2 AC", kw: 11, outlets: 1 },
@@ -41,6 +41,11 @@ const DRIVERS = [
   "Quinn Abara",
   "Devon Hale",
   "Robin Castell",
+  "Jamie Novak",
+  "Alex Ferro",
+  // Relief drivers: they take a shared van on some days in the history.
+  "Kai Lindqvist",
+  "Noor Haddad",
 ];
 
 interface Plan {
@@ -57,11 +62,12 @@ interface Plan {
   depart: number;
   socPercent: number;
   targetPercent: number;
-  /** Index into DRIVERS; `alt` is a second driver who shares the vehicle in the history. */
+  /** Index into DRIVERS, one vehicle each; `alt` is a relief driver who takes it on some days in the history. */
   driver: number;
   alt?: number;
 }
-// 12 vehicles on 8 chargers (6 L2 AC, 2 DC), 12 outlets. The last van is the scripted at-risk one.
+// 12 vehicles on 8 chargers (6 L2 AC, 2 DC), 12 outlets: mostly 11 kW, one 19.2 kW dual unit, two 60 kW DC.
+// Arrival charge varies (15-50%); the last van is the scripted at-risk one and arrives nearly empty.
 const PLANS: Plan[] = [
   {
     name: "Shuttle bus 1",
@@ -71,9 +77,9 @@ const PLANS: Plan[] = [
     maxKw: 60,
     charger: 7,
     outlet: 1,
-    arrive: 20,
+    arrive: 21,
     depart: 5.5,
-    socPercent: 6,
+    socPercent: 8,
     targetPercent: 100,
     driver: 0,
   },
@@ -85,9 +91,9 @@ const PLANS: Plan[] = [
     maxKw: 60,
     charger: 8,
     outlet: 1,
-    arrive: 20.5,
+    arrive: 21,
     depart: 5.5,
-    socPercent: 8,
+    socPercent: 10,
     targetPercent: 100,
     driver: 1,
   },
@@ -96,12 +102,12 @@ const PLANS: Plan[] = [
     plate: "DEMO-X1",
     kind: "van",
     batteryKwh: 135,
-    maxKw: 19,
+    maxKw: 19.2,
     charger: 1,
     outlet: 1,
     arrive: 19,
     depart: 5.5,
-    socPercent: 6,
+    socPercent: 20,
     targetPercent: 100,
     driver: 2,
   },
@@ -110,12 +116,12 @@ const PLANS: Plan[] = [
     plate: "DEMO-X2",
     kind: "van",
     batteryKwh: 135,
-    maxKw: 19,
-    charger: 1,
-    outlet: 2,
+    maxKw: 11,
+    charger: 3,
+    outlet: 1,
     arrive: 20.5,
     depart: 5.75,
-    socPercent: 8,
+    socPercent: 25,
     targetPercent: 100,
     driver: 3,
   },
@@ -124,12 +130,12 @@ const PLANS: Plan[] = [
     plate: "DEMO-C1",
     kind: "van",
     batteryKwh: 89,
-    maxKw: 19,
+    maxKw: 11,
     charger: 2,
     outlet: 1,
     arrive: 17,
     depart: 5.5,
-    socPercent: 8,
+    socPercent: 15,
     targetPercent: 100,
     driver: 4,
   },
@@ -138,12 +144,12 @@ const PLANS: Plan[] = [
     plate: "DEMO-C2",
     kind: "van",
     batteryKwh: 89,
-    maxKw: 19,
+    maxKw: 11,
     charger: 2,
     outlet: 2,
     arrive: 21,
     depart: 6,
-    socPercent: 6,
+    socPercent: 15,
     targetPercent: 100,
     driver: 5,
   },
@@ -154,13 +160,13 @@ const PLANS: Plan[] = [
     batteryKwh: 89,
     maxKw: 11,
     charger: 3,
-    outlet: 1,
+    outlet: 2,
     arrive: 19.5,
     depart: 6,
-    socPercent: 10,
+    socPercent: 15,
     targetPercent: 95,
     driver: 6,
-    alt: 7,
+    alt: 12,
   },
   {
     name: "Cargo van 4",
@@ -172,7 +178,7 @@ const PLANS: Plan[] = [
     outlet: 2,
     arrive: 20.5,
     depart: 5.75,
-    socPercent: 8,
+    socPercent: 15,
     targetPercent: 100,
     driver: 7,
   },
@@ -186,10 +192,10 @@ const PLANS: Plan[] = [
     outlet: 1,
     arrive: 21,
     depart: 6,
-    socPercent: 8,
+    socPercent: 15,
     targetPercent: 100,
     driver: 8,
-    alt: 9,
+    alt: 13,
   },
   {
     name: "City van 1",
@@ -200,8 +206,8 @@ const PLANS: Plan[] = [
     charger: 4,
     outlet: 2,
     arrive: 19.5,
-    depart: 7.5,
-    socPercent: 88,
+    depart: 6.25,
+    socPercent: 50,
     targetPercent: 85,
     driver: 9,
   },
@@ -214,25 +220,25 @@ const PLANS: Plan[] = [
     charger: 5,
     outlet: 1,
     arrive: 17,
-    depart: 8,
-    socPercent: 90,
+    depart: 6,
+    socPercent: 48,
     targetPercent: 85,
-    driver: 0,
-    alt: 9,
+    driver: 10,
+    alt: 12,
   },
   {
     name: "Cargo van 6",
     plate: "DEMO-C6",
     kind: "van",
     batteryKwh: 89,
-    maxKw: 19,
-    charger: 6,
-    outlet: 1,
+    maxKw: 19.2,
+    charger: 1,
+    outlet: 2,
     arrive: 21.5,
     depart: 6.5,
     socPercent: 6,
     targetPercent: 100,
-    driver: 1,
+    driver: 11,
   },
 ];
 
@@ -354,7 +360,7 @@ export async function seedDemo(depot: Depot, base = dayStart(Date.now())) {
   await logEvent(
     depot,
     "demo.ready",
-    "Simulated depot: 12 vehicles on 8 chargers, a 150 kW site cap, vehicles leave 05:30-08:00",
+    "Simulated depot: 12 vehicles on 8 chargers, a 150 kW site cap, vehicles leave 05:30-07:15",
   );
 }
 
@@ -364,6 +370,7 @@ async function seedHistory(depot: Depot, base: number) {
   for (let day = 1; day <= 45; day++) {
     const dayMs = base - day * DAY;
     const weekday = new Date(dayMs).getUTCDay();
+    const used = new Set<number>();
     for (const [i, p] of PLANS.entries()) {
       // Not every vehicle runs every day; weekends are quiet.
       if (rand() > (weekday === 0 || weekday === 6 ? 0.35 : 0.88)) continue;
@@ -371,7 +378,10 @@ async function seedHistory(depot: Depot, base: number) {
       const startedAt = new Date(dayMs + Math.round(arrive * 3600_000));
       const share = 0.35 + rand() * 0.5;
       const kwh = Math.round(p.batteryKwh * share * 10) / 10;
-      const driver = p.alt !== undefined && rand() < 0.4 ? p.alt : p.driver;
+      // A relief driver takes at most one vehicle a day.
+      const relief = p.alt !== undefined && rand() < 0.4 && !used.has(p.alt);
+      if (relief) used.add(p.alt!);
+      const driver = relief ? p.alt! : p.driver;
       const id = `seed-${day}-${i}`;
       await depot.store.put("transactions", id, {
         id,

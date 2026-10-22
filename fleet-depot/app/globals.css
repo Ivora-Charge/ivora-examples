@@ -1061,7 +1061,7 @@ svg .cap-l {
 .nextlist li {
   flex: 1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 5ch 4ch auto;
+  grid-template-columns: minmax(0, 1fr) 5ch 8ch auto;
   align-items: center;
   gap: 16px;
   padding: 0 var(--space);
