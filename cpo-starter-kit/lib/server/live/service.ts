@@ -46,6 +46,11 @@ export const STAFF_TOKEN_LABEL = "Staff remote start (CPO kit)";
 /** The staff token's external reference in Ivora: one per operator. */
 export const staffTokenReference = (operatorId: string) =>
   `cpo-staff-${operatorId}`;
+/** How the operator's free charging token is labelled in Ivora. */
+export const FREE_TOKEN_LABEL = "Free charging (CPO kit)";
+/** The free charging token's external reference in Ivora: one per operator. */
+export const freeTokenReference = (operatorId: string) =>
+  `cpo-free-${operatorId}`;
 /** OCPP 1.6 ID tags are at most 20 characters. */
 const STAFF_TOKEN_FORMAT = /^[A-Z0-9-]{8,20}$/;
 /** Sessions read for the Live view (the API's maximum page). */
@@ -101,7 +106,7 @@ function definitelyRefused(e: unknown): boolean {
 }
 
 /** A session that may be running: active, or not known to have ended. */
-const running = (t: Transaction) =>
+export const running = (t: Transaction) =>
   t.active === true || (t.active === null && !t.ended_at);
 
 /**
@@ -112,17 +117,36 @@ export function isStaffSession(
   t: { id_token?: string | null },
   staffToken: string | null,
 ): boolean {
-  if (!staffToken || !t.id_token) return false;
-  return (
-    t.id_token === staffToken || t.id_token === `****${staffToken.slice(-4)}`
-  );
+  return sameToken(t, staffToken);
+}
+
+/** A session started with the operator's free charging token (driver checkout). */
+export function isFreeSession(
+  t: { id_token?: string | null },
+  freeToken: string | null,
+): boolean {
+  return sameToken(t, freeToken);
+}
+
+function sameToken(t: { id_token?: string | null }, token: string | null) {
+  if (!token || !t.id_token) return false;
+  return t.id_token === token || t.id_token === `****${token.slice(-4)}`;
 }
 
 const TOKEN_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 
 /** A new random staff token: STAFF and 15 random characters (about 75 bits). */
 export function newStaffToken(): string {
-  let t = "STAFF";
+  return randomToken("STAFF");
+}
+
+/** A new random free charging token: FREE and 16 random characters (80 bits). */
+export function newFreeToken(): string {
+  return randomToken("FREE");
+}
+
+function randomToken(prefix: string) {
+  let t = prefix;
   while (t.length < 20) t += TOKEN_CHARS[randomInt(TOKEN_CHARS.length)];
   return t;
 }
@@ -149,6 +173,8 @@ export interface SessionView {
   idToken: string | null;
   /** Started with the operator's staff token (a remote start from the Live view). */
   staff: boolean;
+  /** Started with the operator's free charging token (a driver on a free tariff). */
+  free: boolean;
   startedAt: string | null;
   energyKwh: number;
 }
@@ -262,6 +288,7 @@ function sessionView(
   t: Transaction,
   s: Station | undefined,
   staffToken: string | null,
+  freeToken: string | null = null,
 ): SessionView {
   const c = s?.connectors.find((x) => x.id === t.connector_id);
   return {
@@ -272,6 +299,7 @@ function sessionView(
     connectorNumber: t.connector_number ?? c?.number ?? null,
     idToken: t.id_token ?? null,
     staff: isStaffSession(t, staffToken),
+    free: isFreeSession(t, freeToken),
     startedAt: t.started_at,
     energyKwh: whToKwh(t.energy_wh ?? 0),
   };
@@ -427,14 +455,15 @@ async function refreshPending(
 
 /** Everything the Live page shows. Reads only (it re-reads pending operations). */
 export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
-  let locations, stations, txs: Transaction[], commands, token;
+  let locations, stations, txs: Transaction[], commands, token, free;
   try {
-    [locations, stations, txs, commands, token] = await Promise.all([
+    [locations, stations, txs, commands, token, free] = await Promise.all([
       d.ivora.listAllLocations(),
       d.ivora.listAllStations(),
       d.ivora.listTransactions({ limit: SESSION_LIMIT }),
       d.store.listCommands(staff.operatorId, { limit: COMMAND_LIMIT }),
       d.store.getStaffToken(staff.operatorId),
+      d.store.getFreeToken(staff.operatorId),
     ]);
     commands = await refreshPending(d, staff.operatorId, commands);
   } catch (e) {
@@ -447,7 +476,14 @@ export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
   const byId = new Map(stations.data.map((s) => [s.id, s]));
   const sessions = txs
     .filter(running)
-    .map((t) => sessionView(t, byId.get(t.station_id ?? 0), staffToken));
+    .map((t) =>
+      sessionView(
+        t,
+        byId.get(t.station_id ?? 0),
+        staffToken,
+        free?.idToken ?? null,
+      ),
+    );
   const views = stations.data.map((s) => stationView(s, sessions));
   const siteOf = new Map<number, Location>(
     locations.data.map((l) => [l.id, l]),
@@ -546,7 +582,8 @@ export async function loadStation(
     faults: Fault[],
     locations,
     commands,
-    token;
+    token,
+    free;
   try {
     s = await d.ivora.getStation(stationId);
   } catch (e) {
@@ -557,12 +594,13 @@ export async function loadStation(
     return { ok: false, error: describeError(e), retryAfter: retryAfter(e) };
   }
   try {
-    [txs, faults, locations, commands, token] = await Promise.all([
+    [txs, faults, locations, commands, token, free] = await Promise.all([
       d.ivora.listTransactions({ station_id: stationId, limit: 20 }),
       d.ivora.listFaults(stationId, { limit: 20 }),
       d.ivora.listAllLocations(),
       d.store.listCommands(staff.operatorId, { stationId, limit: 10 }),
       d.store.getStaffToken(staff.operatorId),
+      d.store.getFreeToken(staff.operatorId),
     ]);
     if (commands.some((c) => c.phase === "pending" && c.operationId)) {
       await refreshPending(d, staff.operatorId, commands);
@@ -578,7 +616,10 @@ export async function loadStation(
   }
   const now = nowOf(d);
   const staffToken = token?.idToken ?? null;
-  const active = txs.filter(running).map((t) => sessionView(t, s, staffToken));
+  const freeToken = free?.idToken ?? null;
+  const active = txs
+    .filter(running)
+    .map((t) => sessionView(t, s, staffToken, freeToken));
   const views = commands.map((c) =>
     commandView(c, new Map([[s.id, s]]), txs, now, staffToken),
   );
@@ -592,7 +633,7 @@ export async function loadStation(
         locations.data.find((l) => l.id === s.location_id)?.name ?? null,
       recent: txs
         .map((t) => ({
-          ...sessionView(t, s, staffToken),
+          ...sessionView(t, s, staffToken, freeToken),
           active: running(t),
           endedAt: t.ended_at,
         }))
@@ -716,6 +757,54 @@ export async function ensureStaffToken(
         external_reference: reference,
       },
       idempotencyKey("staff-token", operatorId, "create"),
+    ),
+  );
+}
+
+/**
+ * The operator's free charging token, registered once like the staff token (type
+ * Central, external_reference cpo-free-<operator>, a key derived from the operator,
+ * adopted when it already exists). Unlike the staff token, Ivora is asked every time:
+ * blocking the token in Ivora turns free starts off at once. Null when it is blocked
+ * (or can't be read back): then there are no free starts.
+ */
+export async function ensureFreeToken(
+  d: {
+    store: Pick<LiveStore, "getFreeToken" | "putFreeToken">;
+    ivora: Pick<IvoraClient, "findToken" | "createToken">;
+  },
+  operatorId: string,
+): Promise<string | null> {
+  const reference = freeTokenReference(operatorId);
+  const usable = async (t: TokenRecord) => {
+    if (!STAFF_TOKEN_FORMAT.test(t.id_token) || t.status !== "Accepted")
+      return null;
+    return (
+      await d.store.putFreeToken(
+        operatorId,
+        { idToken: t.id_token, tokenId: t.id },
+        { replace: true },
+      )
+    ).idToken;
+  };
+  const found = await d.ivora.findToken(reference);
+  if (found) return usable(found);
+  const token =
+    (await d.store.getFreeToken(operatorId)) ??
+    (await d.store.putFreeToken(operatorId, {
+      idToken: newFreeToken(),
+      tokenId: null,
+    }));
+  return usable(
+    await d.ivora.createToken(
+      {
+        id_token: token.idToken,
+        type: "Central",
+        status: "Accepted",
+        label: FREE_TOKEN_LABEL,
+        external_reference: reference,
+      },
+      idempotencyKey("free-token", operatorId, "create"),
     ),
   );
 }
@@ -1100,10 +1189,21 @@ export const WEBHOOK_EVENTS = [
   "station.fault_cleared",
   "charging_session.status_changed",
   "operation.completed",
+  "meter.sampled",
 ] as const;
 
 export function eventStation(e: IvoraEvent): number | null {
   const v = e.station_id ?? e.data.station_id;
+  return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/**
+ * The transaction a charger event names, if it carries one (`transaction_id`, or a
+ * `transaction` object's `id`). Only a hint: it is read from the API before use.
+ */
+export function eventTransaction(e: IvoraEvent): number | null {
+  const tx = e.data.transaction as { id?: unknown } | undefined;
+  const v = e.data.transaction_id ?? tx?.id;
   return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
 }
 

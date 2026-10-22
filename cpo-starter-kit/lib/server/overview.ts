@@ -1,6 +1,6 @@
 import "server-only";
 import { describeError, getIvora, IvoraError } from "./ivora";
-import { getLive, isStaffSession } from "./live";
+import { getLive, isFreeSession, isStaffSession } from "./live";
 import { whToKwh } from "../units";
 
 export interface Overview {
@@ -14,6 +14,8 @@ export interface Overview {
   recentEnergyKwh: number;
   /** Of those sessions, how many were started with the staff token (remote start, charger test). */
   staffSessions: number;
+  /** Of those, how many were free driver sessions (the free charging token). */
+  freeSessions: number;
   stations: { id: number; name: string; online: boolean; connectors: number }[];
   /** More sites or chargers than the client pages through: counts are a lower bound. */
   truncated: boolean;
@@ -34,9 +36,15 @@ export async function loadOverview(
       ivora.listAllStations(),
       ivora.listTransactions({ limit: 50 }),
     ]);
-    const staffToken = operatorId
-      ? ((await getLive().store.getStaffToken(operatorId))?.idToken ?? null)
-      : null;
+    const store = getLive().store;
+    const [staff, free] = operatorId
+      ? await Promise.all([
+          store.getStaffToken(operatorId),
+          store.getFreeToken(operatorId),
+        ])
+      : [null, null];
+    const staffToken = staff?.idToken ?? null;
+    const freeToken = free?.idToken ?? null;
     const locations = sites.data;
     const stations = chargers.data;
     const energyWh = transactions.reduce((n, t) => n + (t.energy_wh ?? 0), 0);
@@ -51,6 +59,8 @@ export async function loadOverview(
         activeSessions: transactions.filter((t) => t.active).length,
         recentEnergyKwh: whToKwh(energyWh),
         staffSessions: transactions.filter((t) => isStaffSession(t, staffToken))
+          .length,
+        freeSessions: transactions.filter((t) => isFreeSession(t, freeToken))
           .length,
         stations: stations.map((s) => ({
           id: s.id,

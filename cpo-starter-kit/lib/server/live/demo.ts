@@ -47,6 +47,13 @@ const stateSchema = z.object({
   staffToken: z
     .object({ idToken: text(20), tokenId: z.number().int().nullable() })
     .optional(),
+  freeToken: z
+    .object({ idToken: text(20), tokenId: z.number().int().nullable() })
+    .optional(),
+  /** Transaction high-water marks by station ID. */
+  marks: z
+    .record(z.string().max(12), z.number().int().nonnegative())
+    .optional(),
 });
 export type DemoLiveState = z.infer<typeof stateSchema>;
 
@@ -212,6 +219,25 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
       return update((s) => {
         if (!s.staffToken || o.replace) s.staffToken = { ...t };
         return { ...s.staffToken };
+      });
+    },
+    async getFreeToken() {
+      return (await cookie.load()).freeToken ?? null;
+    },
+    putFreeToken(_operatorId, t, o = {}) {
+      return update((s) => {
+        if (!s.freeToken || o.replace) s.freeToken = { ...t };
+        return { ...s.freeToken };
+      });
+    },
+    async getTransactionMark(stationId) {
+      return (await cookie.load()).marks?.[String(stationId)] ?? null;
+    },
+    async advanceTransactionMark(stationId, transactionId) {
+      await update((s) => {
+        const marks = (s.marks ??= {});
+        const k = String(stationId);
+        marks[k] = Math.max(marks[k] ?? 0, transactionId);
       });
     },
     // Demo mode accepts no webhooks: nothing to deduplicate.

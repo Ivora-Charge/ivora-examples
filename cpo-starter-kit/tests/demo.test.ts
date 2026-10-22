@@ -107,6 +107,25 @@ describe("demo mode", () => {
     expect(await ivora.listLocations()).toHaveLength(locations.length + 1);
 
     expect((await ivora.listTransactions()).length).toBeGreaterThan(0);
+    // Shaped like the API's list: oldest first after the cursor, no token or connector.
+    const station = (await ivora.listTransactions())[0].station_id!;
+    const page = await ivora.listTransactionsAfter({
+      station_id: station,
+      after: 0,
+    });
+    expect(page.data.length).toBeGreaterThan(0);
+    const ids = page.data.map((t) => t.id);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    expect(page.data[0]).not.toHaveProperty("id_token");
+    expect(page.data[0]).not.toHaveProperty("connector_id");
+    expect(
+      (
+        await ivora.listTransactionsAfter({
+          station_id: station,
+          after: ids[ids.length - 1],
+        })
+      ).data,
+    ).toHaveLength(0);
     expect((await ivora.listAllStations()).data).toHaveLength(stations.length);
     expect((await ivora.listAllLocations()).truncated).toBe(false);
 
@@ -426,6 +445,35 @@ describe("demo mode", () => {
           idempotencyKey("charger", "x", "test-1-stop"),
         ),
       () => live.deleteStation(1, idempotencyKey("charger", "x", "delete")),
+      // Driver checkout: no bill, payment or start ever leaves demo mode.
+      () =>
+        live.createBill(
+          { station_id: 1, connector_id: 1, tariff_id: 1 },
+          idempotencyKey("checkout", "x", "bill"),
+        ),
+      () =>
+        live.createPayment(
+          {
+            bill_id: `bill_${"a".repeat(32)}`,
+            return_surface: "driver",
+            return_reference: "x",
+          },
+          idempotencyKey("checkout", "x", "payment"),
+        ),
+      () => live.getBill(`bill_${"a".repeat(32)}`),
+      () =>
+        live.startBill(
+          `bill_${"a".repeat(32)}`,
+          idempotencyKey("checkout", "x", "start"),
+        ),
+      () =>
+        live.quoteTariff(1, {
+          start_at: "2026-01-01T00:00:00Z",
+          time_zone: "UTC",
+          duration_minutes: 60,
+          energy_kwh: 20,
+          idle_minutes: 0,
+        }),
     ])
       await expect(call()).rejects.toThrow(/Demo mode/);
     expect(liveFetch).not.toHaveBeenCalled();

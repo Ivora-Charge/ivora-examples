@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { atLeast } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
+import { checkoutAlerts, getCheckout } from "@/lib/server/checkout";
 import { config } from "@/lib/server/env";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getLive, loadLive } from "@/lib/server/live";
@@ -33,6 +34,13 @@ export default async function Page() {
       </>
     );
   const live = r.live;
+  // Driver checkouts that need the operator. A failed read doesn't hide the rest.
+  const alerts = await checkoutAlerts(getCheckout(), me.operatorId).catch(
+    () => null,
+  );
+  const stationName = (id: number) =>
+    live.sites.flatMap((s) => s.stations).find((s) => s.id === id)?.name ??
+    `Charger ${id}`;
   const demo = live.mode === "demo";
   // Demo mode loads no map tiles, so it stays offline.
   const tiles = demo ? null : config.mapTiles;
@@ -51,6 +59,34 @@ export default async function Page() {
           sites and chargers.
         </p>
       )}
+      {(alerts === null || alerts.length > 0) && (
+        <section className="card" aria-labelledby="checkout-alerts-heading">
+          <h2 id="checkout-alerts-heading">Driver sessions that need you</h2>
+          {alerts === null ? (
+            <p className="error" role="alert">
+              Driver checkouts can&apos;t be read right now.
+            </p>
+          ) : (
+            <ul className="rows" aria-label="Driver sessions that need you">
+              {alerts.map((a) => (
+                <li key={a.reference}>
+                  <Link className="name" href={`/live/stations/${a.stationId}`}>
+                    {stationName(a.stationId)}, sticker {a.stickerCode}
+                  </Link>
+                  <span>
+                    <strong>{a.title}.</strong> {a.detail}
+                  </span>
+                  <span className="muted">
+                    {a.kind === "free" ? "Free session" : "Paid session"} ·
+                    since {when(a.createdAt)} · {a.billId ?? a.reference}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      )}
+
       <section className="stats" aria-label="Live summary">
         <Stat
           label="Chargers online"
@@ -147,6 +183,7 @@ export default async function Page() {
                   {formatKwh(x.energyKwh)}
                   {x.idToken ? ` · token ${x.idToken}` : ""}
                   {x.staff ? " · staff/test session" : ""}
+                  {x.free ? " · free session" : ""}
                 </span>
               </li>
             ))}

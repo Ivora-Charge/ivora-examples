@@ -440,6 +440,21 @@ describe("live view (live API mocked)", () => {
       [900, false],
       [901, true],
     ]);
+    // A session with the operator's free charging token is labelled free, not staff.
+    await d.store.putFreeToken(OPERATOR, {
+      idToken: "FREEABCDEFGHJKLMN234",
+      tokenId: 77,
+    });
+    api.transactions.push(tx(903, "****N234"));
+    const f = await loadLive(d, viewer);
+    expect(
+      f.ok && f.live.sessions.map((x) => [x.id, x.staff, x.free]).sort(),
+    ).toEqual([
+      [900, false, false],
+      [901, true, false],
+      [903, false, true],
+    ]);
+    api.transactions.pop();
     // Registered once: the next start reuses the stored token without asking Ivora.
     const before = tokenCalls(api.calls).length;
     api.transactions.pop();

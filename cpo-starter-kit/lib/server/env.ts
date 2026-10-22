@@ -98,6 +98,13 @@ export const config = {
   get supabaseServiceRoleKey() {
     return env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
   },
+  /**
+   * Bearer secret of the settlement sweep (/api/cron/settle), which a scheduler calls
+   * every minute. Vercel Cron sends it as `Authorization: Bearer <CRON_SECRET>`.
+   */
+  get cronSecret() {
+    return env("CRON_SECRET") ?? "";
+  },
   /** One-time secret that unlocks the setup screen for the first owner. */
   get setupSecret() {
     return env("SETUP_SECRET") ?? "";

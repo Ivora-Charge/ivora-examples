@@ -16,6 +16,7 @@ export const EVENTS = [
   "station.fault_cleared",
   "charging_session.status_changed",
   "operation.completed",
+  "meter.sampled",
 ];
 export const PATH = "/api/webhooks/ivora";
 
