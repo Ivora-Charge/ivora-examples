@@ -61,6 +61,10 @@ const recordSchema = z.object({
   startOperationId: z.string().max(100).nullable(),
   transactionId: z.number().int().nullable(),
   stopRequestedAt: z.string().max(40).nullable(),
+  stopRetriedAt: z.string().max(40).nullable(),
+  meterWh: z.number().int().nullable(),
+  meterAt: z.string().max(40).nullable(),
+  alert: z.enum(["stalled", "hold_stop_ignored"]).nullable(),
   finalMinor: z.number().int().nullable(),
   capturedMinor: z.number().int().nullable(),
   error: z.string().max(600).nullable(),
@@ -70,14 +74,14 @@ const recordSchema = z.object({
 });
 
 const stateSchema = z.object({
-  v: z.literal(2),
+  v: z.literal(3),
   simulate: z.enum(DEMO_CHECKOUT_SIMULATIONS),
   records: z.array(recordSchema).max(MAX_RECORDS),
 });
 export type DemoCheckoutState = z.infer<typeof stateSchema>;
 
 export const emptyDemoCheckout = (): DemoCheckoutState => ({
-  v: 2,
+  v: 3,
   simulate: "none",
   records: [],
 });
@@ -157,8 +161,7 @@ export function createDemoCheckoutStore(
             seen.stickerCode !== n.stickerCode ||
             seen.stationId !== n.stationId ||
             seen.connectorId !== n.connectorId ||
-            seen.tariffId !== n.tariffId ||
-            seen.holdMinor !== n.holdMinor
+            seen.tariffId !== n.tariffId
           )
             throw new CheckoutError(
               "invalid",
@@ -195,6 +198,10 @@ export function createDemoCheckoutStore(
           startOperationId: null,
           transactionId: null,
           stopRequestedAt: null,
+          stopRetriedAt: null,
+          meterWh: null,
+          meterAt: null,
+          alert: null,
           finalMinor: null,
           capturedMinor: null,
           error: null,
@@ -239,6 +246,19 @@ export function createDemoCheckoutStore(
         .slice(0, o.limit)
         .map(view);
     },
+    async listAlerts(operatorId, o) {
+      const since = now() - o.days * 86_400_000;
+      return (await cookie.load()).records
+        .filter(
+          (r) =>
+            mine(r, operatorId) &&
+            ((r.phase === "attention" && Date.parse(r.createdAt) >= since) ||
+              (r.alert !== null && UNSETTLED.has(r.phase))),
+        )
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, o.limit)
+        .map(view);
+    },
     async record(operatorId, id, c) {
       return update((s) => {
         const r = s.records.find((x) => mine(x, operatorId) && x.id === id);
@@ -268,6 +288,8 @@ export function createDemoCheckoutStore(
           )
             phase = undefined;
         }
+        if (c.holdMinor !== undefined && UNSETTLED.has(r.phase))
+          r.holdMinor = c.holdMinor;
         r.billId ??= c.billId ?? null;
         r.paymentId ??= c.paymentId ?? null;
         r.startOperationId ??= c.startOperationId ?? null;
@@ -279,6 +301,12 @@ export function createDemoCheckoutStore(
         if (c.error !== undefined) r.error = c.error?.slice(0, 600) ?? null;
         if (c.startRequested) r.startRequestedAt ??= iso();
         if (c.stopRequested) r.stopRequestedAt ??= iso();
+        if (c.stopRetried) r.stopRetriedAt ??= iso();
+        if (c.meterWh !== undefined) {
+          if (r.meterAt === null || r.meterWh !== c.meterWh) r.meterAt = iso();
+          r.meterWh = c.meterWh;
+        }
+        if (c.alert !== undefined) r.alert = c.alert;
         if (c.checked) r.checkedAt = iso();
         if (TERMINAL.has(r.phase)) r.settledAt ??= iso();
         return true;

@@ -208,6 +208,10 @@ export type Database = {
           start_operation_id: string | null;
           transaction_id: number | null;
           stop_requested_at: Timestamp | null;
+          stop_retried_at: Timestamp | null;
+          meter_wh: number | null;
+          meter_at: Timestamp | null;
+          alert: string | null;
           final_minor: number | null;
           captured_minor: number | null;
           error: string | null;

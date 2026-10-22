@@ -48,6 +48,14 @@ export const NEXT_PHASES: Record<CheckoutPhase, readonly CheckoutPhase[]> = {
 
 export type CheckoutKind = "paid" | "free";
 
+/**
+ * Why the operator should look at a checkout (shown in Live). stalled: the charger
+ * reported nothing for STALLED_HOURS while Ivora still saw the session running (a lost
+ * StopTransaction, say), so the kit stopped and settled it. hold_stop_ignored: the
+ * charger kept charging after the hold stop and one retry.
+ */
+export type CheckoutAlert = "stalled" | "hold_stop_ignored";
+
 /** The kit's own record of one "Pay and charge" or "Start free session". */
 export interface CheckoutRecord {
   /** The source of every Idempotency-Key. Never sent to a browser or in a URL. */
@@ -63,7 +71,10 @@ export interface CheckoutRecord {
   connectorId: number;
   /** The Ivora tariff the bill snapshots. */
   tariffId: number;
-  /** Integer minor units of `currency`; 0 for free sessions. */
+  /**
+   * The card hold, integer minor units of `currency`; 0 for free sessions. The tariff's
+   * at the tap, then the bill's (the bill is the truth: settlement runs against it).
+   */
   holdMinor: number;
   currency: string;
   phase: CheckoutPhase;
@@ -74,6 +85,12 @@ export interface CheckoutRecord {
   startOperationId: string | null;
   transactionId: number | null;
   stopRequestedAt: string | null;
+  /** When the kit sent the hold stop again because the charger ignored the first. */
+  stopRetriedAt: string | null;
+  /** The session's energy (Wh) when it last changed, and when that was. */
+  meterWh: number | null;
+  meterAt: string | null;
+  alert: CheckoutAlert | null;
   /** The finalized bill and what was captured, integer minor units. */
   finalMinor: number | null;
   capturedMinor: number | null;
@@ -99,6 +116,8 @@ export type NewCheckout = Pick<
 export interface CheckoutChanges {
   phase?: CheckoutPhase;
   billId?: string;
+  /** The bill's hold (only while the checkout is unsettled). */
+  holdMinor?: number;
   paymentId?: string;
   checkoutUrl?: string;
   startOperationId?: string;
@@ -110,6 +129,11 @@ export interface CheckoutChanges {
   startRequested?: true;
   /** The kit stopped the session near the hold (once). */
   stopRequested?: true;
+  /** The kit sent the hold stop a second time (once). */
+  stopRetried?: true;
+  /** The session's energy now (null when not reported): meterAt moves when it changes. */
+  meterWh?: number | null;
+  alert?: CheckoutAlert;
   /** Settlement looked at it now. */
   checked?: true;
 }
@@ -127,8 +151,8 @@ export interface CheckoutStore {
   readonly mode: "live" | "demo";
   /**
    * One checkout per tap and one per connector: the same request ID returns the record
-   * it already made (created false); with a different sticker, connector, kind or price
-   * it is refused. While another checkout holds the connector, it is returned as busy
+   * it already made (created false); with a different sticker, connector, kind or tariff
+   * it is refused (the hold is not compared: the bill's may have replaced the tariff's). While another checkout holds the connector, it is returned as busy
    * and nothing is claimed (also when two taps race).
    */
   claim(n: NewCheckout): Promise<ClaimResult>;
@@ -148,6 +172,14 @@ export interface CheckoutStore {
     stationId?: number;
     limit: number;
   }): Promise<CheckoutRecord[]>;
+  /**
+   * One operator's checkouts that need them, newest first: those in attention (made
+   * in the last `days`), and unsettled ones with an alert.
+   */
+  listAlerts(
+    operatorId: string,
+    o: { days: number; limit: number },
+  ): Promise<CheckoutRecord[]>;
   /**
    * IDs never change once recorded; phases only move along NEXT_PHASES. False when the
    * phase change was not applied.

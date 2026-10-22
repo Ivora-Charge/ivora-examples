@@ -4,6 +4,7 @@ import { serviceClient } from "../supabase";
 import {
   CheckoutError,
   UNSETTLED,
+  type CheckoutAlert,
   type CheckoutChanges,
   type CheckoutKind,
   type CheckoutPhase,
@@ -31,7 +32,7 @@ function check<R extends { error: DbError }>(r: R): R {
 }
 
 const COLUMNS =
-  "id, operator_id, request_id, reference, kind, sticker_code, station_id, connector_id, tariff_id, hold_minor, currency, phase, bill_id, payment_id, checkout_url, start_requested_at, start_operation_id, transaction_id, stop_requested_at, final_minor, captured_minor, error, checked_at, settled_at, created_at, updated_at";
+  "id, operator_id, request_id, reference, kind, sticker_code, station_id, connector_id, tariff_id, hold_minor, currency, phase, bill_id, payment_id, checkout_url, start_requested_at, start_operation_id, transaction_id, stop_requested_at, stop_retried_at, meter_wh, meter_at, alert, final_minor, captured_minor, error, checked_at, settled_at, created_at, updated_at";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -55,6 +56,10 @@ const toRecord = (r: Row): CheckoutRecord => ({
   startOperationId: r.start_operation_id,
   transactionId: r.transaction_id,
   stopRequestedAt: r.stop_requested_at,
+  stopRetriedAt: r.stop_retried_at,
+  meterWh: r.meter_wh,
+  meterAt: r.meter_at,
+  alert: r.alert as CheckoutAlert | null,
   finalMinor: r.final_minor,
   capturedMinor: r.captured_minor,
   error: r.error,
@@ -67,6 +72,7 @@ function changesJson(c: CheckoutChanges): Json {
   const out: Record<string, unknown> = {};
   if (c.phase !== undefined) out.phase = c.phase;
   if (c.billId !== undefined) out.bill_id = c.billId;
+  if (c.holdMinor !== undefined) out.hold_minor = c.holdMinor;
   if (c.paymentId !== undefined) out.payment_id = c.paymentId;
   if (c.checkoutUrl !== undefined) out.checkout_url = c.checkoutUrl;
   if (c.startOperationId !== undefined)
@@ -77,6 +83,9 @@ function changesJson(c: CheckoutChanges): Json {
   if (c.error !== undefined) out.error = c.error;
   if (c.startRequested) out.start_requested = true;
   if (c.stopRequested) out.stop_requested = true;
+  if (c.stopRetried) out.stop_retried = true;
+  if (c.meterWh !== undefined) out.meter_wh = c.meterWh;
+  if (c.alert !== undefined) out.alert = c.alert;
   if (c.checked) out.checked = true;
   return out as Json;
 }
@@ -138,6 +147,29 @@ export function createSupabaseCheckoutStore(): CheckoutStore {
           .limit(o.limit),
       );
       return ((data ?? []) as Row[]).map(toRecord);
+    },
+    async listAlerts(operatorId, o) {
+      const since = new Date(Date.now() - o.days * 86_400_000).toISOString();
+      const mine = () => select().eq("operator_id", operatorId);
+      const [attention, alerted] = await Promise.all([
+        mine()
+          .eq("phase", "attention")
+          .gte("created_at", since)
+          .order("created_at", { ascending: false })
+          .limit(o.limit),
+        mine()
+          .not("alert", "is", null)
+          .in("phase", [...UNSETTLED])
+          .order("created_at", { ascending: false })
+          .limit(o.limit),
+      ]);
+      return [
+        ...((check(attention).data ?? []) as Row[]),
+        ...((check(alerted).data ?? []) as Row[]),
+      ]
+        .map(toRecord)
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, o.limit);
     },
     async record(operatorId, id, changes) {
       const { data } = check(

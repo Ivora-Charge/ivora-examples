@@ -2,17 +2,20 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedCode } from "@/lib/server/chargers/types";
 import {
   CHECKOUT_LIMITS,
+  checkoutAlerts,
   checkoutUrl,
   CREATING_STALE_MINUTES,
   driverSessions,
   FREE_START_WAIT_MINUTES,
   HOLD_STOP_PERCENT,
+  HOLD_STOP_RETRY_MINUTES,
   loadChargePage,
   nearHold,
   PAYMENT_WINDOW_MINUTES,
   payAndCharge,
   settleCheckout,
   settleOpenCheckouts,
+  STALLED_HOURS,
   START_RESERVED_MINUTES,
   startFreeSession,
   startPaidSession,
@@ -234,6 +237,8 @@ function fakeIvora() {
     usage: null as BillUsage | null,
     final: null as number | null,
     payment: "pending" as Payment["status"],
+    /** The bill's hold, as Ivora set it (the tariff's unless changed in Ivora). */
+    hold: 2500,
     paymentKey: "",
     captured: 0,
     startCreatedAt: null as string | null,
@@ -245,7 +250,7 @@ function fakeIvora() {
     station_id: 9101,
     connector_id: 91011,
     tariff_id: 777,
-    hold_minor: 2500,
+    hold_minor: state.hold,
     currency: "USD",
     status: state.final === null ? "open" : "final",
     total_minor: state.final,
@@ -267,7 +272,7 @@ function fakeIvora() {
     id: "pay_sample_1",
     bill_id: BILL,
     status: state.payment,
-    hold_minor: 2500,
+    hold_minor: state.hold,
     captured_minor: state.captured,
     payment_mode: "test",
     next_action:
@@ -315,7 +320,7 @@ function fakeIvora() {
     capturePayment: vi.fn(async (_id: string, _key: string) => {
       if (state.final === null)
         throw new IvoraError(409, "bill_not_final", "Not final");
-      if (state.final > 2500)
+      if (state.final > state.hold)
         throw new IvoraError(409, "bill_exceeds_hold", "Above the hold");
       if (state.payment === "authorized") {
         state.payment = state.final < 50 ? "canceled" : "captured";
@@ -575,7 +580,7 @@ describe("pay and charge", () => {
       { status: "active", charges_enabled: false },
     ]) {
       api.getPaymentAccount.mockResolvedValueOnce(account);
-      await expect(pay(d)).rejects.toMatchObject({
+      await expect(pay(d, req(), CODE, account.status)).rejects.toMatchObject({
         code: "stripe_not_ready",
         message: expect.stringMatching(/Sample Charging Co can't take card/),
       });
@@ -617,7 +622,8 @@ describe("pay and charge", () => {
   });
 
   it("takes the hold from the Ivora tariff, and refuses one Ivora Checkout can't hold", async () => {
-    const { d, api, cookie } = deps();
+    const { d, api, cookie, state } = deps();
+    state.hold = 4000;
     api.getTariff.mockResolvedValueOnce({
       id: 777,
       currency: "USD",
@@ -685,6 +691,26 @@ describe("pay and charge", () => {
       expect(await attempt(null)).toBe("offline");
     expect(await attempt(null)).toBe("rate_limited");
     expect(api.createBill).not.toHaveBeenCalled();
+  });
+
+  it("lets one source that never pays hold a connector for at most half an hour", async () => {
+    const c = clock();
+    const { d, api } = deps({ now: c.now });
+    // Tap, never pay; the payment window passes and frees the connector; tap again.
+    await pay(d, req(), CODE, "s1");
+    c.add(PAYMENT_WINDOW_MINUTES + 1);
+    await pay(d, req(), CODE, "s1");
+    c.add(PAYMENT_WINDOW_MINUTES + 1);
+    await expect(pay(d, req(), CODE, "s1")).rejects.toMatchObject({
+      code: "rate_limited",
+    });
+    expect(api.createBill).toHaveBeenCalledTimes(2);
+    // Someone else gets the connector.
+    await pay(d, req(), CODE, "s2");
+    expect(
+      CHECKOUT_LIMITS.sourceConnector.quota * PAYMENT_WINDOW_MINUTES,
+    ).toBeLessThanOrEqual(30);
+    expect(CHECKOUT_LIMITS.sourceConnector.periodSeconds).toBe(3600);
   });
 });
 
@@ -949,6 +975,198 @@ describe("settlement", () => {
     // Too short a secret turns the sweep off.
     expect(cronAuthorized("Bearer short", "short")).toBe(false);
   });
+
+  it("settles against the bill's hold when Ivora's differs from the tariff's", async () => {
+    // The tariff says $25.00; the bill Ivora made holds $40.00 (raised in Ivora).
+    const { d, api, state, paid, cookie } = deps();
+    state.hold = 4000;
+    await pay(d);
+    expect(only(cookie).holdMinor).toBe(4000);
+    paid("charging");
+    // $30.00 is past 90% of the tariff's hold but well under the bill's: no stop.
+    state.usage = usage({ energy_wh: 82_800, estimated_minor: 3000 });
+    await settle(d, cookie);
+    expect(api.sendCommand).not.toHaveBeenCalled();
+    state.usage = usage({
+      active: false,
+      energy_wh: 82_800,
+      estimated_minor: 3000,
+    });
+    state.progress = "ended";
+    const rec = await settle(d, cookie);
+    expect(rec).toMatchObject({
+      phase: "settled",
+      holdMinor: 4000,
+      finalMinor: 3000,
+      capturedMinor: 3000,
+    });
+    const [s] = await driverSessions(d, CODE, [rec.requestId]);
+    expect(s.receipt).toEqual({
+      charged: "$30.00",
+      released: "$10.00",
+      hold: "$40.00",
+    });
+  });
+
+  it("follows a hold Ivora changed after the checkout was recorded", async () => {
+    const { d, state, paid, cookie } = deps();
+    await pay(d);
+    expect(only(cookie).holdMinor).toBe(2500);
+    // Ivora answers with a $40.00 hold from now on (the bill is the truth).
+    state.hold = 4000;
+    paid("charging");
+    state.usage = usage({
+      active: false,
+      energy_wh: 82_800,
+      estimated_minor: 3000,
+    });
+    state.progress = "ended";
+    expect(await settle(d, cookie)).toMatchObject({
+      phase: "settled",
+      holdMinor: 4000,
+      capturedMinor: 3000,
+    });
+  });
+
+  it("sends the hold stop once more when the charger ignores it, then alerts the operator in Live", async () => {
+    const c = clock();
+    const { d, api, state, paid, cookie } = deps({ now: c.now });
+    await pay(d);
+    paid("charging");
+    state.usage = usage({ energy_wh: 62_000, estimated_minor: 2270 });
+    const id = (await settle(d, cookie)).id;
+    expect(api.sendCommand).toHaveBeenCalledTimes(1);
+    // Still charging, but not long enough to retry.
+    c.add(HOLD_STOP_RETRY_MINUTES - 1);
+    state.usage = usage({ energy_wh: 62_400, estimated_minor: 2284 });
+    await settle(d, cookie);
+    expect(api.sendCommand).toHaveBeenCalledTimes(1);
+    c.add(2);
+    expect((await settle(d, cookie)).stopRetriedAt).not.toBeNull();
+    expect(api.sendCommand).toHaveBeenLastCalledWith(
+      9101,
+      { action: "stop", transaction_id: 5 },
+      `cpo-checkout-${id}-hold-stop-retry`,
+    );
+    expect(await checkoutAlerts(d, OP)).toEqual([]);
+    // It keeps charging after the retry: the operator is told, and no third stop.
+    c.add(HOLD_STOP_RETRY_MINUTES);
+    state.usage = usage({ energy_wh: 63_000, estimated_minor: 2305 });
+    expect((await settle(d, cookie)).alert).toBe("hold_stop_ignored");
+    await settle(d, cookie);
+    expect(api.sendCommand).toHaveBeenCalledTimes(2);
+    expect(await checkoutAlerts(d, OP)).toMatchObject([
+      {
+        title: "Still charging after the hold stop",
+        stationId: 9101,
+        billId: BILL,
+      },
+    ]);
+    // Once it ends and is captured, the alert leaves Live.
+    state.usage = usage({
+      active: false,
+      energy_wh: 63_000,
+      estimated_minor: 2305,
+    });
+    state.progress = "ended";
+    expect((await settle(d, cookie)).phase).toBe("settled");
+    expect(await checkoutAlerts(d, OP)).toEqual([]);
+  });
+
+  it("stops a session the charger never ends, settles its bill and frees the connector", async () => {
+    const c = clock();
+    const { d, api, state, paid, cookie } = deps({ now: c.now });
+    const mine = req();
+    await pay(d, mine);
+    paid("charging");
+    state.usage = usage({ energy_wh: 40_000, estimated_minor: 1500 });
+    await settle(d, cookie);
+    // Energy that still moves is a session that runs, however long.
+    c.add(11 * 60);
+    state.usage = usage({ energy_wh: 41_000, estimated_minor: 1535 });
+    expect((await settle(d, cookie)).phase).toBe("open");
+    c.add(STALLED_HOURS * 60 - 1);
+    expect((await settle(d, cookie)).phase).toBe("open");
+    expect(api.sendCommand).not.toHaveBeenCalled();
+    // Nothing reported for STALLED_HOURS while Ivora still sees it running (a lost
+    // StopTransaction). Ivora can't finalize a running transaction yet.
+    c.add(2);
+    api.finalizeBill.mockRejectedValue(ivoraError(409, "transaction_active"));
+    const rec = await settle(d, cookie);
+    expect(rec).toMatchObject({ phase: "settling", alert: "stalled" });
+    expect(api.sendCommand).toHaveBeenCalledWith(
+      9101,
+      { action: "stop", transaction_id: 5 },
+      `cpo-checkout-${rec.id}-stall-stop`,
+    );
+    expect(api.finalizeBill).toHaveBeenCalledWith(
+      BILL,
+      5,
+      `cpo-checkout-${rec.id}-finalize`,
+    );
+    // The stop is tried once; settlement keeps trying the same finalize.
+    await settle(d, cookie);
+    expect(api.sendCommand).toHaveBeenCalledTimes(1);
+    expect(api.finalizeBill).toHaveBeenCalledTimes(2);
+    // The operator sees it in Live, and the driver is told.
+    expect(await checkoutAlerts(d, OP)).toMatchObject([
+      {
+        title: "The charger never ended a session",
+        detail: expect.stringMatching(/freed the connector/),
+      },
+    ]);
+    expect((await driverSessions(d, CODE, [mine]))[0]).toMatchObject({
+      label: "Stopped",
+      detail: expect.stringMatching(
+        /never charged more than your card hold of \$25\.00/,
+      ),
+      canStop: false,
+    });
+    // The connector is free for the next driver.
+    expect((await loadChargePage(d, CODE, OPERATOR)).closed).toBeNull();
+    // The session ends in Ivora: finalized and captured as the bill says, $15.35.
+    api.finalizeBill.mockRestore();
+    api.finalizeBill.mockImplementation(async () => {
+      state.final ??= 1535;
+      return {
+        ...(await api.getBill(BILL)),
+        status: "final" as const,
+        total_minor: 1535,
+      };
+    });
+    state.usage = usage({
+      active: false,
+      energy_wh: 41_000,
+      estimated_minor: 1535,
+    });
+    expect(await settle(d, cookie)).toMatchObject({
+      phase: "settled",
+      capturedMinor: 1535,
+    });
+    expect(await checkoutAlerts(d, OP)).toEqual([]);
+  });
+
+  it("hands a stalled session that never ends in Ivora to the operator", async () => {
+    const c = clock();
+    const { d, api, state, paid, cookie } = deps({ now: c.now });
+    await pay(d);
+    paid("charging");
+    state.usage = usage();
+    await settle(d, cookie);
+    api.finalizeBill.mockRejectedValue(ivoraError(409, "transaction_active"));
+    c.add(STALLED_HOURS * 60 + 1);
+    expect((await settle(d, cookie)).phase).toBe("settling");
+    // A day after the checkout it still can't be finalized: attention, still in Live.
+    c.add(12 * 60);
+    expect((await settle(d, cookie)).phase).toBe("attention");
+    expect(api.capturePayment).not.toHaveBeenCalled();
+    expect(await checkoutAlerts(d, OP)).toMatchObject([
+      {
+        title: "The charger never ended a session",
+        detail: expect.stringMatching(/before the \$25\.00 hold lapses/),
+      },
+    ]);
+  });
 });
 
 describe("a returning driver", () => {
@@ -1038,6 +1256,37 @@ describe("a returning driver", () => {
     expect((await driverSessions(d, CODE, [mine]))[0].label).toBe(
       "Not charged",
     );
+  });
+
+  it("says the hold is being released while Ivora still holds the release back", async () => {
+    const { d, api, paid, cookie } = deps();
+    const mine = req();
+    await pay(d, mine);
+    paid("authorized");
+    api.startBill.mockRejectedValueOnce(ivoraError(409, "station_offline"));
+    // Ivora keeps answering start_reserved until the start can't produce a session.
+    api.releasePayment.mockRejectedValue(ivoraError(409, "start_reserved"));
+    const e = await startPaidSession(
+      d,
+      { code: CODE, requestId: mine, requestIds: [mine] },
+      OPERATOR,
+    ).then(
+      () => null,
+      (x: CheckoutError) => x,
+    );
+    expect(e?.message).toMatch(/hold is being released/);
+    expect(e?.message).not.toMatch(/was released/);
+    expect(only(cookie).phase).toBe("releasing");
+    const [s] = await driverSessions(d, CODE, [mine]);
+    expect(s.detail).toMatch(
+      /^The charger did not start\. .*is being released/,
+    );
+    expect(s.detail).not.toMatch(/was released/);
+    // Once Ivora lets it go: released, for the same reason.
+    api.releasePayment.mockRestore();
+    const [after] = await driverSessions(d, CODE, [mine]);
+    expect(after.label).toBe("Not charged");
+    expect(after.detail).toMatch(/^The charger did not start\. .*was released/);
   });
 
   it("stops their own session, and settles it", async () => {
@@ -1213,6 +1462,65 @@ describe("free sessions", () => {
         ),
       );
     expect(attempts).toContain("rate_limited");
+  });
+
+  it("applies the rate limits before reading the free token or writing anything", async () => {
+    const { d, api, cookie } = deps();
+    const codes: string[] = [];
+    for (let i = 0; i < 40; i++)
+      codes.push(
+        await startFree(d, req(), "FREE2345", "spam").then(
+          () => "ok",
+          (e: CheckoutError) => e.code,
+        ),
+      );
+    expect(codes.filter((x) => x === "rate_limited").length).toBe(
+      40 - CHECKOUT_LIMITS.sourceConnector.quota,
+    );
+    // One Ivora token read per tap the limits let through, and one record.
+    expect(api.findToken).toHaveBeenCalledTimes(
+      CHECKOUT_LIMITS.sourceConnector.quota,
+    );
+    expect(cookie.state.records).toHaveLength(1);
+  });
+
+  it("stops a free session the charger never ends and frees the connector", async () => {
+    const c = clock();
+    const { d, api, cookie, state, live } = deps({ now: c.now });
+    await startFree(d);
+    const token = (await live.getFreeToken(OP))!.idToken;
+    state.transactions = [
+      {
+        id: 89,
+        station_id: 9103,
+        connector_id: 91031,
+        active: true,
+        id_token: `****${token.slice(-4)}`,
+        started_at: new Date(c.t).toISOString(),
+        ended_at: null,
+        energy_wh: 9_000,
+      },
+    ];
+    await settle(d, cookie);
+    c.add(STALLED_HOURS * 60 + 1);
+    const rec = await settle(d, cookie);
+    expect(rec).toMatchObject({ phase: "attention", alert: "stalled" });
+    expect(api.sendCommand).toHaveBeenLastCalledWith(
+      9103,
+      { action: "stop", transaction_id: 89 },
+      `cpo-checkout-${rec.id}-stall-stop`,
+    );
+    const stops = api.sendCommand.mock.calls.length;
+    await settleOpenCheckouts(d);
+    expect(api.sendCommand).toHaveBeenCalledTimes(stops);
+    expect(await checkoutAlerts(d, OP)).toMatchObject([
+      { kind: "free", title: "The charger never ended a session" },
+    ]);
+    const [s] = await driverSessions(d, "FREE2345", [rec.requestId]);
+    expect(s).toMatchObject({ label: "Stopped" });
+    expect(s.detail).toMatch(/Nothing was charged/);
+    // The connector is free again.
+    expect((await loadChargePage(d, "FREE2345", OPERATOR)).closed).toBeNull();
   });
 
   it("frees the connector when no session starts", async () => {
@@ -1500,7 +1808,7 @@ describe("demo checkout", () => {
   });
 
   function demoDeps(simulate: DemoCheckoutSimulation = "none") {
-    const cookie = memoryDemoCheckout({ v: 2, simulate, records: [] });
+    const cookie = memoryDemoCheckout({ v: 3, simulate, records: [] });
     const d: CheckoutDeps = {
       store: createDemoCheckoutStore(cookie),
       ivora: withDemoSimulation(

@@ -1393,19 +1393,23 @@ describe("driver checkouts", () => {
   /** Ends a checkout so the connector is free for the next test. */
   const close = (id: string) => record(id, { phase: "failed" });
 
-  it("makes one checkout per tap, for the same sticker, kind and price only", async () => {
+  it("makes one checkout per tap, for the same sticker, kind and tariff only", async () => {
     const first = await claim();
     expect(first.created).toBe(true);
     // A double tap or a retry after an uncertain answer: the same checkout.
     expect(await claim()).toEqual({ id: first.id, created: false });
-    // The same request ID for another connector, sticker, kind or hold is refused.
+    // The same request ID for another connector, sticker or kind is refused.
     await expect(claim(REQ, { connector: 91012 })).rejects.toThrow(
       /cpo_invalid/,
     );
     await expect(claim(REQ, { code: "WXYZ2345" })).rejects.toThrow(
       /cpo_invalid/,
     );
-    await expect(claim(REQ, { hold: 4000 })).rejects.toThrow(/cpo_invalid/);
+    // The hold is not compared: the bill's may have replaced the tariff's.
+    expect(await claim(REQ, { hold: 4000 })).toEqual({
+      id: first.id,
+      created: false,
+    });
     // Another operator's request IDs are its own.
     const b = await claim(REQ, { operator: operatorB });
     expect(b.created).toBe(true);
@@ -1494,6 +1498,60 @@ describe("driver checkouts", () => {
     expect((await row(id)).stop_requested_at).not.toBeNull();
     // Another operator can't touch it.
     expect(await record(id, { error: "x" }, operatorB)).toBe(false);
+  });
+
+  it("follows the bill's hold while unsettled, and notes the meter, retries and alerts", async () => {
+    const { id } = (await claim(nextReq())) as { id: string };
+    const extra = async () =>
+      (
+        await pg.query<{
+          hold_minor: number;
+          meter_wh: number | null;
+          meter_at: string | null;
+          stop_retried_at: string | null;
+          alert: string | null;
+        }>(
+          "select hold_minor, meter_wh, extract(epoch from meter_at)::bigint::text as meter_at, stop_retried_at, alert from cpo_checkouts where id=$1",
+          [id],
+        )
+      ).rows[0];
+    // The bill holds $40.00 where the tariff said $25.00: the record follows it.
+    expect(await record(id, { bill_id: BILL, hold_minor: 4000 })).toBe(true);
+    expect((await extra()).hold_minor).toBe(4000);
+    await expect(record(id, { hold_minor: 20 })).rejects.toThrow(/check/);
+    // meter_at moves only when the energy changes.
+    expect(await record(id, { phase: "open", meter_wh: 1000 })).toBe(true);
+    await pg.query(
+      "update cpo_checkouts set meter_at = '2026-01-01T00:00:00Z' where id=$1",
+      [id],
+    );
+    await record(id, { meter_wh: 1000 });
+    const old = String(Date.parse("2026-01-01T00:00:00Z") / 1000);
+    expect((await extra()).meter_at).toBe(old);
+    await record(id, { meter_wh: 1200 });
+    expect(await extra()).toMatchObject({ meter_wh: 1200 });
+    expect((await extra()).meter_at).not.toBe(old);
+    await expect(record(id, { alert: "other" })).rejects.toThrow(/check/);
+    expect(
+      await record(id, { stop_retried: true, alert: "hold_stop_ignored" }),
+    ).toBe(true);
+    expect(await extra()).toMatchObject({
+      alert: "hold_stop_ignored",
+      stop_retried_at: expect.anything(),
+    });
+    // A capture up to the bill's hold is fine; once settled, the hold stays.
+    expect(
+      await record(id, {
+        phase: "settling",
+        alert: "stalled",
+        transaction_id: 7,
+      }),
+    ).toBe(true);
+    expect(await record(id, { phase: "settled", captured_minor: 3000 })).toBe(
+      true,
+    );
+    expect(await record(id, { hold_minor: 2500 })).toBe(true);
+    expect(await extra()).toMatchObject({ hold_minor: 4000, alert: "stalled" });
   });
 
   it("takes a connector back only if no one else holds it (a late start after releasing)", async () => {

@@ -32,7 +32,8 @@ create table if not exists public.cpo_checkouts (
   sticker_code text not null check (sticker_code ~ '^[A-HJ-NP-Z2-9]{8}$'),
   station_id bigint not null check (station_id > 0),
   connector_id bigint not null check (connector_id > 0),
-  -- The Ivora tariff the bill snapshots, and its hold (integer minor units).
+  -- The Ivora tariff the bill snapshots, and the card hold (integer minor units): the
+  -- tariff's at the tap, then the bill's once it exists (the bill is the truth).
   tariff_id bigint not null check (tariff_id > 0),
   hold_minor integer not null,
   currency text not null check (currency ~ '^[A-Z]{3}$'),
@@ -61,6 +62,15 @@ create table if not exists public.cpo_checkouts (
   transaction_id bigint check (transaction_id > 0),
   -- When the kit stopped the session because its cost neared the hold.
   stop_requested_at timestamptz,
+  -- When the kit sent that stop a second time, because the charger kept charging.
+  stop_retried_at timestamptz,
+  -- The session's energy (Wh) when it last changed, and when: a session the charger
+  -- reports nothing for (a lost StopTransaction) is stopped and settled after a while.
+  meter_wh bigint check (meter_wh >= 0),
+  meter_at timestamptz,
+  -- Why the operator should look at it (shown in Live): stalled (the charger never
+  -- ended the session) or hold_stop_ignored (it kept charging after the hold stop).
+  alert text check (alert in ('stalled', 'hold_stop_ignored')),
   -- The finalized bill and what was captured (integer minor units).
   final_minor integer check (final_minor >= 0),
   captured_minor integer check (captured_minor >= 0),
@@ -86,6 +96,9 @@ create index if not exists cpo_checkouts_unsettled
 create index if not exists cpo_checkouts_station
   on public.cpo_checkouts(station_id)
   where phase in ('creating', 'open', 'settling', 'releasing');
+create index if not exists cpo_checkouts_alerts
+  on public.cpo_checkouts(operator_id, created_at desc)
+  where phase = 'attention' or alert is not null;
 
 alter table public.cpo_checkouts enable row level security;
 revoke all on public.cpo_checkouts from public, anon, authenticated;
@@ -93,7 +106,8 @@ grant all on public.cpo_checkouts to service_role;
 
 -- Claims a checkout for one tap. The same p_request_id again returns the checkout it
 -- already made (created = false), which must be for the same sticker, connector, kind
--- and price; anything else is refused. While another checkout holds the connector
+-- and tariff; anything else is refused. The hold is not compared: once the bill exists
+-- its hold replaces the tariff's. While another checkout holds the connector
 -- (creating or open), nothing is inserted and that one is returned as busy, also when
 -- two taps race: the unique index decides, and the loser reads the winner.
 create or replace function public.cpo_claim_checkout(
@@ -109,8 +123,7 @@ begin
   for i in 1..2 loop
     select id, (kind = p_kind and sticker_code = p_sticker_code
         and station_id = p_station_id and connector_id = p_connector_id
-        and tariff_id = p_tariff_id and hold_minor = p_hold_minor
-        and currency = p_currency)
+        and tariff_id = p_tariff_id and currency = p_currency)
       into v_id, v_same
       from public.cpo_checkouts
       where operator_id = p_operator_id and request_id = p_request_id;
@@ -151,7 +164,8 @@ grant execute on function public.cpo_claim_checkout(uuid, uuid, text, text, bigi
 -- once known, never changes (a different one is refused). Phases only move forward:
 -- creating -> open | failed | releasing | released; open -> settling | releasing |
 -- released | settled | attention; releasing -> open (a late start ran after all) |
--- settling | released | settled | attention; settling -> settled | attention. Returns
+-- settling | released | settled | attention; settling -> settled | attention. The hold
+-- changes only while the checkout is unsettled (to the bill's). Returns
 -- false when the change was not applied (an older reader lost to a newer one).
 create or replace function public.cpo_record_checkout(
   p_operator_id uuid, p_id uuid, p_changes jsonb
@@ -192,6 +206,9 @@ begin
   end if;
   update public.cpo_checkouts set
     bill_id = coalesce(bill_id, p_changes->>'bill_id'),
+    hold_minor = case when p_changes ? 'hold_minor'
+        and v_row.phase in ('creating', 'open', 'settling', 'releasing')
+      then (p_changes->>'hold_minor')::integer else hold_minor end,
     payment_id = coalesce(payment_id, p_changes->>'payment_id'),
     start_operation_id = coalesce(start_operation_id, p_changes->>'start_operation_id'),
     transaction_id = coalesce(transaction_id, (p_changes->>'transaction_id')::bigint),
@@ -204,6 +221,15 @@ begin
       then coalesce(start_requested_at, now()) else start_requested_at end,
     stop_requested_at = case when p_changes ? 'stop_requested'
       then coalesce(stop_requested_at, now()) else stop_requested_at end,
+    stop_retried_at = case when p_changes ? 'stop_retried'
+      then coalesce(stop_retried_at, now()) else stop_retried_at end,
+    -- meter_at moves only when the energy changes (or is first seen).
+    meter_at = case when p_changes ? 'meter_wh' and (meter_at is null
+        or meter_wh is distinct from (p_changes->>'meter_wh')::bigint)
+      then now() else meter_at end,
+    meter_wh = case when p_changes ? 'meter_wh'
+      then (p_changes->>'meter_wh')::bigint else meter_wh end,
+    alert = coalesce(p_changes->>'alert', alert),
     checked_at = case when p_changes ? 'checked' then now() else checked_at end,
     settled_at = case when coalesce(v_phase, phase) in ('settled', 'released', 'failed', 'attention')
       then coalesce(settled_at, now()) else settled_at end,

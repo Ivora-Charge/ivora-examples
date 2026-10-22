@@ -86,10 +86,24 @@ export const FREE_START_WAIT_MINUTES = 5;
  * for the energy delivered between two checks (see the README: check every minute).
  */
 export const HOLD_STOP_PERCENT = 90;
+/**
+ * A hold stop the charger ignored is sent once more after this, and the operator is
+ * alerted in Live this long after the retry.
+ */
+export const HOLD_STOP_RETRY_MINUTES = 5;
+/**
+ * A running session whose energy hasn't changed for this long (a charger that lost
+ * its StopTransaction, or a car left plugged in all night) is stopped once, settled
+ * from what its bill says, frees the connector, and is shown to the operator in Live.
+ */
+export const STALLED_HOURS = 12;
 /** Settlement that still fails after this goes to the operator (attention). */
 const GIVE_UP_HOURS = 24;
-/** A returning driver's sessions are shown on the sticker's page this long. */
-export const DRIVER_SESSION_HOURS = 12;
+/**
+ * A returning driver's sessions are shown on the sticker's page this long: longer than
+ * STALLED_HOURS, so a driver whose session stalled still sees what happened to it.
+ */
+export const DRIVER_SESSION_HOURS = 24;
 /** Ivora Checkout's authorization limits ($0.50 to $100), integer minor units. */
 const HOLD_RANGE = { min: 50, max: 10_000 } as const;
 
@@ -100,7 +114,9 @@ const HOLD_RANGE = { min: 50, max: 10_000 } as const;
  */
 export const CHECKOUT_LIMITS = {
   source: { quota: 10, periodSeconds: 600 },
-  sourceConnector: { quota: 4, periodSeconds: 3600 },
+  // Two taps an hour: with the 15-minute payment window, one person who never pays can
+  // hold a connector for at most half an hour.
+  sourceConnector: { quota: 2, periodSeconds: 3600 },
   connector: { quota: 20, periodSeconds: 3600 },
   operator: { quota: 300, periodSeconds: 3600 },
 } as const;
@@ -314,6 +330,23 @@ async function tariffHold(
   return Number.isInteger(h) && h >= HOLD_RANGE.min && h <= HOLD_RANGE.max
     ? h
     : null;
+}
+
+/**
+ * The bill's hold when it differs from the record's: the one Ivora authorizes and caps
+ * the capture at, so the record follows it (for example a hold raised in Ivora).
+ */
+function billHold(
+  bill: Pick<Bill, "hold_minor">,
+  rec: CheckoutRecord,
+): { holdMinor?: number } {
+  const h = bill.hold_minor;
+  if (h === rec.holdMinor) return {};
+  if (!Number.isInteger(h) || h < HOLD_RANGE.min || h > HOLD_RANGE.max) {
+    console.error(`cpo-starter-kit: checkout hold out of range ${rec.id}`);
+    return {};
+  }
+  return { holdMinor: h };
 }
 
 // ---- The page ----
@@ -592,6 +625,8 @@ type KeyAction =
   | "start"
   | "stop"
   | "hold-stop"
+  | "hold-stop-retry"
+  | "stall-stop"
   | "finalize"
   | "capture"
   | "release";
@@ -813,11 +848,9 @@ export async function payAndCharge(
       if (definite(e)) throw await fail(refusal(e, operatorName));
       throw unconfirmed(e, "Pay and charge");
     }
-    if (bill.hold_minor !== rec.holdMinor)
-      console.error(
-        `cpo-starter-kit: checkout bill hold ${bill.hold_minor} differs from the tariff's ${rec.holdMinor} ${id}`,
-      );
-    await record({ billId: bill.id, error: null });
+    // The bill's hold is the one Ivora authorizes and caps the capture at: settlement
+    // runs against it, whatever the tariff said when the page was read.
+    await record({ billId: bill.id, ...billHold(bill, rec), error: null });
   }
 
   let payment: Payment;
@@ -932,6 +965,9 @@ export async function startFreeSession(
     else throw new CheckoutError("refused", closedMessage(rec));
   }
 
+  // Limits first: spam taps cost no Ivora read and no write.
+  if (!rec) await takeLimits(d, found, input.source);
+
   let token: string | null;
   try {
     token = await ensureFreeToken(
@@ -955,7 +991,6 @@ export async function startFreeSession(
     );
 
   if (!rec) {
-    await takeLimits(d, found, input.source);
     let station: Station;
     let txs: Transaction[];
     try {
@@ -1068,19 +1103,21 @@ const transactionOf = (bill: Bill, rec: CheckoutRecord) =>
 
 /**
  * Stops the session (key cpo-checkout-<id>-stop, the same for the driver's Stop and
- * the hold stop, so one stop is sent). An uncertain answer is tried again next time
+ * the hold stop, so one stop is sent; the hold stop's one retry and the stop of a
+ * stalled session have their own keys). An uncertain answer is tried again next time
  * with the same key.
  */
 async function sendStop(
   d: CheckoutDeps,
   rec: CheckoutRecord,
   transactionId: number,
+  action: "stop" | "hold-stop-retry" | "stall-stop" = "stop",
 ): Promise<"sent" | "ended" | "uncertain"> {
   try {
     await d.ivora.sendCommand(
       rec.stationId,
       { action: "stop", transaction_id: transactionId },
-      keyFor(rec.id, "stop"),
+      keyFor(rec.id, action),
     );
     return "sent";
   } catch (e) {
@@ -1097,6 +1134,8 @@ async function release(
   why: string,
 ): Promise<void> {
   const op = rec.operatorId;
+  // A release tried again keeps the reason it was first made for.
+  if (rec.phase === "releasing" && rec.error) why = rec.error;
   if (!rec.paymentId) {
     await d.store.record(op, rec.id, { phase: "released", error: why });
     return;
@@ -1132,6 +1171,7 @@ async function recordPayment(
   else if (p.status === "captured" || p.status.startsWith("refund"))
     await d.store.record(op, rec.id, {
       phase: "settled",
+      ...billHold(p, rec),
       capturedMinor: p.captured_minor ?? 0,
       error: null,
     });
@@ -1162,7 +1202,7 @@ async function finalizeAndCapture(
   if (bill.status !== "final") {
     const tx = transactionOf(bill, rec);
     if (!tx) {
-      await release(d, rec, "No charging took place. Your hold was released.");
+      await release(d, rec, "No charging took place.");
       return;
     }
     await d.store.record(op, rec.id, { phase: "settling", transactionId: tx });
@@ -1234,7 +1274,7 @@ async function settlePaid(
     if (age > minutes(CREATING_STALE_MINUTES))
       await d.store.record(op, rec.id, {
         phase: "released",
-        error: "This checkout was not completed. Nothing was charged.",
+        error: "This checkout was not completed.",
       });
     return null;
   }
@@ -1242,8 +1282,89 @@ async function settlePaid(
   // A driver-return bill read also lets Ivora start an authorized payment once (the
   // documented driver-return rule).
   const bill = await d.ivora.getBill(rec.billId);
+  const hold = billHold(bill, rec);
+  if (hold.holdMinor !== undefined) {
+    await d.store.record(op, rec.id, hold);
+    rec = { ...rec, holdMinor: hold.holdMinor };
+  }
   await step(d, rec, bill);
   return bill;
+}
+
+/**
+ * Notes the running session's energy, and says whether it has stayed the same for
+ * STALLED_HOURS (a charger that lost its StopTransaction reports nothing more).
+ */
+async function stalled(
+  d: CheckoutDeps,
+  rec: CheckoutRecord,
+  energyWh: number | null | undefined,
+): Promise<boolean> {
+  const wh = energyWh ?? null;
+  if (rec.meterAt === null || rec.meterWh !== wh) {
+    await d.store.record(rec.operatorId, rec.id, { meterWh: wh });
+    return false;
+  }
+  return now(d) - Date.parse(rec.meterAt) > STALLED_HOURS * 3_600_000;
+}
+
+const STALLED_NOTE = `The charger reported nothing for ${STALLED_HOURS} hours while the session still ran, so it was stopped.`;
+
+/**
+ * A paid session that stalled: settling at once (which frees the connector and is
+ * recorded first, so this happens once), with an alert for Live. The stop is tried
+ * once (key cpo-checkout-<id>-stall-stop), then the bill is finalized and captured as
+ * it says; settlement keeps trying with the same keys until Ivora sees the session
+ * end, and hands it to the operator (attention) after GIVE_UP_HOURS.
+ */
+async function stallPaid(
+  d: CheckoutDeps,
+  rec: CheckoutRecord,
+  bill: Bill,
+  tx: number,
+) {
+  const marked = { ...rec, transactionId: tx };
+  if (
+    !(await d.store.record(rec.operatorId, rec.id, {
+      phase: "settling",
+      alert: "stalled",
+      transactionId: tx,
+      error: STALLED_NOTE,
+    }))
+  )
+    return;
+  console.error(`cpo-starter-kit: checkout stalled ${rec.id}`);
+  rec = { ...marked, phase: "settling", alert: "stalled" };
+  await sendStop(d, rec, tx, "stall-stop");
+  return finalizeAndCapture(d, rec, bill);
+}
+
+/**
+ * The kit stopped the session near the hold. If it still runs HOLD_STOP_RETRY_MINUTES
+ * later, the stop is sent once more (key cpo-checkout-<id>-hold-stop-retry); if it
+ * still runs that long after the retry, the operator is alerted in Live.
+ */
+async function holdStopFollowUp(
+  d: CheckoutDeps,
+  rec: CheckoutRecord,
+  tx: number,
+) {
+  const since = (iso: string) => now(d) - Date.parse(iso);
+  const wait = minutes(HOLD_STOP_RETRY_MINUTES);
+  if (!rec.stopRetriedAt) {
+    if (since(rec.stopRequestedAt!) < wait) return;
+    if ((await sendStop(d, rec, tx, "hold-stop-retry")) === "uncertain") return;
+    await d.store.record(rec.operatorId, rec.id, { stopRetried: true });
+    return;
+  }
+  if (rec.alert === null && since(rec.stopRetriedAt) >= wait) {
+    console.error(
+      `cpo-starter-kit: checkout still charging after its hold stop and a retry ${rec.id}`,
+    );
+    await d.store.record(rec.operatorId, rec.id, {
+      alert: "hold_stop_ignored",
+    });
+  }
 }
 
 async function step(d: CheckoutDeps, rec: CheckoutRecord, bill: Bill) {
@@ -1268,19 +1389,11 @@ async function step(d: CheckoutDeps, rec: CheckoutRecord, bill: Bill) {
   switch (progress) {
     case "awaiting_payment":
       if (rec.phase === "releasing" || age > minutes(PAYMENT_WINDOW_MINUTES))
-        await release(
-          d,
-          rec,
-          "The payment was not completed in time. Nothing was charged.",
-        );
+        await release(d, rec, "The payment was not completed in time.");
       return;
     case "authorized":
       if (rec.phase === "releasing" || age > minutes(UNSTARTED_RELEASE_MINUTES))
-        await release(
-          d,
-          rec,
-          "Charging was not started. Your card hold was released; nothing was charged.",
-        );
+        await release(d, rec, "Charging was not started.");
       return;
     case "starting":
     case "waiting_for_vehicle": {
@@ -1291,37 +1404,23 @@ async function step(d: CheckoutDeps, rec: CheckoutRecord, bill: Bill) {
         dispatched &&
         now(d) - Date.parse(dispatched) > minutes(START_RESERVED_MINUTES)
       )
-        await release(
-          d,
-          rec,
-          "No car was plugged in in time. Your card hold was released; nothing was charged.",
-        );
+        await release(d, rec, "No car was plugged in in time.");
       return;
     }
     case "charging":
     case "start_failed":
       if (progress === "start_failed" && !tx) {
         // Ivora answers start_reserved until the start can't produce a session.
-        await release(
-          d,
-          rec,
-          "The charger did not start. Your card hold was released; nothing was charged.",
-        );
+        await release(d, rec, "The charger did not start.");
         return;
       }
       if (usage && !usage.active) return finalizeAndCapture(d, rec, bill);
+      if (!tx || !usage) return;
+      if (await stalled(d, rec, usage.energy_wh))
+        return stallPaid(d, rec, bill, tx);
+      if (rec.stopRequestedAt) return holdStopFollowUp(d, rec, tx);
       if (
-        rec.stopRequestedAt &&
-        now(d) - Date.parse(rec.stopRequestedAt) > minutes(5)
-      )
-        // The charger ignored the stop: Ivora alerts its operators near the hold too.
-        console.error(
-          `cpo-starter-kit: checkout still charging after its hold stop ${rec.id}`,
-        );
-      if (
-        tx &&
-        !rec.stopRequestedAt &&
-        typeof usage?.estimated_minor === "number" &&
+        typeof usage.estimated_minor === "number" &&
         nearHold(usage.estimated_minor, bill.hold_minor)
       ) {
         const r = await sendStop(d, rec, tx);
@@ -1347,7 +1446,7 @@ async function step(d: CheckoutDeps, rec: CheckoutRecord, bill: Bill) {
       if (tx) return finalizeAndCapture(d, rec, bill);
       await d.store.record(op, rec.id, {
         phase: "released",
-        error: "The payment was canceled or expired. Nothing was charged.",
+        error: "The payment was canceled or expired.",
       });
       return;
     default:
@@ -1406,6 +1505,21 @@ async function settleFree(
       transactionId: t.id,
       ...(running(t) ? {} : { phase: "settled", error: null }),
     });
+    // Stalled (see stallPaid): no money to settle, so it goes to the operator at once,
+    // freeing the connector, and the stop is tried once.
+    if (running(t) && (await stalled(d, rec, t.energy_wh))) {
+      const marked = { ...rec, transactionId: t.id };
+      if (
+        await d.store.record(op, rec.id, {
+          phase: "attention",
+          alert: "stalled",
+          error: STALLED_NOTE,
+        })
+      ) {
+        console.error(`cpo-starter-kit: checkout stalled ${rec.id}`);
+        await sendStop(d, marked, t.id, "stall-stop");
+      }
+    }
     return t;
   }
   if (rec.startOperationId && rec.phase === "open") {
@@ -1477,6 +1591,71 @@ export async function settleOpenCheckouts(
     }
   }
   return recs.length;
+}
+
+// ---- What the operator sees in Live ----
+
+/** How far back Live lists checkouts in attention. */
+export const ALERT_DAYS = 14;
+
+export interface CheckoutAlertView {
+  /** The payment's return_reference: safe to show, and found again in the database. */
+  reference: string;
+  kind: CheckoutKind;
+  stationId: number;
+  connectorId: number;
+  stickerCode: string;
+  billId: string | null;
+  createdAt: string;
+  title: string;
+  detail: string;
+}
+
+/**
+ * Driver checkouts that need the operator, newest first: stalled sessions, a charger
+ * that kept charging after the hold stop and its retry, and settlement that went to
+ * attention (a bill above its hold, or one not settled within GIVE_UP_HOURS).
+ */
+export async function checkoutAlerts(
+  d: CheckoutDeps,
+  operatorId: string,
+): Promise<CheckoutAlertView[]> {
+  const recs = await d.store.listAlerts(operatorId, {
+    days: ALERT_DAYS,
+    limit: 20,
+  });
+  return recs.map((r) => {
+    const hold = formatMinor(r.holdMinor, r.currency);
+    const settling =
+      r.phase === "attention"
+        ? (r.error ?? "Settlement needs you.")
+        : r.kind === "free"
+          ? "Free session: nothing to settle."
+          : `The kit keeps finalizing and capturing the bill (never more than the ${hold} hold).`;
+    const [title, detail] =
+      r.alert === "stalled"
+        ? [
+            "The charger never ended a session",
+            `No energy reading for ${STALLED_HOURS} hours while the session still ran: the kit sent one stop and freed the connector for other drivers. Check the charger. ${r.phase === "attention" && r.kind === "paid" ? `${settling} If the session never ends in Ivora, settle the bill there before the ${hold} hold lapses (about 7 days).` : settling}`,
+          ]
+        : r.alert === "hold_stop_ignored"
+          ? [
+              "Still charging after the hold stop",
+              `The kit stopped this paid session near its ${hold} card hold and sent the stop again, but the charger keeps charging. Stop it from the charger's page or on site; nothing above the hold is charged.`,
+            ]
+          : ["A driver payment needs you", settling];
+    return {
+      reference: r.reference,
+      kind: r.kind,
+      stationId: r.stationId,
+      connectorId: r.connectorId,
+      stickerCode: r.stickerCode,
+      billId: r.billId,
+      createdAt: r.createdAt,
+      title,
+      detail,
+    };
+  });
 }
 
 // ---- A driver back on the sticker's page ----
@@ -1576,13 +1755,13 @@ function sessionView(
         detail:
           rec.kind === "free"
             ? (rec.error ?? "No session started.")
-            : `${rec.error ?? "Nothing was charged."}${rec.paymentId ? ` Any card hold (${money(rec.holdMinor)}) was released.` : ""}`,
+            : `${rec.error ? `${rec.error} ` : ""}Nothing was charged.${rec.paymentId ? ` Any card hold (${money(rec.holdMinor)}) was released.` : ""}`,
       };
     case "releasing":
       return {
         ...base,
         label: "Releasing your hold",
-        detail: `${rec.error ?? "Nothing will be charged."} Your card hold of ${money(rec.holdMinor)} is being released.`,
+        detail: `${rec.error ? `${rec.error} ` : ""}Nothing will be charged. Your card hold of ${money(rec.holdMinor)} is being released.`,
       };
     case "settled":
       if (rec.kind === "free")
@@ -1606,6 +1785,14 @@ function sessionView(
         note: rec.stopRequestedAt ? rec.error : null,
       };
     case "settling":
+      if (rec.alert === "stalled")
+        return {
+          ...base,
+          label: "Stopped",
+          detail:
+            `${rec.error ?? ""} Your final bill is being settled; you are never charged more than your card hold of ${money(rec.holdMinor)}.`.trim(),
+          estimate: rec.finalMinor !== null ? money(rec.finalMinor) : null,
+        };
       return {
         ...base,
         label: "Finished",
@@ -1614,6 +1801,12 @@ function sessionView(
         note: rec.stopRequestedAt ? rec.error : null,
       };
     case "attention":
+      if (rec.kind === "free")
+        return {
+          ...base,
+          label: "Stopped",
+          detail: `${rec.error ?? "This session was stopped."} Nothing was charged.`,
+        };
       return {
         ...base,
         label: "Finished",
@@ -1759,14 +1952,13 @@ export async function startPaidSession(
     throw new CheckoutError("not_found", "Reload the page and try again.");
   const operator = found.operatorName ?? defaultOperatorName;
   const releaseNow = async (why: string, e?: IvoraError) => {
-    await release(
-      d,
-      rec,
-      "The charger did not start. Your card hold was released; nothing was charged.",
-    );
+    await release(d, rec, "The charger did not start.");
+    // Ivora may still hold the release back (start_reserved): then say it is pending.
+    const done =
+      (await d.store.get(found.operatorId, rec.id))?.phase === "released";
     return new CheckoutError(
       "refused",
-      `${why} Your card hold was released, so nothing is charged. Reload the page to start again, or contact ${operator}.`,
+      `${why} Your card hold ${done ? "was released" : "is being released"}, so nothing is charged. Reload the page to start again, or contact ${operator}.`,
       e?.code,
       e?.requestId,
     );
