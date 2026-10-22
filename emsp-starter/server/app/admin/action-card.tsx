@@ -2,8 +2,39 @@
 
 import { useActionState, type ReactNode } from "react";
 
-/** What every admin action returns: a message, plus whatever its form shows. */
-export type CardState = { ok?: boolean; message?: string };
+/**
+ * What every admin action returns: a message, plus whatever its form shows. A failure
+ * also has a code (the CPO's OCPI status code when it gave one) and a next step.
+ */
+export type CardState = {
+  ok?: boolean;
+  message?: string;
+  code?: string;
+  nextStep?: string;
+};
+
+/** The code and next step of a failure, under its message. */
+export function ErrorHelp({ code, nextStep }: CardState) {
+  if (!code && !nextStep) return null;
+  return (
+    <dl className="facts error-help">
+      {code && (
+        <>
+          <dt>Code</dt>
+          <dd>
+            <code>{code}</code>
+          </dd>
+        </>
+      )}
+      {nextStep && (
+        <>
+          <dt>Next step</dt>
+          <dd>{nextStep}</dd>
+        </>
+      )}
+    </dl>
+  );
+}
 
 /** Only asked when the admin is not signed in (ADMIN_SECRET deployments). */
 function SecretField() {
@@ -57,6 +88,9 @@ export function ActionCard<S extends CardState>({
           role={state.ok ? "status" : "alert"}
         >
           <p>{state.message}</p>
+          {!state.ok && (
+            <ErrorHelp code={state.code} nextStep={state.nextStep} />
+          )}
           {details?.(state)}
         </div>
       )}

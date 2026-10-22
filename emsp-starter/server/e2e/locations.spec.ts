@@ -42,7 +42,7 @@ test("demo: pulling locations from a CPO is refused, nothing sent", async ({
   await sync.getByLabel("Peer ID").fill("00000000-0000-4000-8000-000000000000");
   await sync.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
   await sync.getByRole("button", { name: "Pull changes" }).click();
-  await expect(sync.getByRole("alert")).toHaveText(
+  await expect(sync.getByRole("alert")).toContainText(
     "Demo mode: refused to pull locations and tariffs from a CPO. Nothing was sent.",
   );
 });

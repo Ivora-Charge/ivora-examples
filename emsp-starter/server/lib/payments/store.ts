@@ -1,5 +1,13 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
+import {
+  byCode,
+  inRange,
+  RECONCILIATION_ID_LIMIT,
+  utcDay,
+  type ReconciliationQuery,
+  type StoredCdr,
+} from "@/lib/sessions/store";
 
 /**
  * Payments: one per START_SESSION command (the driver's charge request), from the
@@ -145,6 +153,32 @@ export type ReserveOutcome =
   | { outcome: "created" | "replayed"; refund: Refund }
   | { outcome: "exceeds" | "not_found"; refund: null };
 
+/**
+ * The payment side of reconciliation, per peer, UTC day (of the CDR's start) and the
+ * CDR's currency, over CDRs that are not credit CDRs (emsp_payment_reconciliation).
+ * Amounts are minor units of `currency`; a payment in another currency is not summed
+ * but counted as a mismatch.
+ */
+export type PaymentReconciliationRow = {
+  peerId: string;
+  day: string;
+  currency: string;
+  /** CDRs a payment was settled from. */
+  cdrsPaid: number;
+  /** CDRs of our drivers that no payment was settled from. */
+  cdrsUnpaid: number;
+  /** `country_code/party_id/cdr_id`, at most RECONCILIATION_ID_LIMIT. */
+  cdrsUnpaidIds: string[];
+  /** The CDR totals incl. VAT the payments saw. */
+  cdrAmount: number;
+  capturedAmount: number;
+  refundedAmount: number;
+  /** Payments whose capture is not their CDR's total, or in another currency. */
+  amountMismatches: number;
+  /** Payment IDs, at most RECONCILIATION_ID_LIMIT. */
+  amountMismatchIds: string[];
+};
+
 export interface PaymentStore {
   /** Null when the command has a payment already: read it with getByCommand. */
   insert(p: NewPayment, now: string): Promise<Payment | null>;
@@ -195,15 +229,24 @@ export interface PaymentStore {
   hasEvent(id: string): Promise<boolean>;
   /** Records a handled Stripe event: true the first time, false for a redelivery. */
   recordEvent(id: string, type: string): Promise<boolean>;
+  /** The payment side of reconciliation for CDRs that started in [from, to). */
+  reconcileCdrs(
+    query: ReconciliationQuery,
+  ): Promise<PaymentReconciliationRow[]>;
 }
 
 const ms = (iso: string) => Date.parse(iso);
 
-/** Payments in memory: for demo mode (nothing persists) and for tests. */
+/**
+ * Payments in memory: for demo mode (nothing persists) and for tests. `cdrs` gives the
+ * CDRs reconciliation reads (the memory session store's), none by default.
+ */
 export class MemoryPaymentStore implements PaymentStore {
   readonly payments = new Map<string, Payment>();
   readonly refunds = new Map<string, Refund>();
   readonly events = new Set<string>();
+
+  constructor(private readonly cdrs: () => Iterable<StoredCdr> = () => []) {}
 
   // No awaits before the writes: each check and write is one step, like a row lock.
   async insert(p: NewPayment, now: string) {
@@ -381,5 +424,70 @@ export class MemoryPaymentStore implements PaymentStore {
     if (this.events.has(id)) return false;
     this.events.add(id);
     return true;
+  }
+
+  /** The same figures as the database function emsp_payment_reconciliation. */
+  async reconcileCdrs(q: ReconciliationQuery) {
+    const rows = new Map<string, PaymentReconciliationRow>();
+    for (const c of this.cdrs()) {
+      const d = c.cdr;
+      if (d.credit || (q.peerId && c.peerId !== q.peerId)) continue;
+      if (!inRange(d.start_date_time, q)) continue;
+      const day = utcDay(d.start_date_time);
+      const key = JSON.stringify([c.peerId, day, d.currency]);
+      let r = rows.get(key);
+      if (!r)
+        rows.set(
+          key,
+          (r = {
+            peerId: c.peerId,
+            day,
+            currency: d.currency,
+            cdrsPaid: 0,
+            cdrsUnpaid: 0,
+            cdrsUnpaidIds: [],
+            cdrAmount: 0,
+            capturedAmount: 0,
+            refundedAmount: 0,
+            amountMismatches: 0,
+            amountMismatchIds: [],
+          }),
+        );
+      const p = this.find((x) => x.cdrId === c.id);
+      if (!p) {
+        if (c.driverRef !== null) {
+          r.cdrsUnpaid++;
+          r.cdrsUnpaidIds.push(`${d.country_code}/${d.party_id}/${d.id}`);
+        }
+        continue;
+      }
+      r.cdrsPaid++;
+      r.cdrAmount += p.cdrAmount ?? 0;
+      const same = p.currency === d.currency;
+      if (same) {
+        r.capturedAmount += p.capturedAmount;
+        r.refundedAmount += p.refundedAmount;
+      }
+      if (!same || p.capturedAmount !== p.cdrAmount) {
+        r.amountMismatches++;
+        r.amountMismatchIds.push(p.id);
+      }
+    }
+    return [...rows.values()]
+      .map((r) => ({
+        ...r,
+        cdrsUnpaidIds: r.cdrsUnpaidIds
+          .sort(byCode)
+          .slice(0, RECONCILIATION_ID_LIMIT),
+        amountMismatchIds: r.amountMismatchIds
+          .sort(byCode)
+          .slice(0, RECONCILIATION_ID_LIMIT),
+      }))
+      .sort(
+        (a, b) =>
+          byCode(a.peerId, b.peerId) ||
+          byCode(a.day, b.day) ||
+          byCode(a.currency, b.currency),
+      );
   }
 }

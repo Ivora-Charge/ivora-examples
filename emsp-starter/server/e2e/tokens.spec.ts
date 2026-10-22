@@ -6,9 +6,9 @@ test("demo: an admin looks up the sample driver, then issues and blocks an app t
   page,
 }) => {
   await page.goto("/");
-  await page.getByRole("link", { name: "Driver tokens" }).first().click();
+  await page.getByRole("link", { name: "Drivers and tokens" }).first().click();
   await expect(
-    page.getByRole("heading", { name: "Driver tokens", level: 1 }),
+    page.getByRole("heading", { name: "Drivers and tokens", level: 1 }),
   ).toBeVisible();
   await expect(page.getByText("nothing is pushed to a CPO")).toBeVisible();
 

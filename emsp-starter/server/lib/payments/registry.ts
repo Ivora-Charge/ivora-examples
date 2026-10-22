@@ -9,7 +9,7 @@ import { peerStore } from "@/lib/ocpi/registry";
 import type { PeerStore } from "@/lib/ocpi/store";
 import { mailer, type Mailer } from "@/lib/receipts/mailer";
 import { sessionStore } from "@/lib/sessions/registry";
-import type { SessionStore } from "@/lib/sessions/store";
+import { MemorySessionStore, type SessionStore } from "@/lib/sessions/store";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { tokenStore } from "@/lib/tokens/registry";
@@ -49,7 +49,14 @@ const holder = globalThis as unknown as {
 export function paymentStore(): PaymentStore {
   if (holder.__emspPaymentStoreOverride)
     return holder.__emspPaymentStoreOverride;
-  if (isDemo()) return (holder.__emspDemoPayments ??= new MemoryPaymentStore());
+  if (isDemo())
+    return (holder.__emspDemoPayments ??= new MemoryPaymentStore(() => {
+      // Reconciliation reads the demo CDRs, which live in the session store.
+      const sessions = sessionStore();
+      return sessions instanceof MemorySessionStore
+        ? sessions.cdrs.values()
+        : [];
+    }));
   return new SupabasePaymentStore(
     config.supabaseUrl,
     config.supabaseServiceRoleKey,
