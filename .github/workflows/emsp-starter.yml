@@ -44,6 +44,9 @@ jobs:
       - run: npm run check:migrations
       # Unit tests include the PGlite migration tests and the brand-token sync check.
       - run: npm test
+      # The OCPI e2e suite, against the mock CPO only. It never runs against a real
+      # CPO here: those credentials stay out of the repository (see the server README).
+      - run: npm run test:ocpi-e2e
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e

@@ -21,6 +21,7 @@ The Next.js server of the eMSP Starter: OCPI 2.2.1 eMSP endpoints, the REST API 
 - **Payments:** saved cards on the network's own Stripe account, a card hold before every app start, capture from the session's CDR, release, refunds, admin review, optional incremental authorization, email receipts and a signed webhook. See [Payments](#payments). **The owner merges changes here.**
 - **Admin sign-in** (`/admin/sign-in`): the same passwordless sign-in for users in the admin role table (`emsp_admins`). `ADMIN_SECRET` still works while it is set.
 - **Admin web**, for admins only (see [Admin web](#admin-web)): CPO peers with their status and the last pull and error of each module; live and recent sessions; payments, refunds and their audit log; CDR reconciliation per peer with a CSV; drivers and tokens, with block and unblock. Every error shows its code (the CPO's OCPI status code when it gave one) and a next step.
+- **OCPI e2e suite** (`npm run test:ocpi-e2e`): the whole path from handshake to refund, run against the mock CPO in CI and against any CPO's sandbox when you configure one. See [End-to-end tests against a CPO](#end-to-end-tests-against-a-cpo).
 
 ## Run locally
 
@@ -420,6 +421,58 @@ The **10-30 rule**, checked by the repository's shared checker, [`tools/check-mi
 
 `tests/migrations.test.ts` applies every migration to an in-memory Postgres ([PGlite](https://pglite.dev)) with Supabase's roles, and checks RLS, table and function grants, `search_path` on `security definer` functions and table behaviour. It runs them twice: on a database like a new Supabase project, and on one with the legacy default grants of older projects. Use `tests/support/pglite.ts` for the tests of new migrations.
 
+## End-to-end tests against a CPO
+
+`tests/e2e/` is one suite that runs this eMSP against one CPO over OCPI 2.2.1, end to end. CI runs it against the [mock CPO](#mock-cpo), so it is never tied to one platform. You can run the same suite against **any** CPO's OCPI 2.2.1 sandbox. Each step uses the server's own code: the OCPI client and endpoints, the driver API the app calls, and the payment flows.
+
+| Step                    | What it checks                                                                                                                                                                                                                                                       |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reachability            | Our versions endpoint answers, without a token, from where the CPO calls it.                                                                                                                                                                                         |
+| Handshake               | We register at the CPO with its versions URL and Token A. It offers 2.2.1 with a CPO role, a locations Sender, a tokens Receiver and a commands Receiver.                                                                                                            |
+| Locations and tariffs   | A full pull (paginated) of both, then the app's search and location detail. With no location given, the suite picks the first `AVAILABLE` EVSE that takes remote starts.                                                                                             |
+| Tokens                  | A driver signs in. Their app token and an RFID card are pushed, and nothing is left owed. The CPO's Tokens Receiver (`GET`) holds both, and the card has `whitelist: NEVER`.                                                                                         |
+| Card                    | A Stripe Customer, with Stripe's test card saved as the default.                                                                                                                                                                                                     |
+| START_SESSION           | `POST /api/v1/charges`. **Accepted:** the hold, the CommandResult and the session linked to the start. **Rejected:** the start ends as "This charger doesn't accept app starts" and the hold is released.                                                            |
+| Session updates         | The session carries the start's `authorization_reference` and the driver's token. It keeps running for `OCPI_E2E_CHARGE_SECONDS` while the CPO pushes (or we pull) its changes.                                                                                      |
+| STOP_SESSION            | `POST /api/v1/charges/{id}/stop`, its CommandResult, and the session completed, with at least one update after the start.                                                                                                                                            |
+| CDR                     | The CDR, pushed or pulled, linked to the start, the session and the driver.                                                                                                                                                                                          |
+| Capture and refund      | The payment is captured from the CDR, never above the hold, and Stripe agrees. A refund of up to 0.50 then goes back to the card. A CDR that costs nothing releases the hold instead.                                                                                |
+| Real-time authorization | The app token gets `ALLOWED` and an RFID card gets `NOT_ALLOWED`. A real CPO asks only when it wants to (at a start, say), so the suite checks our answers about this run's app token and RFID card, and skips the step, saying why, if the CPO asked about neither. |
+| Unregister              | Credentials `DELETE` at the CPO (unless `OCPI_E2E_KEEP_REGISTRATION=1`).                                                                                                                                                                                             |
+
+**Some CPOs disable remote start.** Set `OCPI_E2E_EXPECT_START` to say what the sandbox does:
+
+- `rejected` (the default): START_SESSION must be refused, and the driver API must show the "remote start not available" state. The steps that need a session (session updates, STOP_SESSION, CDR, capture, refund) are then skipped, and each says why. The handshake, the pulls, the token pushes and real-time authorization still run.
+- `accepted`: the full path.
+
+A run that gets the other answer fails, and the message names the setting to change. The mock lane runs both. The eMSP does not send `UNLOCK_CONNECTOR` yet, so that step is listed as skipped.
+
+**Run it against the mock CPO** (offline; CI does this):
+
+```sh
+npm run test:ocpi-e2e
+```
+
+**Run it against a CPO's sandbox.** You need:
+
+1. **The CPO's OCPI 2.2.1 versions URL and a Token A** for your eMSP. These come from the CPO's onboarding, and some sandboxes also need your country code and party ID listed beforehand.
+2. **A public `https://` origin** that reaches this machine. The CPO calls our endpoints (versions, CommandResults, sessions, CDRs, authorization). The suite serves them on `127.0.0.1:OCPI_E2E_LISTEN_PORT` (default 3318), so put a tunnel or reverse proxy in front of that port and set its origin as `OCPI_E2E_PUBLIC_URL`.
+3. **A Stripe test-mode key** (`sk_test_…` or `rk_test_…`). A live key is refused.
+
+Copy [`.env.e2e.example`](.env.e2e.example) to `.env.e2e.local` (git ignores it), fill it in, and run:
+
+```sh
+npm run test:ocpi-e2e   # loads .env.e2e.local; prints the lane, never a value
+```
+
+- The run needs no database. Every store is in memory for the run, sign-in uses the built-in demo sign-in (no email is sent), receipts are off, and the peer's token is encrypted with a new key each run.
+- With `accepted`, a real charger starts and stops: pick the EVSE with `OCPI_E2E_LOCATION_ID`, `OCPI_E2E_EVSE_UID` and `OCPI_E2E_CONNECTOR_ID`.
+- **No charger is left charging.** Before it unregisters, every run checks whether the CPO took a START_SESSION, also one it was expected to refuse, or one whose session never linked in time. It then waits up to `OCPI_E2E_TIMEOUT_SECONDS` for the session link, sends STOP_SESSION, and waits as long again for the result. If it still cannot stop the session, it prints "Stop it on the CPO side" with the start's `authorization_reference`, location and EVSE: stop it there by hand.
+- For CPOs that only offer `GET`, sessions and CDRs are also pulled while the suite waits. Each wait lasts at most `OCPI_E2E_TIMEOUT_SECONDS` (default 300).
+- A CPO on a private network (a lab) also needs `OCPI_ALLOW_PRIVATE_PEERS=1`. It is never honoured in production.
+- **Never in public CI.** The real lane refuses to run when `CI` or `GITHUB_ACTIONS` is set, unless `OCPI_E2E_ALLOW_CI=1`; use that only in a private pipeline that holds the credentials. Never commit a versions URL, a token or a key.
+- Each run registers the eMSP afresh and unregisters at the end. Test tokens, the test Customer and the test payment stay in the CPO's sandbox and in Stripe test mode.
+
 ## Deploy
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter)
@@ -457,7 +510,8 @@ OCPI 2.2.1 as the eMSP role, with any CPO; Supabase (Postgres and Auth); Stripe 
 
 ```sh
 npm run format:check && npm run typecheck && npm run check:migrations && npm test && npm run build
+npm run test:ocpi-e2e                                 # the OCPI e2e suite, against the mock CPO
 npx playwright install chromium && npm run test:e2e   # offline demo run, desktop and mobile
 ```
 
-Tests never need credentials or network access.
+Tests never need credentials or network access. The OCPI e2e suite talks to a real CPO only when you configure one; see [End-to-end tests against a CPO](#end-to-end-tests-against-a-cpo).
