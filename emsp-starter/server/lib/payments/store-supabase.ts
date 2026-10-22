@@ -5,11 +5,13 @@ import {
   supabaseRest,
   type SupabaseTransport,
 } from "@/lib/server/supabase-rest";
+import type { ReconciliationQuery } from "@/lib/sessions/store";
 import {
   REVIEW_REASONS,
   type NewPayment,
   type Payment,
   type PaymentPatch,
+  type PaymentReconciliationRow,
   type PaymentStatus,
   type PaymentStore,
   type Refund,
@@ -45,6 +47,20 @@ type PaymentRow = {
   receipt_sent_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type PaymentReconciliationDbRow = {
+  peer_id: string;
+  day: string;
+  currency: string;
+  cdrs_paid: number;
+  cdrs_unpaid: number;
+  cdrs_unpaid_ids: string[];
+  cdr_amount: number | string;
+  captured_amount: number | string;
+  refunded_amount: number | string;
+  amount_mismatches: number;
+  amount_mismatch_ids: string[];
 };
 
 type RefundRow = {
@@ -312,5 +328,28 @@ export class SupabasePaymentStore implements PaymentStore {
       "resolution=ignore-duplicates,return=representation",
     );
     return rows.length > 0;
+  }
+
+  async reconcileCdrs(
+    q: ReconciliationQuery,
+  ): Promise<PaymentReconciliationRow[]> {
+    const rows = await this.rest<PaymentReconciliationDbRow[]>(
+      "POST",
+      "rpc/emsp_payment_reconciliation",
+      { p_from: q.from, p_to: q.to, p_peer_id: q.peerId ?? null },
+    );
+    return rows.map((r) => ({
+      peerId: r.peer_id,
+      day: r.day.slice(0, 10),
+      currency: r.currency,
+      cdrsPaid: r.cdrs_paid,
+      cdrsUnpaid: r.cdrs_unpaid,
+      cdrsUnpaidIds: r.cdrs_unpaid_ids,
+      cdrAmount: num(r.cdr_amount),
+      capturedAmount: num(r.captured_amount),
+      refundedAmount: num(r.refunded_amount),
+      amountMismatches: r.amount_mismatches,
+      amountMismatchIds: r.amount_mismatch_ids,
+    }));
   }
 }

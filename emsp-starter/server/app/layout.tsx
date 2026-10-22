@@ -44,8 +44,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <nav aria-label="Admin" className="nav">
             <Link href="/">Overview</Link>
             <Link href="/admin/peers">CPO peers</Link>
-            <Link href="/admin/tokens">Driver tokens</Link>
-            <Link href="/admin/payments">Payments</Link>
+            <Link href="/admin/sessions">Sessions</Link>
+            <Link href="/admin/payments">Payments and refunds</Link>
+            <Link href="/admin/reconciliation">Reconciliation</Link>
+            <Link href="/admin/tokens">Drivers and tokens</Link>
             <Link href="/admin/sign-in">Sign in</Link>
           </nav>
         </header>
