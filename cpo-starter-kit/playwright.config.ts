@@ -2,7 +2,8 @@ import { defineConfig, devices } from "@playwright/test";
 
 const PORT = 3307;
 
-// Runs the built app in demo mode: no credentials, no network beyond localhost.
+// Runs the built app in demo mode: no credentials, no network beyond localhost. The
+// optional Cards module (FLEET_MODULE) is on, so its flows are covered too.
 export default defineConfig({
   testDir: "e2e",
   timeout: 60_000,
@@ -17,6 +18,7 @@ export default defineConfig({
     reuseExistingServer: false,
     env: {
       DEMO_MODE: "true",
+      FLEET_MODULE: "1",
       IVORA_API_KEY: "",
       IVORA_TENANT_ID: "",
     },

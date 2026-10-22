@@ -64,6 +64,8 @@ const TABLES = [
   "cpo_transaction_marks",
   "cpo_active_sessions",
   "cpo_active_marks",
+  "cpo_card_sessions",
+  "cpo_card_marks",
 ] as const;
 
 beforeAll(async () => {
@@ -2188,6 +2190,207 @@ describe("tracked sessions", () => {
         await expect(
           pg.query("select public.cpo_forget_removed_stations('{}')"),
         ).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("card sessions", () => {
+  const record = (
+    id: number,
+    key: string,
+    o: {
+      active?: boolean;
+      energy?: number | null;
+      started?: string;
+      connector?: number | null;
+    } = {},
+  ) =>
+    pg.query(
+      "select public.cpo_record_card_session($1, 9101, $2, $3, $4::timestamptz, null, $5, $6)",
+      [
+        id,
+        o.connector === undefined ? 1 : o.connector,
+        key,
+        o.started ?? new Date().toISOString(),
+        o.energy === undefined ? 1000 : o.energy,
+        o.active ?? false,
+      ],
+    );
+  const row = async (id: number) =>
+    (
+      await pg.query<{
+        active: boolean;
+        energy_wh: string | null;
+        token_key: string;
+        connector_number: number | null;
+      }>(
+        "select active, energy_wh, token_key, connector_number from cpo_card_sessions where transaction_id=$1",
+        [id],
+      )
+    ).rows[0];
+  const usage = async (since = "-1 day") =>
+    (
+      await pg.query<{
+        token_key: string;
+        sessions: string;
+        running: string;
+        energy_wh: string;
+      }>(
+        `select * from public.cpo_card_usage(now() + interval '${since}', now() + interval '1 minute') order by token_key`,
+      )
+    ).rows.map((r) => ({
+      key: r.token_key,
+      sessions: Number(r.sessions),
+      running: Number(r.running),
+      energyWh: Number(r.energy_wh),
+    }));
+
+  it("records a session once, keeps the highest energy, and an ended session stays ended", async () => {
+    await as("service_role", null, async () => {
+      await record(7001, "d4e5", { active: true, energy: 3000 });
+      await record(7001, "D4E5", { active: true, energy: 9000 });
+      await record(7001, "D4E5", { active: true, energy: 4000 });
+      expect(await row(7001)).toMatchObject({
+        active: true,
+        token_key: "D4E5",
+      });
+      expect(Number((await row(7001)).energy_wh)).toBe(9000);
+      await record(7001, "D4E5", { active: false, energy: 10_000 });
+      // A late report of it as running changes nothing.
+      await record(7001, "D4E5", { active: true, energy: 11_000 });
+      expect(await row(7001)).toMatchObject({ active: false });
+      expect(Number((await row(7001)).energy_wh)).toBe(10_000);
+    });
+  });
+
+  it("refuses rows it can't key, and stores values it can't hold as unknown", async () => {
+    await as("service_role", null, async () => {
+      for (const [id, key] of [
+        [0, "D4E5"],
+        [7002, ""],
+        [7002, "12345"],
+        // Ivora masks a token of 4 characters or fewer as a bare ****: no key.
+        [7002, "AB"],
+      ] as const)
+        await expect(record(id, key)).rejects.toThrow(/cpo_invalid/);
+      await record(7003, "AB12", { energy: -5, connector: 0 });
+      expect(await row(7003)).toMatchObject({
+        energy_wh: null,
+        connector_number: null,
+        token_key: "AB12",
+      });
+    });
+  });
+
+  it("puts off a running session whose re-read failed, with a growing backoff, until a read works", async () => {
+    await as("service_role", null, async () => {
+      await record(7004, "0004", { active: true });
+      const state = async () =>
+        (
+          await pg.query<{ failures: number; wait: number }>(
+            "select read_failures as failures, round(extract(epoch from checked_at - now()) / 60)::int as wait from cpo_card_sessions where transaction_id = 7004",
+          )
+        ).rows[0];
+      await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 1, wait: 2 });
+      await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 2, wait: 4 });
+      for (let i = 0; i < 12; i++)
+        await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 14, wait: 360 });
+      // A read that works starts again from no failures.
+      await record(7004, "0004", { active: true });
+      expect(await state()).toEqual({ failures: 0, wait: 0 });
+      // An ended session is left as it is.
+      await record(7004, "0004", { active: false });
+      await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 0, wait: 0 });
+    });
+  });
+
+  it("totals sessions and energy per key in the period, without the kit's own checkouts", async () => {
+    await as("service_role", null, async () => {
+      await pg.query("delete from cpo_card_sessions");
+      await record(7101, "0001", { energy: 12_000 });
+      await record(7102, "0001", { energy: 8_000, active: true });
+      await record(7103, "0001", {
+        energy: 50_000,
+        started: new Date(Date.now() - 3 * 86_400_000).toISOString(),
+      });
+      await record(7104, "0002", { energy: 5_000 });
+      await record(7105, "0002", { energy: 7_000 });
+    });
+    // A driver checkout's session ended in the same 4 characters: never a card's.
+    await pg.query(
+      "insert into cpo_checkouts(operator_id, request_id, reference, sticker_code, station_id, connector_id, tariff_id, hold_minor, currency, phase, transaction_id) values ($1, gen_random_uuid(), $2, 'ABCD2345', 9101, 91011, 9401, 2500, 'USD', 'settled', 7105)",
+      [operatorA, `ck_${"e".repeat(32)}`],
+    );
+    await as("service_role", null, async () => {
+      expect(await usage()).toEqual([
+        { key: "0001", sessions: 2, running: 1, energyWh: 20_000 },
+        { key: "0002", sessions: 1, running: 0, energyWh: 5_000 },
+      ]);
+      expect((await usage("-7 days"))[0]).toMatchObject({ sessions: 3 });
+      const list = await pg.query<{ transaction_id: string }>(
+        "select transaction_id from public.cpo_card_session_list('0002', now() - interval '1 day', now() + interval '1 minute', 50)",
+      );
+      expect(list.rows.map((r) => Number(r.transaction_id))).toEqual([7104]);
+      const capped = await pg.query(
+        "select * from public.cpo_card_session_list('0001', now() - interval '7 days', now() + interval '1 minute', 1)",
+      );
+      expect(capped.rows).toHaveLength(1);
+    });
+  });
+
+  it("purges sessions that started over 400 days ago, and forgets one Ivora no longer has", async () => {
+    await as("service_role", null, async () => {
+      await record(7201, "0003", {
+        started: new Date(Date.now() - 401 * 86_400_000).toISOString(),
+      });
+      await record(7202, "0003");
+      expect(await row(7201)).toBeUndefined();
+      await pg.query("select public.cpo_forget_card_session(7202)");
+      expect(await row(7202)).toBeUndefined();
+    });
+  });
+
+  it("moves the card mark only up, and stamps a scan that reached the end", async () => {
+    await as("service_role", null, async () => {
+      const mark = async () =>
+        (
+          await pg.query<{
+            last_transaction_id: string;
+            scanned_at: string | null;
+          }>(
+            "select last_transaction_id, scanned_at from cpo_card_marks where station_id=9107",
+          )
+        ).rows[0];
+      await pg.query("select public.cpo_advance_card_mark(9107, 700)");
+      await pg.query("select public.cpo_advance_card_mark(9107, 300)");
+      expect(Number((await mark()).last_transaction_id)).toBe(700);
+      expect((await mark()).scanned_at).toBeNull();
+      await pg.query("select public.cpo_advance_card_mark(9107, 700, true)");
+      expect((await mark()).scanned_at).not.toBeNull();
+      await expect(
+        pg.query("select public.cpo_advance_card_mark(0, 1)"),
+      ).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
+  it("is not readable or writable from the browser", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        for (const q of [
+          "select * from cpo_card_sessions",
+          "select * from cpo_card_marks",
+          "select public.cpo_record_card_session(1, 1, 1, 'ABCD', now(), null, 1, false)",
+          "select public.cpo_forget_card_session(1)",
+          "select public.cpo_defer_card_session(1)",
+          "select public.cpo_advance_card_mark(9107, 1)",
+          "select * from public.cpo_card_usage(now() - interval '1 day', now())",
+          "select * from public.cpo_card_session_list('ABCD', now() - interval '1 day', now(), 5)",
+        ])
+          await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
   });
 });

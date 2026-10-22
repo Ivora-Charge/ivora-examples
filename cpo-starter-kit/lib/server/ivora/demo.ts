@@ -8,6 +8,14 @@ import {
   memoryDemoOcpi,
   type DemoOcpiStore,
 } from "./demo-ocpi";
+import {
+  demoCards,
+  demoCreateCard,
+  demoImportCards,
+  demoUpdateCard,
+  memoryDemoCards,
+  type DemoCardsStore,
+} from "./demo-cards";
 import { demoHistory, demoStats } from "./demo-history";
 import { demoSimulate } from "./demo-pricing";
 import { IvoraError } from "./errors";
@@ -604,6 +612,8 @@ const op = (
 export interface DemoClientStores {
   /** Roaming (OCPI publishing) settings. */
   ocpi?: DemoOcpiStore;
+  /** RFID cards (the optional Cards module). */
+  cards?: DemoCardsStore;
 }
 
 const hex = (s: string, n: number) =>
@@ -703,7 +713,7 @@ export function createDemoClient(
   fleet: DemoFleetStore = memoryDemoFleet(),
   now: () => number = Date.now,
   tariffs: DemoTariffLookup = async () => null,
-  { ocpi = memoryDemoOcpi() }: DemoClientStores = {},
+  { ocpi = memoryDemoOcpi(), cards = memoryDemoCards() }: DemoClientStores = {},
 ): IvoraClient {
   const update = async <T>(change: (f: DemoFleet) => T): Promise<T> => {
     const f = await fleet.load();
@@ -711,6 +721,14 @@ export function createDemoClient(
     await fleet.save(f);
     return r;
   };
+  // The sample cards and the visitor's, then the kit's own staff and free tokens.
+  const tokens = async (): Promise<TokenRecord[]> => [
+    ...demoCards(await cards.load()),
+    ...((await fleet.load()).tokens ?? []).map((t) => ({
+      ...copy(t),
+      expires_at: null,
+    })),
+  ];
   const locations = async () => [
     ...copy(SAMPLE_LOCATIONS),
     ...(await fleet.load()).locations,
@@ -1087,6 +1105,17 @@ export function createDemoClient(
     },
     // Same reference, same token, like the API's idempotent replays.
     async createToken(input) {
+      if (input.type !== "Central") {
+        const state = await cards.load();
+        const replay = demoCards(state).find(
+          (c) => c.external_reference === input.external_reference,
+        );
+        if (replay) return replay;
+        const kit = ((await fleet.load()).tokens ?? []).map((t) => t.id_token);
+        const created = demoCreateCard(state, input, kit, now());
+        await cards.save(state);
+        return created;
+      }
       return update((f) => {
         const tokens = (f.tokens ??= []);
         const seen = tokens.find(
@@ -1102,6 +1131,26 @@ export function createDemoClient(
         f.tokens = tokens.slice(-2);
         return copy(created);
       });
+    },
+    async listAllTokens() {
+      return { data: await tokens(), truncated: false };
+    },
+    async getToken(tokenId) {
+      const t = (await tokens()).find((x) => x.id === tokenId);
+      if (!t) throw new IvoraError(404, "token_not_found", "Unknown token");
+      return t;
+    },
+    async updateToken(tokenId, input) {
+      const state = await cards.load();
+      const t = demoUpdateCard(state, tokenId, input, now());
+      await cards.save(state);
+      return t;
+    },
+    async importTokens(rows, o) {
+      const state = await cards.load();
+      const r = demoImportCards(state, rows, o.dryRun, now());
+      if (!o.dryRun) await cards.save(state);
+      return r;
     },
     async listFaults(stationId, o = {}) {
       await station(stationId);

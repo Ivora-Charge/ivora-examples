@@ -8,6 +8,16 @@ import { createLiveClient } from "@/lib/server/ivora/live";
 import { isDemo } from "@/lib/server/env";
 import { loadOverview } from "@/lib/server/overview";
 import { getLive } from "@/lib/server/live";
+import {
+  addCard,
+  applyImport,
+  checkImport,
+  getFleet,
+  loadCard,
+  loadCards,
+  refreshCardSessions,
+  updateCard,
+} from "@/lib/server/fleet";
 import { resetDemoLiveForTests } from "@/lib/server/live/demo-cookie";
 import { loadLive, loadStation, sendCommand } from "@/lib/server/live/service";
 import type { Staff } from "@/lib/server/team/types";
@@ -34,6 +44,7 @@ import {
 } from "@/lib/server/onboarding/service";
 
 const VARS = [
+  "FLEET_MODULE",
   "IVORA_API_KEY",
   "IVORA_TENANT_ID",
   "DEMO_MODE",
@@ -381,6 +392,86 @@ describe("demo mode", () => {
     expect(started.ok && started.live.commands[0].observed).toMatch(
       /^Session \d+ started\.$/,
     );
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("runs Cards end to end (list, usage, add, import, block, expiry) without any network call", async () => {
+    process.env.FLEET_MODULE = "1";
+    const d = getFleet();
+    expect(d.ivora.mode).toBe("demo");
+    expect(d.ledger.mode).toBe("demo");
+    const owner = {
+      userId: "demo-owner",
+      email: "demo-owner@example.com",
+      role: "owner" as const,
+      operatorId: "demo-operator",
+      operatorName: "Sample Operator",
+      demo: true,
+    };
+    // The demo ledger is the sample history: nothing to scan.
+    expect(
+      await refreshCardSessions(d, { deadline: Date.now() + 1000 }),
+    ).toMatchObject({ reads: 0 });
+
+    const v = await loadCards(d, owner, { days: "365" });
+    expect(v.demo).toBe(true);
+    expect(v.cards.map((c) => c.masked)).toEqual([
+      "****0001",
+      "****0002",
+      "****0005",
+      "****0003",
+      "****0004",
+    ]);
+    // The sample RFID sessions are the sample cards' (as Reports counts them).
+    const ada = v.cards.find((c) => c.masked === "****0001")!;
+    expect(ada.usage!.sessions).toBeGreaterThan(0);
+    expect(ada.usage!.energyWh).toBeGreaterThan(0);
+    expect(v.cards.find((c) => c.masked === "****0005")!.state).toBe("blocked");
+    const detail = await loadCard(d, owner, ada.id, "365");
+    expect(detail.sessions.length).toBe(ada.usage!.sessions);
+    expect(detail.sessions[0].stationName).toMatch(/^DEMO-/);
+
+    const added = await addCard(d, owner, {
+      value: "DEMO-NEW-0101",
+      kind: "vehicle",
+      name: "Sample Van 9",
+      requestId: "demo-request-000001",
+    });
+    expect(added.card.holder).toEqual({
+      kind: "vehicle",
+      name: "Sample Van 9",
+    });
+    await expect(
+      addCard(d, owner, {
+        value: "demo-new-0101",
+        kind: "driver",
+        name: "Again",
+        requestId: "demo-request-000002",
+      }),
+    ).rejects.toMatchObject({ code: "exists" });
+
+    const csv =
+      "card,holder,name\nDEMO-NEW-0102,driver,Sample Driver Eve\nDEMO-RFID-0002,driver,Sample Driver Ben B";
+    const check = await checkImport(d, owner, csv);
+    expect(check.counts).toMatchObject({ create: 1, update: 1, error: 0 });
+    expect((await loadCards(d, owner)).total).toBe(6);
+    const done = await applyImport(d, owner, csv, "demo-request-000003");
+    expect(done.counts).toMatchObject({ create: 1, update: 1 });
+    expect((await loadCards(d, owner)).total).toBe(7);
+
+    const blocked = await updateCard(d, owner, added.card.id, {
+      intent: "block",
+      revision: added.card.revision,
+      requestId: "demo-request-000004",
+    });
+    expect(blocked.card.state).toBe("blocked");
+    const until = await updateCard(d, owner, added.card.id, {
+      intent: "expiry",
+      revision: blocked.card.revision,
+      requestId: "demo-request-000005",
+      date: "2099-12-31",
+    });
+    expect(until.card.expiresAt).toBe("2100-01-01T00:00:00.000Z");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
