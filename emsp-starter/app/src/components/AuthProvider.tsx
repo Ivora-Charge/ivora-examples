@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import * as api from "../lib/api";
+import { stopPush } from "../lib/push";
 import { keepSessionFresh } from "../lib/session-refresh";
 import { loadSession, saveSession, type Stored } from "../lib/session-store";
 import type { Driver } from "../lib/types";
@@ -18,6 +19,8 @@ type Auth =
   | { state: "signedIn"; driver: Driver };
 
 type AuthApi = Auth & {
+  /** The access token for driver API calls; null when signed out. */
+  token: string | null;
   /** Signs in with the emailed code; throws ApiError on a wrong code or a limit. */
   signIn: (email: string, code: string) => Promise<void>;
   signOut: () => Promise<void>;
@@ -25,6 +28,7 @@ type AuthApi = Auth & {
 
 const AuthContext = createContext<AuthApi>({
   state: "loading",
+  token: null,
   signIn: async () => {},
   signOut: async () => {},
 });
@@ -80,6 +84,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = useCallback(async () => {
     const token = stored?.session.accessToken;
+    // Best effort, while the token still works: this device gets no more notifications.
+    if (token) await stopPush(token).catch(() => {});
     await saveSession(null);
     setStored(null);
     setAuth({ state: "signedOut" });
@@ -87,9 +93,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (token) await api.signOut(token).catch(() => {});
   }, [stored]);
 
+  const token = stored?.session.accessToken ?? null;
   const value = useMemo(
-    () => ({ ...auth, signIn, signOut }),
-    [auth, signIn, signOut],
+    () => ({ ...auth, token, signIn, signOut }),
+    [auth, token, signIn, signOut],
   );
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

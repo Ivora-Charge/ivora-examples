@@ -27,3 +27,27 @@ for (const scheme of ["light", "dark"] as const)
       path: `docs/${phone ? "phone" : "desktop"}-${scheme}.png`,
     });
   });
+
+// The charging screen needs no map: its tiles stay blocked.
+for (const scheme of ["light", "dark"] as const)
+  test(`screenshot: charging, ${scheme}`, async ({ page }, info) => {
+    await page.emulateMedia({ colorScheme: scheme });
+    await page.route(/tiles\.openfreemap\.org/, (r) => r.abort());
+    await page.goto("/");
+    await page.getByTestId("tab-account").click();
+    await page.getByTestId("email-input").fill("driver@example.com");
+    await page.getByTestId("send-code").click();
+    await page.getByTestId("code-input").fill("000000");
+    await page.getByTestId("verify-code").click();
+    await page.getByTestId("tab-charging").click();
+    await page.getByTestId("charging-start").click();
+    await page.getByTestId("charger-code").fill("ZZ*MCK*E11");
+    await page.getByTestId("charger-find").click();
+    await page.getByTestId("confirm-start").click();
+    await expect(page.getByTestId("live-phase")).toHaveText("Charging");
+    await page.waitForTimeout(8000);
+    const phone = info.project.name === "mobile";
+    await page.screenshot({
+      path: `docs/charging-${phone ? "phone" : "desktop"}-${scheme}.png`,
+    });
+  });

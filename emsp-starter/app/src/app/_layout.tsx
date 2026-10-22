@@ -31,6 +31,10 @@ function Shell() {
         >
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="location/[id]" />
+          <Stack.Screen name="start" />
+          <Stack.Screen name="charge/[id]" />
+          <Stack.Screen name="receipt/[id]" />
+          <Stack.Screen name="report" />
         </Stack>
       </View>
     </View>

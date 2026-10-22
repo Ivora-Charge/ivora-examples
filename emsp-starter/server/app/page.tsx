@@ -15,6 +15,7 @@ const ADMIN_PAGES = [
     "sessions vs CDRs vs captured amounts, per peer, with a CSV",
   ],
   ["/admin/tokens", "Drivers and tokens", "block and unblock, RFID cards"],
+  ["/admin/problems", "Reported problems", "what drivers report from the app"],
 ] as const;
 
 export default function Overview() {

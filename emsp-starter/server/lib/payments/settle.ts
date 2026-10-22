@@ -558,7 +558,25 @@ export async function maybeIncrement(
       await audit(deps, "payment.increment", raised, { amount: authorized, n });
     return raised ?? reread(p.id, deps);
   }
+  return declineIncrement(stored, p, deps, commandDeps);
+}
 
+/**
+ * A raise of `p`'s hold was declined (or MAX_INCREMENTS reached): flag the payment,
+ * store why on the session and the payment, emit `hold_increment_declined` and ask the
+ * CPO to stop the session. Only the caller whose compare-and-swap uses the attempt's
+ * number does this, so the session is stopped once. Demo mode also comes here for its
+ * demo card that declines raises (lib/driver-app/demo-charging.ts).
+ */
+export async function declineIncrement(
+  stored: StoredSession,
+  p: Payment,
+  deps: PaymentDeps,
+  commandDeps: () => CommandDeps,
+): Promise<Payment | null> {
+  const s = stored.session;
+  const n = p.increments + 1;
+  const now = nowOf(deps).toISOString();
   // Declined: this attempt's number is used, so one caller alone stops the session.
   const stopped = await deps.payments.transition(
     p.id,

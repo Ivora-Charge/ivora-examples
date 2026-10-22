@@ -1,14 +1,46 @@
+import { useEffect, useState } from "react";
 import { ScrollView, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../../components/AuthProvider";
 import { Button } from "../../components/Controls";
 import { SignInForm } from "../../components/SignInForm";
 import { t } from "../../i18n";
+import {
+  pushState,
+  pushSupported,
+  startPush,
+  type PushState,
+} from "../../lib/push";
 import { fontSize, radius, space, type, useScale, useTheme } from "../../theme";
 
 export default function Account() {
   const { c } = useTheme();
   const { fs } = useScale();
   const auth = useAuth();
+  const [push, setPush] = useState<PushState | null>(null);
+  const signedIn = auth.state === "signedIn";
+
+  useEffect(() => {
+    if (!signedIn) return;
+    let live = true;
+    pushState().then(
+      (s) => live && setPush(s),
+      () => live && setPush("unavailable"),
+    );
+    return () => {
+      live = false;
+    };
+  }, [signedIn]);
+
+  const PUSH_TEXT: Record<PushState, string> = {
+    on: t("account.notificationsOn"),
+    off: t("account.notificationsOff"),
+    denied: t("account.notificationsDenied"),
+    demo: t("account.notificationsDemo"),
+    unavailable: pushSupported
+      ? t("account.notificationsUnavailable")
+      : t("account.notificationsWeb"),
+  };
+
   return (
     <ScrollView
       role="main"
@@ -77,6 +109,42 @@ export default function Account() {
               >
                 {t("account.demo")}
               </Text>
+            )}
+          </View>
+          <View
+            style={[styles.card, { backgroundColor: c.surface }]}
+            testID="notifications"
+          >
+            <Text
+              role="heading"
+              aria-level={2}
+              style={[
+                type.strong,
+                { color: c.text, fontSize: fs(fontSize.md + 1) },
+              ]}
+            >
+              {t("account.notifications")}
+            </Text>
+            {push && (
+              <Text
+                style={[
+                  type.body,
+                  { color: c.muted, fontSize: fs(fontSize.sm + 1) },
+                ]}
+              >
+                {PUSH_TEXT[push]}
+              </Text>
+            )}
+            {push === "off" && auth.token && (
+              <Button
+                label={t("account.notificationsTurnOn")}
+                variant="secondary"
+                onPress={() =>
+                  void startPush(auth.token!, { ask: true }).then(setPush, () =>
+                    setPush("unavailable"),
+                  )
+                }
+              />
             )}
           </View>
           <Button

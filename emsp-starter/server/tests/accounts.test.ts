@@ -19,6 +19,7 @@ import { clearUserCacheForTests } from "@/lib/accounts/api";
 import { DEMO_CODE, DemoAuth, SupabaseAuth } from "@/lib/accounts/auth";
 import {
   DEMO_CARD_ID,
+  DEMO_DECLINE_CARD_ID,
   setAccountStoreForTests,
   setAuthProviderForTests,
 } from "@/lib/accounts/registry";
@@ -402,19 +403,20 @@ describe("passwordless sign-in (demo mode)", () => {
         )
       ).status,
     ).toBe(404);
-    // No session yet: nothing to stop.
-    expect(
-      (
-        await stopPOST(
-          post(
-            `/api/v1/charges/${body.command.id}/stop`,
-            { requestId: "app-req-0002" },
-            { token },
-          ),
-          params(body.command.id),
-        )
-      ).status,
-    ).toBe(409);
+    // Demo mode plays the mock CPO: the session is there at once, and stops.
+    const stopped = await stopPOST(
+      post(
+        `/api/v1/charges/${body.command.id}/stop`,
+        { requestId: "app-req-0002" },
+        { token },
+      ),
+      params(body.command.id),
+    );
+    expect(stopped.status).toBe(201);
+    expect((await stopped.json()).command).toMatchObject({
+      type: "STOP_SESSION",
+      status: "succeeded",
+    });
     const history = await (
       await paymentsGET(req("/api/v1/payments", { token }))
     ).json();
@@ -431,7 +433,11 @@ describe("passwordless sign-in (demo mode)", () => {
     ).json();
     expect(cards).toMatchObject({
       mode: "demo",
-      cards: [{ id: DEMO_CARD_ID, last4: "4242", isDefault: true }],
+      cards: [
+        { id: DEMO_CARD_ID, last4: "4242", isDefault: true },
+        // The demo card that declines a higher hold (lib/driver-app/demo-charging.ts).
+        { id: DEMO_DECLINE_CARD_ID, last4: "0341", isDefault: false },
+      ],
     });
     const setup = await (
       await setupPOST(post("/api/v1/cards/setup", {}, { token }))

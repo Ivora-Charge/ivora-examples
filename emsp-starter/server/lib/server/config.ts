@@ -204,6 +204,14 @@ export const config = {
       : undefined;
   },
   /**
+   * Expo push access token (expo.dev, Access tokens), for push notifications to the
+   * driver app. Secret. Unset: no push is sent.
+   */
+  get expoAccessToken(): string | undefined {
+    const v = env("EXPO_ACCESS_TOKEN");
+    return v && /^[A-Za-z0-9_-]{20,200}$/.test(v) ? v : undefined;
+  },
+  /**
    * Browser origins allowed to call the driver API (the app's web build). Native apps
    * send no Origin and need none. Empty: same origin only.
    */
@@ -314,6 +322,11 @@ export function configErrors(): string[] {
       "RECEIPT_FROM",
       () => config.receiptFrom,
       "must be an email address, optionally with a name",
+    ],
+    [
+      "EXPO_ACCESS_TOKEN",
+      () => config.expoAccessToken,
+      "must be an Expo access token (letters, digits, _ and -)",
     ],
     [
       "APP_ORIGINS",

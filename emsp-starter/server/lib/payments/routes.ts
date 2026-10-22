@@ -8,6 +8,7 @@ import {
   stopSession,
   type CommandDeps,
 } from "@/lib/commands/manage";
+import { stopCodeOf } from "@/lib/driver-app/charges";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { listCards, removeCard, setDefaultCard, setupCard } from "./cards";
@@ -45,6 +46,8 @@ export function paymentView(p: Payment) {
     refundedAmount: p.refundedAmount,
     sessionCost: p.cdrAmount,
     stopReason: p.stopReason,
+    // The app's own words for why we stopped it (hold_increment_declined, other).
+    stopCode: stopCodeOf(p.stopReason),
     underReview: p.review !== null && !p.reviewedAt,
     demo: isDemo(),
     createdAt: p.createdAt,

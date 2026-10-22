@@ -105,6 +105,44 @@ export function createI18n(
     }
   };
 
+  /**
+   * An amount in minor units (cents), as the server's payments give it: 2500 EUR is
+   * €25.00. Formatted only; the app never computes what a driver pays.
+   */
+  const minor = (amount: number, currency: string) =>
+    money(amount * 10 ** (4 - currencyDigits(currency)), currency);
+
+  /** Energy: "12.35 kWh", at most 2 decimals. */
+  const kwh = (n: number) => t("unit.kwh", { n: number(n, 2) });
+
+  /** A duration: "45 min", "1 h 05 min". */
+  const duration = (seconds: number) => {
+    const total = Math.max(0, Math.floor(seconds / 60));
+    const h = Math.floor(total / 60);
+    const m = total % 60;
+    if (!h && !m && seconds > 0) return t("unit.underMinute");
+    return h
+      ? t("unit.hoursMinutes", {
+          h: integer.format(h),
+          m: String(m).padStart(2, "0"),
+        })
+      : t("unit.minutes", { m: integer.format(m) });
+  };
+
+  /** A moment, for example "22 Oct 2026, 09:41", in the device's time zone. */
+  const dateTime = (iso: string) => {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    try {
+      return new Intl.DateTimeFormat(locale, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(d);
+    } catch {
+      return d.toISOString();
+    }
+  };
+
   /** "07:00" (a local wall-clock time from OCPI) in the locale's own style. */
   const clock = (hhmm: string) => {
     const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
@@ -138,7 +176,21 @@ export function createI18n(
     }
   };
 
-  return { locale, t, tn, number, kw, distance, money, clock, weekday };
+  return {
+    locale,
+    t,
+    tn,
+    number,
+    kw,
+    kwh,
+    distance,
+    money,
+    minor,
+    duration,
+    dateTime,
+    clock,
+    weekday,
+  };
 }
 
 export type I18n = ReturnType<typeof createI18n>;
