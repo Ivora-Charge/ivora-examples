@@ -20,7 +20,7 @@ export const metadata = { title: "Live charger" };
 
 /** How a session is named in a confirmation: the driver's session, unmistakably. */
 const sessionLabel = (s: SessionView) =>
-  `${s.staff ? "staff " : ""}session ${s.id}${s.connectorNumber ? ` on connector ${s.connectorNumber}` : ""} (since ${when(s.startedAt)}, ${formatKwh(s.energyKwh)}${s.idToken ? `, token ${s.idToken}` : ""})`;
+  `${s.staff ? "staff " : s.free ? "free " : ""}session ${s.id}${s.connectorNumber ? ` on connector ${s.connectorNumber}` : ""} (since ${when(s.startedAt)}, ${formatKwh(s.energyKwh)}${s.idToken ? `, token ${s.idToken}` : ""})`;
 
 export default async function Page({
   params,
@@ -217,6 +217,7 @@ export default async function Page({
                   {formatKwh(x.energyKwh)}
                   {x.idToken ? ` · token ${x.idToken}` : ""}
                   {x.staff ? " · staff/test session" : ""}
+                  {x.free ? " · free session" : ""}
                 </span>
                 <span className={x.active ? "pill busy" : "pill ok"}>
                   {x.active ? "Charging" : "Ended"}

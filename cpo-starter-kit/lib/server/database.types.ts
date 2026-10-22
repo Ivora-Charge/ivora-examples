@@ -192,6 +192,8 @@ export type Database = {
           id: string;
           operator_id: string;
           request_id: string;
+          reference: string;
+          kind: string;
           sticker_code: string;
           station_id: number;
           connector_id: number;
@@ -203,7 +205,14 @@ export type Database = {
           payment_id: string | null;
           checkout_url: string | null;
           start_requested_at: Timestamp | null;
+          start_operation_id: string | null;
+          transaction_id: number | null;
+          stop_requested_at: Timestamp | null;
+          final_minor: number | null;
+          captured_minor: number | null;
           error: string | null;
+          checked_at: Timestamp | null;
+          settled_at: Timestamp | null;
           created_at: Timestamp;
           updated_at: Timestamp;
         };
@@ -213,6 +222,27 @@ export type Database = {
         Relationships: [];
       };
       cpo_staff_tokens: {
+        Row: {
+          operator_id: string;
+          id_token: string;
+          token_id: number | null;
+          created_at: Timestamp;
+          registered_at: Timestamp | null;
+        };
+        Insert: {
+          operator_id: string;
+          id_token: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Update: {
+          id_token?: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Relationships: [];
+      };
+      cpo_free_tokens: {
         Row: {
           operator_id: string;
           id_token: string;
@@ -558,6 +588,7 @@ export type Database = {
         Args: {
           p_operator_id: string;
           p_request_id: string;
+          p_kind: string;
           p_sticker_code: string;
           p_station_id: number;
           p_connector_id: number;

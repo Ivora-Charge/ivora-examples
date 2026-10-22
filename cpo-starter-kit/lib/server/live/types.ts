@@ -111,6 +111,14 @@ export interface LiveStore {
     t: StaffToken,
     o?: { replace?: boolean },
   ): Promise<StaffToken>;
+  /** The operator's free charging token (driver checkout on free tariffs). */
+  getFreeToken(operatorId: string): Promise<StaffToken | null>;
+  /** Like putStaffToken, for the free charging token. */
+  putFreeToken(
+    operatorId: string,
+    t: StaffToken,
+    o?: { replace?: boolean },
+  ): Promise<StaffToken>;
   /** True for a new event, false for a redelivery. */
   recordEvent(e: StoredEvent): Promise<boolean>;
   markProcessed(eventId: string): Promise<void>;

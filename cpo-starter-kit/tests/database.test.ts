@@ -55,6 +55,7 @@ const TABLES = [
   "cpo_station_pricing",
   "cpo_connector_tariffs",
   "cpo_checkouts",
+  "cpo_free_tokens",
 ] as const;
 
 beforeAll(async () => {
@@ -207,7 +208,7 @@ describe("row level security", () => {
           `select cpo_claim_live_command('${operatorA}','${OWNER_A}','${OWNER_A}',1,'reset',null,null,'soft','{}')`,
           `select cpo_record_live_command('${operatorA}','${OWNER_A}','{}')`,
           "select cpo_record_ivora_event('evt_x','webhook.test',null)",
-          `select cpo_claim_checkout('${operatorA}','${OWNER_A}','ABCD2345',1,11,1,2500,'USD')`,
+          `select cpo_claim_checkout('${operatorA}','${OWNER_A}','paid','ABCD2345',1,11,1,2500,'USD')`,
           `select cpo_record_checkout('${operatorA}','${OWNER_A}','{}')`,
           `select cpo_next_tariff_attempt('${operatorA}','${OWNER_A}','${OWNER_A}',1)`,
         ])
@@ -1338,17 +1339,28 @@ describe("driver checkouts", () => {
       pg.query<T & Record<string, unknown>>(sql, params),
     );
   const REQ = "20000000-0000-4000-8000-000000000001";
+  let r = 100;
+  const nextReq = () =>
+    `20000000-0000-4000-8000-${String(++r).padStart(12, "0")}`;
   const claim = (
     request = REQ,
-    o: { code?: string; connector?: number; operator?: string } = {},
+    o: {
+      code?: string;
+      connector?: number;
+      operator?: string;
+      kind?: string;
+      hold?: number;
+    } = {},
   ) =>
-    call<{ r: { id: string; created: boolean } }>(
-      "select cpo_claim_checkout($1,$2,$3,9101,$4,9401,2500,'USD') as r",
+    call<{ r: { id?: string; created?: boolean; busy?: string } }>(
+      "select cpo_claim_checkout($1,$2,$3,$4,9101,$5,9401,$6,'USD') as r",
       [
         o.operator ?? operatorA,
         request,
+        o.kind ?? "paid",
         o.code ?? "ABCD2345",
         o.connector ?? 91011,
+        o.hold ?? 2500,
       ],
     ).then((x) => x.rows[0].r);
   const record = (id: string, changes: object, operator = operatorA) =>
@@ -1361,39 +1373,73 @@ describe("driver checkouts", () => {
     (
       await pg.query<{
         phase: string;
+        reference: string;
         bill_id: string | null;
         payment_id: string | null;
         checkout_url: string | null;
         start_requested_at: string | null;
+        stop_requested_at: string | null;
+        transaction_id: number | null;
+        final_minor: number | null;
+        captured_minor: number | null;
+        settled_at: string | null;
         error: string | null;
       }>(
-        "select phase, bill_id, payment_id, checkout_url, start_requested_at, error from cpo_checkouts where id=$1",
+        "select phase, reference, bill_id, payment_id, checkout_url, start_requested_at, stop_requested_at, transaction_id, final_minor, captured_minor, settled_at, error from cpo_checkouts where id=$1",
         [id],
       )
     ).rows[0];
   const BILL = `bill_${"a".repeat(32)}`;
+  /** Ends a checkout so the connector is free for the next test. */
+  const close = (id: string) => record(id, { phase: "failed" });
 
-  it("makes one checkout per tap, for the same sticker and price only", async () => {
+  it("makes one checkout per tap, for the same sticker, kind and price only", async () => {
     const first = await claim();
     expect(first.created).toBe(true);
     // A double tap or a retry after an uncertain answer: the same checkout.
     expect(await claim()).toEqual({ id: first.id, created: false });
-    // The same request ID for another connector or sticker is refused.
+    // The same request ID for another connector, sticker, kind or hold is refused.
     await expect(claim(REQ, { connector: 91012 })).rejects.toThrow(
       /cpo_invalid/,
     );
     await expect(claim(REQ, { code: "WXYZ2345" })).rejects.toThrow(
       /cpo_invalid/,
     );
+    await expect(claim(REQ, { hold: 4000 })).rejects.toThrow(/cpo_invalid/);
     // Another operator's request IDs are its own.
-    expect((await claim(REQ, { operator: operatorB })).created).toBe(true);
+    const b = await claim(REQ, { operator: operatorB });
+    expect(b.created).toBe(true);
     await expect(
-      claim("20000000-0000-4000-8000-000000000002", { code: "abcd2345" }),
+      claim(nextReq(), { code: "abcd2345", connector: 91019 }),
     ).rejects.toThrow(/check/);
+    // The return_reference is its own random value.
+    expect((await row(first.id!)).reference).toMatch(/^ck_[0-9a-f]{32}$/);
+    await close(first.id!);
+    await close(b.id!);
   });
 
-  it("never changes a recorded bill or payment, and never reopens a checkout", async () => {
-    const { id } = await claim("20000000-0000-4000-8000-000000000003");
+  it("holds a connector for one waiting or running checkout, before any hold is placed", async () => {
+    const first = await claim(nextReq());
+    expect(first.created).toBe(true);
+    // A second driver at the same connector gets the first one back, nothing inserted.
+    expect(await claim(nextReq())).toEqual({ busy: first.id });
+    expect(await claim(nextReq(), { kind: "free", hold: 0 })).toEqual({
+      busy: first.id,
+    });
+    // Another connector, or another operator's, is free.
+    const other = await claim(nextReq(), { connector: 91012 });
+    expect(other.created).toBe(true);
+    // Open still holds it; settling, releasing or any end frees it.
+    await record(first.id!, { phase: "open", bill_id: BILL, payment_id: "p1" });
+    expect((await claim(nextReq())).busy).toBe(first.id);
+    await record(first.id!, { phase: "settling" });
+    const next = await claim(nextReq());
+    expect(next.created).toBe(true);
+    for (const id of [other.id!, next.id!]) await close(id);
+  });
+
+  it("only moves a checkout forward, and never changes a recorded ID", async () => {
+    const { id } = (await claim(nextReq())) as { id: string };
     expect(await record(id, { bill_id: BILL })).toBe(true);
     await expect(
       record(id, { bill_id: `bill_${"b".repeat(32)}` }),
@@ -1403,30 +1449,93 @@ describe("driver checkouts", () => {
     await expect(record(id, { payment_id: "pay_2" })).rejects.toThrow(
       /cpo_invalid/,
     );
-    await expect(record(id, { phase: "paid" })).rejects.toThrow(/cpo_invalid/);
     await expect(
       record(id, { checkout_url: "http://checkout.example.com/x" }),
     ).rejects.toThrow(/check/);
-    await record(id, {
-      checkout_url: "https://checkout.example.com/x",
-      phase: "checkout",
-    });
-    await record(id, { phase: "failed", start_requested: true });
+    expect(await record(id, { phase: "settled" })).toBe(false);
+    expect(
+      await record(id, {
+        checkout_url: "https://checkout.example.com/x",
+        phase: "open",
+      }),
+    ).toBe(true);
+    expect(await record(id, { phase: "creating" })).toBe(false);
+    expect(
+      await record(id, {
+        phase: "settling",
+        transaction_id: 5,
+        final_minor: 361,
+      }),
+    ).toBe(true);
+    await expect(record(id, { transaction_id: 6 })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    // Settling never goes back to releasing or open.
+    expect(await record(id, { phase: "releasing" })).toBe(false);
+    // A capture above the hold is refused outright.
+    await expect(record(id, { captured_minor: 2600 })).rejects.toThrow(/check/);
+    expect(
+      await record(id, {
+        phase: "settled",
+        captured_minor: 361,
+        stop_requested: true,
+      }),
+    ).toBe(true);
+    expect(await record(id, { phase: "attention" })).toBe(false);
     expect(await row(id)).toMatchObject({
-      phase: "checkout",
+      phase: "settled",
       bill_id: BILL,
       payment_id: "pay_1",
-      checkout_url: "https://checkout.example.com/x",
+      transaction_id: 5,
+      final_minor: 361,
+      captured_minor: 361,
     });
-    expect((await row(id)).start_requested_at).not.toBeNull();
+    expect((await row(id)).settled_at).not.toBeNull();
+    expect((await row(id)).stop_requested_at).not.toBeNull();
     // Another operator can't touch it.
     expect(await record(id, { error: "x" }, operatorB)).toBe(false);
+  });
+
+  it("takes a connector back only if no one else holds it (a late start after releasing)", async () => {
+    const a = (await claim(nextReq())) as { id: string };
+    await record(a.id, { phase: "open", bill_id: BILL, payment_id: "pa" });
+    await record(a.id, { phase: "releasing" });
+    const b = (await claim(nextReq())) as { id: string };
+    expect(b.id).toBeTruthy();
+    // The released one's start ran after all, but b holds the connector now.
+    expect(await record(a.id, { phase: "open" })).toBe(true);
+    expect((await row(a.id)).phase).toBe("releasing");
+    await close(b.id);
+    await record(a.id, { phase: "open" });
+    expect((await row(a.id)).phase).toBe("open");
+    await record(a.id, { phase: "released" });
+  });
+
+  it("keeps free sessions free: no hold, and paid ones within Ivora Checkout's limits", async () => {
+    // (Each on its own connector: the claim checks the connector first.)
+    await expect(
+      claim(nextReq(), { kind: "free", hold: 2500, connector: 91021 }),
+    ).rejects.toThrow(/check/);
+    await expect(
+      claim(nextReq(), { hold: 20, connector: 91022 }),
+    ).rejects.toThrow(/check/);
+    await expect(
+      claim(nextReq(), { kind: "gift", hold: 0, connector: 91023 }),
+    ).rejects.toThrow(/check/);
+    const free = (await claim(nextReq(), { kind: "free", hold: 0 })) as {
+      id: string;
+    };
+    expect(free.id).toBeTruthy();
+    await close(free.id);
   });
 
   it("is not readable or writable from the browser", async () => {
     for (const role of ["anon", "authenticated"] as const)
       await as(role, OWNER_A, async () => {
         await expect(pg.query("select * from cpo_checkouts")).rejects.toThrow(
+          /permission denied/,
+        );
+        await expect(pg.query("select * from cpo_free_tokens")).rejects.toThrow(
           /permission denied/,
         );
         await expect(

@@ -5,8 +5,13 @@ import { demoPaymentAccount } from "../ivora/demo";
 import type { IvoraClient } from "../ivora/types";
 import {
   CheckoutError,
+  HOLDS_CONNECTOR,
+  NEXT_PHASES,
+  UNSETTLED,
+  type CheckoutPhase,
   type CheckoutRecord,
   type CheckoutStore,
+  type ClaimResult,
 } from "./types";
 
 // Demo checkout: each visitor's checkouts in their own cookie, and a switch that
@@ -25,33 +30,54 @@ export type DemoCheckoutSimulation = (typeof DEMO_CHECKOUT_SIMULATIONS)[number];
 
 const MAX_RECORDS = 5;
 
+const PHASES = [
+  "creating",
+  "open",
+  "settling",
+  "releasing",
+  "settled",
+  "released",
+  "failed",
+  "attention",
+] as const;
+
 const recordSchema = z.object({
   id: z.uuid(),
+  operatorId: z.string().max(64),
   requestId: z.uuid(),
+  reference: z.string().regex(/^ck_[0-9a-f]{32}$/),
+  kind: z.enum(["paid", "free"]),
   stickerCode: z.string().max(16),
   stationId: z.number().int(),
   connectorId: z.number().int(),
   tariffId: z.number().int(),
   holdMinor: z.number().int(),
   currency: z.string().max(3),
-  phase: z.enum(["creating", "checkout", "failed"]),
+  phase: z.enum(PHASES),
   billId: z.string().max(40).nullable(),
   paymentId: z.string().max(100).nullable(),
   checkoutUrl: z.string().max(200).nullable(),
   startRequestedAt: z.string().max(40).nullable(),
+  startOperationId: z.string().max(100).nullable(),
+  transactionId: z.number().int().nullable(),
+  stopRequestedAt: z.string().max(40).nullable(),
+  finalMinor: z.number().int().nullable(),
+  capturedMinor: z.number().int().nullable(),
   error: z.string().max(600).nullable(),
+  checkedAt: z.string().max(40).nullable(),
+  settledAt: z.string().max(40).nullable(),
   createdAt: z.string().max(40),
 });
 
 const stateSchema = z.object({
-  v: z.literal(1),
+  v: z.literal(2),
   simulate: z.enum(DEMO_CHECKOUT_SIMULATIONS),
   records: z.array(recordSchema).max(MAX_RECORDS),
 });
 export type DemoCheckoutState = z.infer<typeof stateSchema>;
 
 export const emptyDemoCheckout = (): DemoCheckoutState => ({
-  v: 1,
+  v: 2,
   simulate: "none",
   records: [],
 });
@@ -94,9 +120,17 @@ export function memoryDemoCheckout(
   return store;
 }
 
+const TERMINAL: ReadonlySet<CheckoutPhase> = new Set([
+  "settled",
+  "released",
+  "failed",
+  "attention",
+]);
+
 /** Same rules as the Supabase store, in the visitor's cookie. */
 export function createDemoCheckoutStore(
   cookie: DemoCheckoutCookie,
+  now: () => number = Date.now,
 ): CheckoutStore {
   const update = async <T>(change: (s: DemoCheckoutState) => T) => {
     const s = await cookie.load();
@@ -104,17 +138,27 @@ export function createDemoCheckoutStore(
     await cookie.save(s);
     return r;
   };
+  const view = (r: DemoCheckoutState["records"][number]): CheckoutRecord => ({
+    ...r,
+  });
+  const mine = (r: { operatorId: string }, operatorId: string) =>
+    r.operatorId === operatorId;
+  const iso = () => new Date(now()).toISOString();
   return {
     mode: "demo",
     claim(n) {
-      return update((s) => {
-        const seen = s.records.find((r) => r.requestId === n.requestId);
+      return update((s): ClaimResult => {
+        const seen = s.records.find(
+          (r) => mine(r, n.operatorId) && r.requestId === n.requestId,
+        );
         if (seen) {
           if (
+            seen.kind !== n.kind ||
             seen.stickerCode !== n.stickerCode ||
             seen.stationId !== n.stationId ||
             seen.connectorId !== n.connectorId ||
-            seen.tariffId !== n.tariffId
+            seen.tariffId !== n.tariffId ||
+            seen.holdMinor !== n.holdMinor
           )
             throw new CheckoutError(
               "invalid",
@@ -122,10 +166,21 @@ export function createDemoCheckoutStore(
             );
           return { id: seen.id, created: false };
         }
+        const busy = s.records.find(
+          (r) =>
+            mine(r, n.operatorId) &&
+            r.stationId === n.stationId &&
+            r.connectorId === n.connectorId &&
+            HOLDS_CONNECTOR.has(r.phase),
+        );
+        if (busy) return { busy: busy.id };
         const id = randomUUID();
         s.records.push({
           id,
+          operatorId: n.operatorId,
           requestId: n.requestId,
+          reference: `ck_${randomUUID().replaceAll("-", "")}`,
+          kind: n.kind,
           stickerCode: n.stickerCode,
           stationId: n.stationId,
           connectorId: n.connectorId,
@@ -137,32 +192,96 @@ export function createDemoCheckoutStore(
           paymentId: null,
           checkoutUrl: null,
           startRequestedAt: null,
+          startOperationId: null,
+          transactionId: null,
+          stopRequestedAt: null,
+          finalMinor: null,
+          capturedMinor: null,
           error: null,
-          createdAt: new Date().toISOString(),
+          checkedAt: null,
+          settledAt: null,
+          createdAt: iso(),
         });
-        s.records = s.records.slice(-MAX_RECORDS);
+        // The oldest settled ones go first when the cookie is full.
+        while (s.records.length > MAX_RECORDS) {
+          const i = s.records.findIndex((r) => TERMINAL.has(r.phase));
+          s.records.splice(Math.max(0, i), 1);
+        }
         return { id, created: true };
       });
     },
     async get(operatorId, id) {
-      const r = (await cookie.load()).records.find((x) => x.id === id);
-      return r ? ({ ...r, operatorId } satisfies CheckoutRecord) : null;
+      const r = (await cookie.load()).records.find(
+        (x) => mine(x, operatorId) && x.id === id,
+      );
+      return r ? view(r) : null;
     },
-    async record(_operatorId, id, c) {
-      await update((s) => {
-        const r = s.records.find((x) => x.id === id);
-        if (!r) return;
+    async getByRequest(operatorId, requestId) {
+      const r = (await cookie.load()).records.find(
+        (x) => mine(x, operatorId) && x.requestId === requestId.toLowerCase(),
+      );
+      return r ? view(r) : null;
+    },
+    async getByReference(reference) {
+      const r = (await cookie.load()).records.find(
+        (x) => x.reference === reference,
+      );
+      return r ? view(r) : null;
+    },
+    async listUnsettled(o) {
+      return (await cookie.load()).records
+        .filter(
+          (r) =>
+            UNSETTLED.has(r.phase) &&
+            (!o.stationId || r.stationId === o.stationId),
+        )
+        .sort((a, b) => (a.checkedAt ?? "").localeCompare(b.checkedAt ?? ""))
+        .slice(0, o.limit)
+        .map(view);
+    },
+    async record(operatorId, id, c) {
+      return update((s) => {
+        const r = s.records.find((x) => mine(x, operatorId) && x.id === id);
+        if (!r) return false;
+        const differs = <T>(a: T | null, b: T | undefined) =>
+          b !== undefined && a !== null && a !== b;
         if (
-          (c.billId && r.billId && c.billId !== r.billId) ||
-          (c.paymentId && r.paymentId && c.paymentId !== r.paymentId)
+          differs(r.billId, c.billId) ||
+          differs(r.paymentId, c.paymentId) ||
+          differs(r.startOperationId, c.startOperationId) ||
+          differs(r.transactionId, c.transactionId)
         )
           throw new CheckoutError("invalid", "Reload the page and try again.");
+        let phase = c.phase;
+        if (phase && phase !== r.phase) {
+          if (!NEXT_PHASES[r.phase].includes(phase)) return false;
+          if (
+            phase === "open" &&
+            s.records.some(
+              (x) =>
+                x.id !== r.id &&
+                mine(x, operatorId) &&
+                x.stationId === r.stationId &&
+                x.connectorId === r.connectorId &&
+                HOLDS_CONNECTOR.has(x.phase),
+            )
+          )
+            phase = undefined;
+        }
         r.billId ??= c.billId ?? null;
         r.paymentId ??= c.paymentId ?? null;
+        r.startOperationId ??= c.startOperationId ?? null;
+        r.transactionId ??= c.transactionId ?? null;
+        r.finalMinor ??= c.finalMinor ?? null;
+        r.capturedMinor ??= c.capturedMinor ?? null;
         if (c.checkoutUrl !== undefined) r.checkoutUrl = c.checkoutUrl;
-        if (r.phase === "creating" && c.phase) r.phase = c.phase;
+        if (phase) r.phase = phase;
         if (c.error !== undefined) r.error = c.error?.slice(0, 600) ?? null;
-        if (c.startRequested) r.startRequestedAt ??= new Date().toISOString();
+        if (c.startRequested) r.startRequestedAt ??= iso();
+        if (c.stopRequested) r.stopRequestedAt ??= iso();
+        if (c.checked) r.checkedAt = iso();
+        if (TERMINAL.has(r.phase)) r.settledAt ??= iso();
+        return true;
       });
     },
   };

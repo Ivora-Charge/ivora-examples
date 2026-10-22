@@ -10,6 +10,7 @@ import {
   type CommandPhase,
   type LiveCommand,
   type LiveStore,
+  type StaffToken,
 } from "./types";
 
 type DbError = { message: string; code?: string } | null;
@@ -83,16 +84,42 @@ export function createSupabaseLiveStore(): LiveStore {
     );
     return data ? toCommand(data as Row) : null;
   };
-  const getStaffToken = async (operatorId: string) => {
-    const { data } = check(
-      await svc()
-        .from("cpo_staff_tokens")
-        .select("id_token, token_id")
-        .eq("operator_id", operatorId)
-        .maybeSingle(),
-    );
-    return data ? { idToken: data.id_token, tokenId: data.token_id } : null;
-  };
+  const getToken =
+    (table: "cpo_staff_tokens" | "cpo_free_tokens") =>
+    async (operatorId: string) => {
+      const { data } = check(
+        await svc()
+          .from(table)
+          .select("id_token, token_id")
+          .eq("operator_id", operatorId)
+          .maybeSingle(),
+      );
+      return data ? { idToken: data.id_token, tokenId: data.token_id } : null;
+    };
+  const putToken =
+    (table: "cpo_staff_tokens" | "cpo_free_tokens") =>
+    async (
+      operatorId: string,
+      t: StaffToken,
+      o: { replace?: boolean } = {},
+    ) => {
+      check(
+        await svc()
+          .from(table)
+          .upsert(
+            {
+              operator_id: operatorId,
+              id_token: t.idToken,
+              token_id: t.tokenId,
+              registered_at: t.tokenId ? new Date().toISOString() : null,
+            },
+            { onConflict: "operator_id", ignoreDuplicates: !o.replace },
+          ),
+      );
+      const stored = await getToken(table)(operatorId);
+      if (!stored) throw new Error("Token not stored");
+      return stored;
+    };
   return {
     mode: "live",
     async listCommands(operatorId, o = {}) {
@@ -155,25 +182,10 @@ export function createSupabaseLiveStore(): LiveStore {
           }
         : null;
     },
-    getStaffToken,
-    async putStaffToken(operatorId, t, o = {}) {
-      check(
-        await svc()
-          .from("cpo_staff_tokens")
-          .upsert(
-            {
-              operator_id: operatorId,
-              id_token: t.idToken,
-              token_id: t.tokenId,
-              registered_at: t.tokenId ? new Date().toISOString() : null,
-            },
-            { onConflict: "operator_id", ignoreDuplicates: !o.replace },
-          ),
-      );
-      const stored = await getStaffToken(operatorId);
-      if (!stored) throw new Error("Staff token not stored");
-      return stored;
-    },
+    getStaffToken: getToken("cpo_staff_tokens"),
+    putStaffToken: putToken("cpo_staff_tokens"),
+    getFreeToken: getToken("cpo_free_tokens"),
+    putFreeToken: putToken("cpo_free_tokens"),
     async recordEvent(e) {
       const { data } = check(
         await svc().rpc("cpo_record_ivora_event", {

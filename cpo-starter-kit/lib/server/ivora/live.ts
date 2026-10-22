@@ -143,6 +143,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   const roots = {
     tenant: `${origin}/v1/tenants/${o.tenantId}/`,
     stripe: `${origin}/payment/stripe/v1/tenants/${o.tenantId}/`,
+    billing: `${origin}/v1/billing/`,
   };
 
   async function once<T>(
@@ -452,6 +453,45 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         key,
         root: "stripe",
       });
+    },
+    getTariff(tariffId) {
+      return request<Tariff>("GET", `tariffs/${tariffId}`);
+    },
+    finalizeBill(billId, transactionId, key) {
+      return request<Bill>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/finalize`,
+        { body: { transaction_id: transactionId }, key },
+      );
+    },
+    getPayment(paymentId) {
+      return request<Payment>(
+        "GET",
+        `payments/${encodeURIComponent(paymentId)}`,
+        { root: "stripe" },
+      );
+    },
+    // No amount: Ivora captures exactly the final bill.
+    capturePayment(paymentId, key) {
+      return request<Payment>(
+        "POST",
+        `payments/${encodeURIComponent(paymentId)}/capture`,
+        { key, root: "stripe" },
+      );
+    },
+    releasePayment(paymentId, key) {
+      return request<Payment>(
+        "POST",
+        `payments/${encodeURIComponent(paymentId)}/release`,
+        { key, root: "stripe" },
+      );
+    },
+    async recordHoldStop(billId, key) {
+      await request<unknown>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/alerts`,
+        { body: { kind: "hold_stop" }, key, root: "billing" },
+      );
     },
   };
 }

@@ -1,6 +1,5 @@
 import "server-only";
-import { cookies } from "next/headers";
-import { config } from "../env";
+import { demoRenderCookie } from "../demo-render-cookie";
 import {
   decodeDemoCheckout,
   emptyDemoCheckout,
@@ -14,33 +13,21 @@ const COOKIE = "cpo_demo_checkout";
 /** Outside a request (tests, scripts) there is no cookie: keep checkouts in memory. */
 const outsideRequest = memoryDemoCheckout();
 
-async function jar() {
-  try {
-    return await cookies();
-  } catch {
-    return null;
-  }
-}
-
-/** The visitor's own demo checkouts, in an HTTP-only cookie. Saved only by server actions. */
+/**
+ * The visitor's own demo checkouts, in an HTTP-only cookie. Server actions save it; a
+ * page that settles a session keeps the change for its own render (see
+ * demoRenderCookie).
+ */
 export function cookieDemoCheckout(): DemoCheckoutCookie {
   return {
     async load() {
-      const c = await jar();
-      return c
-        ? decodeDemoCheckout(c.get(COOKIE)?.value)
-        : outsideRequest.load();
+      const c = await demoRenderCookie(COOKIE);
+      return c ? decodeDemoCheckout(c.read()) : outsideRequest.load();
     },
     async save(state) {
-      const c = await jar();
+      const c = await demoRenderCookie(COOKIE);
       if (!c) return outsideRequest.save(state);
-      c.set(COOKIE, encodeDemoCheckout(state), {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: config.appUrl.startsWith("https:"),
-        path: "/",
-        maxAge: 7 * 24 * 3600,
-      });
+      c.write(encodeDemoCheckout(state));
     },
   };
 }

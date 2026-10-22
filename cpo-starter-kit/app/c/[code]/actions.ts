@@ -8,7 +8,9 @@ import {
   CheckoutError,
   getCheckout,
   payAndCharge,
+  startFreeSession,
   startPaidSession,
+  stopDriverSession,
 } from "@/lib/server/checkout";
 import {
   DEMO_CHECKOUT_SIMULATIONS,
@@ -16,15 +18,16 @@ import {
 } from "@/lib/server/checkout/demo";
 import { cookieDemoCheckout } from "@/lib/server/checkout/demo-cookie";
 import {
-  driverCheckoutIds,
-  rememberDriverCheckout,
+  driverRequestIds,
+  rememberDriverRequest,
 } from "@/lib/server/checkout/driver-cookie";
 import { config, isDemo } from "@/lib/server/env";
 import { sourceOf } from "@/lib/server/rate-limit";
 
 // Public actions: drivers are not staff. They carry only the sticker's code and a
 // random request ID; everything else (charger, connector, price, private, Stripe) is
-// looked up and checked on the server.
+// looked up and checked on the server. Starting or stopping a session needs the
+// request ID to be in this browser's own cookie.
 
 const str = (form: FormData, name: string) => {
   const v = form.get(name);
@@ -46,10 +49,12 @@ function failure(e: unknown): ActionState {
   });
   return {
     error:
-      "Something went wrong on our side, and nothing was charged. Try again in a minute.",
+      "Something went wrong on our side. Try again in a minute: a retry never charges or starts anything twice.",
     errorDetail: { kind: "server_error" },
   };
 }
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** "Pay and charge": sends the driver to Ivora Checkout (in demo mode, the demo's own). */
 export async function payAction(
@@ -57,24 +62,46 @@ export async function payAction(
   form: FormData,
 ): Promise<ActionState> {
   const code = str(form, "code");
+  const requestId = str(form, "requestId");
   let url: string;
   try {
+    // Remembered first: an uncertain answer leaves a session this browser follows.
+    if (UUID.test(requestId)) await rememberDriverRequest(requestId);
     const r = await payAndCharge(
       getCheckout(),
-      {
-        code,
-        requestId: str(form, "requestId"),
-        source: sourceOf(await headers()),
-      },
+      { code, requestId, source: sourceOf(await headers()) },
       config.operatorName,
     );
-    await rememberDriverCheckout(r.id);
     url = r.url;
   } catch (e) {
     revalidatePath(`/c/${code}`);
     return failure(e);
   }
   redirect(url);
+}
+
+/** "Start free session": the operator's free charging token, only on a free tariff. */
+export async function freeAction(
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const code = str(form, "code");
+  const requestId = str(form, "requestId");
+  try {
+    if (UUID.test(requestId)) await rememberDriverRequest(requestId);
+    await startFreeSession(
+      getCheckout(),
+      { code, requestId, source: sourceOf(await headers()) },
+      config.operatorName,
+    );
+  } catch (e) {
+    revalidatePath(`/c/${code}`);
+    return failure(e);
+  }
+  revalidatePath(`/c/${code}`);
+  return {
+    ok: `Start sent to the charger.${isDemo() ? " Demo: simulated, nothing was sent to a charger." : ""} Plug in your car: “Your session” above shows when charging begins.`,
+  };
 }
 
 /** Starts a paid session whose automatic start was refused (this browser's own). */
@@ -86,15 +113,42 @@ export async function startAction(
   try {
     await startPaidSession(
       getCheckout(),
-      { code, id: str(form, "id"), ids: await driverCheckoutIds() },
+      {
+        code,
+        requestId: str(form, "requestId"),
+        requestIds: await driverRequestIds(),
+      },
       config.operatorName,
     );
   } catch (e) {
+    revalidatePath(`/c/${code}`);
     return failure(e);
   }
   revalidatePath(`/c/${code}`);
   return {
     ok: `Start sent to the charger.${isDemo() ? " Demo: simulated, nothing was sent to a charger." : ""} The status above shows when charging begins.`,
+  };
+}
+
+/** Stops this browser's own running session. */
+export async function stopAction(
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const code = str(form, "code");
+  try {
+    await stopDriverSession(getCheckout(), {
+      code,
+      requestId: str(form, "requestId"),
+      requestIds: await driverRequestIds(),
+    });
+  } catch (e) {
+    revalidatePath(`/c/${code}`);
+    return failure(e);
+  }
+  revalidatePath(`/c/${code}`);
+  return {
+    ok: `Stop sent to the charger.${isDemo() ? " Demo: simulated, nothing was sent to a charger." : ""}`,
   };
 }
 

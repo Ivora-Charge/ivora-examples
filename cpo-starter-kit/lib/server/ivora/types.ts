@@ -120,6 +120,7 @@ export interface Operation {
   id: string;
   status: "dispatching" | "succeeded" | "rejected" | "unknown";
   result: Record<string, unknown> | null;
+  created_at?: string;
 }
 
 /**
@@ -403,6 +404,8 @@ export interface BillUsage {
   estimated_minor: number | null;
   started_at: string | null;
   ended_at: string | null;
+  /** Latest reported charging power, W; 0 once ended; null when not reported. */
+  power_w?: number | null;
 }
 
 /**
@@ -454,6 +457,9 @@ export interface Payment {
     | "refunded"
     | (string & {});
   hold_minor: number;
+  /** Integer minor units captured (0 until captured, and for a waived bill). */
+  captured_minor?: number;
+  refunded_minor?: number;
   currency?: string;
   payment_mode: "test" | "live" | (string & {});
   authorized_at?: string | null;
@@ -575,4 +581,30 @@ export interface IvoraClient {
   startBill(billId: string, key: string): Promise<Operation>;
   /** One payment per bill: a retry with the same key answers with the same payment. */
   createPayment(input: PaymentInput, key: string): Promise<Payment>;
+  /** One tariff by its Ivora ID (its authorization_minor is the card hold). */
+  getTariff(tariffId: number): Promise<Tariff>;
+  /**
+   * Finalizes a bill from its completed transaction (`POST /bills/{id}/finalize`).
+   * Ivora reads the usage itself and computes the immutable total_minor.
+   */
+  finalizeBill(
+    billId: string,
+    transactionId: number,
+    key: string,
+  ): Promise<Bill>;
+  /** One payment, synchronized with Stripe. */
+  getPayment(paymentId: string): Promise<Payment>;
+  /**
+   * Captures exactly the final bill (no amount is sent). Zero bills, and bills below
+   * Stripe's 50-cent minimum, release the hold instead (status canceled, captured 0).
+   * A bill above its hold answers 409 bill_exceeds_hold.
+   */
+  capturePayment(paymentId: string, key: string): Promise<Payment>;
+  /**
+   * Releases an unused authorization. Stops no charger; after a dispatched start it
+   * answers start_reserved until the start can no longer produce a session.
+   */
+  releasePayment(paymentId: string, key: string): Promise<Payment>;
+  /** Records that the kit stopped charging near the hold (once per bill). */
+  recordHoldStop(billId: string, key: string): Promise<void>;
 }

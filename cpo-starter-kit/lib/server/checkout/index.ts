@@ -2,6 +2,7 @@ import "server-only";
 import { getChargers } from "../chargers";
 import { config, isDemo } from "../env";
 import { getIvora } from "../ivora";
+import { getLive } from "../live";
 import { getPricing } from "../pricing";
 import { createSupabaseLimiter } from "../team/supabase";
 import { createDemoCheckoutStore, withDemoSimulation } from "./demo";
@@ -22,7 +23,7 @@ const shared = (): Shared => (g.__cpoCheckout ??= { cache: new Map() });
 /**
  * The one place that picks the checkout store. In demo mode it is the visitor's cookie
  * and the demo Ivora client (with the visitor's simulation applied), so no bill,
- * payment or charger command reaches Ivora, Stripe or Supabase.
+ * payment, capture, release or charger command reaches Ivora, Stripe or Supabase.
  */
 export function getCheckout(): CheckoutDeps {
   const s = shared();
@@ -36,6 +37,7 @@ export function getCheckout(): CheckoutDeps {
       ),
       chargers: getChargers().store,
       pricing: getPricing().store,
+      tokens: getLive().store,
       // Demo checkouts send nothing anywhere, and all visitors of a public demo share
       // one sample operator and its connectors: they are not limited.
       limiter: { take: async () => true },
@@ -49,6 +51,7 @@ export function getCheckout(): CheckoutDeps {
     ivora: getIvora(),
     chargers: getChargers().store,
     pricing: getPricing().store,
+    tokens: getLive().store,
     limiter: createSupabaseLimiter(),
     secret: config.supabaseServiceRoleKey,
     cache: s.cache,

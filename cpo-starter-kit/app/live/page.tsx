@@ -147,6 +147,7 @@ export default async function Page() {
                   {formatKwh(x.energyKwh)}
                   {x.idToken ? ` · token ${x.idToken}` : ""}
                   {x.staff ? " · staff/test session" : ""}
+                  {x.free ? " · free session" : ""}
                 </span>
               </li>
             ))}

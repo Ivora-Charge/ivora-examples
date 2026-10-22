@@ -257,6 +257,8 @@ export const DEMO_RESET_MS = 4_000;
 export const DEMO_PLUG_IN_MS = 3_000;
 /** Bills the visitor's cookie keeps (the newest ones). */
 const MAX_BILLS = 3;
+/** The demo tariffs' card hold: $25.00, as the kit's paid tariffs set it. */
+export const DEMO_HOLD_MINOR = 2500;
 
 const fleetSchema = z.object({
   v: z.literal(1),
@@ -357,8 +359,16 @@ const fleetSchema = z.object({
             key: z.string().max(128),
             return_reference: z.string().max(128),
             authorized_at: z.number().nullable(),
+            /** Released (canceled) or captured, and when; null while open. */
+            ended: z.enum(["released", "captured"]).nullable().optional(),
+            captured_minor: z.number().int().nullable().optional(),
           })
           .nullable(),
+        /** The finalized bill, once final. */
+        final: z
+          .object({ total_minor: z.number().int(), at: z.number() })
+          .nullable()
+          .optional(),
         /** When the start was dispatched; the session's transaction ID then. */
         start_at: z.number().nullable(),
         transaction_id: z.number().int().nullable(),
@@ -634,7 +644,8 @@ export async function authorizeDemoPayment(
   const b = (f.bills ?? []).find((x) => x.payment?.id === paymentId);
   if (!b?.payment) return null;
   const t = now();
-  if (b.payment.authorized_at === null) {
+  // A released payment (the payment window passed) can't be paid any more.
+  if (b.payment.authorized_at === null && !b.payment.ended) {
     b.payment.authorized_at = t;
     const s = await client.getStation(b.station_id).catch(() => null);
     const txs = await client.listTransactions({ station_id: b.station_id });
@@ -661,19 +672,8 @@ export async function demoPayment(fleet: DemoFleetStore, paymentId: string) {
     currency: b.currency,
     returnReference: b.payment.return_reference,
     authorized: b.payment.authorized_at !== null,
+    released: b.payment.ended === "released",
   };
-}
-
-/** The demo bill a driver-return page resumes, by its return_reference. */
-export async function findDemoBill(
-  fleet: DemoFleetStore,
-  returnReference: string,
-): Promise<string | null> {
-  return (
-    (await fleet.load()).bills?.find(
-      (b) => b.payment?.return_reference === returnReference,
-    )?.id ?? null
-  );
 }
 
 /**
@@ -737,15 +737,18 @@ export function createDemoClient(
         ? undefined
         : ownTransactions(f, t).find((x) => x.id === b.transaction_id);
     const usage = tx ? demoTransaction(tx, t) : null;
-    const progress: BillProgress = !b.payment?.authorized_at
-      ? "awaiting_payment"
-      : b.start_at === null
-        ? "authorized"
-        : !usage
-          ? "waiting_for_vehicle"
-          : usage.active
-            ? "charging"
-            : "ended";
+    const progress: BillProgress =
+      b.final || (usage && !usage.active)
+        ? "ended"
+        : b.payment?.ended === "released" && !usage
+          ? "canceled"
+          : !b.payment?.authorized_at
+            ? "awaiting_payment"
+            : b.start_at === null
+              ? "authorized"
+              : !usage
+                ? "waiting_for_vehicle"
+                : "charging";
     let estimated: number | null = null;
     if (usage?.started_at) {
       const def = await tariffs(b.tariff_id);
@@ -767,25 +770,62 @@ export function createDemoClient(
       tariff_id: b.tariff_id,
       hold_minor: b.hold_minor,
       currency: b.currency,
-      status: "open",
-      total_minor: null,
+      status: b.final ? "final" : "open",
+      total_minor: b.final?.total_minor ?? null,
       transaction_id: usage?.id ?? null,
       created_at: ISO(b.created_at),
-      finalized_at: null,
+      finalized_at: b.final ? ISO(b.final.at) : null,
       usage: usage && {
         transaction_id: usage.id,
         active: usage.active === true,
         energy_wh: usage.energy_wh ?? 0,
-        estimated_minor: estimated,
+        estimated_minor: b.final?.total_minor ?? estimated,
         started_at: usage.started_at,
         ended_at: usage.ended_at,
       },
       start_operation:
         b.start_at === null
           ? null
-          : op(`${b.id}-start`, { charger_status: "Accepted" }),
+          : {
+              ...op(`${b.id}-start`, { charger_status: "Accepted" }),
+              created_at: ISO(b.start_at),
+            },
       progress,
     };
+  };
+  const paymentView = (b: DemoBill): Payment => {
+    const p = b.payment!;
+    return {
+      id: p.id,
+      bill_id: b.id,
+      status:
+        p.ended === "released"
+          ? "canceled"
+          : p.ended === "captured"
+            ? "captured"
+            : p.authorized_at === null
+              ? "pending"
+              : "authorized",
+      hold_minor: b.hold_minor,
+      captured_minor: p.captured_minor ?? 0,
+      currency: b.currency,
+      payment_mode: "test",
+      authorized_at: p.authorized_at === null ? null : ISO(p.authorized_at),
+      next_action:
+        p.authorized_at === null && !p.ended
+          ? {
+              type: "redirect_to_url",
+              redirect_to_url: { url: demoCheckoutPath(p.id) },
+            }
+          : null,
+    };
+  };
+  const byPayment = async (paymentId: string) => {
+    const f = await fleet.load();
+    const b = f.bills?.find((x) => x.payment?.id === paymentId);
+    if (!b?.payment)
+      throw new IvoraError(404, "payment_not_found", "Unknown demo payment");
+    return { f, b };
   };
   const bill = async (billId: string) => {
     const f = await fleet.load();
@@ -1192,8 +1232,7 @@ export function createDemoClient(
           connector_id: c.id,
           connector_number: c.number ?? 1,
           tariff_id: input.tariff_id,
-          // The sample tariffs' hold: $25.00, as the kit's paid tariffs set it.
-          hold_minor: 2500,
+          hold_minor: DEMO_HOLD_MINOR,
           currency: def.currency,
           created_at: now(),
           payment: null,
@@ -1218,6 +1257,12 @@ export function createDemoClient(
           409,
           "payment_not_authorized",
           "The bill's payment is not authorized",
+        );
+      if (b.payment.ended)
+        throw new IvoraError(
+          409,
+          "payment_not_authorized",
+          "The bill's payment was released",
         );
       if (b.start_at === null) {
         const refusal = startRefusal(
@@ -1246,24 +1291,102 @@ export function createDemoClient(
           return_reference: input.return_reference,
           authorized_at: null,
         };
-        return { ...b.payment, hold_minor: b.hold_minor, currency: b.currency };
+        return b;
       });
+      return paymentView(p);
+    },
+    async getTariff(tariffId) {
+      const def = await tariffs(tariffId);
+      if (!def)
+        throw new IvoraError(404, "tariff_not_found", "Unknown demo tariff");
+      const free = def.elements.every((e) =>
+        e.price_components.every((c) => Number(c.price) === 0),
+      );
       return {
-        id: p.id,
-        bill_id: input.bill_id,
-        status: p.authorized_at === null ? "pending" : "authorized",
-        hold_minor: p.hold_minor,
-        currency: p.currency,
-        payment_mode: "test",
-        authorized_at: p.authorized_at === null ? null : ISO(p.authorized_at),
-        next_action:
-          p.authorized_at === null
-            ? {
-                type: "redirect_to_url",
-                redirect_to_url: { url: demoCheckoutPath(p.id) },
-              }
-            : null,
-      } satisfies Payment;
+        id: tariffId,
+        currency: def.currency,
+        rate_minor_per_kwh: 0,
+        authorization_minor: free ? 0 : DEMO_HOLD_MINOR,
+        archived: false,
+        is_complex: true,
+      };
+    },
+    // Like the API: usage from the (simulated) charger, never from the caller.
+    async finalizeBill(billId, transactionId) {
+      const { f, b } = await bill(billId);
+      if (!b.final) {
+        const view = await billView(b, f);
+        if (view.usage?.transaction_id !== transactionId)
+          throw new IvoraError(
+            409,
+            "transaction_mismatch",
+            "Not this bill's transaction",
+          );
+        if (view.usage.active)
+          throw new IvoraError(
+            409,
+            "transaction_active",
+            "The transaction has not ended",
+          );
+        const total = view.usage.estimated_minor ?? 0;
+        await update((g) => {
+          const own = g.bills?.find((x) => x.id === billId);
+          if (own && !own.final) own.final = { total_minor: total, at: now() };
+        });
+      }
+      const after = await bill(billId);
+      return billView(after.b, after.f);
+    },
+    async getPayment(paymentId) {
+      return paymentView((await byPayment(paymentId)).b);
+    },
+    // Exactly the final bill; under 50 cents (or zero) the hold is released instead.
+    async capturePayment(paymentId) {
+      const { b } = await byPayment(paymentId);
+      if (!b.final)
+        throw new IvoraError(409, "bill_not_final", "The bill is not final");
+      if (b.final.total_minor > b.hold_minor)
+        throw new IvoraError(
+          409,
+          "bill_exceeds_hold",
+          "The final bill is above the hold",
+        );
+      const g = await update((x) => {
+        const own = x.bills!.find((y) => y.id === b.id)!;
+        const p = own.payment!;
+        if (!p.ended) {
+          const total = own.final!.total_minor;
+          p.ended = total < 50 ? "released" : "captured";
+          p.captured_minor = total < 50 ? 0 : total;
+        }
+        return own;
+      });
+      return paymentView(g);
+    },
+    async releasePayment(paymentId) {
+      const { f, b } = await byPayment(paymentId);
+      if (b.payment!.ended === "captured")
+        throw new IvoraError(
+          409,
+          "payment_captured",
+          "The payment was captured",
+        );
+      if ((await billView(b, f)).usage)
+        throw new IvoraError(
+          409,
+          "start_reserved",
+          "A session matched this bill",
+        );
+      const g = await update((x) => {
+        const own = x.bills!.find((y) => y.id === b.id)!;
+        own.payment!.ended ??= "released";
+        own.payment!.captured_minor ??= 0;
+        return own;
+      });
+      return paymentView(g);
+    },
+    async recordHoldStop(billId) {
+      await bill(billId);
     },
   };
 }

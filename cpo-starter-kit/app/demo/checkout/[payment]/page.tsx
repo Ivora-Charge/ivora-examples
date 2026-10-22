@@ -21,7 +21,7 @@ export default async function Page({
   const { payment } = await params;
   const p = await demoPayment(cookieDemoFleet(), payment);
   if (!p) notFound();
-  const rec = await getCheckout().store.get("demo", p.returnReference);
+  const rec = await getCheckout().store.getByReference(p.returnReference);
   const hold = formatMinor(p.holdMinor, p.currency);
   return (
     <section className="card stack" aria-labelledby="pay-heading">
@@ -38,12 +38,14 @@ export default async function Page({
         <label htmlFor="demo-card">Card number</label>
         <input id="demo-card" value="Demo card, nothing is charged" readOnly />
       </div>
-      {p.authorized ? (
+      {p.released && !p.authorized ? (
+        <p className="error" role="alert">
+          This payment page has expired. Nothing was charged.
+        </p>
+      ) : p.authorized ? (
         <p className="success" role="status">
           Already paid.{" "}
-          <a href={`/demo/charging/${encodeURIComponent(p.returnReference)}`}>
-            Follow your session
-          </a>
+          {rec && <a href={`/c/${rec.stickerCode}`}>Follow your session</a>}
         </p>
       ) : (
         <form action={demoPayAction}>

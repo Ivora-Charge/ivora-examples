@@ -64,6 +64,15 @@ vi.mock("@/lib/server/live", async (orig) => ({
   ...(await orig<typeof import("@/lib/server/live")>()),
   getLive: () => live.deps,
 }));
+// Driver checkouts at the event's station are settled after the response.
+const settled = vi.hoisted(() => ({ calls: [] as unknown[] }));
+vi.mock("@/lib/server/checkout", () => ({
+  getCheckout: () => ({ fake: "checkout deps" }),
+  settleOpenCheckouts: async (_d: unknown, o: unknown) => {
+    settled.calls.push(o);
+    return 0;
+  },
+}));
 vi.mock("next/server", async (orig) => ({
   ...(await orig<typeof import("next/server")>()),
   after: (job: () => Promise<void>) => later.jobs.push(job),
@@ -106,6 +115,7 @@ describe("webhook route", () => {
       ivora: { mode: "live" } as LiveDeps["ivora"],
     };
     later.jobs = [];
+    settled.calls = [];
     ({ POST } = await import("@/app/api/webhooks/ivora/route"));
   });
   afterEach(() => {
@@ -138,6 +148,8 @@ describe("webhook route", () => {
     expect(later.jobs).toHaveLength(1);
     await later.jobs[0]();
     expect(processed).toEqual(["evt_10"]);
+    // A charger event is a cue for that station's driver checkouts.
+    expect(settled.calls).toEqual([{ stationId: 70 }]);
     expect(live.deps.store.recordEvent).toHaveBeenCalledWith({
       id: "evt_10",
       type: "connector.status_changed",

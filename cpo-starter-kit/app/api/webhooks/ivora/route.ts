@@ -1,4 +1,5 @@
 import { after } from "next/server";
+import { getCheckout, settleOpenCheckouts } from "@/lib/server/checkout";
 import { config, isDemo } from "@/lib/server/env";
 import { eventStation, getLive, handleEvent } from "@/lib/server/live";
 import {
@@ -17,7 +18,8 @@ const reply = (status: number, error?: string) =>
  * Verifies Ivora-Signature over the raw body before parsing, checks the tenant,
  * deduplicates by event ID, acknowledges at once and does the work after the response
  * (Ivora allows 15 seconds per attempt). The event is only a cue: the work re-reads
- * state from the API, and open Live pages re-read it too.
+ * state from the API (commands, and the station's driver checkouts), and open Live
+ * pages re-read it too.
  */
 export async function POST(req: Request) {
   if (isDemo()) return reply(404, "Demo mode does not accept webhooks");
@@ -58,6 +60,11 @@ export async function POST(req: Request) {
   after(async () => {
     try {
       await handleEvent(d, evt);
+      // A charger event is also a cue for that station's driver checkouts: a session
+      // that ended is settled, one near its card hold is stopped (re-read from the API).
+      const station = eventStation(evt);
+      if (station)
+        await settleOpenCheckouts(getCheckout(), { stationId: station });
     } catch (e) {
       // The next page load or check re-reads the API anyway.
       console.error("cpo-starter-kit: webhook processing failed:", {

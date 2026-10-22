@@ -8,10 +8,10 @@ import {
 } from "@/lib/server/checkout";
 import { DEMO_CHECKOUT_SIMULATIONS } from "@/lib/server/checkout/demo";
 import { cookieDemoCheckout } from "@/lib/server/checkout/demo-cookie";
-import { driverCheckoutIds } from "@/lib/server/checkout/driver-cookie";
+import { driverRequestIds } from "@/lib/server/checkout/driver-cookie";
 import { config, isDemo } from "@/lib/server/env";
 import { demoSimulateAction } from "./actions";
-import { PayForm, StartForm } from "./forms";
+import { FreeForm, PayForm, StartForm, StopForm } from "./forms";
 import { AutoRefresh } from "./refresh";
 
 export const metadata = { title: "Charge here" };
@@ -39,19 +39,13 @@ function StatusPill({ c }: { c: NonNullable<ChargePage["connector"]> }) {
   return <span className={`pill ${tone}`}>{label}</span>;
 }
 
-const IN_PROGRESS = new Set([
-  "awaiting_payment",
-  "starting",
-  "waiting_for_vehicle",
-  "charging",
-]);
-
 /**
  * Where a sticker's QR code lands, on your own domain. Public: drivers are not staff.
  * Shows the charger, the connector's status and price (with Ivora's quote of an example
- * session), and "Pay and charge", which hands the driver to Ivora Checkout. After
- * paying, the driver continues on Ivora's driver page (live session and receipt); a
- * driver who comes back here sees their own session.
+ * session), and "Pay and charge", which hands the driver to Ivora Checkout, or "Start
+ * free session" on a free tariff. After paying, Stripe returns the driver to Ivora's
+ * page, which can't show the kit's sessions yet; a driver who comes back here sees
+ * their own session, can start or stop it, and sees what was charged.
  */
 export default async function Page({
   params,
@@ -61,13 +55,12 @@ export default async function Page({
   const { code } = await params;
   const demo = isDemo();
   const d = getCheckout();
-  const page = await loadChargePage(d, code, config.operatorName);
-  const sessions =
-    page.state === "open"
-      ? await driverSessions(d, page.code, await driverCheckoutIds())
-      : [];
+  const ids = await driverRequestIds();
+  // Sessions first: reading them settles them, which may free the connector.
+  const sessions = await driverSessions(d, code, ids);
+  const page = await loadChargePage(d, code, config.operatorName, ids);
   const simulate = demo ? (await cookieDemoCheckout().load()).simulate : null;
-  const live = sessions.some((s) => s.progress && IN_PROGRESS.has(s.progress));
+  const live = sessions.some((s) => s.live);
 
   if (page.state !== "open")
     return (
@@ -112,27 +105,58 @@ export default async function Page({
         {page.connector && <StatusPill c={page.connector} />}
       </header>
 
-      {sessions.length > 0 && (
+      {page.state === "open" && sessions.length > 0 && (
         <section className="card" aria-labelledby="sessions-heading">
           <h2 id="sessions-heading">Your session</h2>
           <ul className="rows">
             {sessions.map((s) => (
-              <li key={s.id}>
+              <li key={s.requestId}>
                 <p>
                   <strong>{s.label}</strong>
                   {s.energyKwh && <> · {s.energyKwh} kWh</>}
                   {s.estimate && <> · {s.estimate} so far</>}
                 </p>
                 <p className="muted">{s.detail}</p>
-                {s.canStart && <StartForm code={page.code} id={s.id} />}
+                {s.note && (
+                  <p className="notice" role="note">
+                    {s.note}
+                  </p>
+                )}
+                {s.receipt && (
+                  <dl className="facts" aria-label="Receipt">
+                    <div>
+                      <dt>Charged</dt>
+                      <dd data-testid="receipt-charged">{s.receipt.charged}</dd>
+                    </div>
+                    <div>
+                      <dt>Hold released</dt>
+                      <dd>
+                        {s.receipt.released} of {s.receipt.hold}
+                      </dd>
+                    </div>
+                  </dl>
+                )}
+                {s.receipt && demo && (
+                  <p className="muted">
+                    Demo receipt: no card was charged and no money moved.
+                  </p>
+                )}
+                {s.canStart && (
+                  <StartForm code={page.code} requestId={s.requestId} />
+                )}
+                {s.canStop && (
+                  <StopForm code={page.code} requestId={s.requestId} />
+                )}
               </li>
             ))}
           </ul>
-          <p className="muted">
-            Your live session and receipt are on the payment page you were sent
-            to after paying (run by Ivora, our payment partner). Keep that page
-            open to follow your session.
-          </p>
+          {sessions.some((s) => s.kind === "paid") && (
+            <p className="muted">
+              Follow your session here: scan the sticker again, or keep this
+              page open. The payment page you return to after paying (run by
+              Ivora, our payment partner) can&apos;t show this session yet.
+            </p>
+          )}
         </section>
       )}
 
@@ -176,11 +200,17 @@ export default async function Page({
       )}
 
       <section className="card stack" aria-labelledby="pay-heading">
-        <h2 id="pay-heading">Pay and charge</h2>
+        <h2 id="pay-heading">
+          {page.kind === "free" ? "Start a free session" : "Pay and charge"}
+        </h2>
         {page.closed && (
           <p
-            className={page.closed.code === "private" ? "notice" : "error"}
-            role={page.closed.code === "private" ? "note" : "alert"}
+            className={
+              page.closed.code === "private" || page.mine ? "notice" : "error"
+            }
+            role={
+              page.closed.code === "private" || page.mine ? "note" : "alert"
+            }
           >
             {page.closed.message}
           </p>
@@ -190,12 +220,30 @@ export default async function Page({
             {page.readError}
           </p>
         )}
-        {page.hold && (
+        {page.kind === "free" && (
+          <>
+            <p>Charging here is free: no payment or card is needed.</p>
+            <FreeForm
+              code={page.code}
+              requestId={randomUUID()}
+              closed={Boolean(page.closed)}
+            />
+          </>
+        )}
+        {page.kind === "paid" && (
           <>
             <p>
-              Your card is authorized for a <strong>{page.hold}</strong> hold.
+              {page.hold ? (
+                <>
+                  Your card is authorized for a <strong>{page.hold}</strong>{" "}
+                  hold.
+                </>
+              ) : (
+                "Your card is authorized for a hold before charging."
+              )}{" "}
               You pay for your session at the price above, and the rest of the
-              hold is released.
+              hold is released. Charging stops by itself before the hold is used
+              up.
             </p>
             <PayForm
               code={page.code}
@@ -207,7 +255,7 @@ export default async function Page({
             <p className="muted">
               {demo
                 ? "Demo: a simulated checkout stands in for Stripe. No card is needed and nothing is charged."
-                : `You pay ${page.operatorName} by card, Apple Pay or Google Pay through Stripe, on a secure page run by Ivora, our payment partner. After paying you stay on Ivora's page, which shows your live session and your receipt.`}
+                : `You pay ${page.operatorName} by card, Apple Pay or Google Pay through Stripe, on a secure page run by Ivora, our payment partner. Then come back to this page to follow your session.`}
             </p>
           </>
         )}
