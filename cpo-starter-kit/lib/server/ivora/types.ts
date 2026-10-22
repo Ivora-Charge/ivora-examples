@@ -120,6 +120,7 @@ export interface Operation {
   id: string;
   status: "dispatching" | "succeeded" | "rejected" | "unknown";
   result: Record<string, unknown> | null;
+  created_at?: string;
 }
 
 /**
@@ -171,6 +172,16 @@ export interface Transaction {
   ended_at: string | null;
   energy_wh?: number | null;
 }
+
+/**
+ * One item of `GET /transactions`. The list runs oldest first (page on with `after`,
+ * a transaction ID) and its items carry no ID token or connector: read
+ * `GET /transactions/{id}` for those.
+ */
+export type TransactionListItem = Pick<Transaction, "id"> &
+  Partial<
+    Pick<Transaction, "station_id" | "active" | "started_at" | "ended_at">
+  >;
 
 /** `PUT /v1/tenants/{id}/branding`: what drivers see on Ivora's payment pages. */
 export interface BrandingInput {
@@ -372,6 +383,100 @@ export interface Quote {
   idle_free_seconds?: number;
 }
 
+// ---- Bills and Ivora Checkout (managed Stripe payments) ----
+
+/** `POST /bills`: snapshots the tariff before charging. Usage comes from the charger. */
+export interface BillInput {
+  station_id: number;
+  /** Connector resource ID, never the OCPP connector number. */
+  connector_id: number;
+  tariff_id: number;
+}
+
+/** The driver-facing step of a managed bill (single bill reads only). */
+export type BillProgress =
+  | "awaiting_payment"
+  | "authorized"
+  | "starting"
+  | "waiting_for_vehicle"
+  | "charging"
+  | "ended"
+  | "start_failed"
+  | "canceled";
+
+/** The matched transaction once a start was dispatched; a final snapshot once final. */
+export interface BillUsage {
+  transaction_id: number | null;
+  active: boolean;
+  /** Integer Wh for arithmetic. */
+  energy_wh: number | null;
+  /** Integer minor units; equals total_minor on a final bill. */
+  estimated_minor: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  /** Latest reported charging power, W; 0 once ended; null when not reported. */
+  power_w?: number | null;
+}
+
+/**
+ * A bill. Its `charging_token` is deliberately not listed: the kit never reads, stores
+ * or shows it.
+ */
+export interface Bill {
+  id: string;
+  station_id: number;
+  connector_id: number;
+  tariff_id: number;
+  hold_minor: number;
+  currency: string;
+  status: "open" | "final";
+  total_minor: number | null;
+  transaction_id: number | null;
+  created_at: string;
+  finalized_at: string | null;
+  usage?: BillUsage | null;
+  start_operation?: Operation | null;
+  /** Null for externally settled bills and in lists. */
+  progress?: BillProgress | null;
+}
+
+/**
+ * `POST /payment/stripe/…/payments`: a hosted authorization for a bill. With
+ * return_surface driver, Stripe Checkout returns the driver to Ivora's driver page for
+ * the bill's station and connector (URLs chosen by the API), which resumes the session
+ * named by return_reference.
+ */
+export interface PaymentInput {
+  bill_id: string;
+  return_surface: "driver";
+  /** ^[A-Za-z0-9_-]{1,128}$: our own session record, never a URL. */
+  return_reference: string;
+}
+
+export interface Payment {
+  id: string;
+  bill_id: string;
+  status:
+    | "preparing"
+    | "pending"
+    | "authorized"
+    | "captured"
+    | "canceled"
+    | "refund_pending"
+    | "refund_failed"
+    | "refunded"
+    | (string & {});
+  hold_minor: number;
+  /** Integer minor units captured (0 until captured, and for a waived bill). */
+  captured_minor?: number;
+  refunded_minor?: number;
+  currency?: string;
+  payment_mode: "test" | "live" | (string & {});
+  authorized_at?: string | null;
+  /** The hosted checkout the driver completes (see checkoutUrl in lib/server/checkout). */
+  next_action: Record<string, unknown> | null;
+}
+
 export interface ListOptions {
   /** 1 to 100 (the API's maximum). */
   limit?: number;
@@ -426,6 +531,15 @@ export interface IvoraClient {
     limit?: number;
     station_id?: number;
   }): Promise<Transaction[]>;
+  /**
+   * One page of `GET /transactions`, oldest first: transactions with an ID above
+   * `after` (lib/server/live/transactions.ts follows it from a stored high-water mark).
+   */
+  listTransactionsAfter(o: {
+    station_id: number;
+    after: number;
+    limit?: number;
+  }): Promise<Page<TransactionListItem>>;
   getTransaction(transactionId: number): Promise<Transaction>;
   /** The token with this external_reference, if any (`GET /tokens`). */
   findToken(externalReference: string): Promise<TokenRecord | null>;
@@ -466,4 +580,50 @@ export interface IvoraClient {
     tariff: TariffDefinitionInput,
     session: SessionProfile,
   ): Promise<Quote>;
+  /**
+   * Prices a session under a stored tariff (`POST /tariffs/{id}/quote`), with the
+   * function bills finalize with. Read-only: stores nothing, contacts no charger.
+   */
+  quoteTariff(tariffId: number, session: SessionProfile): Promise<Quote>;
+  /** Snapshots the tariff in a new bill. Bills have no external_reference: keep the key. */
+  createBill(input: BillInput, key: string): Promise<Bill>;
+  /**
+   * One bill with its usage, start operation and progress. For a driver-return payment
+   * this read also asks Stripe and, once authorized, starts the charger once (the key
+   * holds billing:write and stations:control).
+   */
+  getBill(billId: string): Promise<Bill>;
+  /**
+   * Starts an authorized bill whose automatic start was refused (`progress`
+   * authorized). Answers with the bill's one start operation, whatever the key.
+   */
+  startBill(billId: string, key: string): Promise<Operation>;
+  /** One payment per bill: a retry with the same key answers with the same payment. */
+  createPayment(input: PaymentInput, key: string): Promise<Payment>;
+  /** One tariff by its Ivora ID (its authorization_minor is the card hold). */
+  getTariff(tariffId: number): Promise<Tariff>;
+  /**
+   * Finalizes a bill from its completed transaction (`POST /bills/{id}/finalize`).
+   * Ivora reads the usage itself and computes the immutable total_minor.
+   */
+  finalizeBill(
+    billId: string,
+    transactionId: number,
+    key: string,
+  ): Promise<Bill>;
+  /** One payment, synchronized with Stripe. */
+  getPayment(paymentId: string): Promise<Payment>;
+  /**
+   * Captures exactly the final bill (no amount is sent). Zero bills, and bills below
+   * Stripe's 50-cent minimum, release the hold instead (status canceled, captured 0).
+   * A bill above its hold answers 409 bill_exceeds_hold.
+   */
+  capturePayment(paymentId: string, key: string): Promise<Payment>;
+  /**
+   * Releases an unused authorization. Stops no charger; after a dispatched start it
+   * answers start_reserved until the start can no longer produce a session.
+   */
+  releasePayment(paymentId: string, key: string): Promise<Payment>;
+  /** Records that the kit stopped charging near the hold (once per bill). */
+  recordHoldStop(billId: string, key: string): Promise<void>;
 }

@@ -1189,3 +1189,53 @@ textarea:focus-visible {
     transition: none !important;
   }
 }
+
+/* Driver checkout (/c/<code>): one column with large tap targets, after
+   forecourt-checkout's driver page. */
+.charge-board {
+  margin: 0 0 var(--space-4);
+}
+.charge-board p {
+  margin: 0;
+}
+.charge-board h1 {
+  margin: var(--space-1) 0 var(--space-2);
+}
+.charge-board h1 .muted {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+.charge-board .pill {
+  margin-left: 0;
+}
+.price-table {
+  width: 100%;
+  margin-bottom: var(--space-2);
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+.price-table caption {
+  padding-bottom: var(--space-2);
+  text-align: left;
+  color: var(--color-text-muted);
+}
+.price-table td {
+  padding: var(--space-2);
+  border-top: var(--border-width) solid var(--color-border);
+}
+.price-table .num {
+  text-align: right;
+  white-space: nowrap;
+}
+.price-table .total td {
+  font-weight: var(--font-weight-bold);
+}
+.button.block {
+  width: 100%;
+}
+.stack > * + * {
+  margin-top: var(--space-3);
+}
+.driver-error p {
+  margin: var(--space-1) 0 0;
+}

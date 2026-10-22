@@ -74,6 +74,8 @@ const stateSchema = z.object({
               attempt: z.number().int().min(1).default(1),
               definition: definitionSchema.nullable(),
               createdAt: z.string().max(40),
+              /** Missing in older demo cookies: the version's creation time. */
+              attemptedAt: z.string().max(40).optional(),
               archivedAt: z.string().max(40).nullable(),
             }),
           )
@@ -266,7 +268,13 @@ export function createDemoPricingStore(
     async load(): Promise<PricingState> {
       const s = await cookie.load();
       return {
-        tariffs: s.tariffs.map(({ lastVersion: _l, ...t }) => t),
+        tariffs: s.tariffs.map(({ lastVersion: _l, ...t }) => ({
+          ...t,
+          versions: t.versions.map((v) => ({
+            ...v,
+            attemptedAt: v.attemptedAt ?? v.createdAt,
+          })),
+        })),
         stations: s.stations,
       };
     },
@@ -290,6 +298,7 @@ export function createDemoPricingStore(
               attempt: 1,
               definition,
               createdAt: now(),
+              attemptedAt: now(),
               archivedAt: null,
             },
           ],
@@ -313,6 +322,7 @@ export function createDemoPricingStore(
           attempt: 1,
           definition,
           createdAt: now(),
+          attemptedAt: now(),
           archivedAt: null,
         });
         return version;
@@ -333,6 +343,7 @@ export function createDemoPricingStore(
           (x) => x.version === version && x.ivoraTariffId === null,
         );
         if (!v) throw notFound();
+        v.attemptedAt = now();
         return ++v.attempt;
       });
     },

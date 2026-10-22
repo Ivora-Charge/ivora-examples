@@ -54,6 +54,9 @@ const TABLES = [
   "cpo_tariff_versions",
   "cpo_station_pricing",
   "cpo_connector_tariffs",
+  "cpo_checkouts",
+  "cpo_free_tokens",
+  "cpo_transaction_marks",
 ] as const;
 
 beforeAll(async () => {
@@ -206,6 +209,9 @@ describe("row level security", () => {
           `select cpo_claim_live_command('${operatorA}','${OWNER_A}','${OWNER_A}',1,'reset',null,null,'soft','{}')`,
           `select cpo_record_live_command('${operatorA}','${OWNER_A}','{}')`,
           "select cpo_record_ivora_event('evt_x','webhook.test',null)",
+          `select cpo_claim_checkout('${operatorA}','${OWNER_A}','paid','ABCD2345',1,11,1,2500,'USD')`,
+          `select cpo_record_checkout('${operatorA}','${OWNER_A}','{}')`,
+          `select cpo_next_tariff_attempt('${operatorA}','${OWNER_A}','${OWNER_A}',1)`,
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -1158,6 +1164,28 @@ describe("pricing", () => {
     ).rejects.toThrow(/cpo_tariff_changed/);
   });
 
+  it("records when each create attempt started", async () => {
+    const id = await create(OWNER_A);
+    const at = async () =>
+      (
+        await pg.query<{ t: Date }>(
+          "select attempted_at as t from cpo_tariff_versions where tariff_id=$1 and version=1",
+          [id],
+        )
+      ).rows[0].t.getTime();
+    await pg.query(
+      "update cpo_tariff_versions set attempted_at = now() - interval '1 hour' where tariff_id=$1",
+      [id],
+    );
+    const before = await at();
+    await call("select cpo_next_tariff_attempt($1,$2,$3,1)", [
+      operatorA,
+      OWNER_A,
+      id,
+    ]);
+    expect((await at()) - before).toBeGreaterThan(59 * 60_000);
+  });
+
   it("never reuses a version number, and counts create attempts", async () => {
     const id = await create(OWNER_A);
     await record(id, 1, 660);
@@ -1302,6 +1330,317 @@ describe("pricing", () => {
             OWNER_A,
           ]),
         ).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("driver checkouts", () => {
+  const call = <T = unknown>(sql: string, params: unknown[]) =>
+    as("service_role", null, () =>
+      pg.query<T & Record<string, unknown>>(sql, params),
+    );
+  const REQ = "20000000-0000-4000-8000-000000000001";
+  let r = 100;
+  const nextReq = () =>
+    `20000000-0000-4000-8000-${String(++r).padStart(12, "0")}`;
+  const claim = (
+    request = REQ,
+    o: {
+      code?: string;
+      connector?: number;
+      operator?: string;
+      kind?: string;
+      hold?: number;
+    } = {},
+  ) =>
+    call<{ r: { id?: string; created?: boolean; busy?: string } }>(
+      "select cpo_claim_checkout($1,$2,$3,$4,9101,$5,9401,$6,'USD') as r",
+      [
+        o.operator ?? operatorA,
+        request,
+        o.kind ?? "paid",
+        o.code ?? "ABCD2345",
+        o.connector ?? 91011,
+        o.hold ?? 2500,
+      ],
+    ).then((x) => x.rows[0].r);
+  const record = (id: string, changes: object, operator = operatorA) =>
+    call<{ ok: boolean }>("select cpo_record_checkout($1,$2,$3::jsonb) as ok", [
+      operator,
+      id,
+      JSON.stringify(changes),
+    ]).then((x) => x.rows[0].ok);
+  const row = async (id: string) =>
+    (
+      await pg.query<{
+        phase: string;
+        reference: string;
+        bill_id: string | null;
+        payment_id: string | null;
+        checkout_url: string | null;
+        start_requested_at: string | null;
+        stop_requested_at: string | null;
+        transaction_id: number | null;
+        final_minor: number | null;
+        captured_minor: number | null;
+        settled_at: string | null;
+        error: string | null;
+      }>(
+        "select phase, reference, bill_id, payment_id, checkout_url, start_requested_at, stop_requested_at, transaction_id, final_minor, captured_minor, settled_at, error from cpo_checkouts where id=$1",
+        [id],
+      )
+    ).rows[0];
+  const BILL = `bill_${"a".repeat(32)}`;
+  /** Ends a checkout so the connector is free for the next test. */
+  const close = (id: string) => record(id, { phase: "failed" });
+
+  it("makes one checkout per tap, for the same sticker, kind and tariff only", async () => {
+    const first = await claim();
+    expect(first.created).toBe(true);
+    // A double tap or a retry after an uncertain answer: the same checkout.
+    expect(await claim()).toEqual({ id: first.id, created: false });
+    // The same request ID for another connector, sticker or kind is refused.
+    await expect(claim(REQ, { connector: 91012 })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    await expect(claim(REQ, { code: "WXYZ2345" })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    // The hold is not compared: the bill's may have replaced the tariff's.
+    expect(await claim(REQ, { hold: 4000 })).toEqual({
+      id: first.id,
+      created: false,
+    });
+    // Another operator's request IDs are its own.
+    const b = await claim(REQ, { operator: operatorB });
+    expect(b.created).toBe(true);
+    await expect(
+      claim(nextReq(), { code: "abcd2345", connector: 91019 }),
+    ).rejects.toThrow(/check/);
+    // The return_reference is its own random value.
+    expect((await row(first.id!)).reference).toMatch(/^ck_[0-9a-f]{32}$/);
+    await close(first.id!);
+    await close(b.id!);
+  });
+
+  it("holds a connector for one waiting or running checkout, before any hold is placed", async () => {
+    const first = await claim(nextReq());
+    expect(first.created).toBe(true);
+    // A second driver at the same connector gets the first one back, nothing inserted.
+    expect(await claim(nextReq())).toEqual({ busy: first.id });
+    expect(await claim(nextReq(), { kind: "free", hold: 0 })).toEqual({
+      busy: first.id,
+    });
+    // Another connector, or another operator's, is free.
+    const other = await claim(nextReq(), { connector: 91012 });
+    expect(other.created).toBe(true);
+    // Open still holds it; settling, releasing or any end frees it.
+    await record(first.id!, { phase: "open", bill_id: BILL, payment_id: "p1" });
+    expect((await claim(nextReq())).busy).toBe(first.id);
+    await record(first.id!, { phase: "settling" });
+    const next = await claim(nextReq());
+    expect(next.created).toBe(true);
+    for (const id of [other.id!, next.id!]) await close(id);
+  });
+
+  it("only moves a checkout forward, and never changes a recorded ID", async () => {
+    const { id } = (await claim(nextReq())) as { id: string };
+    expect(await record(id, { bill_id: BILL })).toBe(true);
+    await expect(
+      record(id, { bill_id: `bill_${"b".repeat(32)}` }),
+    ).rejects.toThrow(/cpo_invalid/);
+    // The same bill again is fine (a retry).
+    expect(await record(id, { bill_id: BILL, payment_id: "pay_1" })).toBe(true);
+    await expect(record(id, { payment_id: "pay_2" })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    await expect(
+      record(id, { checkout_url: "http://checkout.example.com/x" }),
+    ).rejects.toThrow(/check/);
+    expect(await record(id, { phase: "settled" })).toBe(false);
+    expect(
+      await record(id, {
+        checkout_url: "https://checkout.example.com/x",
+        phase: "open",
+      }),
+    ).toBe(true);
+    expect(await record(id, { phase: "creating" })).toBe(false);
+    expect(
+      await record(id, {
+        phase: "settling",
+        transaction_id: 5,
+        final_minor: 361,
+      }),
+    ).toBe(true);
+    await expect(record(id, { transaction_id: 6 })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    // Settling never goes back to releasing or open.
+    expect(await record(id, { phase: "releasing" })).toBe(false);
+    // A capture above the hold is refused outright.
+    await expect(record(id, { captured_minor: 2600 })).rejects.toThrow(/check/);
+    expect(
+      await record(id, {
+        phase: "settled",
+        captured_minor: 361,
+        stop_requested: true,
+      }),
+    ).toBe(true);
+    expect(await record(id, { phase: "attention" })).toBe(false);
+    expect(await row(id)).toMatchObject({
+      phase: "settled",
+      bill_id: BILL,
+      payment_id: "pay_1",
+      transaction_id: 5,
+      final_minor: 361,
+      captured_minor: 361,
+    });
+    expect((await row(id)).settled_at).not.toBeNull();
+    expect((await row(id)).stop_requested_at).not.toBeNull();
+    // Another operator can't touch it.
+    expect(await record(id, { error: "x" }, operatorB)).toBe(false);
+  });
+
+  it("follows the bill's hold while unsettled, and notes the meter, retries and alerts", async () => {
+    const { id } = (await claim(nextReq())) as { id: string };
+    const extra = async () =>
+      (
+        await pg.query<{
+          hold_minor: number;
+          meter_wh: number | null;
+          meter_at: string | null;
+          stop_retried_at: string | null;
+          alert: string | null;
+        }>(
+          "select hold_minor, meter_wh, extract(epoch from meter_at)::bigint::text as meter_at, stop_retried_at, alert from cpo_checkouts where id=$1",
+          [id],
+        )
+      ).rows[0];
+    // The bill holds $40.00 where the tariff said $25.00: the record follows it.
+    expect(await record(id, { bill_id: BILL, hold_minor: 4000 })).toBe(true);
+    expect((await extra()).hold_minor).toBe(4000);
+    await expect(record(id, { hold_minor: 20 })).rejects.toThrow(/check/);
+    // meter_at moves only when the energy changes.
+    expect(await record(id, { phase: "open", meter_wh: 1000 })).toBe(true);
+    await pg.query(
+      "update cpo_checkouts set meter_at = '2026-01-01T00:00:00Z' where id=$1",
+      [id],
+    );
+    await record(id, { meter_wh: 1000 });
+    const old = String(Date.parse("2026-01-01T00:00:00Z") / 1000);
+    expect((await extra()).meter_at).toBe(old);
+    await record(id, { meter_wh: 1200 });
+    expect(await extra()).toMatchObject({ meter_wh: 1200 });
+    expect((await extra()).meter_at).not.toBe(old);
+    await expect(record(id, { alert: "other" })).rejects.toThrow(/check/);
+    expect(
+      await record(id, { stop_retried: true, alert: "hold_stop_ignored" }),
+    ).toBe(true);
+    expect(await extra()).toMatchObject({
+      alert: "hold_stop_ignored",
+      stop_retried_at: expect.anything(),
+    });
+    // A capture up to the bill's hold is fine; once settled, the hold stays.
+    expect(
+      await record(id, {
+        phase: "settling",
+        alert: "stalled",
+        transaction_id: 7,
+      }),
+    ).toBe(true);
+    expect(await record(id, { phase: "settled", captured_minor: 3000 })).toBe(
+      true,
+    );
+    expect(await record(id, { hold_minor: 2500 })).toBe(true);
+    expect(await extra()).toMatchObject({ hold_minor: 4000, alert: "stalled" });
+  });
+
+  it("takes a connector back only if no one else holds it (a late start after releasing)", async () => {
+    const a = (await claim(nextReq())) as { id: string };
+    await record(a.id, { phase: "open", bill_id: BILL, payment_id: "pa" });
+    await record(a.id, { phase: "releasing" });
+    const b = (await claim(nextReq())) as { id: string };
+    expect(b.id).toBeTruthy();
+    // The released one's start ran after all, but b holds the connector now.
+    expect(await record(a.id, { phase: "open" })).toBe(true);
+    expect((await row(a.id)).phase).toBe("releasing");
+    await close(b.id);
+    await record(a.id, { phase: "open" });
+    expect((await row(a.id)).phase).toBe("open");
+    await record(a.id, { phase: "released" });
+  });
+
+  it("keeps free sessions free: no hold, and paid ones within Ivora Checkout's limits", async () => {
+    // (Each on its own connector: the claim checks the connector first.)
+    await expect(
+      claim(nextReq(), { kind: "free", hold: 2500, connector: 91021 }),
+    ).rejects.toThrow(/check/);
+    await expect(
+      claim(nextReq(), { hold: 20, connector: 91022 }),
+    ).rejects.toThrow(/check/);
+    await expect(
+      claim(nextReq(), { kind: "gift", hold: 0, connector: 91023 }),
+    ).rejects.toThrow(/check/);
+    const free = (await claim(nextReq(), { kind: "free", hold: 0 })) as {
+      id: string;
+    };
+    expect(free.id).toBeTruthy();
+    await close(free.id);
+  });
+
+  it("is not readable or writable from the browser", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        await expect(pg.query("select * from cpo_checkouts")).rejects.toThrow(
+          /permission denied/,
+        );
+        await expect(pg.query("select * from cpo_free_tokens")).rejects.toThrow(
+          /permission denied/,
+        );
+        await expect(
+          pg.query(
+            "insert into cpo_checkouts(operator_id, request_id, sticker_code, station_id, connector_id, tariff_id, hold_minor, currency) values ($1,$2,'ABCD2345',1,1,1,2500,'USD')",
+            [operatorA, REQ],
+          ),
+        ).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("transaction marks", () => {
+  const mark = async (station: number) =>
+    (
+      await pg.query<{ last_transaction_id: string }>(
+        "select last_transaction_id from cpo_transaction_marks where station_id=$1",
+        [station],
+      )
+    ).rows[0]?.last_transaction_id;
+  const advance = (station: number, id: number) =>
+    pg.query("select public.cpo_advance_transaction_mark($1, $2)", [
+      station,
+      id,
+    ]);
+
+  it("only moves up", async () => {
+    await as("service_role", null, async () => {
+      await advance(9103, 1200);
+      expect(String(await mark(9103))).toBe("1200");
+      await advance(9103, 900);
+      expect(String(await mark(9103))).toBe("1200");
+      await advance(9103, 1201);
+      expect(String(await mark(9103))).toBe("1201");
+      await expect(advance(0, 1)).rejects.toThrow(/cpo_invalid/);
+      await expect(advance(9103, -1)).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
+  it("is not readable or writable from the browser", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        await expect(
+          pg.query("select * from cpo_transaction_marks"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(advance(9103, 5000)).rejects.toThrow(/permission denied/);
       });
   });
 });
