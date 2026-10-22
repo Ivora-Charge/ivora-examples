@@ -58,6 +58,10 @@ type ReconciliationDbRow = {
   credit_cdrs: number;
   cdrs_without_session: number;
   cdrs_without_session_ids: string[];
+  cdrs_unknown_token: number;
+  cdrs_unknown_token_ids: string[];
+  cdrs_currency_mismatch: number;
+  cdrs_currency_mismatch_ids: string[];
   cdr_energy_e4: number;
   cdr_cost_excl_vat_e4: number;
   cdr_cost_incl_vat_e4: number | null;
@@ -265,6 +269,10 @@ export class SupabaseSessionStore implements SessionStore {
       creditCdrs: r.credit_cdrs,
       cdrsWithoutSession: r.cdrs_without_session,
       cdrsWithoutSessionIds: r.cdrs_without_session_ids,
+      cdrsUnknownToken: r.cdrs_unknown_token,
+      cdrsUnknownTokenIds: r.cdrs_unknown_token_ids,
+      cdrsCurrencyMismatch: r.cdrs_currency_mismatch,
+      cdrsCurrencyMismatchIds: r.cdrs_currency_mismatch_ids,
       cdrEnergyE4: Number(r.cdr_energy_e4),
       cdrCostExclVatE4: Number(r.cdr_cost_excl_vat_e4),
       cdrCostInclVatE4:

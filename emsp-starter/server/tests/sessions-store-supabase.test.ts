@@ -27,7 +27,7 @@ import {
 import { reconcile } from "@/lib/sessions/reconcile";
 import { MemorySessionStore, type SessionStore } from "@/lib/sessions/store";
 import { SupabaseSessionStore } from "@/lib/sessions/store-supabase";
-import { MemoryTokenStore } from "@/lib/tokens/store";
+import { MemoryTokenStore, type TokenStore } from "@/lib/tokens/store";
 import { asRole, migratedDatabase } from "./support/pglite";
 import { pgliteRest } from "./support/pglite-rest";
 import { LIVE_ENV } from "./support/network";
@@ -318,11 +318,20 @@ describe("reconciliation", () => {
   /**
    * Two peers, two days and every case: a session with its CDR, one without, open and
    * invalid sessions, a CDR naming an unknown session, one naming none (and without
-   * an amount including VAT), a credit CDR, the same IDs at the other peer, and a
+   * an amount including VAT), a credit CDR, a CDR of a token we did not issue, a CDR
+   * in another currency than its session, the same IDs at the other peer, and a
    * session outside the range.
    */
   async function scenario(sessions: SessionStore) {
-    const d = deps(sessions);
+    // Our drivers' token is the sample one; any other is not ours.
+    const ours = sampleCdrToken({ countryCode: "NL", partyId: "ABC" });
+    const d: SessionDeps = {
+      ...deps(sessions),
+      tokens: {
+        getToken: async (uid: string) =>
+          uid === ours.uid ? { driverRef: "driver-1" } : null,
+      } as unknown as TokenStore,
+    };
     const zz = { countryCode: "ZZ", partyId: "MCK" };
     const yy = { countryCode: "YY", partyId: "TWO" };
     const day1 = "2026-10-20";
@@ -354,6 +363,7 @@ describe("reconciliation", () => {
       cdr(s1, {
         id: "C9",
         session_id: "NOPE",
+        cdr_token: sampleCdrToken({ countryCode: "NL", partyId: "ABC" }, 2),
         total_energy: 1,
         total_cost: { excl_vat: 1, incl_vat: 1.21 },
       }),
@@ -376,6 +386,15 @@ describe("reconciliation", () => {
         total_energy: 10.5,
         total_cost: { excl_vat: -5.1234, incl_vat: -6.2 },
       }),
+      "push",
+      d,
+    );
+    // Billed in dollars, for a session in euros.
+    const s7 = session(zz, "S7", { kwh: 0 });
+    await recordSession(peerA, s7, d);
+    await recordCdr(
+      peerA,
+      cdr(s7, { id: "C7", currency: "USD", total_energy: 0 }),
       "push",
       d,
     );
@@ -410,18 +429,19 @@ describe("reconciliation", () => {
     expect(fromDb).toEqual(fromMemory);
 
     const days = fromDb.days;
-    expect(days.map((r) => [r.peerId, r.day])).toEqual([
-      [B, "2026-10-21"],
-      [A, "2026-10-20"],
-      [A, "2026-10-21"],
+    expect(days.map((r) => [r.peerId, r.day, r.currency])).toEqual([
+      [B, "2026-10-21", "EUR"],
+      [A, "2026-10-20", "EUR"],
+      [A, "2026-10-20", "USD"],
+      [A, "2026-10-21", "EUR"],
     ]);
     expect(days[1]).toEqual({
       peerId: A,
       day: "2026-10-20",
       currency: "EUR",
-      sessions: 4,
+      sessions: 5,
       sessionsOpen: 1,
-      sessionsCompleted: 2,
+      sessionsCompleted: 3,
       sessionsInvalid: 1,
       sessionKwhE4: 145_000,
       sessionsWithoutCdr: 1,
@@ -430,11 +450,24 @@ describe("reconciliation", () => {
       creditCdrs: 1,
       cdrsWithoutSession: 2,
       cdrsWithoutSessionIds: ["ZZ/MCK/C10", "ZZ/MCK/C9"],
+      cdrsUnknownToken: 1,
+      cdrsUnknownTokenIds: ["ZZ/MCK/C9"],
+      cdrsCurrencyMismatch: 0,
+      cdrsCurrencyMismatchIds: [],
       // C1 + C9 + C10 - CR1.
       cdrEnergyE4: 30_000,
       cdrCostExclVatE4: 30_000,
       // C10 gave no amount including VAT.
       cdrCostInclVatE4: null,
+    });
+    // C7 counts in its own currency, flagged against its session's.
+    expect(days[2]).toMatchObject({
+      sessions: 0,
+      cdrs: 1,
+      cdrsWithoutSession: 0,
+      cdrsUnknownToken: 0,
+      cdrsCurrencyMismatch: 1,
+      cdrsCurrencyMismatchIds: ["ZZ/MCK/C7"],
     });
     expect(days[0]).toMatchObject({
       sessions: 1,
@@ -447,11 +480,19 @@ describe("reconciliation", () => {
       expect.objectContaining({ peerId: B, sessions: 1, cdrs: 1 }),
       expect.objectContaining({
         peerId: A,
-        sessions: 5,
+        currency: "EUR",
+        sessions: 6,
         sessionsWithoutCdr: 1,
         cdrs: 4,
         cdrsWithoutSession: 2,
+        cdrsUnknownToken: 1,
         cdrCostInclVatE4: null,
+      }),
+      expect.objectContaining({
+        peerId: A,
+        currency: "USD",
+        cdrs: 1,
+        cdrsCurrencyMismatch: 1,
       }),
     ]);
     // One peer only.

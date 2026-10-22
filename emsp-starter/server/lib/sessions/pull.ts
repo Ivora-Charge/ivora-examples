@@ -9,7 +9,7 @@ import {
   type SyncStateStore,
 } from "@/lib/locations/sync";
 import type { ClientOptions } from "@/lib/ocpi/client";
-import { OcpiError } from "@/lib/ocpi/errors";
+import { OcpiError, OcpiProblem } from "@/lib/ocpi/errors";
 import { sameId } from "@/lib/ocpi/locations";
 import {
   parseCdr,
@@ -34,8 +34,9 @@ import { recordCdr, recordSession, type SessionDeps } from "./record";
  * Sessions Sender needs a `date_from`. Later pulls ask for changes since the last one
  * started. Nothing is ever removed.
  *
- * Invalid objects, and objects of a party that is not one of the peer's CPO parties,
- * are skipped and counted, never stored.
+ * Invalid objects, objects of a party that is not one of the peer's CPO parties, and
+ * objects we cannot store (a change that makes the session invalid, or a session too
+ * busy to write) are skipped, logged by ID and counted as invalid: the pull goes on.
  */
 export type SessionPullDeps = SessionDeps & {
   syncState: SyncStateStore;
@@ -65,9 +66,21 @@ function target(module: SessionModule, deps: SessionPullDeps): PullTarget {
       for (const x of raw) {
         const parsed = module === "sessions" ? parseSession(x) : parseCdr(x);
         if (!parsed.ok || !ofCpoParty(peer, parsed.value)) continue;
-        if (module === "sessions")
-          await recordSession(peer, parsed.value as Session, deps);
-        else await recordCdr(peer, parsed.value as Cdr, "pull", deps);
+        try {
+          if (module === "sessions")
+            await recordSession(peer, parsed.value as Session, deps);
+          else await recordCdr(peer, parsed.value as Cdr, "pull", deps);
+        } catch (e) {
+          // One object we cannot store (its merge is invalid, or it stays busy) must
+          // not hold the pull at this page forever: count it and go on. Anything else
+          // (the database is down) fails the page, to be resumed.
+          if (!(e instanceof OcpiProblem)) throw e;
+          const o = parsed.value;
+          console.error(
+            `Pulling ${module} from peer ${peer.id}: skipped ${o.country_code}/${o.party_id}/${o.id}: ${e.message}`,
+          );
+          continue;
+        }
         items++;
       }
       return { items, invalid: raw.length - items };

@@ -34,8 +34,9 @@ import type {
  *   removes the optional fields it lacks, but only where that field's time is not newer
  *   than the change's. So a late PATCH of kWh still lands after a newer PATCH of the
  *   status, and never undoes it.
- * - `charging_periods` are merged with ours by `start_date_time`, whatever the change's
- *   time (a CPO may send only the new periods, or all of them): none goes missing.
+ * - `charging_periods` are merged with ours by `start_date_time` (a CPO may send only
+ *   the new periods, or all of them): none goes missing. Each period keeps the time of
+ *   the change that set it, like a field, so a late change never rolls it back.
  * - `last_updated` is the newest we have seen. The result is validated as a whole.
  * - Every write is a compare-and-swap on the session's revision: two pushes at once
  *   both land.
@@ -182,8 +183,10 @@ async function tokenDriver(
 
 /**
  * The links of a session or CDR: the start command by authorization_reference (of
- * this peer and the object's CPO party), else just the driver by token. A session
- * also links the command to itself (linkSession), so the driver can stop it.
+ * this peer and the object's CPO party), else just the driver by token. `sessionId`:
+ * the session's ID, or the session the CDR names (undefined: none). That session is
+ * linked to the command (linkSession), so the driver can stop it, and the command is
+ * never linked to two sessions.
  */
 async function resolveLinks(
   peer: Peer,
@@ -207,19 +210,24 @@ async function resolveLinks(
       c?.type === "START_SESSION" &&
       c.peerId === peer.id &&
       sameParty(party, { countryCode: c.toCountryCode, partyId: c.toPartyId });
+    // The start is this object's only when it is linked to no other session: a CDR
+    // claims it for the session the CDR names (like that session would), and one that
+    // names no session takes it only while it has none. So two sessions' CDRs never
+    // share a start, nor the payment hold behind it.
     if (
       c &&
       ours &&
-      (sessionId === undefined ||
-        (await linkSession(
-          {
-            peerId: peer.id,
-            authorizationReference: o.authorization_reference,
-            sessionId,
-            party,
-          },
-          { commands: deps.commands, now: deps.now },
-        )))
+      (sessionId === undefined
+        ? !c.sessionId
+        : await linkSession(
+            {
+              peerId: peer.id,
+              authorizationReference: o.authorization_reference,
+              sessionId,
+              party,
+            },
+            { commands: deps.commands, now: deps.now },
+          ))
     ) {
       commandId = c.id;
       driverRef = c.driverRef;
@@ -234,20 +242,42 @@ const startMs = (p: unknown) => {
   return typeof v === "string" ? dateTimeMs(v) : NaN;
 };
 
+/** The fieldTimes key of the charging period starting at `ms`. */
+export const periodTimeKey = (ms: number) => `charging_periods@${ms}`;
+
 /**
  * Our charging periods with `incoming` merged in by start_date_time: an incoming
- * period replaces ours with the same start, the rest are added, oldest first. Raw
- * values: the merged session is validated afterwards.
+ * period replaces ours with the same start, unless ours was set by a newer change
+ * (its time in `times`, under periodTimeKey); the rest are added, oldest first. Sets
+ * the times of the periods it writes. Raw values: the merged session is validated
+ * afterwards.
  */
-function mergePeriods(held: unknown[], incoming: unknown): unknown {
+function mergePeriods(
+  held: unknown[],
+  incoming: unknown,
+  times: Record<string, string>,
+  at: string,
+): unknown {
   if (!Array.isArray(incoming)) return incoming;
+  const atMs = dateTimeMs(at);
   const out = new Map<string, unknown>();
   const key = (p: unknown, i: number, side: string) => {
     const ms = startMs(p);
     return Number.isNaN(ms) ? `${side}${i}` : String(ms);
   };
   held.forEach((p, i) => out.set(key(p, i, "held"), p));
-  incoming.forEach((p, i) => out.set(key(p, i, "new"), p));
+  incoming.forEach((p, i) => {
+    const ms = startMs(p);
+    if (Number.isNaN(ms)) {
+      out.set(key(p, i, "new"), p);
+      return;
+    }
+    const t = times[periodTimeKey(ms)];
+    // A period set by a newer change stays.
+    if (out.has(String(ms)) && t !== undefined && dateTimeMs(t) > atMs) return;
+    out.set(String(ms), p);
+    times[periodTimeKey(ms)] = at;
+  });
   return [...out.values()].sort((a, b) => startMs(a) - startMs(b));
 }
 
@@ -303,6 +333,8 @@ function applyChange(
     base.charging_periods = mergePeriods(
       held?.session.charging_periods ?? [],
       change.charging_periods,
+      times,
+      at,
     );
   base.last_updated =
     held && dateTimeMs(held.session.last_updated) > atMs
@@ -365,7 +397,10 @@ async function writeSession(
       await emit({ type: "session.started", session: created }, deps);
       if (created.completedAt)
         await emit({ type: "session.completed", session: created }, deps);
-      return { outcome: "created", session: created };
+      return {
+        outcome: "created",
+        session: await completeIfCdr(key, created, deps),
+      };
     }
 
     if (
@@ -389,7 +424,10 @@ async function writeSession(
       await emit({ type: "session.updated", session: updated }, deps);
     if (!held.completedAt && updated.completedAt)
       await emit({ type: "session.completed", session: updated }, deps);
-    return { outcome: changed ? "updated" : "unchanged", session: updated };
+    return {
+      outcome: changed ? "updated" : "unchanged",
+      session: await completeIfCdr(key, updated, deps),
+    };
   }
   throw busy();
 }
@@ -440,11 +478,28 @@ export function patchSession(
   );
 }
 
-/** Marks a session ended because its CDR arrived. */
-async function completeByCdr(key: SessionKey, deps: SessionDeps) {
+/**
+ * A session just written without completedAt, ended after all when its CDR arrived
+ * meanwhile: the CDR found no session to end (it was being created) or lost to this
+ * write, after we had looked for a CDR.
+ */
+async function completeIfCdr(
+  key: SessionKey,
+  written: StoredSession,
+  deps: SessionDeps,
+): Promise<StoredSession> {
+  if (written.completedAt || !(await deps.sessions.hasCdr(key))) return written;
+  return (await completeByCdr(key, deps)) ?? written;
+}
+
+/** Marks a session ended because its CDR arrived. The session, when we hold it. */
+async function completeByCdr(
+  key: SessionKey,
+  deps: SessionDeps,
+): Promise<StoredSession | null> {
   for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt++) {
     const held = await deps.sessions.getSession(key);
-    if (!held || held.completedAt) return;
+    if (!held || held.completedAt) return held;
     const updated = await deps.sessions.updateSession(
       held.id,
       held.revision,
@@ -459,7 +514,7 @@ async function completeByCdr(key: SessionKey, deps: SessionDeps) {
     );
     if (updated) {
       await emit({ type: "session.completed", session: updated }, deps);
-      return;
+      return updated;
     }
     await pause(attempt);
   }
@@ -502,7 +557,7 @@ export async function recordCdr(
   const held = await deps.sessions.getCdr(key);
   if (held) return known(held);
 
-  const links = await resolveLinks(peer, cdr, null, deps);
+  const links = await resolveLinks(peer, cdr, null, deps, cdr.session_id);
   const stored = await deps.sessions.insertCdr(
     peer.id,
     { cdr, ...links, source },

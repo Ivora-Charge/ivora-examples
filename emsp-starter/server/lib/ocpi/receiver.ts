@@ -27,15 +27,47 @@ export type ReceiverPath = {
 };
 
 /**
- * The path segments after `/ocpi/2.2.1/{module}/`, decoded and checked. The country
- * code and party ID must be a party of the calling peer (with `cpoOnly`, a CPO party):
- * a CPO cannot write another CPO's objects.
+ * The CPO party a push comes from: OCPI-from, which must be a CPO party of the calling
+ * peer, and `party` (of the URL or the body) must be that same party. A peer with
+ * several CPO parties cannot write one party's objects in the name of another.
  */
-export function receiverPath(
+export function pushingParty(
   ctx: OcpiContext,
-  module: string,
-  { cpoOnly = false }: { cpoOnly?: boolean } = {},
-): ReceiverPath {
+  party: { countryCode: string; partyId: string },
+  where: string,
+): void {
+  const from = ctx.from;
+  if (!from)
+    throw invalid("Missing or invalid OCPI-from/OCPI-to routing headers");
+  const cpo = ctx.peer.roles.some(
+    (r) =>
+      r.role === "CPO" &&
+      sameId(r.country_code, from.countryCode) &&
+      sameId(r.party_id, from.partyId),
+  );
+  if (!cpo)
+    throw new OcpiProblem(
+      403,
+      STATUS.CLIENT_ERROR,
+      "OCPI-from-country-code and OCPI-from-party-id are not a CPO party of this token",
+    );
+  if (
+    !sameId(party.countryCode, from.countryCode) ||
+    !sameId(party.partyId, from.partyId)
+  )
+    throw new OcpiProblem(
+      403,
+      STATUS.CLIENT_ERROR,
+      `The country_code and party_id ${where} are not the OCPI-from party`,
+    );
+}
+
+/**
+ * The path segments after `/ocpi/2.2.1/{module}/`, decoded and checked. The country
+ * code and party ID must be the CPO party in OCPI-from, one of the calling peer's
+ * (pushingParty): a CPO cannot write another CPO's objects.
+ */
+export function receiverPath(ctx: OcpiContext, module: string): ReceiverPath {
   const path = new URL(ctx.request.url).pathname;
   const base = `/ocpi/2.2.1/${module}/`;
   if (!path.startsWith(base)) throw invalid("Unknown path");
@@ -56,18 +88,7 @@ export function receiverPath(
   const [countryCode, partyId] = parts;
   if (!/^[A-Za-z]{2}$/.test(countryCode) || !/^[A-Za-z0-9]{3}$/.test(partyId))
     throw invalid("Invalid country_code or party_id in the path");
-  const own = ctx.peer.roles.some(
-    (r) =>
-      (!cpoOnly || r.role === "CPO") &&
-      sameId(r.country_code, countryCode) &&
-      sameId(r.party_id, partyId),
-  );
-  if (!own)
-    throw new OcpiProblem(
-      403,
-      STATUS.CLIENT_ERROR,
-      `The country_code and party_id in the path are not a ${cpoOnly ? "CPO " : ""}party of this token`,
-    );
+  pushingParty(ctx, { countryCode, partyId }, "in the path");
   return {
     countryCode: countryCode.toUpperCase(),
     partyId: partyId.toUpperCase(),
@@ -86,7 +107,10 @@ export function valid<T>(
   return parsed.value;
 }
 
-/** The identifying fields of a PUT or PATCH body must match the URL. */
+/**
+ * The identifying fields of a PUT or PATCH body must match the URL (whose party is the
+ * OCPI-from party, receiverPath).
+ */
 export function checkIds(
   body: Record<string, unknown>,
   ids: Record<string, string>,

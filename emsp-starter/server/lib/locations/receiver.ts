@@ -34,8 +34,8 @@ import type { ObjectKey } from "./store";
  *   /ocpi/2.2.1/tariffs/{country_code}/{party_id}/{tariff_id}
  *     GET, PUT, PATCH, DELETE
  *
- * The country code and party ID in the URL must be a party of the calling peer, and
- * objects are stored under that peer only. Every body is validated against 2.2.1; a
+ * The country code and party ID in the URL (and the body) must be the CPO party in
+ * OCPI-from, one of the calling peer's, and objects are stored under that peer only. Every body is validated against 2.2.1; a
  * PATCH is merged into the stored object and the result validated as a whole. A change
  * older than what we hold (by last_updated) is acknowledged and ignored, so a late push
  * never overwrites newer data. An EVSE is never deleted: a CPO sets it to REMOVED.

@@ -1,18 +1,19 @@
 import "server-only";
 import { commandStore } from "@/lib/commands/registry";
 import { OcpiProblem } from "@/lib/ocpi/errors";
-import { parsePatch, sameId } from "@/lib/ocpi/locations";
+import { parsePatch } from "@/lib/ocpi/locations";
 import {
   asObject,
   checkIds,
   invalid,
   notAllowed,
+  pushingParty,
   receiverPath,
   valid,
 } from "@/lib/ocpi/receiver";
 import { ocpiResponse, readJson, type OcpiContext } from "@/lib/ocpi/server";
 import { parseCdr, parseSession } from "@/lib/ocpi/session-objects";
-import { STATUS } from "@/lib/ocpi/types";
+import { sameParty, STATUS } from "@/lib/ocpi/types";
 import { ocpiUrls } from "@/lib/server/config";
 import { tokenStore } from "@/lib/tokens/registry";
 import {
@@ -32,8 +33,9 @@ import { sessionStore } from "./registry";
  *   POST /ocpi/2.2.1/cdrs                                         a new CDR
  *   GET  /ocpi/2.2.1/cdrs/{id}                                    the URL we answered with
  *
- * The session's (or CDR's) country code and party ID must be a CPO party of the calling
- * peer, and objects are stored under that peer only. Every body is validated against
+ * The session's (or CDR's) country code and party ID, in the URL and the body, must be
+ * the CPO party in OCPI-from, one of the calling peer's; objects are stored under that
+ * peer only. Every body is validated against
  * 2.2.1. A session we do not hold is `2000 Unknown session` (HTTP 404): 2.2.1 has no
  * status for it. A CDR POSTed again is acknowledged; one with the ID of another is
  * refused with 2001, because CDRs never change (a CPO corrects one with a credit CDR).
@@ -53,7 +55,7 @@ export async function sessionsReceiver(
   ctx: OcpiContext,
   deps: SessionDeps = receiverDeps(ctx),
 ): Promise<Response> {
-  const p = receiverPath(ctx, "sessions", { cpoOnly: true });
+  const p = receiverPath(ctx, "sessions");
   if (p.rest.length) throw invalid("Path is too long");
   const key = {
     peerId: ctx.peer.id,
@@ -99,18 +101,11 @@ export async function cdrsReceiver(
   if (path === "/ocpi/2.2.1/cdrs") {
     if (method !== "POST") throw notAllowed();
     const cdr = valid("CDR", parseCdr(await readJson(ctx.request)));
-    const own = ctx.peer.roles.some(
-      (r) =>
-        r.role === "CPO" &&
-        sameId(r.country_code, cdr.country_code) &&
-        sameId(r.party_id, cdr.party_id),
+    pushingParty(
+      ctx,
+      { countryCode: cdr.country_code, partyId: cdr.party_id },
+      "of the CDR",
     );
-    if (!own)
-      throw new OcpiProblem(
-        403,
-        STATUS.CLIENT_ERROR,
-        "The CDR's country_code and party_id are not a CPO party of this token",
-      );
     const { outcome, cdr: stored } = await recordCdr(
       ctx.peer,
       cdr,
@@ -131,8 +126,16 @@ export async function cdrsReceiver(
   if (!m) throw invalid("Unknown path");
   if (method !== "GET") throw notAllowed();
   const held = await deps.sessions.getCdrById(m[1].toLowerCase());
-  // Only the peer that sent it may read it.
-  if (!held || held.peerId !== ctx.peer.id)
+  // Only the peer and CPO party that sent it may read it.
+  if (
+    !held ||
+    held.peerId !== ctx.peer.id ||
+    !ctx.from ||
+    !sameParty(ctx.from, {
+      countryCode: held.cdr.country_code,
+      partyId: held.cdr.party_id,
+    })
+  )
     throw new OcpiProblem(404, STATUS.CLIENT_ERROR, "Unknown CDR");
   return ocpiResponse(held.cdr, ctx);
 }

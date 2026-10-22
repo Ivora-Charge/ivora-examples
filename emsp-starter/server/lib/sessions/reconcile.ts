@@ -7,6 +7,8 @@ import type { ReconciliationRow, SessionStore } from "./store";
  *
  * - counts of sessions (open, completed, invalid) and of CDRs (and credit CDRs);
  * - COMPLETED sessions without a CDR, and CDRs that name no session we hold;
+ * - CDRs of a token we did not issue (no driver of ours to bill), and CDRs in another
+ *   currency than their session;
  * - totals: kWh as the sessions say, and energy and cost as the CDRs say, net of credit
  *   CDRs. Amounts are E4 (ten-thousandths of a kWh or of the currency unit), so they
  *   add up exactly.
@@ -17,7 +19,11 @@ import type { ReconciliationRow, SessionStore } from "./store";
  */
 export type ReconciliationTotal = Omit<
   ReconciliationRow,
-  "day" | "sessionsWithoutCdrIds" | "cdrsWithoutSessionIds"
+  | "day"
+  | "sessionsWithoutCdrIds"
+  | "cdrsWithoutSessionIds"
+  | "cdrsUnknownTokenIds"
+  | "cdrsCurrencyMismatchIds"
 >;
 
 export type Reconciliation = {
@@ -59,6 +65,8 @@ const NUMBERS = [
   "cdrs",
   "creditCdrs",
   "cdrsWithoutSession",
+  "cdrsUnknownToken",
+  "cdrsCurrencyMismatch",
   "cdrEnergyE4",
   "cdrCostExclVatE4",
 ] as const;
@@ -91,6 +99,8 @@ export async function reconcile(
         day: _day,
         sessionsWithoutCdrIds: _s,
         cdrsWithoutSessionIds: _c,
+        cdrsUnknownTokenIds: _u,
+        cdrsCurrencyMismatchIds: _m,
         ...first
       } = d;
       totals.set(key, first);

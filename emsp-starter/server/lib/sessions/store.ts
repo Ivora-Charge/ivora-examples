@@ -92,6 +92,14 @@ export type ReconciliationRow = {
   cdrsWithoutSession: number;
   /** `country_code/party_id/cdr_id`, at most RECONCILIATION_ID_LIMIT. */
   cdrsWithoutSessionIds: string[];
+  /** CDRs (credit CDRs too) of a token we did not issue: no driver of ours to bill. */
+  cdrsUnknownToken: number;
+  /** `country_code/party_id/cdr_id`, at most RECONCILIATION_ID_LIMIT. */
+  cdrsUnknownTokenIds: string[];
+  /** CDRs (credit CDRs too) in another currency than the session they name. */
+  cdrsCurrencyMismatch: number;
+  /** `country_code/party_id/cdr_id`, at most RECONCILIATION_ID_LIMIT. */
+  cdrsCurrencyMismatchIds: string[];
   /** Net of credit CDRs, which count negative. */
   cdrEnergyE4: number;
   cdrCostExclVatE4: number;
@@ -296,6 +304,10 @@ export class MemorySessionStore implements SessionStore {
             creditCdrs: 0,
             cdrsWithoutSession: 0,
             cdrsWithoutSessionIds: [],
+            cdrsUnknownToken: 0,
+            cdrsUnknownTokenIds: [],
+            cdrsCurrencyMismatch: 0,
+            cdrsCurrencyMismatchIds: [],
             cdrEnergyE4: 0,
             cdrCostExclVatE4: 0,
             cdrCostInclVatE4: 0,
@@ -326,26 +338,33 @@ export class MemorySessionStore implements SessionStore {
       }
     }
 
-    for (const { peerId, cdr: c } of this.cdrs.values()) {
+    for (const { peerId, cdr: c, driverRef } of this.cdrs.values()) {
       if (!wanted(peerId, c.start_date_time)) continue;
       const r = row(peerId, utcDay(c.start_date_time), c.currency);
       const sign = (n: number) => (c.credit ? -Math.abs(n) : n);
-      if (c.credit) r.creditCdrs++;
-      else {
-        r.cdrs++;
-        const session =
-          c.session_id &&
-          (await this.getSession({
+      const ref = `${c.country_code}/${c.party_id}/${c.id}`;
+      const session = c.session_id
+        ? await this.getSession({
             peerId,
             countryCode: c.country_code,
             partyId: c.party_id,
             sessionId: c.session_id,
-          }));
+          })
+        : null;
+      if (driverRef === null) {
+        r.cdrsUnknownToken++;
+        r.cdrsUnknownTokenIds.push(ref);
+      }
+      if (session && session.session.currency !== c.currency) {
+        r.cdrsCurrencyMismatch++;
+        r.cdrsCurrencyMismatchIds.push(ref);
+      }
+      if (c.credit) r.creditCdrs++;
+      else {
+        r.cdrs++;
         if (!session) {
           r.cdrsWithoutSession++;
-          r.cdrsWithoutSessionIds.push(
-            `${c.country_code}/${c.party_id}/${c.id}`,
-          );
+          r.cdrsWithoutSessionIds.push(ref);
         }
       }
       r.cdrEnergyE4 += sign(e4(c.total_energy));
@@ -363,6 +382,12 @@ export class MemorySessionStore implements SessionStore {
           .sort(byCode)
           .slice(0, RECONCILIATION_ID_LIMIT),
         cdrsWithoutSessionIds: r.cdrsWithoutSessionIds
+          .sort(byCode)
+          .slice(0, RECONCILIATION_ID_LIMIT),
+        cdrsUnknownTokenIds: r.cdrsUnknownTokenIds
+          .sort(byCode)
+          .slice(0, RECONCILIATION_ID_LIMIT),
+        cdrsCurrencyMismatchIds: r.cdrsCurrencyMismatchIds
           .sort(byCode)
           .slice(0, RECONCILIATION_ID_LIMIT),
       }))

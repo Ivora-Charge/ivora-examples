@@ -28,6 +28,7 @@ import {
   pullSessions,
   type SessionPullDeps,
 } from "@/lib/sessions/pull";
+import { recordCdr, recordSession } from "@/lib/sessions/record";
 import { reconcile } from "@/lib/sessions/reconcile";
 import { sessionStore, setSessionStoreForTests } from "@/lib/sessions/registry";
 import { MemorySessionStore } from "@/lib/sessions/store";
@@ -360,6 +361,71 @@ describe("sessions pushed by a CPO", () => {
     expect(events).toHaveLength(before);
   });
 
+  it("never lets a late change roll a charging period back", async () => {
+    const { session } = await started();
+    await cpo.putSession(
+      { ...session, charging_periods: [period(0, 1)] },
+      { push: true },
+    );
+    // A PATCH at t10 sets the first period to 9 kWh ...
+    await cpo.sendSessionPatch("SESSION-1", {
+      kwh: 9,
+      charging_periods: [period(0, 9)],
+      last_updated: iso(10),
+    });
+    // ... and a PUT from t5, delayed, still says 4 for it, and adds a period.
+    await cpo.putSession(
+      {
+        ...session,
+        kwh: 4,
+        charging_periods: [period(0, 4), period(4, 0.5)],
+        last_updated: iso(5),
+      },
+      { push: true },
+    );
+    expect((await held()).session).toMatchObject({
+      kwh: 9,
+      charging_periods: [period(0, 9), period(4, 0.5)],
+      last_updated: iso(10),
+    });
+    // A newer change does replace it.
+    await cpo.sendSessionPatch("SESSION-1", {
+      charging_periods: [period(0, 9.5)],
+      last_updated: iso(15),
+    });
+    expect((await held()).session.charging_periods).toEqual([
+      period(0, 9.5),
+      period(4, 0.5),
+    ]);
+  });
+
+  it("completes a session whose CDR arrived while its first PUT was being stored", async () => {
+    const { session } = await started();
+    await cpo.putSession({ ...session, status: "COMPLETED" });
+    const cdr = cpo.cdrFor("SESSION-1");
+    const deps = { sessions, commands, tokens, peers };
+    const insert = sessions.insertSession.bind(sessions);
+    // The CDR lands after the session write looked for one, before it is stored.
+    vi.spyOn(sessions, "insertSession").mockImplementationOnce(
+      async (...args) => {
+        await recordCdr(one, cdr, "push", deps);
+        return insert(...args);
+      },
+    );
+    const { session: stored } = await recordSession(
+      one,
+      { ...session, status: "ACTIVE" },
+      deps,
+    );
+    expect(stored.completedAt).not.toBeNull();
+    expect((await held()).completedAt).not.toBeNull();
+    expect(types()).toEqual([
+      "cdr.received",
+      "session.started",
+      "session.completed",
+    ]);
+  });
+
   it("lands every PATCH when many arrive at once", async () => {
     const { session } = await started();
     await cpo.putSession(session, { push: true });
@@ -443,6 +509,113 @@ describe("sessions pushed by a CPO", () => {
       cpo.sendSessionPatch("SESSION-1", { kwh: "lots", last_updated: iso(1) }),
     ).rejects.toMatchObject({ statusCode: 2001 });
     expect((await held()).session.kwh).toBe(0);
+  });
+
+  it("takes a push only from the CPO party in OCPI-from, on a peer with several", async () => {
+    // The peer runs a second CPO party behind the same token.
+    await peers.updatePeer(one.id, {
+      roles: [
+        ...one.roles,
+        {
+          role: "CPO",
+          business_details: { name: "Mock CPO, second brand" },
+          country_code: "ZZ",
+          party_id: "OTH",
+        },
+      ],
+    });
+    const { session } = await started();
+    const send = (
+      method: "PUT" | "POST" | "GET",
+      path: string,
+      body: unknown,
+      from: string,
+    ) =>
+      ocpiRequest(
+        {
+          method,
+          url: `${EMSP}/${path}`,
+          token: cpo.state.emsp!.token,
+          body,
+          routing: {
+            from: { countryCode: "ZZ", partyId: from },
+            to: { countryCode: "NL", partyId: "ABC" },
+          },
+        },
+        { transport: net.transport, retries: 0 },
+      );
+    const forbidden = { httpStatus: 403 };
+    const theirs = { ...session, party_id: "OTH" };
+
+    // Sessions: the URL's party (and the body's) must be the OCPI-from party.
+    await expect(
+      send("PUT", "sessions/ZZ/OTH/SESSION-1", theirs, "MCK"),
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      send("PUT", "sessions/ZZ/MCK/SESSION-1", session, "OTH"),
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      send("PUT", "sessions/ZZ/OTH/SESSION-1", session, "OTH"),
+    ).rejects.toMatchObject({ statusCode: 2001 });
+    expect(sessions.sessions.size).toBe(0);
+    expect(
+      (await send("PUT", "sessions/ZZ/OTH/SESSION-1", theirs, "OTH"))
+        .statusCode,
+    ).toBe(1000);
+
+    // CDRs: the CDR's party must be the OCPI-from party, to post and to read back.
+    await cpo.putSession(session);
+    const cdr = cpo.cdrFor("SESSION-1");
+    await expect(
+      send("POST", "cdrs", { ...cdr, party_id: "OTH" }, "MCK"),
+    ).rejects.toMatchObject(forbidden);
+    await expect(send("POST", "cdrs", cdr, "OTH")).rejects.toMatchObject(
+      forbidden,
+    );
+    expect(sessions.cdrs.size).toBe(0);
+    const res = await send("POST", "cdrs", cdr, "MCK");
+    const location = res.headers.get("Location")!;
+    const url = location.slice(EMSP.length + 1);
+    await expect(send("GET", url, undefined, "OTH")).rejects.toMatchObject({
+      httpStatus: 404,
+    });
+    expect((await send("GET", url, undefined, "MCK")).data).toEqual(cdr);
+
+    // Locations and tariffs: the same.
+    const location1 = cpo.state.locations[0];
+    const tariff = cpo.state.tariffs[0];
+    await expect(
+      send(
+        "PUT",
+        `locations/ZZ/OTH/${location1.id}`,
+        { ...location1, party_id: "OTH" },
+        "MCK",
+      ),
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      send("PUT", `locations/ZZ/MCK/${location1.id}`, location1, "OTH"),
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      send(
+        "PUT",
+        `tariffs/ZZ/OTH/${tariff.id}`,
+        { ...tariff, party_id: "OTH" },
+        "MCK",
+      ),
+    ).rejects.toMatchObject(forbidden);
+    await expect(
+      send("PUT", `tariffs/ZZ/MCK/${tariff.id}`, tariff, "OTH"),
+    ).rejects.toMatchObject(forbidden);
+    expect(
+      (
+        await send(
+          "PUT",
+          `tariffs/ZZ/OTH/${tariff.id}`,
+          { ...tariff, party_id: "OTH" },
+          "OTH",
+        )
+      ).statusCode,
+    ).toBe(1000);
   });
 
   it("links a session to the driver by token when no start of ours names it", async () => {
@@ -626,6 +799,60 @@ describe("CDRs pushed by a CPO", () => {
   });
 });
 
+describe("CDRs and the driver's start", () => {
+  const stored = async (cdrId: string) =>
+    (await sessions.getCdr({
+      peerId: one.id,
+      countryCode: "ZZ",
+      partyId: "MCK",
+      cdrId,
+    }))!;
+
+  it("links a CDR to a start only for the session that start is linked to", async () => {
+    const { commandId, session } = await started();
+    await cpo.putSession(session, { push: true });
+    // Another session (or a CPO's mistake) with the same authorization_reference.
+    await cpo.putSession({ ...session, id: "SESSION-B" });
+    await cpo.postCdr(cpo.cdrFor("SESSION-1", { id: "CDR-A" }), {
+      push: true,
+    });
+    await cpo.postCdr(cpo.cdrFor("SESSION-B", { id: "CDR-B" }), {
+      push: true,
+    });
+    const noSession = { ...cpo.cdrFor("SESSION-1"), id: "CDR-C" };
+    delete noSession.session_id;
+    await cpo.postCdr(noSession, { push: true });
+    expect(await stored("CDR-A")).toMatchObject({ commandId });
+    // Not this start's session: never its hold. Still the driver's, by token.
+    expect(await stored("CDR-B")).toMatchObject({
+      commandId: null,
+      driverRef: DRIVER,
+    });
+    expect(await stored("CDR-C")).toMatchObject({ commandId: null });
+    expect((await commands.get(commandId))!.sessionId).toBe("SESSION-1");
+  });
+
+  it("lets the first CDR claim a start no session is linked to yet", async () => {
+    const { commandId, session } = await started();
+    await cpo.putSession(session);
+    await cpo.putSession({ ...session, id: "SESSION-B" });
+    await cpo.postCdr(cpo.cdrFor("SESSION-1", { id: "CDR-A" }), {
+      push: true,
+    });
+    await cpo.postCdr(cpo.cdrFor("SESSION-B", { id: "CDR-B" }), {
+      push: true,
+    });
+    expect(await stored("CDR-A")).toMatchObject({ commandId });
+    expect(await stored("CDR-B")).toMatchObject({ commandId: null });
+    expect((await commands.get(commandId))!.sessionId).toBe("SESSION-1");
+    // The session that turns up later is that start's; the other is not.
+    await cpo.putSession(session, { push: true });
+    await cpo.putSession({ ...session, id: "SESSION-B" }, { push: true });
+    expect((await held()).commandId).toBe(commandId);
+    expect((await held("SESSION-B")).commandId).toBeNull();
+  });
+});
+
 describe("sessions and CDRs pulled from a CPO", () => {
   // A pull asks for changes since the peer was added (the real clock), so these are
   // dated from now on.
@@ -720,6 +947,27 @@ describe("sessions and CDRs pulled from a CPO", () => {
     expect(sessions.sessions.size).toBe(5);
     // It went on at the failed page, not at the first one.
     expect(pages[2]).toBe(pages[1]);
+  });
+
+  it("skips an object it cannot store, and goes on with the rest of the page", async () => {
+    const { session } = await started();
+    for (let n = 1; n <= 3; n++)
+      await cpo.putSession({ ...session, id: `S${n}`, last_updated: recent() });
+    // S2 stays busy: every write of it loses.
+    const insert = sessions.insertSession.bind(sessions);
+    vi.spyOn(sessions, "insertSession").mockImplementation(
+      async (peerId, write, now) =>
+        write.session.id === "S2" ? null : insert(peerId, write, now),
+    );
+    const report = await pullSessions(one.id, "sessions", pullDeps());
+    expect(report).toMatchObject({ complete: true, items: 2, invalid: 1 });
+    expect([...sessions.sessions.values()].map((s) => s.session.id)).toEqual([
+      "S1",
+      "S3",
+    ]);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("skipped ZZ/MCK/S2"),
+    );
   });
 
   it("never lets an older pulled version replace a newer pushed one", async () => {

@@ -110,8 +110,10 @@ alter table public.emsp_ocpi_sync_state add constraint emsp_ocpi_sync_state_modu
 
 -- Reconciliation per peer, UTC day (of the start) and currency, for sessions and CDRs
 -- that started in [p_from, p_to): counts, sessions COMPLETED without a CDR, CDRs that
--- name no session we hold, and totals. A credit CDR counts against the totals and needs
--- no session. At most 100 IDs per list (country_code/party_id/id); the counts are whole.
+-- name no session we hold, CDRs of a token we did not issue (no driver to bill), CDRs in
+-- another currency than their session, and totals. A credit CDR counts against the
+-- totals and needs no session. At most 100 IDs per list (country_code/party_id/id); the
+-- counts are whole.
 create function public.emsp_reconciliation(
   p_from timestamptz,
   p_to timestamptz,
@@ -131,6 +133,10 @@ create function public.emsp_reconciliation(
   credit_cdrs integer,
   cdrs_without_session integer,
   cdrs_without_session_ids text[],
+  cdrs_unknown_token integer,
+  cdrs_unknown_token_ids text[],
+  cdrs_currency_mismatch integer,
+  cdrs_currency_mismatch_ids text[],
   cdr_energy_e4 bigint,
   cdr_cost_excl_vat_e4 bigint,
   cdr_cost_incl_vat_e4 bigint
@@ -164,7 +170,14 @@ as $$
         select 1 from public.emsp_sessions as s
         where s.peer_id = c.peer_id and s.country_code = c.country_code
           and s.party_id = c.party_id and s.session_id = c.session_id
-      ) as has_session
+      ) as has_session,
+      c.driver_ref is null as unknown_token,
+      exists (
+        select 1 from public.emsp_sessions as s
+        where s.peer_id = c.peer_id and s.country_code = c.country_code
+          and s.party_id = c.party_id and s.session_id = c.session_id
+          and s.currency <> c.currency
+      ) as currency_mismatch
     from public.emsp_cdrs as c
     where c.start_date_time >= p_from and c.start_date_time < p_to
       and (p_peer_id is null or c.peer_id = p_peer_id)
@@ -193,6 +206,16 @@ as $$
         (array_agg(c.ref order by c.ref collate "C") filter (where not c.has_session))[1:100],
         '{}'::text[]
       ) as cdrs_without_session_ids,
+      count(*) filter (where c.unknown_token)::integer as cdrs_unknown_token,
+      coalesce(
+        (array_agg(c.ref order by c.ref collate "C") filter (where c.unknown_token))[1:100],
+        '{}'::text[]
+      ) as cdrs_unknown_token_ids,
+      count(*) filter (where c.currency_mismatch)::integer as cdrs_currency_mismatch,
+      coalesce(
+        (array_agg(c.ref order by c.ref collate "C") filter (where c.currency_mismatch))[1:100],
+        '{}'::text[]
+      ) as cdrs_currency_mismatch_ids,
       sum(c.energy)::bigint as cdr_energy_e4,
       sum(c.excl)::bigint as cdr_cost_excl_vat_e4,
       -- Null when any CDR of the group gave no amount including VAT.
@@ -209,6 +232,10 @@ as $$
     coalesce(ca.cdrs, 0), coalesce(ca.credit_cdrs, 0),
     coalesce(ca.cdrs_without_session, 0),
     coalesce(ca.cdrs_without_session_ids, '{}'::text[]),
+    coalesce(ca.cdrs_unknown_token, 0),
+    coalesce(ca.cdrs_unknown_token_ids, '{}'::text[]),
+    coalesce(ca.cdrs_currency_mismatch, 0),
+    coalesce(ca.cdrs_currency_mismatch_ids, '{}'::text[]),
     coalesce(ca.cdr_energy_e4, 0), coalesce(ca.cdr_cost_excl_vat_e4, 0),
     case when ca.peer_id is null then 0 else ca.cdr_cost_incl_vat_e4 end
   from sa
