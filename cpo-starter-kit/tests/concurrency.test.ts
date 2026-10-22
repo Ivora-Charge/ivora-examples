@@ -447,27 +447,48 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
       active: boolean,
     ) =>
       c`select cpo_track_session(9201, 9101, 91011, 1, '****ABCD', now(), null, 5, ${active})`;
+    await a`delete from cpo_active_sessions where transaction_id = 9201`;
     await track(a, true);
     const secondPid = await pidOf(b);
     let release!: () => void;
     const released = new Promise<void>((r) => (release = r));
     let ended!: () => void;
-    const endedFirst = new Promise<void>((r) => (ended = r));
+    let endFailed!: (e: unknown) => void;
+    const endedFirst = new Promise<void>((resolve, reject) => {
+      ended = resolve;
+      endFailed = reject;
+    });
     // The end is written but not committed yet.
     const tx = a.begin(async (t) => {
-      await track(t, false);
+      try {
+        await track(t, false);
+      } catch (e) {
+        // Fail fast instead of waiting for the test timeout.
+        endFailed(e);
+        throw e;
+      }
       ended();
       await released;
     });
-    await endedFirst;
-    // The late report waits on the row, then sees it ended and changes nothing.
-    const late = track(b, true);
-    await waitingForLock(secondPid);
-    release();
-    await tx;
-    await late;
+    tx.catch(() => undefined);
+    try {
+      await endedFirst;
+      // The late report waits on the row, then sees it ended and changes nothing.
+      // postgres.js sends a query only once it is awaited or .then'd, so start it now.
+      const late = track(b, true).then(
+        () => null,
+        (e: Error) => e,
+      );
+      await waitingForLock(secondPid);
+      release();
+      await tx;
+      expect(await late).toBeNull();
+    } finally {
+      // Never leave the first transaction open (it would hold the hooks too).
+      release();
+    }
     const rows =
       await a`select active from cpo_active_sessions where transaction_id = 9201`;
     expect(rows).toEqual([{ active: false }]);
-  });
+  }, 15_000);
 });
