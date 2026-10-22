@@ -3,6 +3,8 @@ import { cronAuthorized } from "@/lib/server/checkout/cron-auth";
 import { config, isDemo } from "@/lib/server/env";
 
 export const dynamic = "force-dynamic";
+// The loop starts no new checkout after SETTLE_BUDGET_MS (25 s), so it ends inside this.
+export const maxDuration = 60;
 
 const reply = (status: number, body: Record<string, unknown>) =>
   Response.json(body, { status });

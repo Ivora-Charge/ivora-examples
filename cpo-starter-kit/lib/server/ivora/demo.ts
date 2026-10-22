@@ -1041,6 +1041,25 @@ export function createDemoClient(
         )
         .slice(0, o.limit ?? 50);
     },
+    // Like the API: oldest first by ID, after the cursor, and items without the ID
+    // token or connector (GET /transactions/{id} has those).
+    async listTransactionsAfter(o) {
+      const limit = o.limit ?? 100;
+      const rows = (await transactions())
+        .filter((t) => t.station_id === o.station_id && t.id > o.after)
+        .sort((a, b) => a.id - b.id);
+      const data = rows.slice(0, limit).map((t) => ({
+        id: t.id,
+        station_id: t.station_id,
+        active: t.active,
+        started_at: t.started_at,
+        ended_at: t.ended_at,
+      }));
+      return {
+        data,
+        next_cursor: rows.length > limit ? data[data.length - 1].id : null,
+      };
+    },
     async findToken(externalReference) {
       const t = (await fleet.load()).tokens?.find(
         (x) => x.external_reference === externalReference,

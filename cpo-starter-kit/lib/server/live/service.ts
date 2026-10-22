@@ -1198,6 +1198,16 @@ export function eventStation(e: IvoraEvent): number | null {
 }
 
 /**
+ * The transaction a charger event names, if it carries one (`transaction_id`, or a
+ * `transaction` object's `id`). Only a hint: it is read from the API before use.
+ */
+export function eventTransaction(e: IvoraEvent): number | null {
+  const tx = e.data.transaction as { id?: unknown } | undefined;
+  const v = e.data.transaction_id ?? tx?.id;
+  return typeof v === "number" && Number.isInteger(v) && v > 0 ? v : null;
+}
+
+/**
  * Processes a verified, new event after it was acknowledged. The event is only a cue:
  * an operation.completed re-reads its operation from the API before a command records
  * it, and every other event just tells open Live pages to re-read the API.

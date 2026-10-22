@@ -173,6 +173,16 @@ export interface Transaction {
   energy_wh?: number | null;
 }
 
+/**
+ * One item of `GET /transactions`. The list runs oldest first (page on with `after`,
+ * a transaction ID) and its items carry no ID token or connector: read
+ * `GET /transactions/{id}` for those.
+ */
+export type TransactionListItem = Pick<Transaction, "id"> &
+  Partial<
+    Pick<Transaction, "station_id" | "active" | "started_at" | "ended_at">
+  >;
+
 /** `PUT /v1/tenants/{id}/branding`: what drivers see on Ivora's payment pages. */
 export interface BrandingInput {
   /** 1 to 80 characters. */
@@ -521,6 +531,15 @@ export interface IvoraClient {
     limit?: number;
     station_id?: number;
   }): Promise<Transaction[]>;
+  /**
+   * One page of `GET /transactions`, oldest first: transactions with an ID above
+   * `after` (lib/server/live/transactions.ts follows it from a stored high-water mark).
+   */
+  listTransactionsAfter(o: {
+    station_id: number;
+    after: number;
+    limit?: number;
+  }): Promise<Page<TransactionListItem>>;
   getTransaction(transactionId: number): Promise<Transaction>;
   /** The token with this external_reference, if any (`GET /tokens`). */
   findToken(externalReference: string): Promise<TokenRecord | null>;

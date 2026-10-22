@@ -1,7 +1,12 @@
 import { after } from "next/server";
 import { getCheckout, settleOpenCheckouts } from "@/lib/server/checkout";
 import { config, isDemo } from "@/lib/server/env";
-import { eventStation, getLive, handleEvent } from "@/lib/server/live";
+import {
+  eventStation,
+  eventTransaction,
+  getLive,
+  handleEvent,
+} from "@/lib/server/live";
 import {
   MAX_BODY_BYTES,
   parseEvent,
@@ -62,9 +67,13 @@ export async function POST(req: Request) {
       await handleEvent(d, evt);
       // A charger event is also a cue for that station's driver checkouts: a session
       // that ended is settled, one near its card hold is stopped (re-read from the API).
+      // A transaction ID in the event helps find a new free session; it is read first.
       const station = eventStation(evt);
       if (station)
-        await settleOpenCheckouts(getCheckout(), { stationId: station });
+        await settleOpenCheckouts(getCheckout(), {
+          stationId: station,
+          transactionId: eventTransaction(evt) ?? undefined,
+        });
     } catch (e) {
       // The next page load or check re-reads the API anyway.
       console.error("cpo-starter-kit: webhook processing failed:", {

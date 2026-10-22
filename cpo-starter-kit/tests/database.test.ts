@@ -56,6 +56,7 @@ const TABLES = [
   "cpo_connector_tariffs",
   "cpo_checkouts",
   "cpo_free_tokens",
+  "cpo_transaction_marks",
 ] as const;
 
 beforeAll(async () => {
@@ -1602,6 +1603,44 @@ describe("driver checkouts", () => {
             [operatorA, REQ],
           ),
         ).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("transaction marks", () => {
+  const mark = async (station: number) =>
+    (
+      await pg.query<{ last_transaction_id: string }>(
+        "select last_transaction_id from cpo_transaction_marks where station_id=$1",
+        [station],
+      )
+    ).rows[0]?.last_transaction_id;
+  const advance = (station: number, id: number) =>
+    pg.query("select public.cpo_advance_transaction_mark($1, $2)", [
+      station,
+      id,
+    ]);
+
+  it("only moves up", async () => {
+    await as("service_role", null, async () => {
+      await advance(9103, 1200);
+      expect(String(await mark(9103))).toBe("1200");
+      await advance(9103, 900);
+      expect(String(await mark(9103))).toBe("1200");
+      await advance(9103, 1201);
+      expect(String(await mark(9103))).toBe("1201");
+      await expect(advance(0, 1)).rejects.toThrow(/cpo_invalid/);
+      await expect(advance(9103, -1)).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
+  it("is not readable or writable from the browser", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        await expect(
+          pg.query("select * from cpo_transaction_marks"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(advance(9103, 5000)).rejects.toThrow(/permission denied/);
       });
   });
 });

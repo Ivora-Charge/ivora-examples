@@ -267,6 +267,17 @@ export type Database = {
         };
         Relationships: [];
       };
+      cpo_transaction_marks: {
+        Row: {
+          station_id: number;
+          last_transaction_id: number;
+          updated_at: Timestamp;
+        };
+        // Written only through cpo_advance_transaction_mark.
+        Insert: { station_id: number; last_transaction_id: number };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
       cpo_tariffs: {
         Row: {
           id: string;
@@ -514,6 +525,10 @@ export type Database = {
       cpo_record_live_command: {
         Args: { p_operator_id: string; p_id: string; p_changes: Json };
         Returns: boolean;
+      };
+      cpo_advance_transaction_mark: {
+        Args: { p_station_id: number; p_transaction_id: number };
+        Returns: undefined;
       };
       cpo_record_ivora_event: {
         Args: { p_id: string; p_type: string; p_station_id: number | null };

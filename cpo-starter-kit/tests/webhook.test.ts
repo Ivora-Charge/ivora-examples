@@ -162,6 +162,27 @@ describe("webhook route", () => {
     expect(later.jobs).toHaveLength(1);
   });
 
+  it("passes on a transaction ID the event carries, as a hint", async () => {
+    await deliver({
+      ...event,
+      id: "evt_11",
+      type: "meter.sampled",
+      data: { transaction_id: 1201, connector_id: 701 },
+    });
+    await deliver({
+      ...event,
+      id: "evt_12",
+      data: { transaction: { id: 1202 } },
+    });
+    await deliver({ ...event, id: "evt_13", data: { transaction_id: "x" } });
+    for (const job of later.jobs) await job();
+    expect(settled.calls).toEqual([
+      { stationId: 70, transactionId: 1201 },
+      { stationId: 70, transactionId: 1202 },
+      { stationId: 70 },
+    ]);
+  });
+
   it("refuses unsigned, wrongly signed and other tenants' events", async () => {
     expect((await deliver(event, false)).status).toBe(401);
     expect((await deliver(event, true, "wrong")).status).toBe(401);
