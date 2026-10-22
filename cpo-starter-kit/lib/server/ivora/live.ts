@@ -198,9 +198,14 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       root?: keyof typeof roots;
       /** A POST that changes nothing (a simulation): no Idempotency-Key. */
       readOnly?: boolean;
+      /** Hand a 429 back at once (with its Retry-After) instead of waiting. */
+      failOn429?: boolean;
     } = {},
   ): Promise<T> {
-    const deadline = opts.deadline ?? now() + MAX_REQUEST_SECONDS * 1000;
+    const deadline = Math.min(
+      opts.deadline ?? Infinity,
+      now() + MAX_REQUEST_SECONDS * 1000,
+    );
     // Second guard behind getIvora(): a live client never sends in demo mode.
     if (isDemo()) throw new Error("Demo mode never calls the Ivora API");
     if (method !== "GET" && !opts.readOnly && !(opts.key && KEY.test(opts.key)))
@@ -231,7 +236,12 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
           Math.min(TIMEOUT_MS, left),
         );
       } catch (e) {
-        if (!(e instanceof IvoraError) || !retriable(e) || n >= attempts)
+        if (
+          !(e instanceof IvoraError) ||
+          !retriable(e) ||
+          n >= attempts ||
+          (e.status === 429 && opts.failOn429)
+        )
           throw e;
         const waitMs = (e.retryAfterSeconds ?? 2 ** (n - 1)) * 1000;
         // Past the deadline: hand the error (and its Retry-After) back to the caller.
@@ -351,8 +361,11 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         `operations/${encodeURIComponent(operationId)}`,
       );
     },
-    getTransaction(transactionId) {
-      return request<Transaction>("GET", `transactions/${transactionId}`);
+    getTransaction(transactionId, limits = {}) {
+      return request<Transaction>("GET", `transactions/${transactionId}`, {
+        deadline: limits.deadline,
+        failOn429: limits.failOn429,
+      });
     },
     async findToken(externalReference) {
       return (
@@ -383,10 +396,11 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         )
       ).data;
     },
-    listTransactionsAfter(o) {
+    listTransactionsAfter(o, limits = {}) {
       return request<Page<TransactionListItem>>(
         "GET",
         `transactions${query({ station_id: o.station_id, after: o.after || undefined, limit: o.limit ?? 100 })}`,
+        { deadline: limits.deadline, failOn429: limits.failOn429 },
       );
     },
     // A PUT replaces the whole record, so repeating it is harmless; the key still

@@ -11,6 +11,7 @@ import {
   type LiveCommand,
   type LiveStore,
   type StaffToken,
+  type TrackedSession,
 } from "./types";
 
 type DbError = { message: string; code?: string } | null;
@@ -28,6 +29,56 @@ function check<R extends { error: DbError }>(r: R): R {
     `Supabase request failed (${r.error.code ?? "unknown"}). Check the migrations and keys.`,
   );
 }
+
+const SESSION_COLUMNS =
+  "transaction_id, station_id, connector_id, connector_number, id_token, started_at, ended_at, energy_wh, active, checked_at, changed_at";
+type SessionRow = Database["public"]["Tables"]["cpo_active_sessions"]["Row"];
+/** Rows per request when paging through tracked sessions or marks. */
+const PAGE = 1000;
+
+const posInt = (v: unknown) =>
+  typeof v === "number" && Number.isSafeInteger(v) && v > 0;
+const time = (v: unknown) =>
+  typeof v === "string" && !Number.isNaN(Date.parse(v)) ? v : null;
+
+/**
+ * A tracked session row, or null for one the kit can't read (it is skipped with a
+ * log, so one odd row can't take the Live page down).
+ */
+function toTracked(r: SessionRow): TrackedSession | null {
+  const energy = r.energy_wh === null ? null : Number(r.energy_wh);
+  const checkedAt = time(r.checked_at);
+  if (
+    !posInt(r.transaction_id) ||
+    !posInt(r.station_id) ||
+    typeof r.active !== "boolean" ||
+    !checkedAt
+  ) {
+    console.error("cpo-starter-kit: skipped an unreadable tracked session", {
+      transactionId: r.transaction_id,
+    });
+    return null;
+  }
+  return {
+    transactionId: r.transaction_id,
+    stationId: r.station_id,
+    connectorId: posInt(r.connector_id) ? r.connector_id : null,
+    connectorNumber: Number.isInteger(r.connector_number)
+      ? r.connector_number
+      : null,
+    idToken: typeof r.id_token === "string" ? r.id_token : null,
+    startedAt: time(r.started_at),
+    endedAt: time(r.ended_at),
+    energyWh:
+      energy !== null && Number.isFinite(energy) && energy >= 0 ? energy : null,
+    active: r.active,
+    checkedAt,
+    changedAt: time(r.changed_at) ?? checkedAt,
+  };
+}
+
+const tracked = (rows: SessionRow[] | null) =>
+  (rows ?? []).map(toTracked).filter((t) => t !== null);
 
 const COLUMNS =
   "id, operator_id, request_id, station_id, action, connector_id, transaction_id, mode, phase, operation_id, charger_status, error, confirmed_sessions, requested_by, requested_at, updated_at, finished_at";
@@ -204,29 +255,46 @@ export function createSupabaseLiveStore(): LiveStore {
         }),
       );
     },
-    async listTrackedSessions(o = {}) {
+    async listActiveSessions(o = {}) {
+      const out: TrackedSession[] = [];
+      // Keyset pages, so a row added meanwhile can't shift one out of the list.
+      for (let before: number | null = null; ;) {
+        let q = svc()
+          .from("cpo_active_sessions")
+          .select(SESSION_COLUMNS)
+          .eq("active", true)
+          .order("transaction_id", { ascending: false })
+          .limit(PAGE);
+        if (o.stationId !== undefined) q = q.eq("station_id", o.stationId);
+        if (before !== null) q = q.lt("transaction_id", before);
+        const { data } = check(await q);
+        const rows = (data ?? []) as SessionRow[];
+        out.push(...tracked(rows));
+        if (rows.length < PAGE) return out;
+        before = rows[rows.length - 1].transaction_id;
+      }
+    },
+    async listEndedSessions(stationId, o = {}) {
       let q = svc()
         .from("cpo_active_sessions")
-        .select(
-          "transaction_id, station_id, connector_id, connector_number, id_token, started_at, ended_at, energy_wh, active, checked_at",
-        )
+        .select(SESSION_COLUMNS)
+        .eq("station_id", stationId)
+        .eq("active", false)
         .order("transaction_id", { ascending: false })
-        .limit(500);
-      if (!o.ended) q = q.eq("active", true);
-      if (o.stationId !== undefined) q = q.eq("station_id", o.stationId);
+        .limit(o.limit ?? 20);
+      if (o.before !== undefined) q = q.lt("transaction_id", o.before);
       const { data } = check(await q);
-      return (data ?? []).map((r) => ({
-        transactionId: r.transaction_id,
-        stationId: r.station_id,
-        connectorId: r.connector_id,
-        connectorNumber: r.connector_number,
-        idToken: r.id_token,
-        startedAt: r.started_at,
-        endedAt: r.ended_at,
-        energyWh: r.energy_wh === null ? null : Number(r.energy_wh),
-        active: r.active,
-        checkedAt: r.checked_at,
-      }));
+      return tracked(data as SessionRow[] | null);
+    },
+    async getTrackedSession(transactionId) {
+      const { data } = check(
+        await svc()
+          .from("cpo_active_sessions")
+          .select(SESSION_COLUMNS)
+          .eq("transaction_id", transactionId)
+          .maybeSingle(),
+      );
+      return data ? toTracked(data as SessionRow) : null;
     },
     async trackSession(s) {
       check(
@@ -243,6 +311,16 @@ export function createSupabaseLiveStore(): LiveStore {
         }),
       );
     },
+    async forgetSession(transactionId) {
+      check(
+        await svc().rpc("cpo_forget_session", {
+          p_transaction_id: transactionId,
+        }),
+      );
+    },
+    async forgetRemovedStations(keep) {
+      check(await svc().rpc("cpo_forget_removed_stations", { p_keep: keep }));
+    },
     async getTrackerMark(stationId) {
       const { data } = check(
         await svc()
@@ -253,11 +331,33 @@ export function createSupabaseLiveStore(): LiveStore {
       );
       return data ? data.last_transaction_id : null;
     },
-    async advanceTrackerMark(stationId, transactionId) {
+    async listTrackerMarks() {
+      const out = new Map<number, { mark: number; scannedAt: string | null }>();
+      for (let after = 0; ;) {
+        const { data } = check(
+          await svc()
+            .from("cpo_active_marks")
+            .select("station_id, last_transaction_id, scanned_at")
+            .gt("station_id", after)
+            .order("station_id", { ascending: true })
+            .limit(PAGE),
+        );
+        const rows = data ?? [];
+        for (const r of rows)
+          out.set(r.station_id, {
+            mark: r.last_transaction_id,
+            scannedAt: r.scanned_at,
+          });
+        if (rows.length < PAGE) return out;
+        after = rows[rows.length - 1].station_id;
+      }
+    },
+    async advanceTrackerMark(stationId, transactionId, o = {}) {
       check(
         await svc().rpc("cpo_advance_active_mark", {
           p_station_id: stationId,
           p_transaction_id: transactionId,
+          p_scanned: Boolean(o.scanned),
         }),
       );
     },

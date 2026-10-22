@@ -67,6 +67,7 @@ const stateSchema = z.object({
         energyWh: z.number().nullable(),
         active: z.boolean(),
         checkedAt: text(40),
+        changedAt: text(40),
       }),
     )
     .max(MAX_TRACKED)
@@ -75,6 +76,8 @@ const stateSchema = z.object({
   trackerMarks: z
     .record(z.string().max(12), z.number().int().nonnegative())
     .optional(),
+  /** When the tracker's scan last reached the end of a station's list. */
+  trackerScanned: z.record(z.string().max(12), text(40)).optional(),
   /** Transaction high-water marks by station ID. */
   marks: z
     .record(z.string().max(12), z.number().int().nonnegative())
@@ -265,22 +268,67 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
         marks[k] = Math.max(marks[k] ?? 0, transactionId);
       });
     },
-    async listTrackedSessions(o = {}) {
+    async listActiveSessions(o = {}) {
       return ((await cookie.load()).tracked ?? [])
         .filter(
           (t) =>
-            (o.ended || t.active) &&
+            t.active &&
             (o.stationId === undefined || t.stationId === o.stationId),
         )
         .sort((a, b) => b.transactionId - a.transactionId);
+    },
+    async listEndedSessions(stationId, o = {}) {
+      return ((await cookie.load()).tracked ?? [])
+        .filter(
+          (t) =>
+            !t.active &&
+            t.stationId === stationId &&
+            (o.before === undefined || t.transactionId < o.before),
+        )
+        .sort((a, b) => b.transactionId - a.transactionId)
+        .slice(0, o.limit ?? 20);
+    },
+    async getTrackedSession(transactionId) {
+      return (
+        ((await cookie.load()).tracked ?? []).find(
+          (t) => t.transactionId === transactionId,
+        ) ?? null
+      );
     },
     trackSession(t) {
       return update((s) => {
         const rows = (s.tracked ??= []);
         const i = rows.findIndex((x) => x.transactionId === t.transactionId);
+        const old = i >= 0 ? rows[i] : null;
         // An ended session stays ended.
-        if (i >= 0 && !rows[i].active) return;
-        const row = { ...t, checkedAt: new Date().toISOString() };
+        if (old && !old.active) return;
+        const now = new Date().toISOString();
+        // What the table can't hold is stored as unknown, as cpo_track_session does.
+        const energy =
+          t.energyWh !== null && Number.isFinite(t.energyWh) && t.energyWh >= 0
+            ? t.energyWh
+            : null;
+        const energyWh =
+          energy === null
+            ? (old?.energyWh ?? null)
+            : Math.max(energy, old?.energyWh ?? 0);
+        const row = {
+          ...t,
+          connectorId:
+            t.connectorId && t.connectorId > 0
+              ? t.connectorId
+              : (old?.connectorId ?? null),
+          idToken:
+            t.idToken && t.idToken.length <= 40
+              ? t.idToken
+              : (old?.idToken ?? null),
+          energyWh,
+          checkedAt: now,
+          changedAt:
+            !old || !t.active || energyWh !== old.energyWh
+              ? now
+              : old.changedAt,
+        };
         if (i >= 0) rows[i] = row;
         else rows.push(row);
         // Over the cookie's room: ended sessions go first, oldest first.
@@ -292,14 +340,40 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
         rows.length = Math.min(rows.length, MAX_TRACKED);
       });
     },
+    forgetSession(transactionId) {
+      return update((s) => {
+        s.tracked = (s.tracked ?? []).filter(
+          (t) => t.transactionId !== transactionId,
+        );
+      });
+    },
+    forgetRemovedStations(keep) {
+      const kept = new Set(keep);
+      return update((s) => {
+        s.tracked = (s.tracked ?? []).filter((t) => kept.has(t.stationId));
+        for (const m of [s.trackerMarks, s.trackerScanned])
+          for (const k of Object.keys(m ?? {}))
+            if (!kept.has(Number(k))) delete m![k];
+      });
+    },
     async getTrackerMark(stationId) {
       return (await cookie.load()).trackerMarks?.[String(stationId)] ?? null;
     },
-    async advanceTrackerMark(stationId, transactionId) {
+    async listTrackerMarks() {
+      const s = await cookie.load();
+      return new Map(
+        Object.entries(s.trackerMarks ?? {}).map(([k, mark]) => [
+          Number(k),
+          { mark, scannedAt: s.trackerScanned?.[k] ?? null },
+        ]),
+      );
+    },
+    async advanceTrackerMark(stationId, transactionId, o = {}) {
       await update((s) => {
         const marks = (s.trackerMarks ??= {});
         const k = String(stationId);
         marks[k] = Math.max(marks[k] ?? 0, transactionId);
+        if (o.scanned) (s.trackerScanned ??= {})[k] = new Date().toISOString();
       });
     },
     // Demo mode accepts no webhooks: nothing to deduplicate.

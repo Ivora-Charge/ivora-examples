@@ -52,6 +52,7 @@ export default async function Page() {
         readAt={live.readAt}
         webhooks={!demo && Boolean(config.webhookSecret)}
         pending={pending}
+        retryAfter={live.retryAfter}
       />
       {live.truncated && (
         <p className="notice" role="note">
@@ -62,7 +63,8 @@ export default async function Page() {
       {!live.sessionsComplete && (
         <p className="notice" role="note">
           The list of running sessions may be incomplete: Ivora was slow or
-          refused a read. It catches up on the next refresh.
+          refused a read, or some chargers haven&apos;t been checked for a few
+          minutes. It catches up on the next refreshes.
         </p>
       )}
       {(alerts === null || alerts.length > 0) && (
@@ -190,6 +192,7 @@ export default async function Page() {
                   {x.idToken ? ` · token ${x.idToken}` : ""}
                   {x.staff ? " · staff/test session" : ""}
                   {x.free ? " · free session" : ""}
+                  {x.stalled ? " · no energy for 12 hours" : ""}
                 </span>
               </li>
             ))}

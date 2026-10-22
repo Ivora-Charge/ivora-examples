@@ -1,7 +1,7 @@
 import { deflateRawSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Role } from "@/lib/roles";
-import { resetActiveSyncForTests } from "@/lib/server/live/active";
+import { SYNC_INTERVAL_MS } from "@/lib/server/live/active";
 import { createLiveClient } from "@/lib/server/ivora/live";
 import type {
   Fault,
@@ -176,10 +176,11 @@ function fakeIvora() {
         started_at: t.started_at,
         ended_at: t.ended_at,
       }));
+      // As Ivora: the last item's ID, also on the last page; `after` when empty.
       return {
         body: {
           data,
-          next_cursor: rows.length > limit ? data[data.length - 1].id : null,
+          next_cursor: data.length ? data[data.length - 1].id : after,
         },
       };
     }
@@ -315,7 +316,6 @@ describe("live view (live API mocked)", () => {
     delete process.env.DEMO_MODE;
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(T0);
-    resetActiveSyncForTests();
   });
   afterEach(() => {
     process.env = { ...saved };
@@ -461,7 +461,8 @@ describe("live view (live API mocked)", () => {
     );
     // The view labels it as a staff session.
     api.transactions.push(staffTx);
-    resetActiveSyncForTests();
+    // The next scan of the station finds it.
+    advance(api, SYNC_INTERVAL_MS);
     const r = await loadLive(d, viewer);
     expect(r.ok && r.live.sessions.map((x) => [x.id, x.staff]).sort()).toEqual([
       [900, false],
@@ -473,7 +474,7 @@ describe("live view (live API mocked)", () => {
       tokenId: 77,
     });
     api.transactions.push(tx(903, "****N234"));
-    resetActiveSyncForTests();
+    advance(api, SYNC_INTERVAL_MS);
     const f = await loadLive(d, viewer);
     expect(
       f.ok && f.live.sessions.map((x) => [x.id, x.staff, x.free]).sort(),

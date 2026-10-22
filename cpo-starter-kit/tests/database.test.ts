@@ -1708,6 +1708,86 @@ describe("tracked sessions", () => {
     });
   });
 
+  it("stamps scanned_at only when a scan reached the end, and keeps the mark", async () => {
+    await as("service_role", null, async () => {
+      const get = async () =>
+        (
+          await pg.query<{ last_transaction_id: string; scanned: boolean }>(
+            "select last_transaction_id::text, scanned_at is not null as scanned from cpo_active_marks where station_id=9105",
+          )
+        ).rows[0];
+      await pg.query("select public.cpo_advance_active_mark(9105, 40)");
+      expect(await get()).toMatchObject({ scanned: false });
+      await pg.query("select public.cpo_advance_active_mark(9105, 0, true)");
+      expect(await get()).toMatchObject({
+        last_transaction_id: "40",
+        scanned: true,
+      });
+    });
+  });
+
+  it("stores what the table can't hold as unknown instead of failing", async () => {
+    await as("service_role", null, async () => {
+      await pg.query(
+        "select public.cpo_track_session(5010, 9103, 0, 1, $1, null, null, -5, true)",
+        ["x".repeat(41)],
+      );
+      expect(
+        (
+          await pg.query(
+            "select connector_id, id_token, energy_wh from cpo_active_sessions where transaction_id=5010",
+          )
+        ).rows[0],
+      ).toEqual({ connector_id: null, id_token: null, energy_wh: null });
+    });
+  });
+
+  it("moves changed_at only when the energy grows or the session ends", async () => {
+    await as("service_role", null, async () => {
+      const changed = async () =>
+        (
+          await pg.query<{ changed_at: Date }>(
+            "select changed_at from cpo_active_sessions where transaction_id=5011",
+          )
+        ).rows[0].changed_at.getTime();
+      await track(5011, true, 100);
+      await pg.query(
+        "update cpo_active_sessions set changed_at = now() - interval '13 hours' where transaction_id=5011",
+      );
+      const old = await changed();
+      await track(5011, true, 100);
+      await track(5011, true, null);
+      expect(await changed()).toBe(old);
+      await track(5011, true, 101);
+      expect(await changed()).toBeGreaterThan(old);
+    });
+  });
+
+  it("forgets one session, and the sessions and marks of removed stations", async () => {
+    await as("service_role", null, async () => {
+      await track(5012, true);
+      await pg.query("select public.cpo_forget_session(5012)");
+      expect(await row(5012)).toBeUndefined();
+      await track(5013, true);
+      await pg.query(
+        "select public.cpo_track_session(5014, 9106, null, null, null, null, null, null, true)",
+      );
+      await pg.query("select public.cpo_advance_active_mark(9106, 7)");
+      await pg.query("select public.cpo_forget_removed_stations($1)", [
+        [9103, 9104, 9105],
+      ]);
+      expect(await row(5013)).toMatchObject({ active: true });
+      expect(await row(5014)).toBeUndefined();
+      expect(
+        (await pg.query("select 1 from cpo_active_marks where station_id=9106"))
+          .rows,
+      ).toEqual([]);
+      await expect(
+        pg.query("select public.cpo_forget_removed_stations(null)"),
+      ).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
   it("is not readable or writable from the browser", async () => {
     for (const role of ["anon", "authenticated"] as const)
       await as(role, OWNER_A, async () => {
@@ -1720,6 +1800,12 @@ describe("tracked sessions", () => {
         await expect(track(5004, true)).rejects.toThrow(/permission denied/);
         await expect(
           pg.query("select public.cpo_advance_active_mark(9104, 1)"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          pg.query("select public.cpo_forget_session(5001)"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          pg.query("select public.cpo_forget_removed_stations('{}')"),
         ).rejects.toThrow(/permission denied/);
       });
   });

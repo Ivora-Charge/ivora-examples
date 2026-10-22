@@ -22,6 +22,8 @@ import type { LiveStore } from "./types";
 
 /** Sessions younger than this stay above the mark and are offered again next scan. */
 export const MARK_LAG_MS = 5 * 60_000;
+/** Items per list page. */
+const PAGE_SIZE = 100;
 /** Pages of 100 per scan; the next scan carries on from the mark. */
 export const SCAN_MAX_PAGES = 20;
 /** Full reads (`GET /transactions/{id}`) per scan. */
@@ -62,6 +64,14 @@ export interface TransactionScan {
   include?: (item: TransactionListItem) => boolean;
   /** Called with each new candidate, oldest first. A throw stops the scan there. */
   offer: (tx: Transaction) => Promise<void>;
+  /**
+   * Asked before seeding a station with a long history and no mark (a binary search
+   * of about 20 to 40 requests). False defers it: the scan stops there, not complete,
+   * and the station is seeded on a later scan. Unset: always seed.
+   */
+  seed?: () => boolean;
+  /** No new page or full read after this time (ms, on the `now` clock). */
+  deadline?: number;
 }
 
 export interface TransactionScanResult {
@@ -69,6 +79,8 @@ export interface TransactionScanResult {
   complete: boolean;
   /** Full reads made. */
   reads: number;
+  /** Seeding was deferred (see TransactionScan.seed): nothing was scanned. */
+  deferred?: boolean;
 }
 
 /**
@@ -77,12 +89,14 @@ export interface TransactionScanResult {
  * after x" is monotonic), then moves the mark to SEED_MARGIN IDs below it. About
  * 2 * log2(newest / SEED_THRESHOLD) + log2(newest) cheap requests, whatever the history.
  * Sessions below the seed are not scanned; they are found by their webhooks instead.
- * Returns the seeded mark, or null when the station has no long history.
+ * Returns the seeded mark, null when the station has no long history, or "deferred"
+ * when `allow` said no after the first request.
  */
 export async function seedMark(
   d: TransactionScanDeps,
   stationId: number,
-): Promise<number | null> {
+  allow: () => boolean = () => true,
+): Promise<number | null | "deferred"> {
   const any = async (after: number) =>
     (
       await d.ivora.listTransactionsAfter({
@@ -92,6 +106,7 @@ export async function seedMark(
       })
     ).data.length > 0;
   if (!(await any(SEED_THRESHOLD))) return null;
+  if (!allow()) return "deferred";
   // Something exists after lo, nothing after hi.
   let lo = SEED_THRESHOLD;
   let hi = lo * 2;
@@ -123,8 +138,17 @@ export async function scanNewTransactions(
 ): Promise<TransactionScanResult> {
   const now = d.now ?? Date.now;
   const started = now();
+  const deadline = Math.min(
+    started + SCAN_BUDGET_MS,
+    scan.deadline ?? Infinity,
+  );
   let mark = (await d.marks.getTransactionMark(stationId)) ?? 0;
-  if (mark === 0) mark = (await seedMark(d, stationId)) ?? 0;
+  if (mark === 0) {
+    const seeded = await seedMark(d, stationId, scan.seed);
+    if (seeded === "deferred")
+      return { complete: false, reads: 0, deferred: true };
+    mark = seeded ?? 0;
+  }
   let after = mark;
   // The highest ID up to which every session is done (offered or too old) and older
   // than MARK_LAG_MS: the new mark. Stops moving at the first young or unread one.
@@ -136,13 +160,12 @@ export async function scanNewTransactions(
   };
   try {
     for (let page = 0; page < SCAN_MAX_PAGES; page++) {
-      if (page > 0 && now() - started > SCAN_BUDGET_MS)
-        return { complete: false, reads };
+      if (page > 0 && now() > deadline) return { complete: false, reads };
       const cursor = after;
       const res = await d.ivora.listTransactionsAfter({
         station_id: stationId,
         after: cursor,
-        limit: 100,
+        limit: PAGE_SIZE,
       });
       for (const item of res.data) {
         // Defensive: the list is filtered by station and cursor already.
@@ -151,7 +174,8 @@ export async function scanNewTransactions(
         const listed = item.started_at ? Date.parse(item.started_at) : NaN;
         let startedAt = listed;
         if (scan.include ? scan.include(item) : !(listed < (scan.since ?? 0))) {
-          if (reads >= SCAN_MAX_READS) return { complete: false, reads };
+          if (reads >= SCAN_MAX_READS || (reads > 0 && now() > deadline))
+            return { complete: false, reads };
           reads++;
           const tx = await d.ivora.getTransaction(item.id);
           startedAt = tx.started_at ? Date.parse(tx.started_at) : NaN;
@@ -161,9 +185,10 @@ export async function scanNewTransactions(
         if (!held && startedAt < now() - MARK_LAG_MS) done = item.id;
         else held = true;
       }
-      // Stop on the last page, and on a cursor that does not move forward.
+      // Stop on the last page (a short one: Ivora's next_cursor is then still the last
+      // ID, not null), and on a cursor that does not move forward.
       const next = res.next_cursor;
-      if (!next || !res.data.length || next <= cursor)
+      if (!next || res.data.length < PAGE_SIZE || next <= cursor)
         return { complete: true, reads };
       after = Math.max(after, next);
     }

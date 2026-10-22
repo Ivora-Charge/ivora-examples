@@ -290,6 +290,7 @@ export type Database = {
           energy_wh: number | null;
           active: boolean;
           checked_at: Timestamp;
+          changed_at: Timestamp;
           updated_at: Timestamp;
         };
         // Written only through cpo_track_session.
@@ -301,6 +302,7 @@ export type Database = {
         Row: {
           station_id: number;
           last_transaction_id: number;
+          scanned_at: Timestamp | null;
           updated_at: Timestamp;
         };
         // Written only through cpo_advance_active_mark.
@@ -561,7 +563,19 @@ export type Database = {
         Returns: undefined;
       };
       cpo_advance_active_mark: {
-        Args: { p_station_id: number; p_transaction_id: number };
+        Args: {
+          p_station_id: number;
+          p_transaction_id: number;
+          p_scanned?: boolean;
+        };
+        Returns: undefined;
+      };
+      cpo_forget_session: {
+        Args: { p_transaction_id: number };
+        Returns: undefined;
+      };
+      cpo_forget_removed_stations: {
+        Args: { p_keep: number[] };
         Returns: undefined;
       };
       cpo_track_session: {
