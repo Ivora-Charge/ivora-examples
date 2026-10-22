@@ -37,9 +37,9 @@ test("demo: the home page shows the setup checklist", async ({ page }) => {
   await expect(checkItem(page, "Company details")).toContainText("To do");
   await expect(checkItem(page, "Brand")).toContainText("To do");
   await expect(checkItem(page, "Stripe ready")).toContainText("To do");
-  // The demo project has sample chargers; pricing comes in a later part.
+  // The demo project has sample chargers with sample tariffs.
   await expect(checkItem(page, "First charger")).toContainText("Done");
-  await expect(checkItem(page, "First price")).toContainText("Coming soon");
+  await expect(checkItem(page, "First price")).toContainText("Done");
 });
 
 test("demo: the setup wizard takes company, brand and Stripe end to end", async ({
@@ -139,7 +139,8 @@ test("demo: the setup wizard takes company, brand and Stripe end to end", async 
   await expect(checklist(page)).toBeVisible();
   for (const label of ["Company details", "Brand", "Stripe ready"])
     await expect(checkItem(page, label)).toContainText("Done");
-  await expect(page.getByText("4 of 5 done")).toBeVisible();
+  // The sample chargers already have sample tariffs, so every step is done.
+  await expect(page.getByText("5 of 5 done")).toBeVisible();
 });
 
 test("demo: settings show every step and refuse a logo that isn't an image", async ({

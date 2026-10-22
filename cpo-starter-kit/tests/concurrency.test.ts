@@ -299,4 +299,108 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
     const rows = await a`select 1 from cpo_live_commands where station_id = 77`;
     expect(rows).toHaveLength(1);
   });
+
+  /**
+   * `first` runs in an open transaction (its row locks held); meanwhile `second`
+   * starts, waits for the lock, and its answer (or error) is returned once the first
+   * commits.
+   */
+  async function raceWrites(
+    first: (tx: postgres.TransactionSql) => Promise<unknown>,
+    second: (c: postgres.Sql) => Promise<unknown>,
+  ) {
+    const secondPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let locked!: () => void;
+    const hasLocks = new Promise<void>((r) => (locked = r));
+    const tx = a.begin(async (t) => {
+      await first(t);
+      locked();
+      await released;
+    });
+    await hasLocks;
+    const out = second(b).then(
+      () => null,
+      (e: Error) => e,
+    );
+    await waitingForLock(secondPid);
+    release();
+    await tx;
+    return out;
+  }
+
+  const DEF = { kind: "paid", currency: "USD" };
+
+  async function liveTariff() {
+    const [{ id }] = await a<
+      { id: string }[]
+    >`select cpo_create_tariff(${operator}, ${OWNER}, 'Standard', ${a.json(DEF)}) as id`;
+    await a`select cpo_record_tariff_version(${operator}, ${OWNER}, ${id}, 1, 500)`;
+    return id;
+  }
+
+  it("refuses a tariff save from a stale editor that waited on another save", async () => {
+    await reset();
+    const id = await liveTariff();
+    const [{ revision }] = await a<
+      { revision: number }[]
+    >`select revision from cpo_tariffs where id = ${id}`;
+    // Both editors were loaded at the same revision.
+    const e = await raceWrites(
+      (tx) =>
+        tx`select cpo_add_tariff_version(${operator}, ${OWNER}, ${id}, ${revision}, 'Standard', ${tx.json({ ...DEF, energyMinorPerKwh: 45 })})`,
+      (c) =>
+        c`select cpo_add_tariff_version(${operator}, ${MANAGER}, ${id}, ${revision}, 'Standard', ${c.json({ ...DEF, idleMinorPerMinute: 50 })})`,
+    );
+    expect(String(e)).toMatch(/cpo_tariff_changed/);
+    const rows = await a<
+      { version: number; definition: { energyMinorPerKwh?: number } }[]
+    >`select version, definition from cpo_tariff_versions where tariff_id = ${id} order by version`;
+    expect(rows.map((r) => r.version)).toEqual([1, 2]);
+    expect(rows[1].definition.energyMinorPerKwh).toBe(45);
+  });
+
+  it("refuses a stale station save that would reopen a private charger", async () => {
+    await reset();
+    const id = await liveTariff();
+    const save = (
+      c: postgres.Sql | postgres.TransactionSql,
+      actor: string,
+      expected: number,
+      priv: boolean,
+    ) =>
+      c`select cpo_set_station_pricing(${operator}, ${actor}, 9101, ${expected}, ${id}, ${priv}, ${c.json([])})`;
+    await save(a, OWNER, 0, false);
+    // Both forms were loaded at revision 1; the owner makes it private first.
+    const e = await raceWrites(
+      (tx) => save(tx, OWNER, 1, true),
+      (c) => save(c, MANAGER, 1, false),
+    );
+    expect(String(e)).toMatch(/cpo_station_changed/);
+    const [row] = await a<
+      { private: boolean; revision: number }[]
+    >`select private, revision from cpo_station_pricing where station_id = 9101`;
+    expect(row).toEqual({ private: true, revision: 2 });
+  });
+
+  it("saves a station's first pricing once when two forms race", async () => {
+    await reset();
+    const id = await liveTariff();
+    const save = (
+      c: postgres.Sql | postgres.TransactionSql,
+      actor: string,
+      priv: boolean,
+    ) =>
+      c`select cpo_set_station_pricing(${operator}, ${actor}, 9102, 0, ${id}, ${priv}, ${c.json([])})`;
+    const e = await raceWrites(
+      (tx) => save(tx, OWNER, true),
+      (c) => save(c, MANAGER, false),
+    );
+    expect(String(e)).toMatch(/cpo_station_changed/);
+    const rows = await a<
+      { private: boolean }[]
+    >`select private from cpo_station_pricing where station_id = 9102`;
+    expect(rows).toEqual([{ private: true }]);
+  });
 });

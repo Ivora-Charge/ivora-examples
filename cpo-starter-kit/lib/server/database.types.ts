@@ -208,6 +208,101 @@ export type Database = {
         };
         Relationships: [];
       };
+      cpo_tariffs: {
+        Row: {
+          id: string;
+          operator_id: string;
+          name: string;
+          revision: number;
+          last_version: number;
+          created_by: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          id?: string;
+          operator_id: string;
+          name: string;
+          created_by?: string | null;
+        };
+        Update: {
+          name?: string;
+          revision?: number;
+          last_version?: number;
+          updated_at?: Timestamp;
+        };
+        Relationships: [];
+      };
+      cpo_tariff_versions: {
+        Row: {
+          tariff_id: string;
+          operator_id: string;
+          version: number;
+          definition: Json;
+          ivora_tariff_id: number | null;
+          attempt: number;
+          archived_at: Timestamp | null;
+          created_by: string | null;
+          created_at: Timestamp;
+        };
+        Insert: {
+          tariff_id: string;
+          operator_id: string;
+          version: number;
+          definition: Json;
+          ivora_tariff_id?: number | null;
+          created_by?: string | null;
+        };
+        Update: {
+          ivora_tariff_id?: number | null;
+          attempt?: number;
+          archived_at?: Timestamp | null;
+        };
+        Relationships: [];
+      };
+      cpo_station_pricing: {
+        Row: {
+          operator_id: string;
+          station_id: number;
+          tariff_id: string | null;
+          private: boolean;
+          revision: number;
+          updated_by: string | null;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          operator_id: string;
+          station_id: number;
+          tariff_id?: string | null;
+          private?: boolean;
+          updated_by?: string | null;
+        };
+        Update: {
+          tariff_id?: string | null;
+          private?: boolean;
+          revision?: number;
+        };
+        Relationships: [];
+      };
+      cpo_connector_tariffs: {
+        Row: {
+          operator_id: string;
+          station_id: number;
+          connector_id: number;
+          tariff_id: string;
+          updated_by: string | null;
+          updated_at: Timestamp;
+        };
+        Insert: {
+          operator_id: string;
+          station_id: number;
+          connector_id: number;
+          tariff_id: string;
+          updated_by?: string | null;
+        };
+        Update: { tariff_id?: string };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -362,6 +457,75 @@ export type Database = {
       cpo_record_ivora_event: {
         Args: { p_id: string; p_type: string; p_station_id: number | null };
         Returns: boolean;
+      };
+      cpo_create_tariff: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_name: string;
+          p_definition: Json;
+        };
+        Returns: string;
+      };
+      cpo_add_tariff_version: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_tariff_id: string;
+          p_expected_revision: number;
+          p_name: string;
+          p_definition: Json;
+        };
+        Returns: number;
+      };
+      cpo_next_tariff_attempt: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_tariff_id: string;
+          p_version: number;
+        };
+        Returns: number;
+      };
+      cpo_record_tariff_version: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_tariff_id: string;
+          p_version: number;
+          p_ivora_tariff_id: number;
+        };
+        Returns: undefined;
+      };
+      cpo_drop_tariff_version: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_tariff_id: string;
+          p_version: number;
+        };
+        Returns: undefined;
+      };
+      cpo_record_tariff_archived: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_tariff_id: string;
+          p_version: number;
+        };
+        Returns: undefined;
+      };
+      cpo_set_station_pricing: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_station_id: number;
+          p_expected_revision: number;
+          p_tariff_id: string | null;
+          p_private: boolean;
+          p_connectors: Json;
+        };
+        Returns: undefined;
       };
     };
     Enums: { [_ in never]: never };

@@ -12,8 +12,11 @@ import type {
   Operation,
   Page,
   PaymentAccount,
+  Quote,
   Station,
   StationInput,
+  Tariff,
+  TariffArchived,
   TokenRecord,
   Transaction,
 } from "./types";
@@ -93,7 +96,7 @@ function retriable(e: IvoraError): boolean {
 
 async function toError(res: Response): Promise<IvoraError> {
   const j = (await res.json().catch(() => null)) as {
-    error?: { code?: unknown; message?: unknown };
+    error?: { code?: unknown; message?: unknown; details?: unknown };
     request_id?: unknown;
   } | null;
   const code =
@@ -112,6 +115,9 @@ async function toError(res: Response): Promise<IvoraError> {
     message,
     typeof j?.request_id === "string" ? j.request_id : undefined,
     parseRetryAfter(res.headers.get("retry-after")) ?? undefined,
+    j?.error?.details && typeof j.error.details === "object"
+      ? (j.error.details as Record<string, unknown>)
+      : undefined,
   );
 }
 
@@ -186,12 +192,14 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       key?: string;
       deadline?: number;
       root?: keyof typeof roots;
+      /** A POST that changes nothing (a simulation): no Idempotency-Key. */
+      readOnly?: boolean;
     } = {},
   ): Promise<T> {
     const deadline = opts.deadline ?? now() + MAX_REQUEST_SECONDS * 1000;
     // Second guard behind getIvora(): a live client never sends in demo mode.
     if (isDemo()) throw new Error("Demo mode never calls the Ivora API");
-    if (method !== "GET" && !(opts.key && KEY.test(opts.key)))
+    if (method !== "GET" && !opts.readOnly && !(opts.key && KEY.test(opts.key)))
       throw new Error(`Idempotency-Key missing or invalid for ${method}`);
     const url = `${roots[opts.root ?? "tenant"]}${path}`;
     const body: Body | undefined = opts.raw
@@ -270,7 +278,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
    * looked up by our external_reference instead of being made twice.
    */
   async function create<T>(
-    resource: "locations" | "stations" | "tokens",
+    resource: "locations" | "stations" | "tokens" | "tariffs",
     body: { external_reference: string },
     key: string,
   ): Promise<T> {
@@ -384,6 +392,35 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     },
     getPaymentAccount() {
       return request<PaymentAccount>("GET", "account", { root: "stripe" });
+    },
+    createTariff(input, key) {
+      return create<Tariff>("tariffs", input, key);
+    },
+    // A lookup by external_reference returns its tariff even when archived.
+    async findTariff(externalReference) {
+      return (
+        (
+          await request<Page<Tariff>>(
+            "GET",
+            `tariffs${list({ external_reference: externalReference, limit: 1 })}`,
+          )
+        ).data[0] ?? null
+      );
+    },
+    archiveTariff(tariffId, replacementTariffId, key) {
+      return request<TariffArchived>(
+        "DELETE",
+        `tariffs/${tariffId}${query({ replacement_tariff_id: replacementTariffId ?? undefined })}`,
+        { key },
+      );
+    },
+    // Read-only (nothing is stored), so it takes no Idempotency-Key.
+    simulateTariff(tariff, session) {
+      return request<Quote>("POST", "tariffs/simulate", {
+        body: { tariff, session },
+        key: undefined,
+        readOnly: true,
+      });
     },
   };
 }

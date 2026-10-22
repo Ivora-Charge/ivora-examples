@@ -164,7 +164,9 @@ export function createSupabaseChargerStore(): ChargerStore {
       const { data: c } = check(
         await svc()
           .from("cpo_sticker_codes")
-          .select("code, operator_id, charger_id, connector_number")
+          .select(
+            "code, operator_id, charger_id, connector_number, connector_id",
+          )
           .eq("code", code)
           .maybeSingle(),
       );
@@ -173,7 +175,7 @@ export function createSupabaseChargerStore(): ChargerStore {
         await Promise.all([
           svc()
             .from("cpo_chargers")
-            .select("name, label, removed_at")
+            .select("name, label, removed_at, station_id")
             .eq("id", c.charger_id)
             .maybeSingle()
             .then(check),
@@ -193,6 +195,9 @@ export function createSupabaseChargerStore(): ChargerStore {
       if (!charger) return null;
       return {
         code: c.code,
+        operatorId: c.operator_id,
+        stationId: charger.station_id,
+        connectorId: c.connector_id,
         connectorNumber: c.connector_number,
         chargerName: charger.label ?? charger.name,
         inService: !charger.removed_at,
