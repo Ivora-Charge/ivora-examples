@@ -55,6 +55,15 @@ test("demo: add a card for a vehicle, block it, make it active again and set an 
   await expect(page.locator("main").getByRole("alert")).toContainText(
     "This card is already in your list",
   );
+  // The refused form keeps what was typed; corrected, it is a new request and adds.
+  await expect(page.getByLabel("Driver or vehicle name")).toHaveValue(
+    "Someone else",
+  );
+  await page.getByLabel("Card value").fill("DEMO-E2E-0102");
+  await page.getByRole("button", { name: "Add card" }).click();
+  await expect(
+    status(page, "Card ****0102 added for Someone else"),
+  ).toBeVisible();
 
   await cards.getByRole("link", { name: "****0101" }).click();
   await expect(
@@ -67,6 +76,12 @@ test("demo: add a card for a vehicle, block it, make it active again and set an 
   await page.getByRole("button", { name: "Make active again" }).click();
   await expect(status(page, "is active again")).toBeVisible();
   await expect(card).toContainText("Active");
+  // Block again: each submit is a new request, so it is not the first one replayed.
+  await page.getByRole("button", { name: "Block card" }).click();
+  await expect(status(page, "is blocked")).toBeVisible();
+  await expect(card).toContainText("Blocked");
+  await page.getByRole("button", { name: "Make active again" }).click();
+  await expect(status(page, "is active again")).toBeVisible();
 
   await page.getByLabel("Valid until").fill("2099-12-31");
   await page.getByRole("button", { name: "Set expiry date" }).click();

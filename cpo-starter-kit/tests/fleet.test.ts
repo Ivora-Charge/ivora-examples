@@ -29,7 +29,12 @@ import {
 } from "@/lib/server/fleet/service";
 import { FleetError, type CardLedger } from "@/lib/server/fleet/types";
 import type { LedgerSession } from "@/lib/server/fleet/types";
-import { refreshCardSessions, RESCAN_MS } from "@/lib/server/fleet/usage";
+import {
+  refreshCardSessions,
+  RESCAN_MS,
+  toLedger,
+} from "@/lib/server/fleet/usage";
+import type { TrackedSession } from "@/lib/server/live/types";
 import { createDemoLedger } from "@/lib/server/fleet/demo";
 import type { Staff } from "@/lib/server/team/types";
 
@@ -153,12 +158,15 @@ function fakeApi(routes: Record<string, Route>) {
 }
 
 type MemoryLedger = CardLedger & {
-  rows: Map<number, LedgerSession & { checkedAt: number }>;
+  rows: Map<number, LedgerSession & { checkedAt: number; failures?: number }>;
   marks: Map<number, { mark: number; scannedAt: number | null }>;
 };
 
 function memoryLedger(now = () => NOW): MemoryLedger {
-  const rows = new Map<number, LedgerSession & { checkedAt: number }>();
+  const rows = new Map<
+    number,
+    LedgerSession & { checkedAt: number; failures?: number }
+  >();
   const marks = new Map<number, { mark: number; scannedAt: number | null }>();
   const inPeriod = (s: LedgerSession, since: number, until: number) => {
     const at = s.startedAt ? Date.parse(s.startedAt) : NaN;
@@ -222,6 +230,13 @@ function memoryLedger(now = () => NOW): MemoryLedger {
     async forget(id) {
       rows.delete(id);
     },
+    // As cpo_defer_card_session: 2, 4, 8 ... minutes later, at most 6 hours.
+    async defer(id) {
+      const s = rows.get(id);
+      if (!s?.active) return;
+      s.failures = Math.min((s.failures ?? 0) + 1, 30);
+      s.checkedAt = now() + Math.min(2 ** s.failures, 360) * 60_000;
+    },
     async due(before, limit) {
       return [...rows.values()]
         .filter((s) => s.active && s.checkedAt < before)
@@ -284,6 +299,50 @@ function deps(
     enabled: o.enabled ?? true,
     now: () => NOW,
   };
+}
+
+/** A form's request ID. */
+const RID = "formrequest000000001";
+
+/**
+ * Ivora's token 1 with its idempotency store: an answer is kept under its key and
+ * replayed for that key (503 outcome_unknown too). A label-only change does not move
+ * updated_at. `failNext` makes the next new key answer with that code, changing nothing.
+ */
+function statefulIvora(start: TokenRecord) {
+  const s = {
+    card: { ...start },
+    failNext: null as null | "outcome_unknown" | "request_in_progress",
+    api: null as unknown as ReturnType<typeof fakeApi>,
+  };
+  const answers = new Map<string, () => Response>();
+  s.api = fakeApi({
+    "GET tokens/1": () => json(200, s.card),
+    "PATCH tokens/1": (c) => {
+      const key = c.headers.get("idempotency-key")!;
+      const kept = answers.get(key);
+      if (kept) return kept();
+      if (s.failNext) {
+        const code = s.failNext;
+        s.failNext = null;
+        const answer = () =>
+          apiError(code === "outcome_unknown" ? 503 : 409, code);
+        answers.set(key, answer);
+        return answer();
+      }
+      const body = c.body as Partial<TokenRecord>;
+      const moves = body.status !== undefined || body.expires_at !== undefined;
+      s.card = {
+        ...s.card,
+        ...body,
+        updated_at: moves ? "2026-10-22T15:00:00Z" : s.card.updated_at,
+      };
+      const snapshot = { ...s.card };
+      answers.set(key, () => json(200, snapshot));
+      return json(200, snapshot);
+    },
+  });
+  return s;
 }
 
 const LIVE_ENV = {
@@ -350,7 +409,8 @@ describe("card input", () => {
   it("matches a session's masked token to a card by its last 4, in any case", () => {
     expect(cardKey("04a1b2c3d4e5")).toBe("D4E5");
     expect(maskedKey("****d4e5")).toBe("D4E5");
-    expect(maskedKey("****AB")).toBe("AB");
+    // Ivora masks a token of 4 characters or fewer as a bare ****: no key.
+    expect(maskedKey("****AB")).toBeNull();
     expect(cardKey("AB")).toBe("AB");
     expect(maskedKey(null)).toBeNull();
     expect(maskedKey("")).toBeNull();
@@ -388,7 +448,11 @@ describe("cards against the live API", () => {
         applyImport(d, actor, "a,driver,b", "r".repeat(22)),
       ).rejects.toBeInstanceOf(AccessDeniedError);
       await expect(
-        updateCard(d, actor, 1, { intent: "block", revision: STAMP }),
+        updateCard(d, actor, 1, {
+          intent: "block",
+          revision: STAMP,
+          requestId: RID,
+        }),
       ).rejects.toBeInstanceOf(AccessDeniedError);
     }
     expect(api.calls).toHaveLength(0);
@@ -451,6 +515,23 @@ describe("cards against the live API", () => {
       (await loadCards(deps(api.ivora, { ledger }), viewer, { search: "van" }))
         .cards[0].id,
     ).toBe(2);
+  });
+
+  it("shows no figures for a card of 4 characters or fewer, whose sessions Ivora masks as ****", async () => {
+    const short = token(7, "A1B2", { label: "Driver: Short" });
+    const api = fakeApi({
+      "GET tokens": listed([...TOKENS, short]),
+      "GET tokens/7": () => json(200, short),
+    });
+    const ledger = memoryLedger();
+    const d = deps(api.ivora, { ledger });
+    const row = (await loadCards(d, viewer)).cards.find((c) => c.id === 7)!;
+    expect(row).toMatchObject({ short: true, usage: null, sharedWith: 0 });
+    expect(
+      (await loadCards(d, viewer)).cards.find((c) => c.id === 1),
+    ).toMatchObject({ short: false });
+    const one = await loadCard(d, viewer, 7);
+    expect(one).toMatchObject({ usage: null, card: { short: true } });
   });
 
   it("names private chargers, which cards and staff start", async () => {
@@ -718,6 +799,19 @@ describe("cards against the live API", () => {
     });
   });
 
+  it("says an import still running at Ivora changed nothing yet", async () => {
+    const api = fakeApi({
+      "GET tokens": listed(TOKENS),
+      "POST tokens/import": () => apiError(409, "request_in_progress"),
+    });
+    await expect(
+      applyImport(deps(api.ivora), manager, "04NEW0000001,vehicle,Van 9", RID),
+    ).rejects.toMatchObject({
+      code: "uncertain",
+      message: expect.stringMatching(/still running.*nothing has changed yet/),
+    });
+  });
+
   it("refuses an empty or oversized file before asking Ivora", async () => {
     const api = fakeApi({ "GET tokens": listed(TOKENS) });
     const d = deps(api.ivora);
@@ -735,7 +829,7 @@ describe("cards against the live API", () => {
     expect(api.calls).toHaveLength(0);
   });
 
-  it("blocks a card with a key from the card, the action and the revision", async () => {
+  it("blocks a card with a key from the card, the action and the form's request", async () => {
     const blocked = {
       ...TOKENS[0],
       status: "Blocked",
@@ -748,13 +842,86 @@ describe("cards against the live API", () => {
     const r = await updateCard(deps(api.ivora), manager, 1, {
       intent: "block",
       revision: STAMP,
+      requestId: RID,
     });
     expect(r).toMatchObject({ changed: true, card: { state: "blocked" } });
     const patch = api.calls.find((c) => c.method === "PATCH")!;
     expect(patch.body).toEqual({ status: "Blocked" });
     expect(patch.headers.get("idempotency-key")).toMatch(
-      /^cpo-card-1-block-[0-9a-f]{16}$/,
+      new RegExp(`^cpo-card-1-block-[0-9a-f]{12}-${RID}$`),
     );
+    // Without the form's request ID nothing is sent.
+    await expect(
+      updateCard(deps(api.ivora), manager, 1, {
+        intent: "block",
+        revision: STAMP,
+      }),
+    ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("blocks after an unconfirmed try: the next submit has a new key", async () => {
+    const ivora = statefulIvora(TOKENS[0]);
+    ivora.failNext = "outcome_unknown";
+    const d = deps(ivora.api.ivora);
+    // Ivora could not confirm it, and it did not land.
+    await expect(
+      updateCard(d, manager, 1, {
+        intent: "block",
+        revision: STAMP,
+        requestId: "firstsubmit000000001",
+      }),
+    ).rejects.toMatchObject({
+      code: "uncertain",
+      message: expect.stringMatching(/could not confirm this change/),
+    });
+    expect(ivora.card.status).toBe("Accepted");
+    // The form came back with a new request ID: a new key, which Ivora carries out.
+    const r = await updateCard(d, manager, 1, {
+      intent: "block",
+      revision: STAMP,
+      requestId: "secondsubmit00000001",
+    });
+    expect(r).toMatchObject({ changed: true, card: { state: "blocked" } });
+    expect(ivora.card.status).toBe("Blocked");
+    const keys = ivora.api.calls
+      .filter((c) => c.method === "PATCH")
+      .map((c) => c.headers.get("idempotency-key"));
+    expect(new Set(keys).size).toBe(2);
+  });
+
+  it("relabels A, then B, then A again, and the card ends at A", async () => {
+    const ivora = statefulIvora({ ...TOKENS[0], label: "Driver: A" });
+    const d = deps(ivora.api.ivora);
+    const relabel = async (name: string, requestId: string) =>
+      updateCard(d, manager, 1, {
+        intent: "label",
+        // A label does not move updated_at: every form names the same revision.
+        revision: STAMP,
+        requestId,
+        kind: "driver",
+        name,
+      });
+    await relabel("B", "relabelsubmit0000001");
+    expect(ivora.card.label).toBe("Driver: B");
+    const r = await relabel("A", "relabelsubmit0000002");
+    expect(r.message).toBe('Card ****D4E5 is now labelled "Driver: A".');
+    expect(ivora.card.label).toBe("Driver: A");
+    expect(ivora.card.updated_at).toBe(STAMP);
+  });
+
+  it("says a change is still running at Ivora, not that it may be half done", async () => {
+    const ivora = statefulIvora(TOKENS[0]);
+    ivora.failNext = "request_in_progress";
+    await expect(
+      updateCard(deps(ivora.api.ivora), manager, 1, {
+        intent: "block",
+        revision: STAMP,
+        requestId: RID,
+      }),
+    ).rejects.toMatchObject({
+      code: "uncertain",
+      message: expect.stringMatching(/still running.*nothing has changed yet/),
+    });
   });
 
   it("refuses a change over a newer one, unless the card already is as asked", async () => {
@@ -763,12 +930,17 @@ describe("cards against the live API", () => {
     const d = deps(api.ivora);
     // Someone relabelled it since the page was loaded at STAMP.
     await expect(
-      updateCard(d, manager, 2, { intent: "unblock", revision: STAMP }),
+      updateCard(d, manager, 2, {
+        intent: "unblock",
+        revision: STAMP,
+        requestId: RID,
+      }),
     ).rejects.toMatchObject({ code: "stale" });
     // Blocking a blocked card (a repeated submit) sends nothing.
     const again = await updateCard(d, manager, 2, {
       intent: "block",
       revision: STAMP,
+      requestId: RID,
     });
     expect(again.changed).toBe(false);
     expect(api.calls.filter((c) => c.method === "PATCH")).toHaveLength(0);
@@ -783,6 +955,7 @@ describe("cards against the live API", () => {
     const r = await updateCard(deps(api.ivora), manager, 4, {
       intent: "unblock",
       revision: STAMP,
+      requestId: RID,
     });
     expect(api.calls.find((c) => c.method === "PATCH")!.body).toEqual({
       status: "Accepted",
@@ -801,6 +974,7 @@ describe("cards against the live API", () => {
     const r = await updateCard(d, manager, 1, {
       intent: "expiry",
       revision: STAMP,
+      requestId: RID,
       date: "2026-12-31",
     });
     // Chicago is UTC-6 in winter: the card works until 2027-01-01 00:00 local.
@@ -812,8 +986,31 @@ describe("cards against the live API", () => {
     );
     for (const date of ["2026-10-21", "2026-02-30", ""])
       await expect(
-        updateCard(d, manager, 1, { intent: "expiry", revision: STAMP, date }),
+        updateCard(d, manager, 1, {
+          intent: "expiry",
+          revision: STAMP,
+          requestId: RID,
+          date,
+        }),
       ).rejects.toMatchObject({ code: "invalid" });
+  });
+
+  it("says a blocked card stays blocked when it gets an expiry date", async () => {
+    const api = fakeApi({
+      "GET tokens/2": () => json(200, TOKENS[1]),
+      "PATCH tokens/2": (c) =>
+        json(200, { ...TOKENS[1], ...(c.body as object), updated_at: "x" }),
+    });
+    const r = await updateCard(deps(api.ivora), manager, 2, {
+      intent: "expiry",
+      revision: STAMP,
+      requestId: RID,
+      date: "2026-12-31",
+    });
+    expect(r.message).not.toMatch(/works until/);
+    expect(r.message).toMatch(
+      /expiry date of the end of 2026-12-31 .* It is blocked now/,
+    );
   });
 
   it("relabels a card for a driver or a vehicle, and never touches the kit's own tokens", async () => {
@@ -827,6 +1024,7 @@ describe("cards against the live API", () => {
     const r = await updateCard(d, manager, 3, {
       intent: "label",
       revision: STAMP,
+      requestId: RID,
       kind: "vehicle",
       name: "Van 3",
     });
@@ -835,10 +1033,18 @@ describe("cards against the live API", () => {
       label: "Vehicle: Van 3",
     });
     await expect(
-      updateCard(d, manager, 6, { intent: "block", revision: STAMP }),
+      updateCard(d, manager, 6, {
+        intent: "block",
+        revision: STAMP,
+        requestId: RID,
+      }),
     ).rejects.toMatchObject({ code: "not_found" });
     await expect(
-      updateCard(d, manager, 3, { intent: "delete", revision: STAMP }),
+      updateCard(d, manager, 3, {
+        intent: "delete",
+        revision: STAMP,
+        requestId: RID,
+      }),
     ).rejects.toMatchObject({ code: "invalid" });
   });
 });
@@ -992,13 +1198,110 @@ describe("card ledger refresh", () => {
     expect(ivora.getTransaction).toHaveBeenCalledTimes(1);
   });
 
+  it("puts off a running session whose re-read keeps failing, so the others get its slot", async () => {
+    const running = (id: number) =>
+      tx(id, { active: true, ended_at: null, energy_wh: 1_000 });
+    const sessions = [running(301), running(302), running(303)];
+    const { ivora } = fakeIvora(sessions);
+    const { IvoraError } = await import("@/lib/server/ivora/errors");
+    let clock = NOW;
+    const ledger = memoryLedger(() => clock);
+    for (const s of sessions) await ledger.record(toLedger(s, 5)!);
+    // 301 is the oldest check: first in line.
+    ledger.rows.get(301)!.checkedAt = NOW - 30 * 60_000;
+    ledger.rows.get(302)!.checkedAt = NOW - 20 * 60_000;
+    ledger.rows.get(303)!.checkedAt = NOW - 10 * 60_000;
+    ivora.getTransaction.mockImplementation(async (id: number) => {
+      if (id === 301) throw new IvoraError(500, "internal_error", "boom");
+      // 302 comes back without its token.
+      if (id === 302) return { ...sessions[1], id_token: null };
+      return sessions[2];
+    });
+    const run = () =>
+      refreshCardSessions(
+        { ivora, ledger, now: () => clock },
+        { deadline: clock + 5_000, maxStations: 0, maxRechecks: 1 },
+      );
+    await run();
+    expect(ivora.getTransaction).toHaveBeenLastCalledWith(
+      301,
+      expect.anything(),
+    );
+    // Put off by 2 minutes: the next run, a little later, reads 302.
+    expect(ledger.rows.get(301)).toMatchObject({ failures: 1, active: true });
+    clock += 60_000;
+    await run();
+    expect(ivora.getTransaction).toHaveBeenLastCalledWith(
+      302,
+      expect.anything(),
+    );
+    expect(ledger.rows.get(302)).toMatchObject({ failures: 1 });
+    clock += 60_000;
+    await run();
+    expect(ivora.getTransaction).toHaveBeenLastCalledWith(
+      303,
+      expect.anything(),
+    );
+    // Each failure doubles the wait: after a second one 301 waits 4 minutes.
+    clock += 4 * 60_000;
+    await run();
+    expect(ivora.getTransaction).toHaveBeenLastCalledWith(
+      301,
+      expect.anything(),
+    );
+    expect(ledger.rows.get(301)!.failures).toBe(2);
+    expect(ledger.rows.get(301)!.checkedAt).toBe(clock + 4 * 60_000);
+  });
+
+  it("takes a session Live's tracker already read instead of reading it again", async () => {
+    const ended = tx(401, { id_token: "****beef", energy_wh: 7_000 });
+    const { ivora } = fakeIvora([ended, tx(402)]);
+    const tracked: TrackedSession = {
+      transactionId: 401,
+      stationId: 5,
+      connectorId: 51,
+      connectorNumber: 1,
+      idToken: "****beef",
+      startedAt: ended.started_at,
+      endedAt: ended.ended_at,
+      energyWh: 7_000,
+      active: false,
+      checkedAt: new Date(NOW - DAY).toISOString(),
+      changedAt: new Date(NOW - DAY).toISOString(),
+    };
+    const tracker = {
+      getTrackedSession: vi.fn(async (id: number) =>
+        id === 401 ? tracked : null,
+      ),
+    };
+    const ledger = memoryLedger();
+    const r = await refreshCardSessions(
+      { ivora, ledger, tracker, now: () => NOW },
+      { deadline: NOW + 5_000, maxStations: 1 },
+    );
+    expect(r).toMatchObject({ reused: 1, recorded: 2 });
+    expect(ivora.getTransaction).toHaveBeenCalledTimes(1);
+    expect(ivora.getTransaction).toHaveBeenCalledWith(402, expect.anything());
+    expect(ledger.rows.get(401)).toMatchObject({
+      key: "BEEF",
+      energyWh: 7_000,
+      active: false,
+    });
+  });
+
   it("does nothing in demo mode, where the sample history is the ledger", async () => {
     const { ivora } = fakeIvora([tx(101)]);
     const r = await refreshCardSessions(
       { ivora, ledger: createDemoLedger(() => NOW) },
       { deadline: NOW + 5_000 },
     );
-    expect(r).toEqual({ stations: 0, reads: 0, recorded: 0, limited: false });
+    expect(r).toEqual({
+      stations: 0,
+      reads: 0,
+      reused: 0,
+      recorded: 0,
+      limited: false,
+    });
     expect(ivora.listAllStations).not.toHaveBeenCalled();
   });
 });

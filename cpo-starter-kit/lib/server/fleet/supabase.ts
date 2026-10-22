@@ -136,6 +136,13 @@ export function createSupabaseLedger(): CardLedger {
         }),
       );
     },
+    async defer(transactionId) {
+      check(
+        await serviceClient().rpc("cpo_defer_card_session", {
+          p_transaction_id: transactionId,
+        }),
+      );
+    },
     async due(before, limit) {
       const { data } = check(
         await serviceClient()

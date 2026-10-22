@@ -86,13 +86,20 @@ function HolderFields(p: { kind?: string; name?: string }) {
   );
 }
 
-/** Adds one card. The request ID makes a double submit one card. */
+/**
+ * Adds one card. The request ID makes a double submit one card; each answer brings the
+ * next one. The form starts again empty only after an add.
+ */
 export function AddCardForm({ requestId }: { requestId: string }) {
   const [state, action, pending] = useActionState(addCardAction, NO_STATE);
   const id = useId();
   const rid = state.requestId ?? requestId;
   return (
-    <form key={rid} onSubmit={inTransition(action)} className="form">
+    <form
+      key={state.formKey ?? "add"}
+      onSubmit={inTransition(action)}
+      className="form"
+    >
       <input type="hidden" name="requestId" value={rid} />
       <div className="field">
         <label htmlFor={`${id}-value`}>Card value</label>
@@ -248,13 +255,15 @@ export function ImportCardsForm() {
 }
 
 /**
- * A form that changes one card; it names the revision the page was loaded at. Without
+ * A form that changes one card; it names the revision the page was loaded at, and a
+ * request ID that is new after every answer (the change's Idempotency-Key). Without
  * `intent`, its buttons say what to do (name="intent"), so its outcome stays on the
  * page when the buttons change after the card did.
  */
 function CardChange(p: {
   id: number;
   revision: string;
+  requestId: string;
   intent?: string;
   children: ReactNode;
 }) {
@@ -263,6 +272,11 @@ function CardChange(p: {
     <form onSubmit={inTransition(action)} className="form" aria-busy={pending}>
       <input type="hidden" name="id" value={p.id} />
       <input type="hidden" name="revision" value={p.revision} />
+      <input
+        type="hidden"
+        name="requestId"
+        value={state.requestId ?? p.requestId}
+      />
       {p.intent && <input type="hidden" name="intent" value={p.intent} />}
       {p.children}
       <Outcome state={state} />
@@ -273,11 +287,17 @@ function CardChange(p: {
 export function HolderForm(p: {
   id: number;
   revision: string;
+  requestId: string;
   kind: string | null;
   name: string;
 }) {
   return (
-    <CardChange id={p.id} revision={p.revision} intent="label">
+    <CardChange
+      id={p.id}
+      revision={p.revision}
+      requestId={p.requestId}
+      intent="label"
+    >
       <HolderFields kind={p.kind ?? undefined} name={p.name} />
       <div>
         <button type="submit" className="button">
@@ -292,10 +312,11 @@ export function HolderForm(p: {
 export function StatusActions(p: {
   id: number;
   revision: string;
+  requestId: string;
   state: "active" | "blocked" | "expired" | "other";
 }) {
   return (
-    <CardChange id={p.id} revision={p.revision}>
+    <CardChange id={p.id} revision={p.revision} requestId={p.requestId}>
       <div className="actions">
         {p.state !== "active" && (
           <button
@@ -335,6 +356,7 @@ export function StatusActions(p: {
 export function ExpiryForm(p: {
   id: number;
   revision: string;
+  requestId: string;
   /** YYYY-MM-DD, the last day the card works; null for no expiry. */
   validUntil: string | null;
   today: string;
@@ -342,7 +364,7 @@ export function ExpiryForm(p: {
 }) {
   const id = useId();
   return (
-    <CardChange id={p.id} revision={p.revision}>
+    <CardChange id={p.id} revision={p.revision} requestId={p.requestId}>
       <div className="field">
         <label htmlFor={`${id}-date`}>Valid until</label>
         <input

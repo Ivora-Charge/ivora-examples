@@ -43,12 +43,13 @@ export const maskCard = (value: string) => `****${value.slice(-4)}`;
 
 /**
  * The key of a session's token as the API shows it (****1234), or null when there is
- * none. The API masks a token to its last 4 characters behind ****.
+ * none. The API masks a token to its last 4 characters behind ****, and a token of 4
+ * characters or fewer to a bare ****: that has no key (no card can be matched to it).
  */
 export function maskedKey(masked: string | null | undefined): string | null {
   if (!masked) return null;
   const tail = (masked.startsWith("****") ? masked.slice(4) : masked).slice(-4);
-  return tail && /^[\x21-\x7e]+$/.test(tail) ? tail.toUpperCase() : null;
+  return /^[\x21-\x7e]{4}$/.test(tail) ? tail.toUpperCase() : null;
 }
 
 /** A holder name: trimmed, spaces collapsed, no control characters. */

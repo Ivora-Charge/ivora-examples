@@ -9,6 +9,7 @@ import {
   getFleet,
   lastValidDay,
   loadCard,
+  newRequestId,
   type CardDetail,
 } from "@/lib/server/fleet";
 import { describeError, IvoraError } from "@/lib/server/ivora";
@@ -192,7 +193,13 @@ export default async function Page({
             Show
           </button>
         </form>
-        {shared > 0 ? (
+        {c.short ? (
+          <p className="notice" role="note">
+            This card&apos;s value has 4 characters or fewer. Ivora hides all of
+            it in a session&apos;s details, so the kit can&apos;t find its
+            sessions and shows no figures for it.
+          </p>
+        ) : shared > 0 ? (
           <p className="notice" role="note">
             {shared === 1 ? "Another token" : `${shared} other tokens`} in your
             list {shared === 1 ? "ends" : "end"} in the same 4 characters
@@ -238,13 +245,19 @@ export default async function Page({
               taps itself while it is offline, may still accept it until it asks
               Ivora again.
             </p>
-            <StatusActions id={c.id} revision={c.revision} state={c.state} />
+            <StatusActions
+              id={c.id}
+              revision={c.revision}
+              requestId={newRequestId()}
+              state={c.state}
+            />
           </section>
           <section className="card" aria-labelledby="expiry-heading">
             <h2 id="expiry-heading">Expiry date</h2>
             <ExpiryForm
               id={c.id}
               revision={c.revision}
+              requestId={newRequestId()}
               validUntil={
                 c.expiresAt ? lastValidDay(c.expiresAt, v.zone) : null
               }
@@ -257,6 +270,7 @@ export default async function Page({
             <HolderForm
               id={c.id}
               revision={c.revision}
+              requestId={newRequestId()}
               kind={c.holder.kind}
               name={c.holder.name}
             />

@@ -14,6 +14,7 @@ import {
   newRequestId,
   updateCard,
 } from "@/lib/server/fleet";
+import { IvoraError } from "@/lib/server/ivora";
 import { resetDemoCards } from "@/lib/server/ivora/demo-cards-cookie";
 
 // Owners and managers only: every action checks the signed-in staff member's role on
@@ -32,11 +33,19 @@ function failed(e: unknown, what: string): CardsState {
   return { error: r.error, problems: r.problems };
 }
 
-/** Adds one card (POST /tokens). */
+/**
+ * Adds one card (POST /tokens). A refused add hands back a new request ID, so the
+ * corrected form is a new request (Ivora refuses a key used with another body), and an
+ * add Ivora could not confirm is not repeated under a key it would answer the same way;
+ * the card's reference finds one that did land. Only while the first request is still
+ * running does the form keep its ID. The form starts again empty after an add only
+ * (formKey), so a refused one keeps what was typed.
+ */
 export async function addCardAction(
-  _prev: CardsState,
+  prev: CardsState,
   form: FormData,
 ): Promise<CardsState> {
+  const requestId = str(form, "requestId");
   try {
     const actor = await requireRole("manager");
     const { card, warnings } = await addCard(getFleet(), actor, {
@@ -51,9 +60,15 @@ export async function addCardAction(
       warnings,
       cardPath: `/cards/${card.id}`,
       requestId: newRequestId(),
+      formKey: newRequestId(),
     };
   } catch (e) {
-    return failed(e, "card add");
+    const running = e instanceof IvoraError && e.code === "request_in_progress";
+    return {
+      ...failed(e, "card add"),
+      requestId: running && requestId ? requestId : newRequestId(),
+      formKey: prev.formKey,
+    };
   }
 }
 
@@ -113,7 +128,10 @@ export async function importCardsAction(
   }
 }
 
-/** Relabels, blocks, unblocks or expires a card, or sets or clears its expiry date. */
+/**
+ * Relabels, blocks, unblocks or expires a card, or sets or clears its expiry date.
+ * Every answer hands back a new request ID: each submit is a new Idempotency-Key.
+ */
 export async function updateCardAction(
   _prev: CardsState,
   form: FormData,
@@ -124,15 +142,19 @@ export async function updateCardAction(
     const r = await updateCard(getFleet(), actor, id, {
       intent: str(form, "intent"),
       revision: str(form, "revision"),
+      requestId: str(form, "requestId"),
       kind: str(form, "kind"),
       name: str(form, "name"),
       date: str(form, "date"),
     });
     revalidatePath("/cards");
     revalidatePath(`/cards/${id}`);
-    return { ok: `${r.message}${r.changed ? demoNote() : ""}` };
+    return {
+      ok: `${r.message}${r.changed ? demoNote() : ""}`,
+      requestId: newRequestId(),
+    };
   } catch (e) {
-    return failed(e, "card change");
+    return { ...failed(e, "card change"), requestId: newRequestId() };
   }
 }
 

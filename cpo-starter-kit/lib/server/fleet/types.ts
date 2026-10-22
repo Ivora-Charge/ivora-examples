@@ -47,6 +47,11 @@ export interface Card {
   status: string;
   state: CardState;
   expiresAt: string | null;
+  /**
+   * The value is 4 characters or fewer: Ivora masks its sessions as a bare ****, so
+   * the kit can't find them and shows no figures for it.
+   */
+  short: boolean;
   /** False when the value is longer than an OCPP 1.6 idTag (20 characters). */
   ocpp16: boolean;
   /** Ivora's updated_at: forms name it, and a change over a newer one is refused. */
@@ -108,6 +113,11 @@ export interface CardLedger {
   record(s: LedgerSession): Promise<void>;
   /** Ivora no longer knows the session (404). */
   forget(transactionId: number): Promise<void>;
+  /**
+   * A running session's re-read failed or came back without a token: read it again
+   * later, after a backoff that grows with each failure.
+   */
+  defer(transactionId: number): Promise<void>;
   /** Running sessions last read before `before` (ms), oldest check first. */
   due(
     before: number,
@@ -116,7 +126,10 @@ export interface CardLedger {
 }
 
 export interface CardRow extends Card {
-  /** Null when another token shares the key: its sessions can't be told apart. */
+  /**
+   * Null when another token shares the key (its sessions can't be told apart) or the
+   * card is `short` (its sessions can't be found).
+   */
   usage: CardUsage | null;
   /** Other tokens in the list with the same last 4 characters. */
   sharedWith: number;

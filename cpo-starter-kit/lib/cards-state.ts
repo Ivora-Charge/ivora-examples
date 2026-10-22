@@ -33,6 +33,8 @@ export interface CardsState {
   csv?: string;
   /** A new request ID for the next submit, after one that finished. */
   requestId?: string;
+  /** Add: changes after a card was added, so the form starts again empty. */
+  formKey?: string;
 }
 
 export const NO_STATE: CardsState = {};

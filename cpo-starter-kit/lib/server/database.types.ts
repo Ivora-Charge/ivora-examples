@@ -430,9 +430,10 @@ export type Database = {
           energy_wh: number | null;
           active: boolean;
           checked_at: Timestamp;
+          read_failures: number;
           updated_at: Timestamp;
         };
-        // Written only through cpo_record_card_session.
+        // Written only through cpo_record_card_session and cpo_defer_card_session.
         Insert: {
           transaction_id: number;
           station_id: number;
@@ -796,6 +797,10 @@ export type Database = {
         Returns: undefined;
       };
       cpo_forget_card_session: {
+        Args: { p_transaction_id: number };
+        Returns: undefined;
+      };
+      cpo_defer_card_session: {
         Args: { p_transaction_id: number };
         Returns: undefined;
       };

@@ -143,7 +143,8 @@ function CardsTable({ v }: { v: CardsView }) {
           : "No cards yet. Add one below, or import a file."}
       </p>
     );
-  const shared = v.cards.some((c) => c.usage === null);
+  const shared = v.cards.some((c) => c.usage === null && !c.short);
+  const short = v.cards.some((c) => c.short);
   return (
     <>
       <div className="table-scroll" tabIndex={0}>
@@ -182,6 +183,8 @@ function CardsTable({ v }: { v: CardsView }) {
                     </td>
                     <td className="num">{kwh(c.usage.energyWh)}</td>
                   </>
+                ) : c.short ? (
+                  <td colSpan={2}>No figures†</td>
                 ) : (
                   <td colSpan={2}>Can&apos;t tell apart*</td>
                 )}
@@ -195,6 +198,13 @@ function CardsTable({ v }: { v: CardsView }) {
           * Ivora shows only the last 4 characters of a session&apos;s card, and
           another token in your list ends in the same 4, so the kit shows no
           figures for these cards rather than guess.
+        </p>
+      )}
+      {short && (
+        <p className="hint muted">
+          † The card&apos;s value has 4 characters or fewer. Ivora hides all of
+          it in a session&apos;s details, so the kit can&apos;t find its
+          sessions.
         </p>
       )}
     </>

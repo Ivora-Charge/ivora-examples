@@ -20,18 +20,24 @@ create table if not exists public.cpo_card_sessions (
   transaction_id bigint primary key check (transaction_id > 0),
   station_id bigint not null check (station_id > 0),
   connector_number integer check (connector_number > 0),
-  -- The ID token's last 4 characters (fewer for a shorter token), upper-cased: chargers
-  -- match cards case-insensitively. Ivora never returns the rest.
+  -- The ID token's last 4 characters, upper-cased: chargers match cards
+  -- case-insensitively. Ivora never returns the rest, and masks a token of 4 characters
+  -- or fewer as a bare "****": such a session has no key and is not recorded (the
+  -- Cards page shows no figures for a card that short).
   token_key text not null
-    check (char_length(token_key) between 1 and 4 and token_key = upper(token_key)),
+    check (char_length(token_key) = 4 and token_key = upper(token_key)),
   started_at timestamptz,
   ended_at timestamptz,
   energy_wh bigint check (energy_wh >= 0),
   -- False once the session ended. Final: a late report of a running session can't
   -- reopen it.
   active boolean not null default true,
-  -- Last read from Ivora: running sessions are read again until they end.
+  -- Last read from Ivora: running sessions are read again until they end. After a
+  -- re-read that failed (or came back without a token) it is set later, by a backoff
+  -- that grows with read_failures, so a session that keeps failing can't hold one of
+  -- the few re-read slots of every run.
   checked_at timestamptz not null default now(),
+  read_failures integer not null default 0 check (read_failures >= 0),
   updated_at timestamptz not null default now()
 );
 create index if not exists cpo_card_sessions_token
@@ -76,7 +82,7 @@ declare
 begin
   if p_transaction_id is null or p_transaction_id <= 0
      or p_station_id is null or p_station_id <= 0 or p_active is null
-     or v_key is null or char_length(v_key) not between 1 and 4 then
+     or v_key is null or char_length(v_key) <> 4 then
     raise exception 'cpo_invalid' using errcode = 'P0001';
   end if;
   insert into public.cpo_card_sessions as s (
@@ -96,6 +102,7 @@ begin
     energy_wh = greatest(excluded.energy_wh, s.energy_wh),
     active = excluded.active,
     checked_at = now(),
+    read_failures = 0,
     updated_at = now()
   where s.active;
   delete from public.cpo_card_sessions
@@ -114,6 +121,23 @@ end;
 $$;
 revoke all on function public.cpo_forget_card_session(bigint) from public, anon, authenticated;
 grant execute on function public.cpo_forget_card_session(bigint) to service_role;
+
+-- A running session's re-read failed, or came back without a token: it is read again
+-- later, after 2, 4, 8 ... minutes, at most 6 hours (the re-read waits RECHECK_MS after
+-- checked_at on top). An ended session is left as it is.
+create or replace function public.cpo_defer_card_session(p_transaction_id bigint)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  update public.cpo_card_sessions s set
+    read_failures = least(s.read_failures + 1, 30),
+    checked_at = now()
+      + least(power(2, least(s.read_failures + 1, 30)), 360) * interval '1 minute',
+    updated_at = now()
+  where s.transaction_id = p_transaction_id and s.active;
+end;
+$$;
+revoke all on function public.cpo_defer_card_session(bigint) from public, anon, authenticated;
+grant execute on function public.cpo_defer_card_session(bigint) to service_role;
 
 -- Moves a station's card mark up; never down (two scans at once keep the higher).
 -- p_scanned also stamps scanned_at: the scan reached the end of the station's list.

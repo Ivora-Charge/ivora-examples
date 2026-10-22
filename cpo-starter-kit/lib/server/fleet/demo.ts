@@ -69,6 +69,7 @@ export function createDemoLedger(now: () => number = Date.now): CardLedger {
     },
     async record() {},
     async forget() {},
+    async defer() {},
     async due() {
       return [];
     },

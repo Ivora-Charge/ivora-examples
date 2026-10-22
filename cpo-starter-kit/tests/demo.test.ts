@@ -462,11 +462,13 @@ describe("demo mode", () => {
     const blocked = await updateCard(d, owner, added.card.id, {
       intent: "block",
       revision: added.card.revision,
+      requestId: "demo-request-000004",
     });
     expect(blocked.card.state).toBe("blocked");
     const until = await updateCard(d, owner, added.card.id, {
       intent: "expiry",
       revision: blocked.card.revision,
+      requestId: "demo-request-000005",
       date: "2099-12-31",
     });
     expect(until.card.expiresAt).toBe("2100-01-01T00:00:00.000Z");

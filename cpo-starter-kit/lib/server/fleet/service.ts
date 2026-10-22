@@ -9,6 +9,7 @@ import {
   type TokenRecord,
   type TokenUpdate,
 } from "../ivora";
+import type { LiveStore } from "../live/types";
 import type { OnboardingStore } from "../onboarding/types";
 import type { PricingStore } from "../pricing/types";
 import { localDate, nextDate, zonedToUtc } from "../pricing/time";
@@ -52,6 +53,8 @@ import type { ImportLine, ImportOutcome } from "@/lib/cards-state";
 export interface FleetDeps {
   ivora: IvoraClient;
   ledger: CardLedger;
+  /** Live's session tracker, whose reads the card ledger reuses (live mode). */
+  tracker?: Pick<LiveStore, "getTrackedSession">;
   /** Private chargers (Pricing): cards and staff only. */
   pricing: Pick<PricingStore, "load">;
   /** The company's time zone, for expiry dates and session times. */
@@ -117,6 +120,7 @@ export function toCard(t: TokenRecord, now: number): Card {
     status: t.status,
     state: cardState(t, now),
     expiresAt: t.expires_at ?? null,
+    short: t.id_token.length <= SHORT_MAX,
     ocpp16: t.ocpp16_compatible ?? t.id_token.length <= OCPP16_MAX,
     revision: t.updated_at ?? t.created_at ?? "unknown",
     kit: (t.external_reference ?? "").startsWith("cpo-card-"),
@@ -132,6 +136,9 @@ function keyCounts(tokens: TokenRecord[]): Map<string, number> {
   }
   return m;
 }
+
+/** Ivora masks a token of this many characters or fewer as a bare "****". */
+const SHORT_MAX = 4;
 
 const NONE: CardUsage = { sessions: 0, running: 0, energyWh: 0 };
 
@@ -206,7 +213,7 @@ export async function loadCards(
       return {
         ...card,
         sharedWith,
-        usage: sharedWith ? null : (usage.get(card.key) ?? NONE),
+        usage: sharedWith || card.short ? null : (usage.get(card.key) ?? NONE),
       };
     })
     .sort(
@@ -282,7 +289,7 @@ export async function loadCard(
       d.ledger.usage(since, now + 1),
       d.ledger.sessions(card.key, since, now + 1, CARD_SESSIONS),
     ]);
-    if (!shared) {
+    if (!shared && !card.short) {
       const found = all.find((u) => u.key === card.key);
       usage = found
         ? {
@@ -423,6 +430,9 @@ export async function addCard(
   ).length;
   const warnings = [
     sharedWarning(others, card.masked),
+    card.short
+      ? `This value has ${SHORT_MAX} characters or fewer: Ivora hides all of it in session details, so the kit can't count this card's sessions or energy.`
+      : null,
     card.ocpp16
       ? null
       : `This value is longer than ${OCPP16_MAX} characters: OCPP 1.6 chargers can't read it (OCPP 2.0.1 chargers can).`,
@@ -573,10 +583,12 @@ export async function applyImport(
       key: idempotencyKey("card-import", `${digest}-${requestId}`, "apply"),
     });
   } catch (e) {
-    if (
-      e instanceof IvoraError &&
-      (e.code === "outcome_unknown" || e.code === "request_in_progress")
-    )
+    if (e instanceof IvoraError && e.code === "request_in_progress")
+      throw new FleetError(
+        "uncertain",
+        "Another request for this import is still running at Ivora; nothing has changed yet. Wait a minute, then check the file again: cards it added are reported unchanged.",
+      );
+    if (e instanceof IvoraError && e.code === "outcome_unknown")
       throw new FleetError(
         "uncertain",
         "Ivora could not confirm the import, so some cards may be in and others not. Check the file and import it again: cards already in are reported unchanged.",
@@ -596,6 +608,8 @@ export async function applyImport(
 export interface CardForm {
   intent?: string;
   revision?: string;
+  /** The form's random request ID, new for every submit (see updateCard). */
+  requestId?: string;
   kind?: string;
   name?: string;
   /** YYYY-MM-DD, the last day the card works (in the company's time zone). */
@@ -687,8 +701,12 @@ function changedMessage(intent: CardIntent, c: Card, zone: string): string {
       return `Card ${c.masked} is expired: Ivora refuses it at its next tap.`;
     case "unblock":
       return `Card ${c.masked} is active again.`;
-    case "expiry":
-      return `Card ${c.masked} works until the end of ${lastValidDay(c.expiresAt!, zone)} (${zone}).`;
+    case "expiry": {
+      const until = `the end of ${lastValidDay(c.expiresAt!, zone)} (${zone})`;
+      return c.state === "active"
+        ? `Card ${c.masked} works until ${until}.`
+        : `Card ${c.masked} has an expiry date of ${until}. It is ${c.state === "blocked" ? "blocked" : "not active"} now: make it active again for chargers to accept it.`;
+    }
     case "clear-expiry":
       return `Card ${c.masked} no longer has an expiry date.`;
   }
@@ -698,7 +716,15 @@ function changedMessage(intent: CardIntent, c: Card, zone: string): string {
  * Changes a card (`PATCH /tokens/{id}`): its holder label, block, unblock, expire now,
  * or an expiry date. The form names the card's revision (Ivora's updated_at) it was
  * loaded at; a change over a newer one is refused unless the card already is as asked.
- * The key comes from the card, the action and that revision, so a retry is one change.
+ * That check is a read before the write (Ivora's PATCH takes no precondition), so two
+ * changes sent at the same moment are not caught by it.
+ *
+ * The key comes from the card, the action, the body and the form's request ID, which
+ * is new for every submit: a double submit of one form is one change (and the second
+ * finds the card already as asked), while a new submit gets a new key. A key built from
+ * the revision alone would repeat: after a 503 outcome_unknown that did not land Ivora
+ * replays that answer for the key, and a label-only change does not move updated_at,
+ * so relabelling A, B, then A again would replay the first answer.
  */
 export async function updateCard(
   d: FleetDeps,
@@ -708,7 +734,11 @@ export async function updateCard(
 ): Promise<CardChanged> {
   allowed(actor, "manager");
   enabled(d);
-  if (!isCardIntent(form.intent) || !form.revision)
+  if (
+    !isCardIntent(form.intent) ||
+    !form.revision ||
+    !REQUEST_ID.test(form.requestId ?? "")
+  )
     throw new FleetError("invalid", "Reload the page and try again.");
   const intent = form.intent;
   const now = clock(d);
@@ -729,18 +759,28 @@ export async function updateCard(
       "Someone changed this card since you opened this page. Reload it to see their change, then make yours again.",
     );
   const digest = createHash("sha256")
-    .update(`${form.revision}\n${JSON.stringify(body)}`)
+    .update(JSON.stringify(body))
     .digest("hex")
-    .slice(0, 16);
+    .slice(0, 12);
   let updated: TokenRecord;
   try {
     updated = await d.ivora.updateToken(
       id,
       body,
-      idempotencyKey("card", id, `${intent}-${digest}`),
+      idempotencyKey("card", id, `${intent}-${digest}-${form.requestId}`),
     );
   } catch (e) {
     if (e instanceof IvoraError && e.status === 404) throw notFound();
+    if (e instanceof IvoraError && e.code === "request_in_progress")
+      throw new FleetError(
+        "uncertain",
+        "Another request for this change is still running at Ivora; nothing has changed yet. Reload the page in a minute to see whether it went through.",
+      );
+    if (e instanceof IvoraError && e.code === "outcome_unknown")
+      throw new FleetError(
+        "uncertain",
+        "Ivora could not confirm this change. Reload the page to see the card as it is now, then make the change again if it is needed.",
+      );
     throw e;
   }
   console.info("cpo-starter-kit: card changed", {

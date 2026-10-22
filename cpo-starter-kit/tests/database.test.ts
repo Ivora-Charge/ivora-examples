@@ -2269,14 +2269,42 @@ describe("card sessions", () => {
         [0, "D4E5"],
         [7002, ""],
         [7002, "12345"],
+        // Ivora masks a token of 4 characters or fewer as a bare ****: no key.
+        [7002, "AB"],
       ] as const)
         await expect(record(id, key)).rejects.toThrow(/cpo_invalid/);
-      await record(7003, "AB", { energy: -5, connector: 0 });
+      await record(7003, "AB12", { energy: -5, connector: 0 });
       expect(await row(7003)).toMatchObject({
         energy_wh: null,
         connector_number: null,
-        token_key: "AB",
+        token_key: "AB12",
       });
+    });
+  });
+
+  it("puts off a running session whose re-read failed, with a growing backoff, until a read works", async () => {
+    await as("service_role", null, async () => {
+      await record(7004, "0004", { active: true });
+      const state = async () =>
+        (
+          await pg.query<{ failures: number; wait: number }>(
+            "select read_failures as failures, round(extract(epoch from checked_at - now()) / 60)::int as wait from cpo_card_sessions where transaction_id = 7004",
+          )
+        ).rows[0];
+      await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 1, wait: 2 });
+      await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 2, wait: 4 });
+      for (let i = 0; i < 12; i++)
+        await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 14, wait: 360 });
+      // A read that works starts again from no failures.
+      await record(7004, "0004", { active: true });
+      expect(await state()).toEqual({ failures: 0, wait: 0 });
+      // An ended session is left as it is.
+      await record(7004, "0004", { active: false });
+      await pg.query("select public.cpo_defer_card_session(7004)");
+      expect(await state()).toEqual({ failures: 0, wait: 0 });
     });
   });
 
@@ -2357,6 +2385,7 @@ describe("card sessions", () => {
           "select * from cpo_card_marks",
           "select public.cpo_record_card_session(1, 1, 1, 'ABCD', now(), null, 1, false)",
           "select public.cpo_forget_card_session(1)",
+          "select public.cpo_defer_card_session(1)",
           "select public.cpo_advance_card_mark(9107, 1)",
           "select * from public.cpo_card_usage(now() - interval '1 day', now())",
           "select * from public.cpo_card_session_list('ABCD', now() - interval '1 day', now(), 5)",
