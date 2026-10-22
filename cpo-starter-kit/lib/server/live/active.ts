@@ -1,7 +1,7 @@
 import "server-only";
 import { IvoraError } from "../ivora/errors";
 import type { IvoraClient, ReadLimits, Transaction } from "../ivora/types";
-import { scanNewTransactions } from "./transactions";
+import { scanNewTransactions, SEED_THRESHOLD } from "./transactions";
 import type { LiveStore, TrackedSession } from "./types";
 
 /**
@@ -68,6 +68,8 @@ export interface ActiveDeps {
     | "getTrackerMark"
     | "listTrackerMarks"
     | "advanceTrackerMark"
+    | "getTrackerSeed"
+    | "saveTrackerSeed"
   >;
   ivora: Pick<
     IvoraClient,
@@ -90,10 +92,17 @@ export const stalled = (t: TrackedSession) =>
 
 const posInt = (v: unknown): v is number =>
   typeof v === "number" && Number.isSafeInteger(v) && v > 0;
-const time = (v: unknown) =>
-  typeof v === "string" && v.length <= 40 && !Number.isNaN(Date.parse(v))
-    ? v
-    : null;
+/**
+ * A time Postgres reads back the same: written as UTC ISO 8601 with a 4-digit year.
+ * JavaScript also parses extended years ("+010000-01-01"), which Postgres rejects.
+ */
+const time = (v: unknown) => {
+  if (typeof v !== "string" || v.length > 40) return null;
+  const ms = Date.parse(v);
+  if (Number.isNaN(ms)) return null;
+  const year = new Date(ms).getUTCFullYear();
+  return year >= 1 && year <= 9999 ? new Date(ms).toISOString() : null;
+};
 
 /**
  * Records a session as read from Ivora. Sessions without a station are ignored. A
@@ -262,6 +271,13 @@ export async function syncActiveSessions(
   ]);
   const mine = tracked.filter((t) => wanted.has(t.stationId));
   const knownIds = new Set(mine.map((t) => t.transactionId));
+  const newest = (stationId: number) =>
+    Math.max(
+      0,
+      ...mine
+        .filter((t) => t.stationId === stationId)
+        .map((t) => t.transactionId),
+    );
 
   // 1. Scan for sessions the kit has not seen.
   const lastScan = (id: number) => {
@@ -286,6 +302,17 @@ export async function syncActiveSessions(
           marks: {
             getTransactionMark: (s) => d.store.getTrackerMark(s),
             advanceTransactionMark: (s, t) => d.store.advanceTrackerMark(s, t),
+          },
+          // A seed cut short by the budget resumes on the next load. A first seed
+          // starts from the station's newest tracked session (a webhook may have
+          // named one), which skips most of the search.
+          progress: {
+            getSeed: async (s) =>
+              (await d.store.getTrackerSeed(s)) ??
+              (newest(s) > SEED_THRESHOLD
+                ? { lo: newest(s) - 1, hi: null }
+                : null),
+            saveSeed: (s, p) => d.store.saveTrackerSeed(s, p),
           },
           now: d.now,
         },

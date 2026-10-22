@@ -91,6 +91,16 @@ export interface TrackerMark {
   scannedAt: string | null;
 }
 
+/**
+ * A seed's binary search so far: something exists after `lo`; nothing existed after
+ * `hi` when it was probed (null: not found yet). Saved after each probe, so a search
+ * cut short by a budget carries on from there on the next scan instead of from 0.
+ */
+export interface SeedProgress {
+  lo: number;
+  hi: number | null;
+}
+
 /** One webhook delivery, as the kit stores it to deduplicate. */
 export interface StoredEvent {
   id: string;
@@ -202,6 +212,10 @@ export interface LiveStore {
     transactionId: number,
     o?: { scanned?: boolean },
   ): Promise<void>;
+  /** A station's unfinished mark seeding (see SeedProgress); null: none. */
+  getTrackerSeed(stationId: number): Promise<SeedProgress | null>;
+  /** Saves a seed's search progress; a concurrent search's narrower bounds are kept. */
+  saveTrackerSeed(stationId: number, p: SeedProgress): Promise<void>;
   /** True for a new event, false for a redelivery. */
   recordEvent(e: StoredEvent): Promise<boolean>;
   markProcessed(eventId: string): Promise<void>;

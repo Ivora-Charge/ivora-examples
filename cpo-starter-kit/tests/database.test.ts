@@ -1726,6 +1726,34 @@ describe("tracked sessions", () => {
     });
   });
 
+  it("saves a seed's search progress, keeping the narrower bounds of two searches", async () => {
+    await as("service_role", null, async () => {
+      const get = async () =>
+        (
+          await pg.query<{ lo: string; hi: string | null; mark: string }>(
+            "select seed_lo::text as lo, seed_hi::text as hi, last_transaction_id::text as mark from cpo_active_marks where station_id=9106",
+          )
+        ).rows[0];
+      await pg.query("select public.cpo_save_active_seed(9106, 2000, null)");
+      expect(await get()).toEqual({ lo: "2000", hi: null, mark: "0" });
+      await pg.query("select public.cpo_save_active_seed(9106, 4000, 8000)");
+      // An older search's wider bounds don't undo it.
+      await pg.query("select public.cpo_save_active_seed(9106, 2000, 16000)");
+      expect(await get()).toMatchObject({ lo: "4000", hi: "8000" });
+      await pg.query("select public.cpo_save_active_seed(9106, 6000, 8000)");
+      expect(await get()).toMatchObject({ lo: "6000", hi: "8000" });
+      // Sessions came in after hi was probed: search up from lo again.
+      await pg.query("select public.cpo_save_active_seed(9106, 9000, null)");
+      expect(await get()).toMatchObject({ lo: "9000", hi: null });
+      // The mark and scanned_at are untouched by it, and the mark still moves up.
+      await pg.query("select public.cpo_advance_active_mark(9106, 8500)");
+      expect(await get()).toMatchObject({ mark: "8500" });
+      await expect(
+        pg.query("select public.cpo_save_active_seed(9106, -1, null)"),
+      ).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
   it("stores what the table can't hold as unknown instead of failing", async () => {
     await as("service_role", null, async () => {
       await pg.query(

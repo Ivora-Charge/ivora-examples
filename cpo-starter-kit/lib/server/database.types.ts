@@ -303,6 +303,8 @@ export type Database = {
           station_id: number;
           last_transaction_id: number;
           scanned_at: Timestamp | null;
+          seed_lo: number | null;
+          seed_hi: number | null;
           updated_at: Timestamp;
         };
         // Written only through cpo_advance_active_mark.
@@ -568,6 +570,10 @@ export type Database = {
           p_transaction_id: number;
           p_scanned?: boolean;
         };
+        Returns: undefined;
+      };
+      cpo_save_active_seed: {
+        Args: { p_station_id: number; p_lo: number; p_hi: number | null };
         Returns: undefined;
       };
       cpo_forget_session: {

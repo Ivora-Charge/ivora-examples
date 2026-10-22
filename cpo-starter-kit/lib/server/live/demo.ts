@@ -11,6 +11,7 @@ import {
   type LiveCommand,
   type LiveStore,
 } from "./types";
+import { mergeSeed } from "./transactions";
 
 // Demo commands: each visitor's own, in their own cookie (see demo-cookie.ts), so
 // visitors never see each other's and nothing is sent anywhere. The simulated chargers
@@ -78,6 +79,16 @@ const stateSchema = z.object({
     .optional(),
   /** When the tracker's scan last reached the end of a station's list. */
   trackerScanned: z.record(z.string().max(12), text(40)).optional(),
+  /** Unfinished mark seeding by station ID (see SeedProgress). */
+  trackerSeeds: z
+    .record(
+      z.string().max(12),
+      z.object({
+        lo: z.number().int().nonnegative(),
+        hi: z.number().int().nonnegative().nullable(),
+      }),
+    )
+    .optional(),
   /** Transaction high-water marks by station ID. */
   marks: z
     .record(z.string().max(12), z.number().int().nonnegative())
@@ -351,7 +362,7 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
       const kept = new Set(keep);
       return update((s) => {
         s.tracked = (s.tracked ?? []).filter((t) => kept.has(t.stationId));
-        for (const m of [s.trackerMarks, s.trackerScanned])
+        for (const m of [s.trackerMarks, s.trackerScanned, s.trackerSeeds])
           for (const k of Object.keys(m ?? {}))
             if (!kept.has(Number(k))) delete m![k];
       });
@@ -374,6 +385,17 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
         const k = String(stationId);
         marks[k] = Math.max(marks[k] ?? 0, transactionId);
         if (o.scanned) (s.trackerScanned ??= {})[k] = new Date().toISOString();
+      });
+    },
+    async getTrackerSeed(stationId) {
+      return (await cookie.load()).trackerSeeds?.[String(stationId)] ?? null;
+    },
+    async saveTrackerSeed(stationId, p) {
+      await update((s) => {
+        (s.trackerSeeds ??= {})[String(stationId)] = mergeSeed(
+          s.trackerSeeds?.[String(stationId)] ?? null,
+          p,
+        );
       });
     },
     // Demo mode accepts no webhooks: nothing to deduplicate.

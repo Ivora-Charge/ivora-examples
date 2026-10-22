@@ -49,6 +49,12 @@ create table if not exists public.cpo_active_marks (
   -- scan throttle and the "may be incomplete" note read it, so they hold across
   -- server instances.
   scanned_at timestamptz,
+  -- A first scan's mark seeding (a binary search for the station's newest ID), saved
+  -- after each probe so a search cut short by a page load's budget resumes next load:
+  -- something exists after seed_lo; nothing existed after seed_hi (null: not found
+  -- yet). Unused once the mark is set.
+  seed_lo bigint check (seed_lo >= 0),
+  seed_hi bigint check (seed_hi > 0),
   updated_at timestamptz not null default now()
 );
 
@@ -157,5 +163,30 @@ end;
 $$;
 revoke all on function public.cpo_advance_active_mark(bigint, bigint, boolean) from public, anon, authenticated;
 grant execute on function public.cpo_advance_active_mark(bigint, bigint, boolean) to service_role;
+
+-- Saves a seed's search progress. Two searches at once keep the higher lo and the
+-- lower hi (both still hold); a lo at or above hi means sessions came in after hi was
+-- probed, so hi is dropped and the search goes up from lo again.
+create or replace function public.cpo_save_active_seed(
+  p_station_id bigint, p_lo bigint, p_hi bigint
+)
+returns void language plpgsql security definer set search_path = '' as $$
+begin
+  if p_station_id is null or p_station_id <= 0
+     or p_lo is null or p_lo < 0 or p_hi <= 0 then
+    raise exception 'cpo_invalid' using errcode = 'P0001';
+  end if;
+  insert into public.cpo_active_marks as m (station_id, last_transaction_id, seed_lo, seed_hi)
+    values (p_station_id, 0, p_lo, case when p_hi > p_lo then p_hi end)
+  on conflict (station_id) do update set
+    seed_lo = greatest(m.seed_lo, excluded.seed_lo),
+    seed_hi = case
+      when least(m.seed_hi, p_hi) > greatest(m.seed_lo, excluded.seed_lo)
+      then least(m.seed_hi, p_hi) end,
+    updated_at = now();
+end;
+$$;
+revoke all on function public.cpo_save_active_seed(bigint, bigint, bigint) from public, anon, authenticated;
+grant execute on function public.cpo_save_active_seed(bigint, bigint, bigint) to service_role;
 
 commit;

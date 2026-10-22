@@ -16,6 +16,7 @@ import {
   SYNC_MAX_CALLS,
   SYNC_MAX_STATIONS,
   syncActiveSessions,
+  trackTransaction,
 } from "@/lib/server/live/active";
 import { createDemoLiveStore, memoryDemoLive } from "@/lib/server/live/demo";
 import {
@@ -29,11 +30,14 @@ import {
   type LiveDeps,
 } from "@/lib/server/live/service";
 import {
+  mergeSeed,
   SEED_MARGIN,
   scanNewTransactions,
+  seedMark,
 } from "@/lib/server/live/transactions";
 import type {
   LiveStore,
+  SeedProgress,
   TrackedSession,
   TrackerMark,
 } from "@/lib/server/live/types";
@@ -138,6 +142,7 @@ function api(rows: Transaction[], stations = [station(STATION, "DEPOT-01")]) {
 function bigStore(): LiveStore {
   const rows = new Map<number, TrackedSession>();
   const marks = new Map<number, TrackerMark>();
+  const seeds = new Map<number, SeedProgress>();
   const newestFirst = (l: TrackedSession[]) =>
     l.sort((a, b) => b.transactionId - a.transactionId);
   return {
@@ -199,6 +204,13 @@ function bigStore(): LiveStore {
         mark: Math.max(m.mark, t),
         scannedAt: o.scanned ? new Date().toISOString() : m.scannedAt,
       });
+    },
+    async getTrackerSeed(id) {
+      return seeds.get(id) ?? null;
+    },
+    async saveTrackerSeed(id, p) {
+      seeds.set(id, mergeSeed(seeds.get(id) ?? null, p));
+      if (!marks.has(id)) marks.set(id, { mark: 0, scannedAt: null });
     },
   };
 }
@@ -400,9 +412,10 @@ describe("the request budget", () => {
     expect(
       a.list.mock.calls.length + a.read.mock.calls.length,
     ).toBeLessThanOrEqual(SYNC_MAX_CALLS);
-    expect((await store.listTrackerMarks()).size).toBeLessThanOrEqual(
-      SEEDS_PER_SYNC,
+    const seeded = [...(await store.listTrackerMarks()).values()].filter(
+      (m) => m.mark > 0,
     );
+    expect(seeded.length).toBeLessThanOrEqual(SEEDS_PER_SYNC);
     // Stations never scanned were left: that matters, so the note shows.
     expect(first.complete).toBe(false);
     let s = first;
@@ -413,6 +426,143 @@ describe("the request budget", () => {
     expect(s.sessions.length).toBe(10);
     c.add(SYNC_INTERVAL_MS);
     expect((await syncActiveSessions(d, ids)).complete).toBe(true);
+  });
+
+  it("finishes seeding 10 stations of about 400,000 IDs at 300 ms a call, then commands work", async () => {
+    const c = clock();
+    const n = 10;
+    const OLD_PER_STATION = 40_000;
+    const ids = fleet(n).map((s) => s.id);
+    // Old sessions only as list items (IDs interleaved across stations), one running
+    // session per station read in full.
+    const newest = OLD_PER_STATION * n;
+    const current = ids.map((id, i) =>
+      running(newest + 1 + i, { station_id: id }),
+    );
+    const a = api(current, fleet(n));
+    const listed = (station: number) => {
+      const s = station - 100;
+      return (after: number, limit: number) => {
+        const out: number[] = [];
+        let i = Math.max(0, Math.floor((after - s - 1) / n));
+        for (; i < OLD_PER_STATION && out.length < limit; i++) {
+          const id = i * n + s + 1;
+          if (id > after) out.push(id);
+        }
+        const cur = newest + 1 + s;
+        if (out.length < limit && cur > after) out.push(cur);
+        return out;
+      };
+    };
+    a.list.mockImplementation(async (o) => {
+      c.add(300);
+      const data = listed(o.station_id)(o.after, o.limit ?? 100).map((id) => {
+        const t = a.rows.find((r) => r.id === id) ?? tx(id);
+        return {
+          id,
+          station_id: o.station_id,
+          active: t.active,
+          started_at: t.started_at,
+          ended_at: t.ended_at,
+        };
+      });
+      return {
+        data,
+        next_cursor: data.length ? data[data.length - 1].id : o.after,
+      };
+    });
+    a.read.mockImplementation(async (id: number) => {
+      c.add(300);
+      const t = a.rows.find((x) => x.id === id);
+      if (!t) throw new IvoraError(404, "transaction_not_found", "Unknown");
+      return structuredClone(t);
+    });
+    const { d, store } = deps(a, c.now, bigStore());
+
+    // Before seeding, a command on the last station is refused (its sessions are not
+    // known yet), as before; but every load now moves the seeds forward.
+    const fresh = () => syncActiveSessions(d, [ids[n - 1]], { fresh: true });
+    expect((await fresh()).complete).toBe(false);
+
+    let s = await syncActiveSessions(d, ids);
+    let loads = 1;
+    for (; loads < 30 && s.sessions.length < n; loads++) {
+      c.add(10_000);
+      s = await syncActiveSessions(d, ids);
+    }
+    expect(s.sessions.map((x) => x.transactionId).sort()).toEqual(
+      current.map((t) => t.id).sort(),
+    );
+    // About 30 requests per seed at about 23 per load.
+    expect(loads).toBeLessThanOrEqual(20);
+    const marks = await store.listTrackerMarks();
+    for (const id of ids)
+      expect(marks.get(id)?.mark).toBeGreaterThan(newest - SEED_MARGIN - n);
+    // Never a probe below the start of the search twice: no search restarted from 0.
+    const fromScratch = a.list.mock.calls.filter(
+      (call) => call[0].after === 2_000 && call[0].limit === 1,
+    );
+    expect(fromScratch.length).toBeLessThanOrEqual(n);
+
+    // Commands: the fresh check before each one is complete on every charger.
+    for (const id of ids) {
+      c.add(1_000);
+      const f = await syncActiveSessions(d, [id], { fresh: true });
+      expect(f.complete).toBe(true);
+      expect(f.sessions.map((x) => x.stationId)).toEqual([id]);
+    }
+  });
+
+  it("resumes a seed cut short by the budget where it stopped", async () => {
+    const a = api([...history(50_000), running(50_001)]);
+    const store = bigStore();
+    const marks = {
+      getTransactionMark: (id: number) => store.getTrackerMark(id),
+      advanceTransactionMark: (id: number, t: number) =>
+        store.advanceTrackerMark(id, t),
+    };
+    const progress = {
+      getSeed: (id: number) => store.getTrackerSeed(id),
+      saveSeed: (id: number, p: SeedProgress) => store.saveTrackerSeed(id, p),
+    };
+    // A whole search, for comparison.
+    await seedMark(
+      { ivora: a.ivora, marks: createDemoLiveStore(memoryDemoLive()) },
+      STATION,
+    );
+    const whole = a.list.mock.calls.length;
+    a.list.mockClear();
+    // Each run is cut after 4 probes.
+    const real = a.list.getMockImplementation()!;
+    let left = 0;
+    a.list.mockImplementation(async (o) => {
+      if (left-- <= 0) throw new Error("budget");
+      return real(o);
+    });
+    let runs = 0;
+    for (; runs < 20 && !((await store.getTrackerMark(STATION)) ?? 0); runs++) {
+      left = 4;
+      await seedMark({ ivora: a.ivora, marks, progress }, STATION).catch(
+        () => {},
+      );
+    }
+    expect(await store.getTrackerMark(STATION)).toBe(50_001 - SEED_MARGIN);
+    // Cut 4 at a time, the same probes as one whole search (each refused call counts).
+    expect(runs).toBe(Math.ceil(whole / 4));
+    expect(a.list.mock.calls.length).toBe(whole + runs - 1);
+  });
+
+  it("starts a first seed from the newest session a webhook already named", async () => {
+    const a = api([...history(50_000), running(50_001)]);
+    const store = bigStore();
+    const { d } = deps(a, () => NOW, store);
+    await store.trackSession(trackedOf(running(50_001)));
+    await syncActiveSessions(d, [STATION]);
+    // No probe at the bottom of the range: the search started at 50,000.
+    expect(
+      a.list.mock.calls.some((c) => c[0].limit === 1 && c[0].after < 50_000),
+    ).toBe(false);
+    expect(await store.getTrackerMark(STATION)).toBe(50_001);
   });
 
   it("stops at the first 429 and hands its Retry-After to the page", async () => {
@@ -674,6 +824,22 @@ describe("stale and odd rows", () => {
       connectorId: null,
       startedAt: null,
       idToken: null,
+    });
+  });
+
+  it("stores an extended-year time as unknown (Postgres rejects it) and a valid one in UTC", async () => {
+    expect(Number.isNaN(Date.parse("+010000-01-01T00:00:00Z"))).toBe(false);
+    const store = bigStore();
+    await trackTransaction(
+      { store },
+      running(1201, {
+        started_at: "2026-10-22T10:00:00+02:00",
+        ended_at: "+010000-01-01T00:00:00Z",
+      }),
+    );
+    expect(await store.getTrackedSession(1201)).toMatchObject({
+      startedAt: "2026-10-22T08:00:00.000Z",
+      endedAt: null,
     });
   });
 });

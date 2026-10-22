@@ -4,7 +4,7 @@ import type {
   Transaction,
   TransactionListItem,
 } from "../ivora/types";
-import type { LiveStore } from "./types";
+import type { LiveStore, SeedProgress } from "./types";
 
 /**
  * Finding a new session at a station. On Ivora, `GET /transactions` lists a station's
@@ -47,6 +47,11 @@ export const SEED_MARGIN = 1_000;
 export interface TransactionScanDeps {
   ivora: Pick<IvoraClient, "listTransactionsAfter" | "getTransaction">;
   marks: Pick<LiveStore, "getTransactionMark" | "advanceTransactionMark">;
+  /** Where a seed's search progress is kept (see SeedProgress); unset: not kept. */
+  progress?: {
+    getSeed(stationId: number): Promise<SeedProgress | null>;
+    saveSeed(stationId: number, p: SeedProgress): Promise<void>;
+  };
   now?: () => number;
 }
 
@@ -66,8 +71,9 @@ export interface TransactionScan {
   offer: (tx: Transaction) => Promise<void>;
   /**
    * Asked before seeding a station with a long history and no mark (a binary search
-   * of about 20 to 40 requests). False defers it: the scan stops there, not complete,
-   * and the station is seeded on a later scan. Unset: always seed.
+   * of about 20 to 40 requests, resumed where it stopped with `progress`). False
+   * defers it: the scan stops there, not complete, and the station is seeded on a
+   * later scan. Unset: always seed.
    */
   seed?: () => boolean;
   /** No new page or full read after this time (ms, on the `now` clock). */
@@ -84,13 +90,29 @@ export interface TransactionScanResult {
 }
 
 /**
+ * Two saved states of one seed's search, combined: the higher lo and the lower hi both
+ * still hold. A lo at or above hi means sessions came in after hi was probed, so the
+ * search goes up from lo again. As cpo_save_active_seed does it.
+ */
+export function mergeSeed(
+  old: SeedProgress | null,
+  p: SeedProgress,
+): SeedProgress {
+  const lo = Math.max(old?.lo ?? 0, p.lo);
+  const his = [old?.hi, p.hi].filter((h): h is number => h != null);
+  const hi = his.length ? Math.min(...his) : null;
+  return { lo, hi: hi !== null && hi > lo ? hi : null };
+}
+
+/**
  * Seeds a station's mark on its first scan. Finds the station's newest transaction ID
  * with a binary search on `after=<x>&limit=1` (IDs only grow, so "is there anything
  * after x" is monotonic), then moves the mark to SEED_MARGIN IDs below it. About
  * 2 * log2(newest / SEED_THRESHOLD) + log2(newest) cheap requests, whatever the history.
- * Sessions below the seed are not scanned; they are found by their webhooks instead.
- * Returns the seeded mark, null when the station has no long history, or "deferred"
- * when `allow` said no after the first request.
+ * With `progress` deps, each probe's result is saved and a later call resumes it, so
+ * every scan moves the search forward however short its budget. Sessions below the seed
+ * are not scanned; they are found by their webhooks instead. Returns the seeded mark,
+ * null when the station has no long history, or "deferred" when `allow` said no.
  */
 export async function seedMark(
   d: TransactionScanDeps,
@@ -105,23 +127,35 @@ export async function seedMark(
         limit: 1,
       })
     ).data.length > 0;
-  if (!(await any(SEED_THRESHOLD))) return null;
+  const save = (p: SeedProgress) => d.progress?.saveSeed(stationId, p);
+  let p = (await d.progress?.getSeed(stationId)) ?? null;
+  if (!p) {
+    if (!(await any(SEED_THRESHOLD))) return null;
+    p = { lo: SEED_THRESHOLD, hi: null };
+    await save(p);
+  }
   if (!allow()) return "deferred";
-  // Something exists after lo, nothing after hi.
-  let lo = SEED_THRESHOLD;
-  let hi = lo * 2;
+  let { lo, hi } = p;
+  // Two searches at once can save a later lo above an older hi (new sessions came in
+  // between): search up from lo again.
+  if (hi !== null && hi <= lo) hi = null;
   // IDs are far below 2^40; a list that never ends is not following `after`.
-  while (await any(hi)) {
-    if (hi > 2 ** 40) return null;
-    lo = hi;
-    hi *= 2;
+  while (hi === null) {
+    const next = lo * 2;
+    if (await any(next)) {
+      if (next > 2 ** 40) return null;
+      lo = next;
+    } else hi = next;
+    await save({ lo, hi });
   }
   while (hi - lo > 1) {
     const mid = Math.floor((lo + hi) / 2);
     if (await any(mid)) lo = mid;
     else hi = mid;
+    await save({ lo, hi });
   }
-  // Now hi = lo + 1 is the newest ID.
+  // Now hi = lo + 1 is the newest ID (as of the probe that set hi; newer sessions are
+  // above the mark and scanned normally).
   const seed = Math.max(0, hi - SEED_MARGIN);
   await d.marks.advanceTransactionMark(stationId, seed);
   return seed;

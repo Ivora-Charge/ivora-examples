@@ -361,6 +361,27 @@ export function createSupabaseLiveStore(): LiveStore {
         }),
       );
     },
+    async getTrackerSeed(stationId) {
+      const { data } = check(
+        await svc()
+          .from("cpo_active_marks")
+          .select("seed_lo, seed_hi")
+          .eq("station_id", stationId)
+          .maybeSingle(),
+      );
+      return data?.seed_lo != null
+        ? { lo: data.seed_lo, hi: data.seed_hi }
+        : null;
+    },
+    async saveTrackerSeed(stationId, p) {
+      check(
+        await svc().rpc("cpo_save_active_seed", {
+          p_station_id: stationId,
+          p_lo: p.lo,
+          p_hi: p.hi,
+        }),
+      );
+    },
     async recordEvent(e) {
       const { data } = check(
         await svc().rpc("cpo_record_ivora_event", {

@@ -491,4 +491,22 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
       await a`select active from cpo_active_sessions where transaction_id = 9201`;
     expect(rows).toEqual([{ active: false }]);
   }, 15_000);
+
+  it("keeps the narrower bounds when two loads save a seed's progress at once", async () => {
+    await a`delete from cpo_active_marks where station_id = 9102`;
+    const [r1, r2] = await Promise.all([
+      a`select cpo_save_active_seed(9102, 64000, 128000)`.then(
+        () => null,
+        (e: Error) => e,
+      ),
+      b`select cpo_save_active_seed(9102, 96000, 256000)`.then(
+        () => null,
+        (e: Error) => e,
+      ),
+    ]);
+    expect([r1, r2]).toEqual([null, null]);
+    const rows =
+      await a`select seed_lo::int as lo, seed_hi::int as hi, last_transaction_id::int as mark from cpo_active_marks where station_id = 9102`;
+    expect(rows).toEqual([{ lo: 96000, hi: 128000, mark: 0 }]);
+  });
 });
