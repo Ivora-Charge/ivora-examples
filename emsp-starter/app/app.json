@@ -1,14 +1,31 @@
 {
   "expo": {
-    "name": "Your Charging Network",
+    "name": "Kilolane",
     "slug": "emsp-starter",
     "scheme": "emsp-starter",
     "version": "0.1.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "ios": { "supportsTablet": true },
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true
+    },
     "android": {},
-    "web": { "bundler": "metro", "output": "single" },
-    "plugins": ["expo-router"]
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-localization",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Show chargers near you."
+        }
+      ],
+      "@maplibre/maplibre-react-native"
+    ]
   }
 }

@@ -208,6 +208,20 @@ const SITES: Site[] = [
   },
 ];
 
+/**
+ * The second round of sites (LOC7 to LOC12): the same layouts under their own names
+ * and addresses, some of them fully in use or out of order, so a list or a map shows
+ * every status. Later rounds repeat the names with a number.
+ */
+const SECOND_ROUND: { name: string; address: string; status?: EvseStatus }[] = [
+  { name: "Harbour Front", address: "2 Quay Road", status: "CHARGING" },
+  { name: "Library Plaza", address: "5 Library Plaza", status: "OUTOFORDER" },
+  { name: "Hospital Car Park", address: "20 Care Avenue" },
+  { name: "Old Mill Lane", address: "9 Old Mill Lane", status: "CHARGING" },
+  { name: "Ring Road Services East", address: "Ring Road R2, exit 3" },
+  { name: "Depot Annex", address: "10 Depot Road" },
+];
+
 /** How many sample sites there are before they repeat. */
 export const SAMPLE_SITE_COUNT = SITES.length;
 
@@ -224,13 +238,14 @@ export function sampleLocations(
     const n = i + 1;
     const site = SITES[i % SITES.length];
     const round = Math.floor(i / SITES.length);
+    const second = round === 1 ? SECOND_ROUND[i % SITES.length] : undefined;
     const id = `LOC${n}`;
     const ref = n <= 26 ? String.fromCharCode(64 + n) : `${n}-`;
     const evses: Evse[] = site.evses.map((e, k) => {
       const evse: Evse = {
         uid: `${id}-${k + 1}`,
         evse_id: `${party.countryCode}*${party.partyId}*E${n}${k + 1}`,
-        status: e.status,
+        status: second?.status ?? e.status,
         capabilities: ["RFID_READER", "REMOTE_START_STOP_CAPABLE"],
         connectors: e.connectors.map((c, j) => ({
           id: String(j + 1),
@@ -255,8 +270,8 @@ export function sampleLocations(
       party_id: party.partyId,
       id,
       publish: site.publish ?? true,
-      name: round ? `${site.name} ${round + 1}` : site.name,
-      address: site.address,
+      name: second?.name ?? (round ? `${site.name} ${round + 1}` : site.name),
+      address: second?.address ?? site.address,
       city: o.city,
       postal_code: site.postal,
       country: o.country,

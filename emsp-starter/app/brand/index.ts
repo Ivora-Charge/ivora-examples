@@ -6,29 +6,25 @@ import tokens from "./tokens.json";
  */
 export const brand = tokens;
 export type Brand = typeof tokens;
-export const color = tokens.color;
+export type Palette = Brand["color"];
+export type Scheme = "light" | "dark";
 export const space = tokens.space;
 export const radius = tokens.radius;
 export const fontSize = tokens.fontSize;
 
-type Weight = "400" | "700";
-export const fontWeight = tokens.fontWeight as Record<
-  keyof Brand["fontWeight"],
-  Weight
->;
+/** The colours of light or dark mode. */
+export const palette = (scheme: Scheme): Palette =>
+  scheme === "dark" ? tokens.colorDark : tokens.color;
 
-const WEB_STACKS: Record<string, string> = {
-  system: 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif',
-  monospace: 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace',
-};
-
-/**
- * A font token as a React Native `fontFamily`. `system` means the platform's own UI
- * font, which is `undefined` on iOS and Android. Custom fonts must be loaded with
- * expo-font under the same name.
- */
-export function fontFamily(name: string, platform: string): string | undefined {
-  if (platform === "web") return WEB_STACKS[name] ?? name;
-  if (name === "system") return undefined;
-  return name;
+/** WCAG 2.x contrast ratio of two `#rrggbb` colours, from 1 to 21. */
+export function contrast(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const [r, g, bl] = [1, 3, 5].map((i) => {
+      const c = parseInt(hex.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * r + 0.7152 * g + 0.0722 * bl;
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
 }
