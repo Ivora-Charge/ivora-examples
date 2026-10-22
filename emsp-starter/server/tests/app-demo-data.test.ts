@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEMO_PEER_ID, demoLocationStore } from "@/lib/locations/registry";
+import { HOLD_AMOUNTS_DEFAULT } from "@/lib/server/config";
 import {
   locationDetail,
   parseLocationAppId,
@@ -45,5 +46,22 @@ describe("the app's offline demo data", () => {
     const json = `${JSON.stringify(await snapshot(), null, 2)}\n`;
     if (process.env.UPDATE_APP_DEMO === "1") writeFileSync(FILE, json);
     expect(readFileSync(FILE, "utf8")).toBe(json);
+  });
+});
+
+describe("the app's offline demo charges like the server's demo mode", () => {
+  it("uses the same pace, hold and decline point", async () => {
+    const { DEMO_KWH_PER_SECOND, DEMO_DECLINE_AT } =
+      await import("@/lib/driver-app/demo-charging");
+    const app = readFileSync(
+      join(__dirname, "../../app/src/lib/demo-charge.ts"),
+      "utf8",
+    );
+    const constant = (name: string) =>
+      Number(new RegExp(`export const ${name} = ([0-9._]+);`).exec(app)?.[1]);
+    expect(constant("DEMO_KWH_PER_SECOND")).toBe(DEMO_KWH_PER_SECOND);
+    expect(constant("DEMO_DECLINE_AT")).toBe(DEMO_DECLINE_AT);
+    // The app's demo hold is the server's default hold in EUR.
+    expect(constant("DEMO_HOLD")).toBe(HOLD_AMOUNTS_DEFAULT.EUR);
   });
 });

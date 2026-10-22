@@ -1,12 +1,12 @@
 import { router } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { i18n, t } from "../i18n";
 import { ApiError, getCharge, getChargeSession, stopCharge } from "../lib/api";
 import { problemText, stopText } from "../lib/charge-words";
 import {
+  oneRequest,
   phaseOf,
-  requestId,
   secondsSince,
   startProblem,
   type Charge,
@@ -45,7 +45,8 @@ export function LiveCharge({
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState("");
   const [now, setNow] = useState(Date.now());
-  const stopRequest = useRef<string | null>(null);
+  // One request ID per stop, kept until the server answers for sure (see oneRequest).
+  const stopRequest = useState(oneRequest)[0];
 
   const phase = phaseOf(charge, state, stopping);
   const over = phase === "finished" || phase === "failed";
@@ -76,22 +77,20 @@ export function LiveCharge({
   const stop = async () => {
     setStopError("");
     setStopping(true);
-    stopRequest.current ??= requestId();
     try {
-      const res = await stopCharge(
-        token,
-        charge.command.id,
-        stopRequest.current,
+      const failed = (r: { command: Charge["command"] }) =>
+        !r.command.pending && r.command.status !== "succeeded";
+      const res = await stopRequest.send(
+        (requestId) => stopCharge(token, charge.command.id, requestId),
+        failed,
       );
-      if (!res.command.pending && res.command.status !== "succeeded") {
+      if (failed(res)) {
         setStopping(false);
-        stopRequest.current = null;
         setStopError(t("charge.stopFailed"));
       }
       await refresh();
     } catch (e) {
       setStopping(false);
-      stopRequest.current = null;
       setStopError(
         e instanceof ApiError && e.code === "http_409"
           ? t("charge.stopTooSoon")

@@ -1,5 +1,5 @@
 import { router, useLocalSearchParams } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../../components/AuthProvider";
 import { Choice, ChoiceGroup } from "../../components/Choice";
@@ -16,7 +16,7 @@ import {
 } from "../../lib/api";
 import { cardLabel, problemText } from "../../lib/charge-words";
 import {
-  requestId,
+  oneRequest,
   startProblem,
   type Card as SavedCard,
   type Quote,
@@ -48,7 +48,8 @@ type Option = {
 /**
  * Before a start: pick the connector, see its price, the hold on the card and the card,
  * and confirm. The server then holds the card and sends START_SESSION; the app only
- * asks, once per tap (one request ID per confirmation, so a retry never starts twice).
+ * asks. The request ID is kept until the server answers for sure, so a retry after a
+ * lost response replays the same start and never holds the card or starts twice.
  */
 export default function ConfirmCharge() {
   const { c } = useTheme();
@@ -61,8 +62,8 @@ export default function ConfirmCharge() {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  // One request ID per confirmation: a double tap or a retry returns the same start.
-  const request = useRef(requestId());
+  // One request ID per start: a double tap or a retry returns the same start.
+  const request = useState(oneRequest)[0];
 
   useEffect(() => {
     if (!token) return;
@@ -145,17 +146,20 @@ export default function ConfirmCharge() {
     setBusy(true);
     setError("");
     try {
-      const res = await startCharge(token, {
-        requestId: request.current,
-        locationId: id,
-        evseUid: choice.evseUid,
-        connectorId: choice.connectorId,
-      });
+      // A refused or failed start is over: the next tap is a new request.
+      const res = await request.send(
+        (requestId) =>
+          startCharge(token, {
+            requestId,
+            locationId: id,
+            evseUid: choice.evseUid,
+            connectorId: choice.connectorId,
+          }),
+        (r) => r.state !== "busy" && startProblem(r.command) !== null,
+      );
       const problem = res.state === "busy" ? null : startProblem(res.command);
       if (problem) {
         setError(problemText(problem));
-        // A refused start is over: the next tap is a new request.
-        request.current = requestId();
         return;
       }
       // Ask for notifications now, when the driver sees why (phones only).
@@ -163,7 +167,7 @@ export default function ConfirmCharge() {
       // Back to the tabs already under this screen, on the Charging tab.
       router.dismissTo("/charging");
     } catch (e) {
-      request.current = requestId();
+      // No answer or a server error keeps the request ID (see oneRequest).
       setError(
         e instanceof ApiError
           ? e.code === "unreachable"

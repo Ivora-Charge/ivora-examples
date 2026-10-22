@@ -10,6 +10,7 @@ import { paymentView } from "@/lib/payments/routes";
 import { receiptEmail } from "@/lib/receipts/receipt";
 import { adapterFor } from "@/lib/live-data/registry";
 import { sessionLive } from "@/lib/live-data/live";
+import { BodyTooLargeError, readLimitedText } from "@/lib/ocpi/body";
 import { parseLocationAppId } from "@/lib/locations/search";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
@@ -353,15 +354,18 @@ export function photoType(bytes: Buffer): PhotoType | null {
   return null;
 }
 
-async function largeBody(
+/** A JSON object of at most `max` bytes: the stream is cut off past it, with or without a Content-Length. */
+export async function largeBody(
   request: Request,
   max: number,
 ): Promise<Record<string, unknown> | null | "too_large"> {
-  if (Number(request.headers.get("content-length") ?? 0) > max)
-    return "too_large";
+  let text: string;
   try {
-    const text = await request.text();
-    if (text.length > max) return "too_large";
+    text = await readLimitedText(request, max);
+  } catch (e) {
+    return e instanceof BodyTooLargeError ? "too_large" : null;
+  }
+  try {
     const v: unknown = text ? JSON.parse(text) : {};
     return v && typeof v === "object" && !Array.isArray(v)
       ? (v as Record<string, unknown>)

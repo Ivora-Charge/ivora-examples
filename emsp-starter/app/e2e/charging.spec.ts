@@ -76,6 +76,8 @@ test("enter a charger's ID, confirm, charge, stop and read the receipt, sending 
   await expect(page.getByTestId("live-phase")).toHaveText("Charging");
   await expect(page.getByTestId("live-kwh")).not.toHaveText("0 kWh");
   await expect(page.getByTestId("live-readout")).toBeVisible();
+  // The charge on the live card is not listed again, with older figures, below it.
+  await expect(page.getByTestId("history-row")).toHaveCount(0);
   expect(await scan(page)).toEqual([]);
 
   await page.getByTestId("live-stop").click();

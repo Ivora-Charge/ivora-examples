@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import { onCommandEvent, type CommandEvent } from "@/lib/commands/events";
 import { driverAppStore } from "@/lib/driver-app/registry";
 import type { DriverAppStore } from "@/lib/driver-app/store";
@@ -22,6 +23,9 @@ import { pushSender, type PushSender } from "./sender";
  * Each device gets the words of its own language (MESSAGES). Demo mode never sends:
  * `pushSender()` is the in-memory outbox there. A token the provider says is gone is
  * forgotten. A failed send is logged by code and not retried.
+ *
+ * The listeners never hold up the request that emitted the event (a CPO's session, CDR
+ * or command result): each notification runs after the response (`later`).
  */
 export type NotifyDeps = {
   store: DriverAppStore;
@@ -128,7 +132,41 @@ export async function onPayment(
   );
 }
 
-const holder = globalThis as unknown as { __emspPushListening?: boolean };
+const holder = globalThis as unknown as {
+  __emspPushListening?: boolean;
+  __emspPushPending?: Set<Promise<void>>;
+};
+const pending = () => (holder.__emspPushPending ??= new Set());
+
+/**
+ * Runs `task` once the current response has been sent (Next's `after`), so a slow push
+ * provider never delays the CPO's request or changes its answer. Outside a request
+ * (a script, a unit test) it starts the task without waiting for it. Never throws.
+ */
+export function later(task: () => Promise<unknown>): void {
+  const run = () => {
+    const p: Promise<void> = task()
+      .then(() => undefined)
+      .catch((e: unknown) =>
+        console.error(
+          `A push notification failed: ${e instanceof Error ? e.name : "unknown error"}`,
+        ),
+      )
+      .finally(() => pending().delete(p));
+    pending().add(p);
+    return p;
+  };
+  try {
+    after(run);
+  } catch {
+    void run();
+  }
+}
+
+/** Waits for the notifications started so far (tests). */
+export async function flushPushForTests(): Promise<void> {
+  while (pending().size) await Promise.all([...pending()]);
+}
 
 /**
  * Subscribes the notifications to session, command and payment events, in this server
@@ -139,9 +177,9 @@ export function installPushListeners(): () => void {
   if (holder.__emspPushListening) return () => undefined;
   holder.__emspPushListening = true;
   const offs = [
-    onSessionEvent((e) => onSession(e)),
-    onCommandEvent((e) => onCommand(e)),
-    onPaymentEvent((e) => onPayment(e)),
+    onSessionEvent((e) => later(() => onSession(e))),
+    onCommandEvent((e) => later(() => onCommand(e))),
+    onPaymentEvent((e) => later(() => onPayment(e))),
   ];
   return () => {
     for (const off of offs) off();

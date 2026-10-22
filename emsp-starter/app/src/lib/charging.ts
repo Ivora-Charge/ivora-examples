@@ -239,3 +239,54 @@ export function requestId(): string {
   for (let i = 0; i < 32; i++) s += Math.floor(Math.random() * 16).toString(16);
   return `app-${s}`;
 }
+
+/**
+ * True when we cannot know whether the server acted: no answer (lost response,
+ * dropped connection), a timeout, a rate limit or a server error (5xx), or an answer
+ * we could not read. Only a clear refusal (any other 4xx) says nothing happened.
+ */
+export function outcomeUnknown(e: unknown): boolean {
+  const code = (e as { name?: string; code?: unknown } | null)?.code;
+  if (
+    !(e instanceof Error) ||
+    e.name !== "ApiError" ||
+    typeof code !== "string"
+  )
+    return true;
+  return (
+    code === "unreachable" ||
+    code === "rate_limited" ||
+    code === "http_408" ||
+    /^http_5\d\d$/.test(code)
+  );
+}
+
+/**
+ * One request ID per action (a start, a stop), kept until the server gives a
+ * definitive answer. A retry after a lost response sends the same ID, so the server
+ * replays the first command instead of placing a second hold or sending a second
+ * START_SESSION. A new ID is made only after a refusal (4xx) or when `over` says the
+ * command has ended without success, so the driver's next tap is a new attempt.
+ */
+export function oneRequest(make: () => string = requestId) {
+  let id = make();
+  return {
+    get id() {
+      return id;
+    },
+    async send<T>(
+      fn: (id: string) => Promise<T>,
+      over: (res: T) => boolean,
+    ): Promise<T> {
+      const used = id;
+      try {
+        const res = await fn(used);
+        if (over(res) && id === used) id = make();
+        return res;
+      } catch (e) {
+        if (!outcomeUnknown(e) && id === used) id = make();
+        throw e;
+      }
+    },
+  };
+}

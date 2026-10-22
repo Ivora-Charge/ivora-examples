@@ -50,13 +50,14 @@ import {
   DEMO_KWH_PER_SECOND,
 } from "@/lib/driver-app/demo-charging";
 import { NO_SESSION_WAIT_MS } from "@/lib/driver-app/charges";
+import { PROBLEM_BODY_MAX } from "@/lib/driver-app/routes";
 import { DEMO_PEER_ID } from "@/lib/locations/registry";
 import { locationAppId } from "@/lib/locations/search";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore } from "@/lib/ocpi/store";
 import { demoOutbox } from "@/lib/receipts/mailer";
 import { formatAmount, pushText } from "@/lib/push/messages";
-import { onCommand, onPayment } from "@/lib/push/notify";
+import { flushPushForTests, onCommand, onPayment } from "@/lib/push/notify";
 import {
   demoPushOutbox,
   DemoPushOutbox,
@@ -319,7 +320,8 @@ describe("charging from the app, in demo mode", () => {
     expect(demoOutbox().sent.at(-1)!.text).toContain("Demo mode");
 
     // "Charging finished", in the device's language (English fills in), kept in the
-    // demo outbox: demo mode sends no push.
+    // demo outbox: demo mode sends no push. Pushes run after the response.
+    await flushPushForTests();
     expect(demoPushOutbox().sent).toEqual([
       expect.objectContaining({
         to: "ExponentPushToken[abcdefghijklmnop]",
@@ -327,7 +329,7 @@ describe("charging from the app, in demo mode", () => {
         data: { kind: "charging_done", chargeId: command.id },
       }),
     ]);
-    expect(demoPushOutbox().sent[0].body).toContain("6 kWh");
+    expect(demoPushOutbox().sent[0].body).toContain("12 kWh");
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
@@ -380,6 +382,7 @@ describe("charging from the app, in demo mode", () => {
     });
 
     // One push, in German number format, and no "Charging finished" beside it.
+    await flushPushForTests();
     expect(demoPushOutbox().sent).toHaveLength(1);
     expect(demoPushOutbox().sent[0]).toMatchObject({
       title: "Charging stopped",
@@ -453,6 +456,121 @@ describe("charging from the app, in demo mode", () => {
       ).charge,
     ).not.toBeNull();
     expect(NO_SESSION_WAIT_MS).toBeGreaterThan(0);
+  });
+});
+
+describe("every driver route needs the driver's token", () => {
+  const id = "11111111-2222-4333-8444-555555555555";
+  const routes: [string, (token?: string) => Promise<Response>][] = [
+    [
+      "GET quote",
+      (t) =>
+        quoteGET(req(`/api/v1/charges/quote?locationId=${LOC1}`, { token: t })),
+    ],
+    [
+      "GET active",
+      (t) => activeGET(req("/api/v1/charges/active", { token: t })),
+    ],
+    [
+      "GET session",
+      (t) =>
+        sessionGET(
+          req(`/api/v1/charges/${id}/session`, { token: t }),
+          params("id", id),
+        ),
+    ],
+    [
+      "GET receipt",
+      (t) =>
+        receiptGET(
+          req(`/api/v1/charges/${id}/receipt`, { token: t }),
+          params("id", id),
+        ),
+    ],
+    [
+      "POST receipt email",
+      (t) =>
+        receiptEmailPOST(
+          req(`/api/v1/charges/${id}/receipt/email`, {
+            method: "POST",
+            token: t,
+          }),
+          params("id", id),
+        ),
+    ],
+    ["GET history", (t) => historyGET(req("/api/v1/history", { token: t }))],
+    [
+      "PUT push token",
+      (t) =>
+        pushPUT(
+          send(
+            "PUT",
+            "/api/v1/push-token",
+            { token: "ExponentPushToken[abcdefgh12345678]", platform: "ios" },
+            t,
+          ),
+        ),
+    ],
+    [
+      "DELETE push token",
+      (t) =>
+        pushDELETE(
+          send(
+            "DELETE",
+            "/api/v1/push-token",
+            { token: "ExponentPushToken[abcdefgh12345678]" },
+            t,
+          ),
+        ),
+    ],
+    [
+      "GET favourites",
+      (t) => favouritesGET(req("/api/v1/favourites", { token: t })),
+    ],
+    [
+      "PUT favourite",
+      (t) =>
+        favouritePUT(
+          req(`/api/v1/favourites/${LOC1}`, { method: "PUT", token: t }),
+          params("locationId", LOC1),
+        ),
+    ],
+    [
+      "DELETE favourite",
+      (t) =>
+        favouriteDELETE(
+          req(`/api/v1/favourites/${LOC1}`, { method: "DELETE", token: t }),
+          params("locationId", LOC1),
+        ),
+    ],
+    [
+      "POST problem",
+      (t) =>
+        problemPOST(
+          send(
+            "POST",
+            "/api/v1/problems",
+            { locationId: LOC1, category: "other", message: "x" },
+            t,
+          ),
+        ),
+    ],
+  ];
+
+  it.each(routes)(
+    "%s answers 401 without a token or with a wrong one",
+    async (_, call) => {
+      expect((await call()).status).toBe(401);
+      expect((await call("not-a-real-access-token-000000")).status).toBe(401);
+      // Nothing was written for anyone.
+      expect(app.reports.size + app.favourites.size + app.pushTokens.size).toBe(
+        0,
+      );
+    },
+  );
+
+  it("covers all 12 new routes", () => {
+    expect(routes).toHaveLength(12);
   });
 });
 
@@ -712,6 +830,36 @@ describe("report a problem", () => {
     for (const [k, v] of Object.entries(o)) f.set(k, v);
     return f;
   };
+
+  it("stops reading a body without a Content-Length at the limit, and answers 413", async () => {
+    const { token } = await signIn("stream.driver@example.com");
+    let pulled = 0;
+    const chunk = new Uint8Array(64 * 1024).fill(0x20);
+    // A body that never ends and declares no length.
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulled++;
+        controller.enqueue(chunk);
+      },
+    });
+    const request = new Request("https://emsp.example.test/api/v1/problems", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: endless,
+      duplex: "half",
+    } as RequestInit);
+    expect(request.headers.get("content-length")).toBeNull();
+    const res = await problemPOST(request);
+    expect(res.status).toBe(413);
+    // Read up to the limit and a chunk past it, never more.
+    expect(pulled * chunk.byteLength).toBeLessThan(
+      PROBLEM_BODY_MAX + 4 * chunk.byteLength,
+    );
+    expect(app.reports.size).toBe(0);
+  });
 
   it("takes a report with a photo, checks it, and shows it to admins", async () => {
     const { token, id } = await signIn("report.driver@example.com");

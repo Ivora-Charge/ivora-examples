@@ -15,6 +15,8 @@ import {
   stopCharge,
 } from "../src/lib/api";
 import {
+  oneRequest,
+  outcomeUnknown,
   phaseOf,
   requestId,
   startProblem,
@@ -259,6 +261,135 @@ describe("the charging API", () => {
     await expect(getReceipt(TOKEN, "c1")).rejects.toMatchObject({
       code: "http_409",
     });
+  });
+
+  /**
+   * A server like ours: one command per request ID, a hold for each new start, and a
+   * replay (no hold, nothing sent) for an ID it has seen. `script` decides each answer.
+   */
+  function fakeServer(
+    script: (call: number) => "ok" | "lost" | "refuse" | "error" | "fail",
+  ) {
+    const seen = new Map<string, string>();
+    const holds: string[] = [];
+    const commands: string[] = [];
+    let call = 0;
+    fetchSpy.mockImplementation(async (url: string, init: RequestInit) => {
+      const step = script(call++);
+      if (step === "refuse") return Response.json({}, { status: 409 });
+      if (step === "error") return Response.json({}, { status: 503 });
+      const { requestId: id } = JSON.parse(String(init.body));
+      const type = url.endsWith("/stop") ? "STOP_SESSION" : "START_SESSION";
+      let state = "replayed";
+      if (!seen.has(id)) {
+        seen.set(id, `cmd-${seen.size + 1}`);
+        if (type === "START_SESSION") holds.push(id);
+        commands.push(type);
+        state = "created";
+      }
+      // The server acted, then the answer never reached the phone.
+      if (step === "lost") throw new TypeError("Network request failed");
+      const command = {
+        id: seen.get(id),
+        type,
+        requestId: id,
+        status: step === "fail" ? "failed" : "accepted",
+        pending: step !== "fail",
+        result: step === "fail" ? "REJECTED" : null,
+      };
+      return Response.json({ state, command, payment: null });
+    });
+    return { holds, commands, seen };
+  }
+
+  const startInput = { locationId: "LOC", evseUid: "E1", connectorId: "1" };
+  const startOver = (r: Awaited<ReturnType<typeof startCharge>>) =>
+    startProblem(r.command) !== null;
+
+  it("retries a start whose answer was lost with the same request ID: one start, one hold", async () => {
+    process.env.EXPO_PUBLIC_API_URL = "https://emsp.example.test";
+    const server = fakeServer((n) => (n === 0 ? "lost" : "ok"));
+    const request = oneRequest();
+    const send = () =>
+      request.send(
+        (requestId) => startCharge(TOKEN, { requestId, ...startInput }),
+        startOver,
+      );
+    await expect(send()).rejects.toMatchObject({ code: "unreachable" });
+    const res = await send();
+    expect(res.state).toBe("replayed");
+    expect(server.holds).toHaveLength(1);
+    expect(server.commands).toEqual(["START_SESSION"]);
+  });
+
+  it("keeps the request ID after a server error, and makes a new one after a refusal or a failed start", async () => {
+    process.env.EXPO_PUBLIC_API_URL = "https://emsp.example.test";
+    const steps = ["error", "refuse", "fail", "ok"] as const;
+    const server = fakeServer((n) => steps[n]);
+    const request = oneRequest();
+    const send = () =>
+      request.send(
+        (requestId) => startCharge(TOKEN, { requestId, ...startInput }),
+        startOver,
+      );
+    const ids: string[] = [];
+    const sent = () =>
+      JSON.parse(fetchSpy.mock.calls.at(-1)![1].body).requestId as string;
+    await expect(send()).rejects.toMatchObject({ code: "http_503" });
+    ids.push(sent());
+    await expect(send()).rejects.toMatchObject({ code: "http_409" });
+    ids.push(sent());
+    expect((await send()).command.status).toBe("failed");
+    ids.push(sent());
+    expect((await send()).state).toBe("created");
+    ids.push(sent());
+    // 503 kept it; the 409 refusal and the failed start each ended it.
+    expect(ids[1]).toBe(ids[0]);
+    expect(ids[2]).not.toBe(ids[1]);
+    expect(ids[3]).not.toBe(ids[2]);
+    expect(server.holds).toEqual([ids[2], ids[3]]);
+  });
+
+  it("treats a stop the same way: a lost answer is retried with the same ID", async () => {
+    process.env.EXPO_PUBLIC_API_URL = "https://emsp.example.test";
+    const server = fakeServer((n) =>
+      n === 0 ? "lost" : n === 1 ? "ok" : "refuse",
+    );
+    const request = oneRequest();
+    const failed = (r: Awaited<ReturnType<typeof stopCharge>>) =>
+      !r.command.pending && r.command.status !== "succeeded";
+    const send = () =>
+      request.send((id) => stopCharge(TOKEN, "c1", id), failed);
+    await expect(send()).rejects.toMatchObject({ code: "unreachable" });
+    const first = request.id;
+    expect((await send()).state).toBe("replayed");
+    expect(server.commands).toEqual(["STOP_SESSION"]);
+    expect(request.id).toBe(first);
+    await expect(send()).rejects.toMatchObject({ code: "http_409" });
+    expect(request.id).not.toBe(first);
+  });
+
+  it("knows which errors leave the outcome unknown", () => {
+    const api = (code: string) =>
+      Object.assign(new Error(code), { name: "ApiError", code });
+    for (const code of [
+      "unreachable",
+      "rate_limited",
+      "http_408",
+      "http_500",
+      "http_504",
+    ])
+      expect(outcomeUnknown(api(code))).toBe(true);
+    for (const code of [
+      "invalid",
+      "unauthorized",
+      "not_found",
+      "http_403",
+      "http_409",
+    ])
+      expect(outcomeUnknown(api(code))).toBe(false);
+    // An answer we could not read: the server may have acted.
+    expect(outcomeUnknown(new SyntaxError("bad json"))).toBe(true);
   });
 });
 

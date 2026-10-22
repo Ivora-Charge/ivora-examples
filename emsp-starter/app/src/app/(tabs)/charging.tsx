@@ -63,6 +63,11 @@ export default function Charging() {
     [],
   );
 
+  // The charge on the live card is not listed twice: its history entry would lag behind
+  // the live figures. It joins the list, final, when the driver closes the card.
+  const past =
+    history?.filter((h) => h.chargeId !== charge?.command.id) ?? null;
+
   const title = (
     <Text
       role="heading"
@@ -147,7 +152,7 @@ export default function Charging() {
             </Card>
           )}
           <Card title={t("history.title")} icon="clock" testID="history">
-            {history === null ? (
+            {past === null ? (
               <Text
                 role="status"
                 style={[
@@ -157,8 +162,8 @@ export default function Charging() {
               >
                 {t("common.loading")}
               </Text>
-            ) : history.length ? (
-              <HistoryList items={history} label={t("history.title")} />
+            ) : past.length ? (
+              <HistoryList items={past} label={t("history.title")} />
             ) : (
               <Text
                 style={[

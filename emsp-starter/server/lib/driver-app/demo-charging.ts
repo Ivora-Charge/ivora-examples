@@ -33,14 +33,15 @@ import { sessionOfStart } from "./charges";
  *   (the demo payment: no card is charged) and makes the receipt.
  *
  * The demo card that declines raises (DEMO_DECLINE_CARD_ID) shows `hold_increment_declined`:
- * once the running cost reaches a fifth of the hold, its raise is declined, and the
+ * once the running cost reaches a tenth of the hold, its raise is declined, and the
  * payments module stops the session exactly as it does live.
  *
  * Nothing here runs outside demo mode, or for any peer but the mock CPO.
  */
-export const DEMO_KWH_PER_SECOND = 0.1;
+/** The same pace as the app's offline demo (app/src/lib/demo-charge.ts; a test keeps them equal). */
+export const DEMO_KWH_PER_SECOND = 0.2;
 /** The demo card that declines raises declines once the cost reaches this share of the hold. */
-export const DEMO_DECLINE_AT = 0.2;
+export const DEMO_DECLINE_AT = 0.1;
 
 const demoPeer = { id: DEMO_PEER_ID } as Peer;
 
