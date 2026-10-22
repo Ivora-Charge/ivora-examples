@@ -17,10 +17,13 @@ import type {
   Quote,
   Station,
   StationInput,
+  Stats,
+  StringPage,
   Tariff,
   TariffArchived,
   TokenRecord,
   Transaction,
+  TransactionRecord,
 } from "./types";
 
 export interface LiveOptions {
@@ -491,6 +494,24 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         "POST",
         `bills/${encodeURIComponent(billId)}/alerts`,
         { body: { kind: "hold_stop" }, key, root: "billing" },
+      );
+    },
+    getStats(q) {
+      return request<Stats>(
+        "GET",
+        `stats${query({ from: q.from, to: q.to, bucket: q.bucket, time_zone: q.time_zone, top: q.top })}`,
+      );
+    },
+    listTransactionPage(o) {
+      return request<Page<TransactionRecord>>(
+        "GET",
+        `transactions${query({ limit: o.limit ?? 100, after: o.after || undefined, station_id: o.station_id })}`,
+      );
+    },
+    listBillPage(o) {
+      return request<StringPage<Bill>>(
+        "GET",
+        `bills${query({ limit: o.limit ?? 100, after: o.after || undefined, station_id: o.station_id, status: o.status })}`,
       );
     },
   };

@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { demoHistory, demoStats } from "./demo-history";
 import { demoSimulate } from "./demo-pricing";
 import { IvoraError } from "./errors";
 import type {
@@ -22,6 +23,7 @@ import type {
   TariffDefinitionInput,
   TokenRecord,
   Transaction,
+  TransactionRecord,
 } from "./types";
 
 // Sample data for demo mode. Every name says "Sample" or starts with DEMO- so it cannot
@@ -38,6 +40,7 @@ const SAMPLE_LOCATIONS: Location[] = [
     // Open ocean off West Africa (0°N 0°E is "Null Island"): never a real site.
     latitude: 0.012,
     longitude: 0.004,
+    time_zone: "America/New_York",
     external_reference: "cpo-demo-site-1",
   },
   {
@@ -49,6 +52,7 @@ const SAMPLE_LOCATIONS: Location[] = [
     country: "USA",
     latitude: 0.006,
     longitude: 0.021,
+    time_zone: "America/New_York",
     external_reference: "cpo-demo-site-2",
   },
 ];
@@ -1388,5 +1392,67 @@ export function createDemoClient(
     async recordHoldStop(billId) {
       await bill(billId);
     },
+    // Reports: the sample history (demo-history.ts) plus the visitor's own sessions
+    // and bills. Cursors are offsets into the newest-first list.
+    async getStats(q) {
+      const { transactions: txs, bills } = await reportData();
+      return demoStats(q, txs, bills, await stations(), now());
+    },
+    async listTransactionPage(o) {
+      const all = (await reportData()).transactions.filter(
+        (t) => o.station_id === undefined || t.station_id === o.station_id,
+      );
+      const at = o.after ?? 0;
+      const limit = o.limit ?? 100;
+      return {
+        data: all.slice(at, at + limit),
+        next_cursor: at + limit < all.length ? at + limit : null,
+      };
+    },
+    async listBillPage(o) {
+      const all = (await reportData()).bills
+        .filter(
+          (b) =>
+            (o.station_id === undefined || b.station_id === o.station_id) &&
+            (o.status === undefined || b.status === o.status),
+        )
+        .sort((a, b) => a.id.localeCompare(b.id));
+      const at = Number(o.after ?? 0) || 0;
+      const limit = o.limit ?? 100;
+      return {
+        data: all.slice(at, at + limit).map((b) => ({ ...b, usage: null })),
+        next_cursor: at + limit < all.length ? String(at + limit) : null,
+      };
+    },
   };
+
+  /** The visitor's sessions and bills, then the sample history; newest session first. */
+  async function reportData() {
+    const f = await fleet.load();
+    const own = await Promise.all((f.bills ?? []).map((b) => billView(b, f)));
+    const history = demoHistory(now());
+    const listed: TransactionRecord[] = (await transactions()).map((t) => {
+      const b = own.find((x) => x.transaction_id === t.id);
+      return {
+        ...t,
+        station_name: null,
+        bill: b
+          ? {
+              id: b.id,
+              status: b.status,
+              currency: b.currency,
+              total_minor: b.total_minor,
+              finalized_at: b.finalized_at,
+            }
+          : null,
+      };
+    });
+    return {
+      transactions: [...listed, ...history.transactions].sort(
+        (a, b) =>
+          Date.parse(b.started_at ?? "") - Date.parse(a.started_at ?? ""),
+      ),
+      bills: [...own, ...history.bills],
+    };
+  }
 }
