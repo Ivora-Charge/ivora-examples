@@ -5,6 +5,8 @@ import {
   listPeersAction,
   managePeerAction,
 } from "@/app/admin/peers/actions";
+import { setLocationStoreForTests } from "@/lib/locations/registry";
+import { MemoryLocationStore } from "@/lib/locations/store";
 import { createMockCpo } from "@/lib/mock-cpo";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore } from "@/lib/ocpi/store";
@@ -39,6 +41,7 @@ beforeEach(() => {
     delete process.env[k];
   store = new MemoryPeerStore();
   setPeerStoreForTests(store);
+  setLocationStoreForTests(new MemoryLocationStore());
   fetchSpy = vi.fn(() => {
     throw new Error("no network in tests");
   });
@@ -47,6 +50,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setPeerStoreForTests(undefined);
+  setLocationStoreForTests(undefined);
   uninstallNetwork();
   process.env = { ...saved };
 });
@@ -60,7 +64,7 @@ describe("admin secret (temporary admin gate)", () => {
       {},
       form({ label: "x", adminSecret: "short" }),
     );
-    expect(res).toEqual({
+    expect(res).toMatchObject({
       ok: false,
       message: expect.stringMatching(/disabled/),
     });
@@ -76,7 +80,7 @@ describe("admin secret (temporary admin gate)", () => {
       listPeersAction,
     ]) {
       resetAdminLimitForTests();
-      expect(await action({}, form({ label: "x" }))).toEqual({
+      expect(await action({}, form({ label: "x" }))).toMatchObject({
         ok: false,
         message: "Wrong admin secret.",
       });
@@ -148,7 +152,7 @@ describe("admin peer actions", () => {
         adminSecret: SECRET,
       }),
     );
-    expect(connected).toEqual({
+    expect(connected).toMatchObject({
       ok: false,
       message: "Demo mode: refused to register at a CPO. Nothing was sent.",
     });
@@ -241,6 +245,6 @@ describe("admin peer actions", () => {
         {},
         form({ peerId: "../x", intent: "rotate", adminSecret: SECRET }),
       ),
-    ).toEqual({ ok: false, message: "Peer ID must be a UUID." });
+    ).toMatchObject({ ok: false, message: "Peer ID must be a UUID." });
   });
 });

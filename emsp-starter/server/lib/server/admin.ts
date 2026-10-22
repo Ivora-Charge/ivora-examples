@@ -4,14 +4,15 @@ import { config } from "./config";
 import { clientAddress } from "./rate-limit";
 
 /**
- * TEMPORARY admin gate, until admin sign-in lands (part 7): every admin action asks
- * for ADMIN_SECRET. Without an ADMIN_SECRET of at least 32 characters, admin actions
- * are disabled. The comparison takes the same time whatever the input.
+ * The ADMIN_SECRET gate, kept beside admin sign-in (lib/accounts/admin-session.ts) for
+ * the first admin and for demo deployments: while ADMIN_SECRET (at least 32
+ * characters) is set, an admin action also runs for whoever gives it. Unset it once
+ * your admins sign in. The comparison takes the same time whatever the input.
  *
  * Wrong secrets are rate limited: 5 per client and 50 in total per 15 minutes. While
  * limited, the secret is not even compared. Without a trusted client address (see
- * clientAddress) there is no per-client count and the total cap alone applies. The counts live in this server process, so
- * each instance counts on its own; part 7 replaces all of this.
+ * clientAddress) there is no per-client count and the total cap alone applies. The
+ * counts live in this server process, so each instance counts on its own.
  */
 export function adminEnabled(): boolean {
   return config.adminSecret !== undefined;

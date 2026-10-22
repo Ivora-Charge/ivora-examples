@@ -2,6 +2,7 @@ import "server-only";
 import { isDemo } from "../env";
 import { IvoraError } from "./errors";
 import type {
+  Bill,
   Branding,
   Fault,
   IvoraClient,
@@ -11,14 +12,18 @@ import type {
   LocationInput,
   Operation,
   Page,
+  Payment,
   PaymentAccount,
   Quote,
   Station,
   StationInput,
+  Stats,
   Tariff,
   TariffArchived,
   TokenRecord,
   Transaction,
+  TransactionDetail,
+  TransactionListItem,
 } from "./types";
 
 export interface LiveOptions {
@@ -141,6 +146,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   const roots = {
     tenant: `${origin}/v1/tenants/${o.tenantId}/`,
     stripe: `${origin}/payment/stripe/v1/tenants/${o.tenantId}/`,
+    billing: `${origin}/v1/billing/`,
   };
 
   async function once<T>(
@@ -194,9 +200,14 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       root?: keyof typeof roots;
       /** A POST that changes nothing (a simulation): no Idempotency-Key. */
       readOnly?: boolean;
+      /** Hand a 429 back at once (with its Retry-After) instead of waiting. */
+      failOn429?: boolean;
     } = {},
   ): Promise<T> {
-    const deadline = opts.deadline ?? now() + MAX_REQUEST_SECONDS * 1000;
+    const deadline = Math.min(
+      opts.deadline ?? Infinity,
+      now() + MAX_REQUEST_SECONDS * 1000,
+    );
     // Second guard behind getIvora(): a live client never sends in demo mode.
     if (isDemo()) throw new Error("Demo mode never calls the Ivora API");
     if (method !== "GET" && !opts.readOnly && !(opts.key && KEY.test(opts.key)))
@@ -227,7 +238,12 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
           Math.min(TIMEOUT_MS, left),
         );
       } catch (e) {
-        if (!(e instanceof IvoraError) || !retriable(e) || n >= attempts)
+        if (
+          !(e instanceof IvoraError) ||
+          !retriable(e) ||
+          n >= attempts ||
+          (e.status === 429 && opts.failOn429)
+        )
           throw e;
         const waitMs = (e.retryAfterSeconds ?? 2 ** (n - 1)) * 1000;
         // Past the deadline: hand the error (and its Retry-After) back to the caller.
@@ -347,8 +363,15 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         `operations/${encodeURIComponent(operationId)}`,
       );
     },
-    getTransaction(transactionId) {
-      return request<Transaction>("GET", `transactions/${transactionId}`);
+    getTransaction(transactionId, limits = {}) {
+      return request<TransactionDetail>(
+        "GET",
+        `transactions/${transactionId}`,
+        {
+          deadline: limits.deadline,
+          failOn429: limits.failOn429,
+        },
+      );
     },
     async findToken(externalReference) {
       return (
@@ -378,6 +401,13 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
           `transactions${query({ limit: o.limit ?? 50, station_id: o.station_id })}`,
         )
       ).data;
+    },
+    listTransactionsAfter(o, limits = {}) {
+      return request<Page<TransactionListItem>>(
+        "GET",
+        `transactions${query({ station_id: o.station_id, after: o.after || undefined, limit: o.limit ?? 100 })}`,
+        { deadline: limits.deadline, failOn429: limits.failOn429 },
+      );
     },
     // A PUT replaces the whole record, so repeating it is harmless; the key still
     // makes a retried request count once.
@@ -421,6 +451,80 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         key: undefined,
         readOnly: true,
       });
+    },
+    quoteTariff(tariffId, session) {
+      return request<Quote>("POST", `tariffs/${tariffId}/quote`, {
+        body: { session },
+        readOnly: true,
+      });
+    },
+    createBill(input, key) {
+      return request<Bill>("POST", "bills", {
+        body: { ...input, source: "csms" },
+        key,
+      });
+    },
+    getBill(billId) {
+      return request<Bill>("GET", `bills/${encodeURIComponent(billId)}`);
+    },
+    startBill(billId, key) {
+      return request<Operation>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/start`,
+        { key },
+      );
+    },
+    createPayment(input, key) {
+      return request<Payment>("POST", "payments", {
+        body: input,
+        key,
+        root: "stripe",
+      });
+    },
+    getTariff(tariffId) {
+      return request<Tariff>("GET", `tariffs/${tariffId}`);
+    },
+    finalizeBill(billId, transactionId, key) {
+      return request<Bill>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/finalize`,
+        { body: { transaction_id: transactionId }, key },
+      );
+    },
+    getPayment(paymentId) {
+      return request<Payment>(
+        "GET",
+        `payments/${encodeURIComponent(paymentId)}`,
+        { root: "stripe" },
+      );
+    },
+    // No amount: Ivora captures exactly the final bill.
+    capturePayment(paymentId, key) {
+      return request<Payment>(
+        "POST",
+        `payments/${encodeURIComponent(paymentId)}/capture`,
+        { key, root: "stripe" },
+      );
+    },
+    releasePayment(paymentId, key) {
+      return request<Payment>(
+        "POST",
+        `payments/${encodeURIComponent(paymentId)}/release`,
+        { key, root: "stripe" },
+      );
+    },
+    async recordHoldStop(billId, key) {
+      await request<unknown>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/alerts`,
+        { body: { kind: "hold_stop" }, key, root: "billing" },
+      );
+    },
+    getStats(q) {
+      return request<Stats>(
+        "GET",
+        `stats${query({ from: q.from, to: q.to, bucket: q.bucket, time_zone: q.time_zone, top: q.top })}`,
+      );
     },
   };
 }

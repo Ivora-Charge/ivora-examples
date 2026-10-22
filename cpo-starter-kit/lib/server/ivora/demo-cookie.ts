@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { config } from "../env";
+import { demoRenderCookie } from "../demo-render-cookie";
 import {
   decodeDemoFleet,
   emptyDemoFleet,
@@ -15,34 +15,22 @@ const COOKIE = "cpo_demo_fleet";
 /** Outside a request (tests, scripts) there is no cookie: keep the fleet in memory. */
 const outsideRequest = memoryDemoFleet();
 
-async function jar() {
-  try {
-    return await cookies();
-  } catch {
-    return null;
-  }
-}
-
 /**
  * The visitor's own demo sites, chargers and test sessions, in an HTTP-only cookie.
- * Pages only read it; server actions write it.
+ * Server actions write it; a page that settles a driver's session (a simulated
+ * finalize, capture or release) keeps the change for its own render (see
+ * demoRenderCookie).
  */
 export function cookieDemoFleet(): DemoFleetStore {
   return {
     async load() {
-      const c = await jar();
-      return c ? decodeDemoFleet(c.get(COOKIE)?.value) : outsideRequest.load();
+      const c = await demoRenderCookie(COOKIE);
+      return c ? decodeDemoFleet(c.read()) : outsideRequest.load();
     },
     async save(f: DemoFleet) {
-      const c = await jar();
+      const c = await demoRenderCookie(COOKIE);
       if (!c) return outsideRequest.save(f);
-      c.set(COOKIE, encodeDemoFleet(f), {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: config.appUrl.startsWith("https:"),
-        path: "/",
-        maxAge: 7 * 24 * 3600,
-      });
+      c.write(encodeDemoFleet(f));
     },
   };
 }

@@ -34,9 +34,13 @@ import { tariffFormSchema, type TariffForm } from "@/lib/server/pricing/input";
 import {
   connectorPricing,
   currentVersion,
+  DISCARD_WAIT_SECONDS,
   discardPendingVersion,
+  editorValues,
   effectiveTariff,
+  idleGraceDefault,
   loadPricing,
+  newTariffDefaults,
   pendingVersion,
   previewTariff,
   pricingProgress,
@@ -1195,6 +1199,50 @@ describe("pricing service", () => {
     );
   });
 
+  it("adopts the version when an earlier attempt lands between the lookup and the next one", async () => {
+    const { d, api, really } = deps();
+    const { id } = await saveTariff(d, owner, FORM);
+    api.createTariff.mockRejectedValueOnce(unknownOutcome());
+    await edit(d, owner, { ...FORM, energy: "0.50" }, id);
+    // "Finish saving": the lookup finds nothing yet, then attempt 1 lands, so attempt
+    // 2 is refused because the reference is taken. Not a refusal of the version.
+    api.findTariff.mockResolvedValueOnce(null);
+    api.createTariff.mockImplementationOnce(async (input, key) => {
+      await really(input, key);
+      throw new IvoraError(
+        409,
+        "external_reference_taken",
+        "A tariff already uses this external_reference",
+        "req_t",
+      );
+    });
+    expect(await publishTariff(d, owner, id)).toMatchObject({
+      state: "saved",
+      version: 2,
+    });
+    const t = await tariffOf(d, id);
+    expect(currentVersion(t)).toMatchObject({ version: 2, ivoraTariffId: 502 });
+    expect(api.createTariff).toHaveBeenCalledTimes(3);
+    // And the old version is archived in favour of the adopted one.
+    expect(api.archiveTariff).toHaveBeenCalledWith(
+      501,
+      502,
+      `cpo-tariff-${id}-v1-archive-to-v2`,
+    );
+    // If the lookup can't find it either, the version stays unconfirmed (not dropped).
+    api.createTariff.mockRejectedValueOnce(unknownOutcome());
+    await edit(d, owner, { ...FORM, energy: "0.60" }, id);
+    api.findTariff.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
+    api.createTariff.mockRejectedValueOnce(
+      new IvoraError(409, "external_reference_taken", "Taken", "req_u"),
+    );
+    expect(await publishTariff(d, owner, id)).toMatchObject({
+      state: "unconfirmed",
+      version: 3,
+    });
+    expect(pendingVersion(await tariffOf(d, id))?.version).toBe(3);
+  });
+
   it("keeps the version as it is when Ivora can't be asked about it", async () => {
     const { d, api } = deps();
     const { id } = await saveTariff(d, owner, FORM);
@@ -1225,6 +1273,13 @@ describe("pricing service", () => {
     // Ivora has nothing for the draft: it is simply forgotten.
     api.createTariff.mockRejectedValueOnce(unknownOutcome());
     await edit(d, owner, { ...FORM, energy: "0.50" }, id);
+    // Not while the create may still be in flight: Ivora could finish it after the
+    // lookup, and the draft would be forgotten with a tariff left behind.
+    await expect(discardPendingVersion(d, manager, id)).rejects.toThrow(
+      /may still be creating version 2\. Wait 120 seconds/,
+    );
+    expect(api.findTariff).not.toHaveBeenCalled();
+    d.now = () => Date.now() + DISCARD_WAIT_SECONDS * 1000;
     expect(await discardPendingVersion(d, manager, id)).toEqual({
       version: 2,
       tariffRemoved: false,
@@ -1436,6 +1491,33 @@ describe("pricing service", () => {
     });
     const free = await previewTariff(d, owner, { ...FORM, kind: "free" }, SIM);
     expect(free.warnings).toEqual([]);
+  });
+
+  it("starts a new idle fee with no grace period when Ivora can't apply one", async () => {
+    const yes = deps();
+    expect(await newTariffDefaults(yes.d, owner)).toEqual({
+      currency: "USD",
+      timeZone: "UTC",
+      idleGrace: 10,
+    });
+    const no = deps({ graceRule: false });
+    const base = await newTariffDefaults(no.d, manager);
+    expect(base.idleGrace).toBe(0);
+    expect(editorValues("", null, base, base.idleGrace).idleGrace).toBe("0");
+    // So the first save of a tariff with an idle fee goes through.
+    const { result } = await saveTariff(no.d, owner, {
+      ...FORM,
+      idleGrace: editorValues("", null, base, base.idleGrace).idleGrace,
+    });
+    expect(result.state).toBe("saved");
+    // A failed check also gives 0; staff can still type a grace period.
+    no.api.simulateTariff.mockRejectedValueOnce(
+      new IvoraError(0, "network_error", "Lost"),
+    );
+    expect(await idleGraceDefault(no.d, owner, base)).toBe(0);
+    await expect(idleGraceDefault(no.d, technician, base)).rejects.toThrow(
+      PricingError,
+    );
   });
 
   it("refuses an idle grace period Ivora does not apply, and explains it", async () => {

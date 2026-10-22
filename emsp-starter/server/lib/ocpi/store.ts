@@ -81,6 +81,9 @@ export type AuditEntry = {
   details?: Record<string, unknown>;
 };
 
+/** An audit log entry as read back, newest first. */
+export type AuditRecord = AuditEntry & { at: string };
+
 export interface PeerStore {
   createPeer(input: {
     label: string;
@@ -105,13 +108,15 @@ export interface PeerStore {
   /** Revokes every active token of the peer, except `keepHash`. */
   revokePeerTokens(peerId: string, keepHash?: string): Promise<void>;
   audit(entry: AuditEntry): Promise<void>;
+  /** The audit log of one subject (a payment, a token, a peer), newest first. */
+  listAudit(subjectId: string, limit: number): Promise<AuditRecord[]>;
 }
 
 /** Peers in memory: for demo mode (nothing persists) and for tests. */
 export class MemoryPeerStore implements PeerStore {
   readonly peers = new Map<string, Peer>();
   readonly tokens = new Map<string, IssuedToken & { revokedAt?: string }>();
-  readonly auditLog: (AuditEntry & { at: string })[] = [];
+  readonly auditLog: AuditRecord[] = [];
 
   async createPeer(input: {
     label: string;
@@ -190,5 +195,13 @@ export class MemoryPeerStore implements PeerStore {
       ...structuredClone(entry),
       at: new Date().toISOString(),
     });
+  }
+
+  async listAudit(subjectId: string, limit: number) {
+    return this.auditLog
+      .filter((e) => e.subjectId === subjectId)
+      .reverse()
+      .slice(0, limit)
+      .map((e) => structuredClone(e));
   }
 }

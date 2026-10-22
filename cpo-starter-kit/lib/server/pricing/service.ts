@@ -69,7 +69,17 @@ export interface PricingDeps {
   ivora: IvoraClient;
   /** The company profile: a new tariff's currency and time zone. */
   company: Pick<OnboardingStore, "load">;
+  /** Milliseconds clock, for tests. */
+  now?: () => number;
 }
+
+/**
+ * How long after a create attempt was started "Discard this draft" waits. A create
+ * gives up within MAX_REQUEST_SECONDS (20 s), but Ivora may still finish it after an
+ * uncertain answer; discarding earlier could forget a version that Ivora makes a
+ * moment later, leaving an unused tariff behind.
+ */
+export const DISCARD_WAIT_SECONDS = 120;
 
 function requireManager(actor: Staff) {
   if (!atLeast(actor.role, "manager")) throw notAllowed();
@@ -94,7 +104,11 @@ function logIvora(what: string, e: unknown) {
     );
 }
 
-/** The API refused outright: nothing was created, so the version can go. */
+/**
+ * The API refused outright: nothing was created, so the version can go. Not
+ * external_reference_taken: that says a tariff with the version's reference exists
+ * (an earlier attempt landed after all), so it is looked up and adopted instead.
+ */
 function definitelyFailed(e: unknown): boolean {
   return (
     e instanceof IvoraError &&
@@ -102,7 +116,8 @@ function definitelyFailed(e: unknown): boolean {
     e.status < 500 &&
     e.status !== 408 &&
     e.status !== 429 &&
-    e.code !== "request_in_progress"
+    e.code !== "request_in_progress" &&
+    e.code !== "external_reference_taken"
   );
 }
 
@@ -431,10 +446,45 @@ export async function loadTariff(
   return t ? tariffView(t, 0) : null;
 }
 
-/** A new tariff's starting values: the company's currency and time zone. */
+/**
+ * A new tariff's starting values: the company's currency and time zone, and the idle
+ * grace period (see idleGraceDefault).
+ */
 export async function newTariffDefaults(d: PricingDeps, staff: Staff) {
   requireManager(staff);
-  return defaults(d, staff.operatorId);
+  const base = await defaults(d, staff.operatorId);
+  return { ...base, idleGrace: await idleGraceDefault(d, staff, base) };
+}
+
+/**
+ * The grace period an idle fee starts with in the editor: DEFAULT_IDLE_GRACE_MINUTES
+ * when Ivora's simulation shows it applies rules.idle_grace_minutes, else 0, so a first
+ * save is not refused on an API without the rule. A failed check also gives 0.
+ */
+export async function idleGraceDefault(
+  d: PricingDeps,
+  staff: Staff,
+  base: { timeZone: string },
+): Promise<number> {
+  requireManager(staff);
+  const probe: TariffDefinition = {
+    kind: "paid",
+    currency: "USD",
+    timeZone: base.timeZone,
+    energyMinorPerKwh: 1,
+    sessionFeeMinor: 0,
+    idleMinorPerMinute: 1,
+    idleGraceMinutes: DEFAULT_IDLE_GRACE_MINUTES,
+    periods: [],
+    driverText: null,
+  };
+  try {
+    await simulate(d, probe, graceProbe(probe));
+    return DEFAULT_IDLE_GRACE_MINUTES;
+  } catch (e) {
+    if (e instanceof PricingError) return 0;
+    throw e;
+  }
 }
 
 /** The editor's fields as text, from a definition (or a new tariff's defaults). */
@@ -454,6 +504,8 @@ export function editorValues(
   name: string,
   def: TariffDefinition | null,
   base: { currency: string; timeZone: string },
+  /** For a tariff without an idle fee: see idleGraceDefault. */
+  graceDefault = DEFAULT_IDLE_GRACE_MINUTES,
 ): EditorValues {
   if (!def)
     return {
@@ -463,7 +515,7 @@ export function editorValues(
       energy: "",
       sessionFee: "",
       idleFee: "",
-      idleGrace: String(DEFAULT_IDLE_GRACE_MINUTES),
+      idleGrace: String(graceDefault),
       driverText: "",
       periods: [],
     };
@@ -480,9 +532,7 @@ export function editorValues(
     sessionFee: m(def.sessionFeeMinor),
     idleFee: m(def.idleMinorPerMinute),
     idleGrace: String(
-      def.idleMinorPerMinute
-        ? def.idleGraceMinutes
-        : DEFAULT_IDLE_GRACE_MINUTES,
+      def.idleMinorPerMinute ? def.idleGraceMinutes : graceDefault,
     ),
     driverText: def.driverText ?? "",
     periods: def.periods.map((p) => ({
@@ -686,6 +736,25 @@ const createKey = (tariffId: string, version: number, attempt: number) =>
   idempotencyKey("tariff", `${tariffId}-v${version}-a${attempt}`, "create");
 
 /**
+ * The Ivora tariff of a version whose create was answered external_reference_taken,
+ * or null when the lookup fails or finds none (the version stays unconfirmed).
+ */
+async function adoptByReference(
+  d: PricingDeps,
+  tariffId: string,
+  version: number,
+): Promise<number | null> {
+  try {
+    const found = await d.ivora.findTariff(tariffReference(tariffId, version));
+    return found && !found.archived ? found.id : null;
+  } catch (e) {
+    if (!(e instanceof IvoraError)) throw e;
+    logIvora("tariff lookup", e);
+    return null;
+  }
+}
+
+/**
  * Sends the tariff's pending version to Ivora as a new tariff (`POST /tariffs`,
  * external_reference cpo-tariff-<id>-v<n>, key cpo-tariff-<id>-v<n>-a<k>-create),
  * then archives the older versions with it as their replacement, so Ivora moves any
@@ -759,7 +828,13 @@ export async function publishTariff(
         await d.store.dropVersion(actor, t.id, pending.version);
         throw ivoraRefusal(e);
       }
-      return unconfirmed(e);
+      // An earlier attempt landed between the lookup and this one: adopt it.
+      const adopted =
+        e.code === "external_reference_taken"
+          ? await adoptByReference(d, t.id, pending.version)
+          : null;
+      if (!adopted) return unconfirmed(e);
+      await d.store.recordVersion(actor, t.id, pending.version, adopted);
     }
     t = await find();
   }
@@ -811,6 +886,18 @@ export async function discardPendingVersion(
     throw new PricingError(
       "invalid",
       "There is no unconfirmed version to discard. Reload the page.",
+    );
+  // A create sent moments ago may still land after the lookup below finds nothing.
+  const wait = Math.ceil(
+    (Date.parse(pending.attemptedAt) +
+      DISCARD_WAIT_SECONDS * 1000 -
+      (d.now ?? Date.now)()) /
+      1000,
+  );
+  if (wait > 0)
+    throw new PricingError(
+      "busy",
+      `Ivora may still be creating version ${pending.version}. Wait ${wait} seconds, then discard it (or use "Finish saving").`,
     );
   try {
     const found = await d.ivora.findTariff(

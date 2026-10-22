@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { config } from "../env";
+import { demoRenderCookie } from "../demo-render-cookie";
 import {
   decodeDemoLive,
   emptyDemoLive,
@@ -14,31 +14,21 @@ const COOKIE = "cpo_demo_live";
 /** Outside a request (tests, scripts) there is no cookie: keep commands in memory. */
 const outsideRequest = memoryDemoLive();
 
-async function jar() {
-  try {
-    return await cookies();
-  } catch {
-    return null;
-  }
-}
-
-/** The visitor's own demo commands, in an HTTP-only cookie. Saved only by server actions. */
+/**
+ * The visitor's own demo commands (and tokens and transaction marks), in an HTTP-only
+ * cookie. Server actions save it; a driver's page that finds their free session moves
+ * the station's mark for its own render only (see demoRenderCookie).
+ */
 export function cookieDemoLive(): DemoLiveCookie {
   return {
     async load() {
-      const c = await jar();
-      return c ? decodeDemoLive(c.get(COOKIE)?.value) : outsideRequest.load();
+      const c = await demoRenderCookie(COOKIE);
+      return c ? decodeDemoLive(c.read()) : outsideRequest.load();
     },
     async save(state) {
-      const c = await jar();
+      const c = await demoRenderCookie(COOKIE);
       if (!c) return outsideRequest.save(state);
-      c.set(COOKIE, encodeDemoLive(state), {
-        httpOnly: true,
-        sameSite: "lax",
-        secure: config.appUrl.startsWith("https:"),
-        path: "/",
-        maxAge: 7 * 24 * 3600,
-      });
+      c.write(encodeDemoLive(state));
     },
   };
 }

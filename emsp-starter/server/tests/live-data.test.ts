@@ -1023,7 +1023,7 @@ describe("live-data admin actions", () => {
       listAdaptersAction,
     ]) {
       resetAdminLimitForTests();
-      expect(await action({}, form({ adminSecret: "wrong" }))).toEqual({
+      expect(await action({}, form({ adminSecret: "wrong" }))).toMatchObject({
         ok: false,
         message: "Wrong admin secret.",
       });
@@ -1055,7 +1055,7 @@ describe("live-data admin actions", () => {
     expect(JSON.stringify(list)).not.toContain(KEY);
     expect(
       await setAdapterAction({}, form({ ...fields, accountId: "x" })),
-    ).toEqual({ ok: false, message: "Tenant ID is invalid." });
+    ).toMatchObject({ ok: false, message: "Tenant ID is invalid." });
     expect(
       await removeAdapterAction(
         {},

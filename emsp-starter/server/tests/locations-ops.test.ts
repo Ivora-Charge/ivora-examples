@@ -18,6 +18,8 @@ import {
 import { clientAddress } from "@/lib/server/rate-limit";
 import { setTokenStoreForTests } from "@/lib/tokens/registry";
 import { setCommandStoreForTests } from "@/lib/commands/registry";
+import { setPaymentStoreForTests } from "@/lib/payments/registry";
+import { MemoryPaymentStore } from "@/lib/payments/store";
 import { MemoryCommandStore } from "@/lib/commands/store";
 import { MemoryTokenStore } from "@/lib/tokens/store";
 import {
@@ -76,6 +78,7 @@ beforeEach(() => {
   setLocationStoreForTests(locations);
   setTokenStoreForTests(new MemoryTokenStore());
   setCommandStoreForTests(new MemoryCommandStore());
+  setPaymentStoreForTests(new MemoryPaymentStore());
   net = inProcessNetwork({
     "emsp.example.test": emspHandler,
     "mock-cpo.example.test": (r) => cpo.handle(r),
@@ -91,6 +94,7 @@ afterEach(() => {
   setLocationStoreForTests(undefined);
   setTokenStoreForTests(undefined);
   setCommandStoreForTests(undefined);
+  setPaymentStoreForTests(undefined);
   process.env = { ...saved };
   vi.restoreAllMocks();
 });
@@ -128,16 +132,16 @@ describe("admin: pull locations and tariffs", () => {
     const peer = await connect();
     expect(
       await syncPeerAction({}, form({ peerId: peer.id, adminSecret: "wrong" })),
-    ).toEqual({ ok: false, message: "Wrong admin secret." });
+    ).toMatchObject({ ok: false, message: "Wrong admin secret." });
     expect(
       await syncPeerAction({}, form({ peerId: "x", adminSecret: SECRET })),
-    ).toEqual({ ok: false, message: "Peer ID must be a UUID." });
+    ).toMatchObject({ ok: false, message: "Peer ID must be a UUID." });
     process.env.DEMO_MODE = "true";
     const demo = await syncPeerAction(
       {},
       form({ peerId: peer.id, adminSecret: SECRET }),
     );
-    expect(demo).toEqual({
+    expect(demo).toMatchObject({
       ok: false,
       message:
         "Demo mode: refused to pull locations and tariffs from a CPO. Nothing was sent.",
@@ -172,6 +176,7 @@ describe("scheduled pull (cron)", () => {
       mode: "live",
       tokens: { expired: 0, pushes: { sent: 0, failed: 0, dropped: 0 } },
       commands: { ended: 0 },
+      payments: { settled: 0, released: 0, expired: 0 },
       results: [
         expect.objectContaining({
           peerId: peer.id,

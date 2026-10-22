@@ -4,6 +4,7 @@ import { toE4 } from "@/lib/locations/pricing";
 import type { Cdr, Session } from "@/lib/ocpi/session-objects";
 import {
   eq,
+  inList,
   supabaseRest,
   type SupabaseTransport,
 } from "@/lib/server/supabase-rest";
@@ -14,6 +15,7 @@ import type {
   ReconciliationQuery,
   ReconciliationRow,
   SessionKey,
+  SessionListQuery,
   SessionStore,
   SessionWrite,
   StoredCdr,
@@ -28,6 +30,7 @@ type SessionRow = {
   driver_ref: string | null;
   command_id: string | null;
   completed_at: string | null;
+  stop_reason?: string | null;
   revision: string;
   created_at: string;
   updated_at: string;
@@ -80,6 +83,7 @@ const session = (r: SessionRow): StoredSession => ({
   driverRef: r.driver_ref,
   commandId: r.command_id,
   completedAt: isoOrNull(r.completed_at),
+  stopReason: r.stop_reason ?? null,
   revision: r.revision,
   createdAt: iso(r.created_at),
   updatedAt: iso(r.updated_at),
@@ -240,12 +244,42 @@ export class SupabaseSessionStore implements SessionStore {
     return row ? cdr(row) : null;
   }
 
+  findCdrsByCommand(commandId: string) {
+    return this.cdrs(`command_id=${eq(commandId)}&order=received_at.asc`);
+  }
+
+  async setStopReason(id: string, reason: string, now: string) {
+    // Not the revision: the CPO's writes never touch stop_reason, so they never race it.
+    await this.rest(
+      "PATCH",
+      `emsp_sessions?id=${eq(id)}`,
+      { stop_reason: reason, updated_at: now },
+      "return=minimal",
+    );
+  }
+
   async hasCdr(k: SessionKey) {
     const rows = await this.rest<{ id: string }[]>(
       "GET",
       `emsp_cdrs?peer_id=${eq(k.peerId)}&country_code=${eq(k.countryCode.toUpperCase())}&party_id=${eq(k.partyId.toUpperCase())}&session_id=${eq(k.sessionId)}&credit=is.false&select=id&limit=1`,
     );
     return rows.length > 0;
+  }
+
+  listSessions(q: SessionListQuery) {
+    const filters = [
+      q.peerId && `peer_id=${eq(q.peerId)}`,
+      q.statuses && `status=${inList([...q.statuses])}`,
+      q.driverRef && `driver_ref=${eq(q.driverRef)}`,
+      q.before && `start_date_time=lt.${encodeURIComponent(q.before)}`,
+    ].filter(Boolean);
+    return this.sessions(
+      [
+        ...filters,
+        "order=start_date_time.desc,id.desc",
+        `limit=${Math.max(1, Math.floor(q.limit))}`,
+      ].join("&"),
+    );
   }
 
   async reconcile(q: ReconciliationQuery): Promise<ReconciliationRow[]> {

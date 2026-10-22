@@ -1,6 +1,7 @@
 import { deflateRawSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Role } from "@/lib/roles";
+import { SYNC_INTERVAL_MS } from "@/lib/server/live/active";
 import { createLiveClient } from "@/lib/server/ivora/live";
 import type {
   Fault,
@@ -159,14 +160,39 @@ function fakeIvora() {
       return { body: { data: locations, next_cursor: null } };
     if (c.method === "GET" && p === "stations")
       return { body: { data: stations, next_cursor: null } };
+    // Like Ivora: oldest first, paged with `after` (a transaction ID), and list items
+    // without the ID token or connector (the read by ID has them).
     if (c.method === "GET" && p === "transactions") {
       const st = q.get("station_id");
+      const after = Number(q.get("after") ?? 0);
+      const limit = Number(q.get("limit") ?? 50);
+      const rows = transactions
+        .filter((t) => (!st || t.station_id === Number(st)) && t.id > after)
+        .sort((a, b) => a.id - b.id);
+      const data = rows.slice(0, limit).map((t) => ({
+        id: t.id,
+        station_id: t.station_id,
+        active: t.active,
+        started_at: t.started_at,
+        ended_at: t.ended_at,
+      }));
+      // As Ivora: the last item's ID, also on the last page; `after` when empty.
       return {
         body: {
-          data: transactions.filter((t) => !st || t.station_id === Number(st)),
-          next_cursor: null,
+          data,
+          next_cursor: data.length ? data[data.length - 1].id : after,
         },
       };
+    }
+    const one = p.match(/^transactions\/(\d+)$/);
+    if (c.method === "GET" && one) {
+      const t = transactions.find((x) => x.id === Number(one[1]));
+      return t
+        ? { body: t }
+        : {
+            status: 404,
+            body: { error: { code: "transaction_not_found", message: "m" } },
+          };
     }
     if (c.method === "GET" && p === "tokens")
       return {
@@ -435,11 +461,29 @@ describe("live view (live API mocked)", () => {
     );
     // The view labels it as a staff session.
     api.transactions.push(staffTx);
+    // The next scan of the station finds it.
+    advance(api, SYNC_INTERVAL_MS);
     const r = await loadLive(d, viewer);
     expect(r.ok && r.live.sessions.map((x) => [x.id, x.staff]).sort()).toEqual([
       [900, false],
       [901, true],
     ]);
+    // A session with the operator's free charging token is labelled free, not staff.
+    await d.store.putFreeToken(OPERATOR, {
+      idToken: "FREEABCDEFGHJKLMN234",
+      tokenId: 77,
+    });
+    api.transactions.push(tx(903, "****N234"));
+    advance(api, SYNC_INTERVAL_MS);
+    const f = await loadLive(d, viewer);
+    expect(
+      f.ok && f.live.sessions.map((x) => [x.id, x.staff, x.free]).sort(),
+    ).toEqual([
+      [900, false, false],
+      [901, true, false],
+      [903, false, true],
+    ]);
+    api.transactions.pop();
     // Registered once: the next start reuses the stored token without asking Ivora.
     const before = tokenCalls(api.calls).length;
     api.transactions.pop();
