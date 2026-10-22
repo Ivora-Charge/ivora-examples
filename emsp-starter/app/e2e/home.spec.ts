@@ -1,26 +1,210 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-// Runs on the desktop and mobile projects (see playwright.config.ts).
-test("offline demo: home is labelled demo and sends no request off the device", async ({
-  page,
-}) => {
+/**
+ * The driver app's web build in its offline demo (built without EXPO_PUBLIC_API_URL).
+ * Runs on the desktop and mobile projects (see playwright.config.ts). Map tiles come
+ * from OpenFreeMap, which is the only host outside the device the app may reach; the
+ * tests block it, so they run offline and the app must still work without tiles.
+ */
+const TILES = /tiles\.openfreemap\.org/;
+
+async function open(page: Page, path = "/") {
   const external: string[] = [];
   page.on("request", (r) => {
-    if (!r.url().startsWith("http://localhost:")) external.push(r.url());
+    const url = r.url();
+    if (
+      !url.startsWith("http://localhost:") &&
+      !TILES.test(url) &&
+      !url.startsWith("blob:") &&
+      !url.startsWith("data:")
+    )
+      external.push(url);
   });
-  await page.goto("/");
+  await page.route(TILES, (r) => r.abort());
+  await page.goto(path);
   await expect(page.getByTestId("demo-banner")).toBeVisible();
+  return external;
+}
+
+const isPhone = (page: Page) => (page.viewportSize()?.width ?? 0) < 900;
+
+test("offline demo: the map screen is labelled demo, lists the sample chargers and sends nothing", async ({
+  page,
+}) => {
+  const external = await open(page);
   await expect(page.getByTestId("demo-banner")).toContainText(
-    "Offline sample data",
+    "Sample chargers from a built-in test network",
   );
   await expect(
-    page.getByRole("heading", { level: 1, name: "Your Charging Network" }),
+    page.getByRole("img", { name: "Kilolane" }).first(),
   ).toBeVisible();
-  await expect(page.getByText("Demo · OCPI 2.2.1")).toBeVisible();
-  await expect(page.getByText("ZZ-DMO")).toBeVisible();
-  await expect(page.getByText("Find a charger")).toBeVisible();
+  await expect(page.getByTestId("result-count")).toContainText("places");
+  await expect(page.getByTestId("place-Station Square")).toBeVisible();
+  await expect(page.getByTestId("place-Station Square")).toContainText("€0.71");
+  await expect(page.getByTestId("map-attribution")).toContainText(
+    "OpenStreetMap contributors",
+  );
+  // No sideways scroll, even at 390 px.
+  const [scroll, width] = await page.evaluate(() => [
+    document.documentElement.scrollWidth,
+    window.innerWidth,
+  ]);
+  expect(scroll).toBeLessThanOrEqual(width);
   expect(external).toEqual([]);
+});
 
-  if (process.env.SCREENSHOT)
-    await page.screenshot({ path: "docs/screenshot.png", fullPage: false });
+test("search by place, charger reference or EVSE ID, and filter", async ({
+  page,
+}) => {
+  await open(page);
+  const search = page.getByRole("searchbox", { name: "Search chargers" });
+  await search.fill("market hall");
+  await expect(page.getByTestId("result-count")).toHaveText(/^1 place\b/);
+  await expect(page.getByTestId("place-Market Hall")).toBeVisible();
+
+  await search.fill("ZZ*MCK*E11");
+  await expect(page.getByTestId("result-count")).toHaveText(/^1 place\b/);
+  await expect(page.getByTestId("place-Station Square")).toBeVisible();
+
+  await search.fill("");
+  await page.getByRole("checkbox", { name: "No fee" }).click();
+  await expect(page.getByRole("checkbox", { name: "No fee" })).toBeChecked();
+  await expect(page.getByTestId("place-Riverside Park")).toBeVisible();
+  await expect(page.getByTestId("place-Station Square")).toHaveCount(0);
+
+  await page.getByRole("checkbox", { name: "150 kW+" }).click();
+  await expect(page.getByText("No chargers match")).toBeVisible();
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page.getByTestId("place-Station Square")).toBeVisible();
+});
+
+test("a charger's page: price from the tariff, connectors, hours and directions", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByTestId("place-Town Hall Garage").click();
+  await expect(page.getByTestId("detail-name")).toHaveText("Town Hall Garage");
+  await expect(page.getByTestId("detail-price")).toContainText("€0.42");
+  await expect(page.getByTestId("detail-price")).toContainText("per kWh");
+  await expect(page.getByTestId("connector")).toHaveCount(2);
+  await expect(page.getByTestId("connector").first()).toContainText(
+    "Type 2 · 11 kW",
+  );
+  await expect(page.getByTestId("connector").first()).toContainText(
+    "ZZ*MCK*E31",
+  );
+  await expect(page.getByText("Mon–Sat")).toBeVisible();
+  await expect(page.getByTestId("directions")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Sign in to charge" }),
+  ).toBeVisible();
+  await page.getByTestId("detail-close").click();
+  if (isPhone(page))
+    await expect(page.getByTestId("search-input")).toBeVisible();
+  else await expect(page.getByTestId("detail-card")).toHaveCount(0);
+});
+
+test("passwordless sign-in: email, then the code (000000 in demo)", async ({
+  page,
+}) => {
+  const external = await open(page);
+  await page.getByTestId("tab-account").click();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  await expect(page.getByTestId("demo-code-hint")).toContainText("000000");
+
+  await page.getByTestId("send-code").click();
+  await expect(page.getByRole("alert")).toHaveText(
+    "Enter a valid email address.",
+  );
+  await page.getByTestId("email-input").fill("driver@example.com");
+  await page.getByTestId("send-code").click();
+  await expect(
+    page.getByText("If driver@example.com can sign in"),
+  ).toBeVisible();
+
+  await page.getByTestId("code-input").fill("123456");
+  await page.getByTestId("verify-code").click();
+  await expect(page.getByRole("alert")).toContainText("wrong or has expired");
+
+  await page.getByTestId("code-input").fill("000000");
+  await page.getByTestId("verify-code").click();
+  await expect(page.getByTestId("signed-in-email")).toHaveText(
+    "driver@example.com",
+  );
+
+  await page.getByTestId("sign-out").click();
+  await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
+  expect(external).toEqual([]);
+});
+
+test("dark mode uses the dark tokens", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await open(page);
+  await page.getByTestId("tab-charging").click();
+  await expect(
+    page.getByRole("heading", { name: "Charging", exact: true }),
+  ).toBeVisible();
+  await expect
+    .poll(() =>
+      page.evaluate(() => getComputedStyle(document.body).backgroundColor),
+    )
+    .toBe("rgb(15, 13, 30)");
+});
+
+test("the charger header's close or back button has a ring that shows on violet", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByTestId("place-Station Square").click();
+  const close = page.getByTestId("detail-close");
+  await expect(close).toBeVisible();
+  await close.focus();
+  // Keyboard focus, so :focus-visible applies.
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  // focusOnPrimary in light mode (white on the violet header, see brand tokens).
+  await expect
+    .poll(() => close.evaluate((el) => getComputedStyle(el).outlineColor))
+    .toBe("rgb(255, 255, 255)");
+});
+
+test("the charger's price is ours, rounded to cents; the CPO's free text is not shown over it", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByTestId("place-Station Square").click();
+  const price = page.getByTestId("detail-price");
+  await expect(price).toContainText("€0.71");
+  await expect(price).toContainText("VAT included");
+  await expect(price).not.toContainText("€0.7139");
+  await expect(price).not.toContainText("0.59 per kWh");
+});
+
+test("the web build carries a strict Content-Security-Policy, and the app runs under it", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    (window as unknown as { cspViolations: string[] }).cspViolations = [];
+    document.addEventListener("securitypolicyviolation", (e) =>
+      (window as unknown as { cspViolations: string[] }).cspViolations.push(
+        `${e.violatedDirective} ${e.blockedURI}`,
+      ),
+    );
+  });
+  await open(page);
+  const policy = await page
+    .locator('meta[http-equiv="Content-Security-Policy"]')
+    .getAttribute("content");
+  expect(policy).toContain("script-src 'self';");
+  expect(policy).toMatch(
+    /connect-src 'self' https:\/\/tiles\.openfreemap\.org;/,
+  );
+  await page.getByTestId("place-Station Square").click();
+  await expect(page.getByTestId("detail-price")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { cspViolations: string[] }).cspViolations,
+    ),
+  ).toEqual([]);
 });

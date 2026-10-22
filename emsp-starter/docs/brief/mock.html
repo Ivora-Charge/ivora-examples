@@ -1,0 +1,1386 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kilolane: find a charger (brief mock)</title>
+    <style>
+      @font-face {
+        font-family: "Bricolage";
+        font-weight: 800;
+        src: url(fonts/bricolage-grotesque-latin-800-normal.woff2)
+          format("woff2");
+      }
+      @font-face {
+        font-family: "Instrument";
+        font-weight: 400;
+        src: url(fonts/instrument-sans-latin-400-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: "Instrument";
+        font-weight: 600;
+        src: url(fonts/instrument-sans-latin-600-normal.woff2) format("woff2");
+      }
+      @font-face {
+        font-family: "DM Mono";
+        font-weight: 500;
+        src: url(fonts/dm-mono-latin-500-normal.woff2) format("woff2");
+      }
+      :root {
+        --bg: #f3f0e8;
+        --surface: #ffffff;
+        --ink: #16132e;
+        --muted: #57536f;
+        --accent: #4b2ed3;
+        --on-accent: #ffffff;
+        --flare: #ffc83d;
+        --on-flare: #16132e;
+        --free: #0b6b4c;
+        --busy: #8a5300;
+        --down: #b4261f;
+        --on-status: #ffffff;
+        /* Focus ring: 3:1 or more against everything it touches (ink here, flare in dark). */
+        --focus: #16132e;
+        --line: color-mix(in srgb, var(--ink) 14%, transparent);
+        --tint: color-mix(in srgb, var(--accent) 9%, transparent);
+        --shadow:
+          0 1px 2px rgb(22 19 46 / 0.12), 0 10px 28px rgb(22 19 46 / 0.14);
+        /* map */
+        --land: #e9e4d6;
+        --block: #e1dbca;
+        --park: #cfe0c2;
+        --water: #b9d0e4;
+        --road: #ffffff;
+        --road-edge: #d3ccb9;
+        --motorway: #f5cf7a;
+        --rail: #b3ab97;
+        --r-sm: 10px;
+        --r-md: 18px;
+        --r-lg: 28px;
+        --display: "Bricolage", "Instrument", sans-serif;
+        --sans: "Instrument", system-ui, sans-serif;
+        --mono: "DM Mono", ui-monospace, monospace;
+      }
+      [data-theme="dark"] {
+        --bg: #0f0d1e;
+        --surface: #1b1833;
+        --ink: #f2efff;
+        --muted: #aaa5c8;
+        --accent: #a597ff;
+        --on-accent: #160f3a;
+        --free: #5ad3a2;
+        --busy: #ffb347;
+        --down: #ff8a7e;
+        --on-status: #0f0d1e;
+        --focus: #ffc83d;
+        --shadow: 0 1px 2px rgb(0 0 0 / 0.5), 0 12px 32px rgb(0 0 0 / 0.5);
+        --land: #15132a;
+        --block: #1b1934;
+        --park: #13261e;
+        --water: #0a1b33;
+        --road: #2b2748;
+        --road-edge: #221f3b;
+        --motorway: #5b4520;
+        --rail: #3a3558;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        height: 100%;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 400 1rem/1.4 var(--sans);
+        overflow: hidden;
+      }
+      .num {
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      button,
+      input {
+        font: inherit;
+        color: inherit;
+      }
+      button {
+        cursor: pointer;
+      }
+      .sr {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+      }
+
+      /* Demo strip: always on top, never hidden */
+      /* Wraps on narrow screens rather than cutting its words off. */
+      .demo {
+        flex: none;
+        min-height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 6px 20px;
+        background: var(--flare);
+        color: var(--on-flare);
+        font-size: 0.8125rem;
+        font-weight: 600;
+      }
+      .demo b {
+        font-family: var(--display);
+        font-weight: 800;
+        letter-spacing: 0.06em;
+        background: var(--on-flare);
+        color: var(--flare);
+        padding: 1px 8px;
+        border-radius: 6px;
+      }
+      :focus-visible {
+        outline: 3px solid var(--focus);
+        outline-offset: 2px;
+      }
+
+      .app {
+        flex: 1;
+        min-height: 0;
+        display: grid;
+        grid-template-columns: 440px 1fr;
+      }
+
+      /* Brand */
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-family: var(--display);
+        font-weight: 800;
+        font-size: 1.625rem;
+        letter-spacing: -0.035em;
+        line-height: 1;
+      }
+      .brand svg {
+        width: 34px;
+        height: 34px;
+      }
+
+      /* Roadbook (left panel / phone sheet) */
+      .roadbook {
+        background: var(--bg);
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        min-height: 0;
+      }
+      .rb-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 22px 24px 6px;
+      }
+      .avatar {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        border: 0;
+        background: var(--ink);
+        color: var(--bg);
+        font-weight: 600;
+      }
+      .hello {
+        padding: 10px 24px 0;
+      }
+      .hello h1 {
+        margin: 0;
+        font-family: var(--display);
+        font-weight: 800;
+        font-size: 2.5rem;
+        line-height: 1;
+        letter-spacing: -0.04em;
+      }
+      .hello h1 em {
+        font-style: normal;
+        color: var(--accent);
+      }
+      .search,
+      .chips,
+      .meta {
+        flex: none;
+      }
+      .search {
+        margin: 18px 24px 0;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 60px;
+        padding: 0 8px 0 18px;
+        background: var(--surface);
+        border: 2px solid var(--ink);
+        border-radius: var(--r-md);
+      }
+      .search svg {
+        flex: none;
+      }
+      .search input {
+        flex: 1;
+        min-width: 0;
+        border: 0;
+        background: none;
+        font-size: 1.0625rem;
+        outline: none;
+      }
+      .search input::placeholder {
+        color: var(--muted);
+      }
+      .search .scan {
+        flex: none;
+        width: 44px;
+        height: 44px;
+        border: 0;
+        border-radius: 12px;
+        background: var(--tint);
+        display: grid;
+        place-items: center;
+      }
+      .chips {
+        display: flex;
+        gap: 8px;
+        padding: 14px 24px 4px;
+        flex-wrap: wrap;
+      }
+      .chip {
+        height: 40px;
+        padding: 0 14px;
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        border-radius: 999px;
+        border: 1.5px solid var(--line);
+        background: var(--surface);
+        font-weight: 600;
+        font-size: 0.9375rem;
+        white-space: nowrap;
+      }
+      .chip[aria-pressed="true"] {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: var(--on-accent);
+      }
+      .meta {
+        display: flex;
+        justify-content: space-between;
+        padding: 14px 24px 8px;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+      .meta b {
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .list {
+        list-style: none;
+        margin: 0;
+        padding: 0 16px 20px;
+        overflow: auto;
+        display: grid;
+        gap: 8px;
+        align-content: start;
+      }
+      .place {
+        display: grid;
+        grid-template-columns: 56px 1fr auto;
+        gap: 14px;
+        align-items: center;
+        padding: 12px 14px 12px 12px;
+        border-radius: var(--r-md);
+        background: var(--surface);
+        border: 1.5px solid transparent;
+      }
+      .place[aria-current="true"] {
+        border-color: var(--accent);
+        box-shadow: inset 6px 0 0 var(--accent);
+      }
+      .place h2 {
+        margin: 0;
+        font-size: 1.0625rem;
+        font-weight: 600;
+        line-height: 1.2;
+      }
+      .place p {
+        margin: 3px 0 0;
+        font-size: 0.875rem;
+        color: var(--muted);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .place .price {
+        text-align: right;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+      .place p .status {
+        margin-right: 4px;
+      }
+      .place .price .nofee {
+        display: block;
+        font-size: 1.0625rem;
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .place .price .num {
+        display: block;
+        font-size: 1.0625rem;
+        color: var(--ink);
+      }
+
+      /* Power tile: the shape every charger takes, in list and on map */
+      .tile {
+        min-width: 3.5rem;
+        min-height: 3.5rem;
+        padding: 4px;
+        border-radius: 16px;
+        display: grid;
+        place-items: center;
+        align-content: center;
+        line-height: 1;
+        position: relative;
+      }
+      .tile .kw {
+        font-family: var(--display);
+        font-weight: 800;
+        font-size: 1.375rem;
+        letter-spacing: -0.03em;
+        font-variant-numeric: tabular-nums;
+      }
+      .tile small {
+        font-size: 0.75rem;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-top: 2px;
+      }
+      .tile.free {
+        background: var(--free);
+        color: var(--on-status);
+      }
+      .tile.busy {
+        background: var(--surface);
+        color: var(--busy);
+        box-shadow: inset 0 0 0 3px var(--busy);
+      }
+      .tile.down {
+        background: var(--surface);
+        color: var(--down);
+        box-shadow: inset 0 0 0 2px var(--down);
+        background-image: repeating-linear-gradient(
+          -45deg,
+          transparent 0 7px,
+          color-mix(in srgb, var(--down) 18%, transparent) 7px 9px
+        );
+      }
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 600;
+        font-size: 0.875rem;
+      }
+      .status.free {
+        color: var(--free);
+      }
+      .status.busy {
+        color: var(--busy);
+      }
+      .status.down {
+        color: var(--down);
+      }
+      .glyph {
+        width: 12px;
+        height: 12px;
+        flex: none;
+      }
+
+      /* Map */
+      .map {
+        position: relative;
+        overflow: hidden;
+        background: var(--land);
+        min-width: 0;
+      }
+      .map > svg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .m-land {
+        fill: var(--land);
+      }
+      .m-block {
+        fill: var(--block);
+      }
+      .m-park {
+        fill: var(--park);
+      }
+      .m-water {
+        fill: var(--water);
+      }
+      .m-edge {
+        fill: none;
+        stroke: var(--road-edge);
+        stroke-linecap: round;
+      }
+      .m-road {
+        fill: none;
+        stroke: var(--road);
+        stroke-linecap: round;
+        stroke-linejoin: round;
+      }
+      .m-mway {
+        fill: none;
+        stroke: var(--motorway);
+        stroke-linecap: round;
+      }
+      .m-rail {
+        fill: none;
+        stroke: var(--rail);
+        stroke-width: 3;
+        stroke-dasharray: 10 6;
+      }
+      .m-label {
+        fill: var(--muted);
+        font: 600 13px var(--sans);
+        letter-spacing: 0.04em;
+      }
+      .m-label.water {
+        font-style: italic;
+        letter-spacing: 0.2em;
+      }
+      .pin {
+        position: absolute;
+        left: var(--x);
+        top: var(--y);
+        transform: translate(-50%, -100%);
+        display: grid;
+        justify-items: center;
+      }
+      .pin .tile {
+        width: 52px;
+        height: 52px;
+        box-shadow: var(--shadow);
+      }
+      .pin .tile.busy,
+      .pin .tile.down {
+        box-shadow:
+          inset 0 0 0 3px currentColor,
+          var(--shadow);
+      }
+      .pin::after {
+        content: "";
+        width: 10px;
+        height: 10px;
+        margin-top: -5px;
+        transform: rotate(45deg);
+        background: inherit;
+      }
+      .pin.free::after {
+        background: var(--free);
+      }
+      .pin.busy::after {
+        background: var(--busy);
+      }
+      .pin.down::after {
+        background: var(--down);
+      }
+      .pin.selected .tile {
+        outline: 5px solid var(--flare);
+        outline-offset: 3px;
+        transform: scale(1.12);
+      }
+      .cluster {
+        position: absolute;
+        left: var(--x);
+        top: var(--y);
+        transform: translate(-50%, -50%);
+        width: 64px;
+        height: 64px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: var(--on-accent);
+        display: grid;
+        place-items: center;
+        align-content: center;
+        box-shadow:
+          0 0 0 8px color-mix(in srgb, var(--accent) 22%, transparent),
+          var(--shadow);
+        line-height: 1;
+      }
+      .cluster .num {
+        font-size: 1.375rem;
+      }
+      .cluster small {
+        font-size: 0.75rem;
+        font-weight: 600;
+      }
+      .me {
+        position: absolute;
+        left: var(--x);
+        top: var(--y);
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--accent);
+        border: 4px solid var(--surface);
+        box-shadow:
+          0 0 0 14px color-mix(in srgb, var(--accent) 18%, transparent),
+          var(--shadow);
+        transform: translate(-50%, -50%);
+      }
+      .map-ctl {
+        position: absolute;
+        left: 20px;
+        bottom: 20px;
+        display: grid;
+        gap: 8px;
+      }
+      .fab {
+        width: 52px;
+        height: 52px;
+        border-radius: 16px;
+        border: 0;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+        display: grid;
+        place-items: center;
+      }
+      .attrib {
+        position: absolute;
+        right: 8px;
+        bottom: 6px;
+        font-size: 0.75rem;
+        color: var(--muted);
+        background: color-mix(in srgb, var(--surface) 80%, transparent);
+        padding: 2px 6px;
+        border-radius: 6px;
+      }
+
+      /* Charger detail card (desktop: floating over the map) */
+      .detail {
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        bottom: 20px;
+        width: 400px;
+        background: var(--surface);
+        border-radius: var(--r-lg);
+        box-shadow: var(--shadow);
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .d-hero {
+        padding: 22px 24px 18px;
+        background: var(--accent);
+        color: var(--on-accent);
+      }
+      .d-hero .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        font-size: 0.875rem;
+        font-weight: 600;
+      }
+      .d-hero h2 {
+        margin: 14px 0 4px;
+        font-family: var(--display);
+        font-weight: 800;
+        font-size: 2.125rem;
+        line-height: 1;
+        letter-spacing: -0.035em;
+      }
+      .d-hero p {
+        margin: 0;
+        font-size: 0.9375rem;
+      }
+      .close {
+        width: 44px;
+        height: 44px;
+        border-radius: 50%;
+        border: 0;
+        margin: -8px -10px -8px 0;
+        background: color-mix(in srgb, var(--on-accent) 16%, transparent);
+        color: inherit;
+        display: grid;
+        place-items: center;
+      }
+      .d-body {
+        padding: 6px 24px 0;
+        overflow: auto;
+        flex: 1;
+      }
+      .d-sec {
+        padding: 16px 0;
+        border-bottom: 1px solid var(--line);
+      }
+      .d-sec h3 {
+        margin: 0 0 10px;
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+      }
+      .price-big {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+      }
+      .price-big .num {
+        font-family: var(--display);
+        font-weight: 800;
+        font-size: 2.5rem;
+        letter-spacing: -0.03em;
+      }
+      .price-big span {
+        color: var(--muted);
+      }
+      .fine {
+        margin: 6px 0 0;
+        font-size: 0.875rem;
+        color: var(--muted);
+      }
+      .conn {
+        display: grid;
+        grid-template-columns: 40px 1fr auto;
+        gap: 12px;
+        align-items: center;
+        padding: 8px 0;
+      }
+      .conn + .conn {
+        border-top: 1px dashed var(--line);
+      }
+      .conn .plug {
+        width: 40px;
+        height: 40px;
+        border-radius: 12px;
+        background: var(--tint);
+        display: grid;
+        place-items: center;
+        color: var(--accent);
+      }
+      .conn b {
+        display: block;
+        font-weight: 600;
+      }
+      .conn .id {
+        font-family: var(--mono);
+        font-size: 0.75rem;
+        color: var(--muted);
+      }
+      .hours {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.9375rem;
+      }
+      .d-actions {
+        display: grid;
+        grid-template-columns: 1fr 1.6fr;
+        gap: 10px;
+        padding: 16px 24px 20px;
+      }
+      .btn {
+        height: 56px;
+        border-radius: var(--r-md);
+        border: 2px solid var(--ink);
+        background: var(--surface);
+        font-weight: 600;
+        font-size: 1rem;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+      }
+      .btn.primary {
+        border-color: var(--accent);
+        background: var(--accent);
+        color: var(--on-accent);
+        font-family: var(--display);
+        font-weight: 800;
+        font-size: 1.1875rem;
+        letter-spacing: -0.02em;
+      }
+
+      .tabs,
+      .grab,
+      .phone-top {
+        display: none;
+      }
+
+      /* Phone: map first, one-handed sheet with search at the thumb */
+      @media (max-width: 700px) {
+        .demo {
+          padding: 0 14px;
+          font-size: 0.75rem;
+        }
+        .app {
+          display: block;
+          position: relative;
+        }
+        .map {
+          position: absolute;
+          inset: 0 0 0 0;
+        }
+        .detail,
+        .rb-head,
+        .hello,
+        .map-ctl {
+          display: none;
+        }
+        .pin,
+        .cluster,
+        .me {
+          left: var(--px);
+          top: var(--py);
+        }
+        .pin.hide-phone {
+          display: none;
+        }
+        .phone-top {
+          display: flex;
+          position: absolute;
+          top: 14px;
+          left: 14px;
+          right: 14px;
+          justify-content: space-between;
+          align-items: center;
+        }
+        .phone-top .brand {
+          background: var(--surface);
+          padding: 8px 14px 8px 10px;
+          border-radius: 999px;
+          box-shadow: var(--shadow);
+          font-size: 1.25rem;
+        }
+        .phone-top .brand svg {
+          width: 28px;
+          height: 28px;
+        }
+        .roadbook {
+          z-index: 2;
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 76px;
+          height: 420px;
+          border: 0;
+          border-radius: var(--r-lg) var(--r-lg) 0 0;
+          box-shadow: 0 -10px 30px rgb(0 0 0 / 0.18);
+          background: var(--bg);
+        }
+        .attrib {
+          z-index: 2;
+          bottom: calc(76px + 420px + 6px);
+        }
+        .grab {
+          display: block;
+          width: 44px;
+          height: 5px;
+          border-radius: 3px;
+          background: var(--line);
+          margin: 10px auto 0;
+        }
+        .search {
+          margin: 12px 14px 0;
+        }
+        .chips {
+          flex-wrap: nowrap;
+          overflow-x: auto;
+          padding: 12px 14px 4px;
+          scrollbar-width: none;
+        }
+        .meta {
+          padding: 12px 18px 6px;
+        }
+        .list {
+          padding: 0 10px 12px;
+        }
+        .place {
+          grid-template-columns: 52px 1fr auto;
+          gap: 12px;
+        }
+        .place .tile {
+          min-width: 3.25rem;
+          min-height: 3.25rem;
+        }
+        .tabs {
+          z-index: 3;
+          display: grid;
+          grid-template-columns: repeat(4, 1fr);
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: 76px;
+          background: var(--surface);
+          border-top: 1px solid var(--line);
+          padding: 6px 6px 14px;
+        }
+        .tabs a {
+          display: grid;
+          justify-items: center;
+          align-content: center;
+          gap: 3px;
+          color: var(--muted);
+          text-decoration: none;
+          font-size: 0.75rem;
+          font-weight: 600;
+          border-radius: 14px;
+        }
+        .tabs a[aria-current="page"] {
+          color: var(--ink);
+        }
+        .tabs a[aria-current="page"] svg {
+          background: var(--accent);
+          color: var(--on-accent);
+          border-radius: 999px;
+          width: 56px;
+          padding: 3px 0;
+          box-sizing: content-box;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <defs>
+        <symbol id="g-free" viewBox="0 0 12 12">
+          <circle cx="6" cy="6" r="6" fill="currentColor" />
+        </symbol>
+        <symbol id="g-busy" viewBox="0 0 12 12">
+          <circle
+            cx="6"
+            cy="6"
+            r="5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          />
+          <path d="M6 1a5 5 0 0 1 0 10Z" fill="currentColor" />
+        </symbol>
+        <symbol id="g-down" viewBox="0 0 12 12">
+          <path
+            d="M2 2l8 8M10 2l-8 8"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          />
+        </symbol>
+        <symbol id="i-search" viewBox="0 0 24 24">
+          <circle
+            cx="10.5"
+            cy="10.5"
+            r="6.5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+          />
+          <path
+            d="M15.5 15.5 20 20"
+            stroke="currentColor"
+            stroke-width="2.6"
+            stroke-linecap="round"
+          />
+        </symbol>
+        <symbol id="i-scan" viewBox="0 0 24 24">
+          <path
+            d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M4 12h16"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          />
+        </symbol>
+        <symbol id="i-locate" viewBox="0 0 24 24">
+          <path
+            d="M20.5 3.5 3.5 10.6l7 2.9 2.9 7z"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-layers" viewBox="0 0 24 24">
+          <path
+            d="m12 4 9 5-9 5-9-5zM3 14l9 5 9-5"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-plug" viewBox="0 0 24 24">
+          <path
+            d="M9 3v5M15 3v5M6 8h12v3a6 6 0 0 1-12 0zM12 17v4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-route" viewBox="0 0 24 24">
+          <path
+            d="M6 20V9a3 3 0 0 1 3-3h9M14 2l4 4-4 4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-bolt" viewBox="0 0 24 24">
+          <path d="M13 2 4 14h7l-1 8 9-12h-7z" fill="currentColor" />
+        </symbol>
+        <symbol id="i-x" viewBox="0 0 24 24">
+          <path
+            d="M6 6l12 12M18 6 6 18"
+            stroke="currentColor"
+            stroke-width="2.4"
+            stroke-linecap="round"
+          />
+        </symbol>
+        <symbol id="i-step" viewBox="0 0 24 24">
+          <circle cx="12" cy="4.5" r="2" fill="currentColor" />
+          <path
+            d="M12 8v6h5l2 6M12 11h5M9.5 10.5a5.5 5.5 0 1 0 6.5 8.4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-map" viewBox="0 0 24 24">
+          <path
+            d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2zM9 4v14M15 6v14"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-wallet" viewBox="0 0 24 24">
+          <path
+            d="M4 7h15a1 1 0 0 1 1 1v10a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1zM4 7l11-3v3M16 13h1"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          />
+        </symbol>
+        <symbol id="i-user" viewBox="0 0 24 24">
+          <circle
+            cx="12"
+            cy="8"
+            r="4"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          />
+          <path
+            d="M4 20a8 8 0 0 1 16 0"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+          />
+        </symbol>
+        <symbol id="mark" viewBox="0 0 48 48">
+          <g transform="rotate(-12 24 24)">
+            <path
+              fill="var(--accent)"
+              fill-rule="evenodd"
+              d="M24 2.5c-9.7 0-17.5 7.6-17.5 17.1 0 12.2 15.1 24.6 16.4 25.6a1.8 1.8 0 0 0 2.2 0c1.3-1 16.4-13.4 16.4-25.6C41.5 10.1 33.7 2.5 24 2.5ZM17.6 12.4a2.4 2.4 0 0 1 2.4 2.4v7.4a2.4 2.4 0 0 1-4.8 0v-7.4a2.4 2.4 0 0 1 2.4-2.4Zm12.8 0a2.4 2.4 0 0 1 2.4 2.4v7.4a2.4 2.4 0 0 1-4.8 0v-7.4a2.4 2.4 0 0 1 2.4-2.4Z"
+            />
+          </g>
+          <circle cx="40.5" cy="40.5" r="5" fill="var(--flare)" />
+        </symbol>
+      </defs>
+    </svg>
+
+    <div class="demo" role="status">
+      <b>DEMO</b
+      ><span
+        >Sample chargers from a built-in test network. Nothing charges, no card
+        is charged.</span
+      >
+    </div>
+
+    <div class="app">
+      <aside class="roadbook" aria-label="Chargers near you">
+        <div class="grab" aria-hidden="true"></div>
+        <div class="rb-head">
+          <div class="brand">
+            <svg aria-hidden="true"><use href="#mark" /></svg>kilolane
+          </div>
+          <button class="avatar" aria-label="Account, signed in as Sam">
+            S
+          </button>
+        </div>
+        <div class="hello">
+          <h1>Charge <em>near</em> you.</h1>
+        </div>
+        <label class="search">
+          <svg width="22" height="22" aria-hidden="true">
+            <use href="#i-search" />
+          </svg>
+          <span class="sr">Search</span>
+          <input placeholder="Place, charger or EVSE ID" />
+          <button class="scan" aria-label="Scan the QR code on a charger">
+            <svg width="22" height="22"><use href="#i-scan" /></svg>
+          </button>
+        </label>
+        <div class="chips" role="group" aria-label="Filters">
+          <button class="chip" aria-pressed="true">Open now</button>
+          <button class="chip" aria-pressed="false">
+            <svg class="glyph"><use href="#g-free" /></svg>Available
+          </button>
+          <button class="chip" aria-pressed="false">
+            <svg width="16" height="16"><use href="#i-bolt" /></svg>50 kW+
+          </button>
+          <button class="chip" aria-pressed="false">CCS</button>
+          <button class="chip" aria-pressed="false">Type 2</button>
+          <button class="chip" aria-pressed="false">
+            <svg width="16" height="16"><use href="#i-step" /></svg>Step-free
+          </button>
+          <button class="chip" aria-pressed="false">No fee</button>
+        </div>
+        <div class="meta">
+          <span><b>6 places</b> within 5 km</span><span>Nearest first</span>
+        </div>
+        <ul class="list">
+          <li class="place" aria-current="true">
+            <div class="tile free">
+              <span class="kw">150</span><small>kW</small>
+            </div>
+            <div>
+              <h2>Station Square</h2>
+              <p>
+                <span class="status free"
+                  ><svg class="glyph"><use href="#g-free" /></svg>2 of 3
+                  free</span
+                >
+                · <span class="num">0.4 km</span>
+              </p>
+            </div>
+            <div class="price"><span class="num">€0.71</span>per kWh</div>
+          </li>
+          <li class="place">
+            <div class="tile free">
+              <span class="kw">22</span><small>kW</small>
+            </div>
+            <div>
+              <h2>Market Hall</h2>
+              <p>
+                <span class="status free"
+                  ><svg class="glyph"><use href="#g-free" /></svg>2 of 3
+                  free</span
+                >
+                · <span class="num">1.1 km</span>
+              </p>
+            </div>
+            <div class="price"><span class="num">€0.47</span>per kWh</div>
+          </li>
+          <li class="place">
+            <div class="tile busy">
+              <span class="kw">11</span><small>kW</small>
+            </div>
+            <div>
+              <h2>Town Hall Garage</h2>
+              <p>
+                <span class="status busy"
+                  ><svg class="glyph"><use href="#g-busy" /></svg>1 of 2
+                  free</span
+                >
+                · Level −1
+              </p>
+            </div>
+            <div class="price"><span class="num">€0.42</span>per kWh</div>
+          </li>
+          <li class="place">
+            <div class="tile free">
+              <span class="kw">7</span><small>kW</small>
+            </div>
+            <div>
+              <h2>Riverside Park</h2>
+              <p>
+                <span class="status free"
+                  ><svg class="glyph"><use href="#g-free" /></svg>1 of 1
+                  free</span
+                >
+                · <span class="num">2.6 km</span>
+              </p>
+            </div>
+            <div class="price"><b class="nofee">No fee</b>owner pays</div>
+          </li>
+          <li class="place">
+            <div class="tile down">
+              <span class="kw">300</span><small>kW</small>
+            </div>
+            <div>
+              <h2>Motorway Services North</h2>
+              <p>
+                <span class="status down"
+                  ><svg class="glyph"><use href="#g-down" /></svg>Out of
+                  order</span
+                >
+                · <span class="num">9.8 km</span>
+              </p>
+            </div>
+            <div class="price"><span class="num">€0.83</span>per kWh</div>
+          </li>
+        </ul>
+      </aside>
+
+      <main class="map" aria-label="Map">
+        <svg
+          viewBox="0 0 1000 800"
+          preserveAspectRatio="xMidYMid slice"
+          aria-hidden="true"
+        >
+          <rect class="m-land" width="1000" height="800" />
+          <path
+            class="m-park"
+            d="M60 470c60-40 170-30 220 10s40 140-30 170-190 20-220-40 0-120 30-140Z"
+          />
+          <path class="m-park" d="M760 90h150v130H760z" />
+          <path
+            class="m-water"
+            d="M-20 560C120 520 260 600 380 580s200-120 330-110 220 80 320 60v90c-100 20-200-40-320-40s-200 100-330 120-260-60-400-30Z"
+          />
+          <g class="m-block">
+            <rect x="330" y="120" width="120" height="90" rx="6" />
+            <rect x="470" y="120" width="90" height="90" rx="6" />
+            <rect x="330" y="230" width="120" height="110" rx="6" />
+            <rect x="470" y="230" width="90" height="50" rx="6" />
+            <rect x="580" y="230" width="140" height="110" rx="6" />
+            <rect x="580" y="120" width="140" height="90" rx="6" />
+            <rect x="740" y="250" width="160" height="90" rx="6" />
+            <rect x="330" y="360" width="230" height="110" rx="6" />
+            <rect x="580" y="360" width="140" height="80" rx="6" />
+            <rect x="160" y="120" width="150" height="220" rx="6" />
+            <rect x="740" y="360" width="160" height="70" rx="6" />
+          </g>
+          <path class="m-rail" d="M-20 80C200 90 420 60 1020 40" />
+          <g stroke-width="26">
+            <path
+              class="m-edge"
+              d="M320 -20v520M570 -20v480M730 -20v470M150 350h880M-20 220h1040"
+            />
+          </g>
+          <g stroke-width="22">
+            <path
+              class="m-road"
+              d="M320 -20v520M570 -20v480M730 -20v470M150 350h880M-20 220h1040"
+            />
+          </g>
+          <g stroke-width="12">
+            <path
+              class="m-road"
+              d="M460 100v380M320 110h420M150 110v380M900 220v240M320 470h420"
+            />
+          </g>
+          <path
+            class="m-mway"
+            stroke-width="30"
+            d="M1020 640C900 620 860 520 900 420S1000 260 1020 240"
+          />
+          <path
+            class="m-road"
+            stroke-width="10"
+            d="M150 490c80 30 120 70 170 10"
+          />
+          <text class="m-label" x="600" y="214">STATION ROAD</text>
+          <text class="m-label" x="330" y="346">MARKET STREET</text>
+          <text class="m-label water" x="420" y="600">RIVER</text>
+          <text class="m-label" x="96" y="570">Riverside Park</text>
+        </svg>
+
+        <div class="me" style="--x: 44%; --y: 50%; --px: 46%; --py: 27%"></div>
+
+        <div
+          class="pin free selected"
+          style="--x: 50%; --y: 38%; --px: 70%; --py: 21%"
+        >
+          <div class="tile free">
+            <span class="kw">150</span><small>kW</small>
+          </div>
+        </div>
+        <div class="pin free" style="--x: 33%; --y: 27%; --px: 20%; --py: 23%">
+          <div class="tile free">
+            <span class="kw">22</span><small>kW</small>
+          </div>
+        </div>
+        <div class="pin busy" style="--x: 40%; --y: 63%; --px: 32%; --py: 37%">
+          <div class="tile busy">
+            <span class="kw">11</span><small>kW</small>
+          </div>
+        </div>
+        <div class="pin free hide-phone" style="--x: 16%; --y: 66%">
+          <div class="tile free">
+            <span class="kw">7</span><small>kW</small>
+          </div>
+        </div>
+        <div class="pin down hide-phone" style="--x: 50%; --y: 84%">
+          <div class="tile down">
+            <span class="kw">300</span><small>kW</small>
+          </div>
+        </div>
+        <div class="cluster" style="--x: 24%; --y: 40%; --px: 84%; --py: 33%">
+          <span class="num">12</span><small>places</small>
+        </div>
+
+        <div class="phone-top">
+          <div class="brand">
+            <svg aria-hidden="true"><use href="#mark" /></svg>kilolane
+          </div>
+          <button class="fab" aria-label="Show my location">
+            <svg width="22" height="22"><use href="#i-locate" /></svg>
+          </button>
+        </div>
+
+        <div class="map-ctl">
+          <button class="fab" aria-label="Show my location">
+            <svg width="22" height="22"><use href="#i-locate" /></svg>
+          </button>
+          <button class="fab" aria-label="Map layers">
+            <svg width="22" height="22"><use href="#i-layers" /></svg>
+          </button>
+        </div>
+        <div class="attrib">© OpenStreetMap contributors</div>
+
+        <section class="detail" aria-labelledby="d-title">
+          <div class="d-hero">
+            <div class="row">
+              <span>Sample Charging Operator · 0.4 km</span>
+              <button class="close" aria-label="Close">
+                <svg width="20" height="20"><use href="#i-x" /></svg>
+              </button>
+            </div>
+            <h2 id="d-title">Station Square</h2>
+            <p>1 Station Square · Car park, by the train station</p>
+          </div>
+          <div class="d-body">
+            <div class="d-sec">
+              <h3>Price</h3>
+              <div class="price-big">
+                <span class="num">€0.71</span><span>per kWh, VAT included</span>
+              </div>
+              <p class="fine">
+                Plus €7.26 an hour while plugged in. Your card is held for €25
+                before you start; you only pay what you use.
+              </p>
+            </div>
+            <div class="d-sec">
+              <h3>Connectors</h3>
+              <div class="conn">
+                <span class="plug"
+                  ><svg width="20" height="20"><use href="#i-plug" /></svg
+                ></span>
+                <div>
+                  <b>CCS · <span class="num">150 kW</span></b
+                  ><span class="id">NL*SMP*E0001*1</span>
+                </div>
+                <span class="status free"
+                  ><svg class="glyph"><use href="#g-free" /></svg>Free</span
+                >
+              </div>
+              <div class="conn">
+                <span class="plug"
+                  ><svg width="20" height="20"><use href="#i-plug" /></svg
+                ></span>
+                <div>
+                  <b>CHAdeMO · <span class="num">50 kW</span></b
+                  ><span class="id">NL*SMP*E0001*2</span>
+                </div>
+                <span class="status free"
+                  ><svg class="glyph"><use href="#g-free" /></svg>Free</span
+                >
+              </div>
+              <div class="conn">
+                <span class="plug"
+                  ><svg width="20" height="20"><use href="#i-plug" /></svg
+                ></span>
+                <div>
+                  <b>CCS · <span class="num">150 kW</span></b
+                  ><span class="id">NL*SMP*E0002*1</span>
+                </div>
+                <span class="status busy"
+                  ><svg class="glyph"><use href="#g-busy" /></svg>In use</span
+                >
+              </div>
+            </div>
+            <div class="d-sec">
+              <h3>Opening hours</h3>
+              <div class="hours">
+                <span>Open 24 hours, every day</span
+                ><span class="status free"
+                  ><svg class="glyph"><use href="#g-free" /></svg>Open now</span
+                >
+              </div>
+            </div>
+          </div>
+          <div class="d-actions">
+            <button class="btn">
+              <svg width="20" height="20" aria-hidden="true">
+                <use href="#i-route" /></svg
+              >Directions
+            </button>
+            <button class="btn primary">
+              <svg width="20" height="20" aria-hidden="true">
+                <use href="#i-bolt" /></svg
+              >Charge here
+            </button>
+          </div>
+        </section>
+      </main>
+
+      <nav class="tabs" aria-label="Main">
+        <a href="#" aria-current="page"
+          ><svg width="24" height="24" aria-hidden="true">
+            <use href="#i-map" /></svg
+          >Map</a
+        >
+        <a href="#"
+          ><svg width="24" height="24" aria-hidden="true">
+            <use href="#i-bolt" /></svg
+          >Charging</a
+        >
+        <a href="#"
+          ><svg width="24" height="24" aria-hidden="true">
+            <use href="#i-wallet" /></svg
+          >Wallet</a
+        >
+        <a href="#"
+          ><svg width="24" height="24" aria-hidden="true">
+            <use href="#i-user" /></svg
+          >Account</a
+        >
+      </nav>
+    </div>
+    <script>
+      const t = new URLSearchParams(location.search).get("theme");
+      if (t === "dark" || t === "light")
+        document.documentElement.dataset.theme = t;
+    </script>
+  </body>
+</html>
