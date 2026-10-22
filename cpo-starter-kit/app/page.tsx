@@ -1,7 +1,8 @@
 import Link from "next/link";
-import { MODULES } from "@/lib/modules";
+import { visibleModules } from "@/lib/modules";
 import { atLeast } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
+import { config } from "@/lib/server/env";
 import {
   getOnboarding,
   loadOnboarding,
@@ -104,17 +105,19 @@ export default async function Page() {
       <section className="card" aria-labelledby="next-heading">
         <h2 id="next-heading">Sections</h2>
         <ul className="rows">
-          {MODULES.filter((m) => m.slug !== "overview").map((m) => (
-            <li key={m.slug}>
-              <Link className="name" href={m.href}>
-                {m.label}
-              </Link>
-              <span className="muted">{m.summary}</span>
-              {m.status === "coming-soon" && (
-                <span className="badge">Coming soon</span>
-              )}
-            </li>
-          ))}
+          {visibleModules({ fleet: config.fleetModule })
+            .filter((m) => m.slug !== "overview")
+            .map((m) => (
+              <li key={m.slug}>
+                <Link className="name" href={m.href}>
+                  {m.label}
+                </Link>
+                <span className="muted">{m.summary}</span>
+                {m.status === "coming-soon" && (
+                  <span className="badge">Coming soon</span>
+                )}
+              </li>
+            ))}
         </ul>
       </section>
     </>

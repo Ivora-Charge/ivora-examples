@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { requireRole } from "@/lib/server/auth";
+import { config } from "@/lib/server/env";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getPricing, loadPricing } from "@/lib/server/pricing";
 import { resetDemoPricingAction } from "./actions";
@@ -69,6 +70,12 @@ export default async function Page() {
           kit&apos;s driver checkout (a later part) bills each connector with
           its tariff; a connector without one is not for sale. Private chargers
           have no public QR checkout: staff and RFID only.
+          {config.fleetModule && (
+            <>
+              {" "}
+              Your RFID cards are in <Link href="/cards">Cards</Link>.
+            </>
+          )}
         </p>
         {r.stationsError ? (
           <p className="error" role="alert">

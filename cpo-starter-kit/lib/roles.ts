@@ -24,11 +24,11 @@ export const ROLE_SUMMARY: Record<Role, string> = {
   owner:
     "Everything, including adding and removing owners. There is always at least one owner.",
   manager:
-    "Runs the network day to day: company details, brand and payments; prices and tariffs; roaming settings; removes chargers; invites, changes and removes technicians and viewers.",
+    "Runs the network day to day: company details, brand and payments; prices and tariffs; roaming settings; RFID cards (with the Cards module); removes chargers; invites, changes and removes technicians and viewers.",
   technician:
     "Works on chargers: adds, tests and edits them, prints QR stickers, and starts, stops, resets and unlocks them from the Live view. Cannot remove chargers or change the team.",
   viewer:
-    "Reads the overview, chargers, the Live view and reports. Cannot change anything.",
+    "Reads the overview, chargers, the Live view, reports and cards. Cannot change anything.",
 };
 
 export function isRole(value: unknown): value is Role {
