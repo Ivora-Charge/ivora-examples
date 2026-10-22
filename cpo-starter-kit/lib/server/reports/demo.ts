@@ -65,11 +65,17 @@ export function createDemoReportsStore(o: {
   own: () => Promise<CheckoutRecord[]>;
   now: () => number;
 }): ReportsStore {
+  // Read once per store (one per request): the CSV export pulls its pages after the
+  // response has started, outside the request, where the visitor's cookie can't be
+  // read. Its count runs first, inside the request, and fills this.
+  let own: Promise<ReportCheckout[]> | null = null;
   async function all(): Promise<ReportCheckout[]> {
-    const own = await Promise.all(
-      (await o.own()).map((r) => fromRecord(r, o.ivora)),
-    );
-    return [...own, ...demoHistory(o.now()).checkouts];
+    own ??= o
+      .own()
+      .then((records) =>
+        Promise.all(records.map((r) => fromRecord(r, o.ivora))),
+      );
+    return [...(await own), ...demoHistory(o.now()).checkouts];
   }
   return {
     mode: "demo",

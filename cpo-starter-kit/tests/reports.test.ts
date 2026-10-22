@@ -39,6 +39,7 @@ import {
   totalsOf,
 } from "@/lib/server/reports/records";
 import { resetDemoCheckoutForTests } from "@/lib/server/checkout/demo-cookie";
+import { createDemoReportsStore } from "@/lib/server/reports/demo";
 import {
   bucketFloor,
   bucketNext,
@@ -1116,6 +1117,27 @@ describe("reports in demo mode", () => {
     const lines = (await new Response(csv.body).text()).trimEnd().split("\r\n");
     expect(lines[0]).toBe(CSV_COLUMNS.join(","));
     expect(lines).toHaveLength(t.checkouts + 1);
+  });
+
+  it("reads the visitor's checkouts once, so the CSV's later pages (outside the request) keep them", async () => {
+    // The cookie can only be read inside the request: a second read fails here.
+    const own = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockRejectedValue(new Error("cookies() outside a request"));
+    const store = createDemoReportsStore({
+      ivora: getIvora(),
+      own,
+      now: () => NOW,
+    });
+    const f = reportFilter(
+      demoStaff,
+      parseReportQuery(params({}), "UTC", NOW).query,
+    );
+    const totals = await store.totals(f);
+    const rows = await store.list(f, { limit: 500 });
+    expect(rows).toHaveLength(Math.min(totals.checkouts, 500));
+    expect(own).toHaveBeenCalledTimes(1);
   });
 
   it("includes every outcome: charged, refunded, released and above the hold", () => {

@@ -95,6 +95,26 @@ describe("demo mode", () => {
     expect(isDemo()).toBe(true);
   });
 
+  it("treats `demo` in a credential as unset, for the Deploy to Vercel form", () => {
+    process.env.IVORA_API_KEY = "test-key";
+    process.env.IVORA_TENANT_ID = "42";
+    Object.assign(process.env, SUPABASE);
+    expect(isDemo()).toBe(false);
+    for (const k of [
+      "IVORA_API_KEY",
+      "IVORA_TENANT_ID",
+      "SUPABASE_URL",
+      "SUPABASE_ANON_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+    ]) {
+      const real = process.env[k];
+      process.env[k] = " Demo ";
+      expect(isDemo(), k).toBe(true);
+      process.env[k] = real;
+    }
+    expect(isDemo()).toBe(false);
+  });
+
   it("runs every client method on labelled sample data without any network call", async () => {
     const ivora = getIvora();
     expect(ivora.mode).toBe("demo");
