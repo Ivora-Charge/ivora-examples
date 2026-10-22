@@ -19,6 +19,10 @@ export default function PeersPage() {
           register with us at{" "}
           <code className="wrap">{ocpiUrls().versions}</code>.
         </p>
+        <p>
+          To show drivers their car&apos;s state of charge, give a peer a{" "}
+          <Link href="/admin/live-data">live-data adapter</Link>.
+        </p>
         {isDemo() && (
           <p className="note">
             Demo mode: peers are kept in memory only, and nothing is sent to a
