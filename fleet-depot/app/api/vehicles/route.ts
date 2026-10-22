@@ -1,9 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { guard } from "@/lib/auth";
-import { getDepot, logEvent, replan, withLock } from "@/lib/depot";
+import { logEvent, replan, withLock } from "@/lib/depot";
 import { UserError } from "@/lib/drivers";
 import { body, fail, json } from "@/lib/http";
 import type { Vehicle } from "@/lib/types";
+import { depotOf } from "@/lib/demo-visitor";
 
 type Input = Omit<Partial<Vehicle>, "need"> & {
   needKind: "kwh" | "battery";
@@ -22,7 +23,8 @@ export async function POST(req: Request) {
   const denied = guard(req, { write: true });
   if (denied) return denied;
   try {
-    const d = await getDepot();
+    // Demo: the visitor's own depot (lib/demo-visitor.ts).
+    const { d } = await depotOf(req);
     const b = await body<Input>(req);
     return await withLock(async () => {
       const vehicles = await d.store.list("vehicles");
@@ -36,7 +38,9 @@ export async function POST(req: Request) {
         id: prev?.id ?? randomUUID(),
         name,
         plate: String(b.plate ?? prev?.plate ?? "").slice(0, 20),
-        kind: (["van", "bus", "car"] as const).includes(b.kind as never)
+        kind: (["van", "bus", "car", "truck"] as const).includes(
+          b.kind as never,
+        )
           ? (b.kind as Vehicle["kind"])
           : (prev?.kind ?? "van"),
         batteryKwh: num(

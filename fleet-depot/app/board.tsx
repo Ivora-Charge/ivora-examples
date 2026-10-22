@@ -1,20 +1,30 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Report, State } from "./types";
 import Timeline from "./timeline";
 import { StatusChip } from "./timeline";
-import { statusOf } from "@/lib/timeline";
+import PowerChart from "./power-chart";
+import SimControls from "./sim-controls";
+import ApiPanel from "./api-panel";
+import Wall from "./wall";
+import { clock, statusOf } from "@/lib/timeline";
+import { collapseEvents } from "@/lib/calls";
 
 const ERRORS_URL = "https://ivoracharge.com/developers/guides/reference/errors";
 
-/** datetime-local value in the browser's time zone. */
-function toLocalInput(iso?: string) {
+/** datetime-local value in the browser's time zone, or in UTC (demo depot time). */
+function toLocalInput(iso?: string, tz?: string) {
   if (!iso) return "";
   const d = new Date(iso);
+  if (tz === "UTC") return d.toISOString().slice(0, 16);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+/** The instant a datetime-local value means, read in the same zone. */
+const fromLocalInput = (v: string, tz?: string) =>
+  new Date(tz === "UTC" ? `${v}Z` : v).toISOString();
 
 type Tab = "overview" | "vehicles" | "sessions" | "settings";
 const TABS: [Tab, string][] = [
@@ -49,6 +59,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
   const [by, setBy] = useState<"vehicle" | "driver">("vehicle");
   const [report, setReport] = useState<Report | null>(null);
+  const [month, setMonth] = useState<"this" | "last">("this");
   const [loadError, setLoadError] = useState<LoadError | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [tv, setTv] = useState(false);
@@ -61,15 +72,20 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
   } | null>(null);
   const [newDriver, setNewDriver] = useState({ name: "", idTag: "" });
 
-  const load = useCallback(async () => {
+  const speed = s?.sim?.speed ?? 0;
+  const nowIso = s?.now;
+  const monthKey = useMemo(() => {
+    const d = new Date(nowIso ?? Date.now());
+    if (month === "last") d.setUTCMonth(d.getUTCMonth() - 1, 1);
+    return d.toISOString().slice(0, 7);
+  }, [nowIso, month]);
+
+  const loadState = useCallback(async () => {
     try {
       const r = await fetch("/api/state");
       if (r.status === 401) return location.reload();
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setS(await r.json());
-      const rep = await fetch(`/api/reports?by=${by}`);
-      if (!rep.ok) throw new Error(`HTTP ${rep.status} (report)`);
-      setReport(await rep.json());
       setLoadError(null);
     } catch (e) {
       setLoadError({
@@ -77,18 +93,49 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
         text: "Could not load the depot.",
       });
     }
-  }, [by]);
+  }, []);
+  const loadReport = useCallback(async () => {
+    try {
+      const rep = await fetch(`/api/reports?by=${by}&month=${monthKey}`);
+      if (!rep.ok) throw new Error(`HTTP ${rep.status} (report)`);
+      setReport(await rep.json());
+    } catch (e) {
+      setLoadError({
+        code: e instanceof Error ? e.message : "network",
+        text: "Could not load the report.",
+      });
+    }
+  }, [by, monthKey]);
+  const load = useCallback(async () => {
+    await loadState();
+    await loadReport();
+  }, [loadState, loadReport]);
+  // The demo clock runs on the server and catches up on each read: poll every
+  // second while it runs, every ten seconds otherwise.
   useEffect(() => {
-    load();
-    const t = setInterval(load, 10000);
+    loadState();
+    const t = setInterval(loadState, speed > 0 ? 1000 : 10000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [loadState, speed]);
+  useEffect(() => {
+    loadReport();
+    const t = setInterval(loadReport, 10000);
+    return () => clearInterval(t);
+  }, [loadReport]);
+  const exitTv = useCallback(() => {
+    setTv(false);
+    if (location.search) history.replaceState(null, "", location.pathname);
+  }, []);
+  // A direct link for the TV: /depot?wall=1.
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get("wall") === "1") setTv(true);
+  }, []);
   useEffect(() => {
     if (!tv) return;
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setTv(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && exitTv();
     addEventListener("keydown", esc);
     return () => removeEventListener("keydown", esc);
-  }, [tv]);
+  }, [tv, exitTv]);
 
   async function post(url: string, body: unknown, ok = "") {
     const r = await fetch(url, {
@@ -120,13 +167,10 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
   const vehiclesFree = s.rows.filter((r) => !r.session).map((r) => r.vehicle);
   const cap = s.settings.siteCapKw;
   const used = cap > 0 ? Math.min(100, (s.totalKw / cap) * 100) : 0;
-  const count = { charging: 0, waiting: 0, ready: 0, late: 0 };
+  const count = { charging: 0, waiting: 0, ready: 0, late: 0, away: 0 };
   for (const r of s.rows) count[statusOf(r)]++;
   const freeKw = Math.max(0, cap - s.totalKw);
-  const nowLabel = new Date(s.now).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const nowLabel = clock(s.sim?.at ?? Date.parse(s.now), s.tz);
 
   const gauge = (
     <section className="panel gauge" aria-labelledby="power">
@@ -149,7 +193,8 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
         <span>{cap} kW cap</span>
       </div>
       <p className="sum">
-        {count.charging + count.late} charging, {count.waiting} waiting.{" "}
+        {count.charging + count.late} charging, {count.waiting} waiting
+        {count.away ? `, ${count.away} not arrived` : ""}.{" "}
         <span className="num">{freeKw.toFixed(1)} kW</span> free.
       </p>
       <dl className="kpis">
@@ -174,38 +219,24 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
 
   if (tv)
     return (
-      <main id="main" className="tvmode">
-        <header className="top">
-          <h1>Depot overview</h1>
-          <span className="num clock">{nowLabel}</span>
-          <button onClick={() => setTv(false)}>Exit wall display (Esc)</button>
-        </header>
-        <div className="grid2">
-          {gauge}
-          <section className="panel flush" aria-labelledby="tl-h">
-            <h2 id="tl-h">Departures</h2>
-            <Timeline s={s} />
-          </section>
-        </div>
-        {loadError && (
-          <p className="msg warn" role="alert">
-            {loadError.text} {loadError.code}. The figures may be out of date.
-          </p>
-        )}
-      </main>
+      <Wall
+        s={s}
+        onExit={exitTv}
+        error={loadError ? `${loadError.text} ${loadError.code}` : undefined}
+      />
     );
 
   return (
     <main id="main">
       <header className="top">
         <h1>Depot overview</h1>
+        {s.tz && <span className="tzlab">Depot time</span>}
         <span className="num clock">{nowLabel}</span>
       </header>
       {s.demo && (
         <div className="banner" role="status">
           <b>Demo</b>: simulated depot with sample vehicles and drivers. No
-          charger commands or API requests are sent. Simulated clock:{" "}
-          {new Date(s.now).toLocaleString()}
+          charger commands or API requests are sent.
         </div>
       )}
       <div className="tabs" role="tablist" aria-label="Sections">
@@ -259,26 +290,10 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
           <div className="grid2">
             <div className="side">
               {gauge}
-              {s.demo && (
-                <div className="actions">
-                  <button
-                    onClick={() =>
-                      post("/api/state", { action: "advance", minutes: 60 })
-                    }
-                  >
-                    Advance 1 h
-                  </button>
-                  <button
-                    onClick={() =>
-                      post("/api/state", { action: "advance", minutes: 480 })
-                    }
-                  >
-                    Advance 8 h
-                  </button>
-                </div>
-              )}
+              {s.demo && <SimControls s={s} post={post} />}
             </div>
             <div className="main-col">
+              {s.demo && <PowerChart s={s} />}
               <section className="panel flush" aria-labelledby="tl-h">
                 <h2 id="tl-h">Departures</h2>
                 <Timeline s={s} />
@@ -291,19 +306,27 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     listed here.
                   </p>
                 ) : (
-                  <ul className="log">
-                    {s.events.map((e) => (
-                      <li key={e.id}>
-                        <span className="num">
-                          {new Date(e.at).toLocaleTimeString()}
-                        </span>
-                        <b>{e.type}</b>
-                        <span>{e.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <div
+                    className="logbox"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Event log"
+                  >
+                    <ul className="log">
+                      {collapseEvents(s.events).map((e) => (
+                        <li key={e.id}>
+                          <span className="num">
+                            {clock(Date.parse(e.at), s.tz)}
+                          </span>
+                          <b>{e.type}</b>
+                          <span>{e.detail}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </section>
+              {s.demo && <ApiPanel s={s} />}
             </div>
           </div>
         )}
@@ -330,11 +353,15 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     Departs{" "}
                     <span className="num">
                       {r.vehicle.departure
-                        ? new Date(r.vehicle.departure).toLocaleString([], {
-                            weekday: "short",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })
+                        ? new Date(r.vehicle.departure).toLocaleString(
+                            s.tz ? "en-GB" : [],
+                            {
+                              weekday: "short",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              timeZone: s.tz,
+                            },
+                          )
                         : "-"}
                     </span>
                     {" · "}
@@ -369,7 +396,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     onClick={() =>
                       setEdit({
                         id: r.vehicle.id,
-                        departure: toLocalInput(r.vehicle.departure),
+                        departure: toLocalInput(r.vehicle.departure, s.tz),
                         needKind: r.vehicle.need?.kind ?? "battery",
                         needValue: String(
                           r.vehicle.need?.kind === "kwh"
@@ -395,7 +422,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     {
                       id: edit.id,
                       departure: edit.departure
-                        ? new Date(edit.departure).toISOString()
+                        ? fromLocalInput(edit.departure, s.tz)
                         : "",
                       needKind: edit.needKind,
                       needValue: Number(edit.needValue),
@@ -411,7 +438,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                   {s.rows.find((r) => r.vehicle.id === edit.id)?.vehicle.name}
                 </h3>
                 <label>
-                  Departure{" "}
+                  Departure{s.tz ? " (depot time)" : ""}{" "}
                   <input
                     type="datetime-local"
                     value={edit.departure}
@@ -627,7 +654,18 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                 <option value="vehicle">Per vehicle</option>
                 <option value="driver">Per driver</option>
               </select>
-              <a href={`/api/reports?by=${by}&format=csv`}>Download CSV</a>
+              <label htmlFor="report-month">Month</label>
+              <select
+                id="report-month"
+                value={month}
+                onChange={(e) => setMonth(e.target.value as "this" | "last")}
+              >
+                <option value="this">This month</option>
+                <option value="last">Last month</option>
+              </select>
+              <a href={`/api/reports?by=${by}&month=${monthKey}&format=csv`}>
+                Download CSV
+              </a>
             </div>
             <p className="note">
               <small className="num">
@@ -639,7 +677,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
               <div className="skel" style={{ height: 160 }} />
             ) : report.rows.length === 0 ? (
               <p className="empty">
-                No sessions this month yet. Cost appears here once a charge
+                No sessions in this month. Cost appears here once a charge
                 finishes.
               </p>
             ) : (

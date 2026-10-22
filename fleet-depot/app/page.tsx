@@ -1,6 +1,7 @@
 import { brand } from "@/brand/brand";
 import { gate } from "@/lib/auth";
 import { isDemo } from "@/lib/config";
+import { HowItWorks } from "./api-panel";
 
 export const dynamic = "force-dynamic";
 
@@ -109,6 +110,33 @@ export default function Landing() {
           </li>
         ))}
       </ul>
+      <section className="panel how-panel" aria-labelledby="how-h">
+        <h2 id="how-h">How it works on Ivora</h2>
+        <ul className="topics">
+          <li>
+            <b>Smart charging profiles.</b> The app sets a limit per session so
+            the depot stays under its cap.
+          </li>
+          <li>
+            <b>RFID cards.</b> Drivers&apos; cards are authorised through the
+            token list.
+          </li>
+          <li>
+            <b>Webhooks.</b> Plug-in and session events tell the app when to
+            replan.
+          </li>
+        </ul>
+        <HowItWorks />
+        <p>
+          <a
+            href="https://www.ivoracharge.com/developers"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Ivora API docs
+          </a>
+        </p>
+      </section>
     </main>
   );
 }
