@@ -7,7 +7,7 @@ import "server-only";
 const DAY_MS = 86_400_000;
 
 /** The zone's offset from UTC at instant `ms`, in ms (local = UTC + offset). */
-function offsetMs(zone: string, ms: number): number {
+export function offsetMs(zone: string, ms: number): number {
   const p = Object.fromEntries(
     new Intl.DateTimeFormat("en-US", {
       timeZone: zone,

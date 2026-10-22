@@ -7,12 +7,30 @@ import {
   rotateCredentials,
   unregisterPeer,
 } from "@/lib/ocpi/handshake";
-import { locationStore } from "@/lib/locations/registry";
+import { explainMessage, explainStatus } from "@/lib/admin/errors";
+import { DEMO_PEER_ID, locationStore } from "@/lib/locations/registry";
+import type { SyncModule, SyncState } from "@/lib/locations/store";
 import { syncPeer, SyncError, type SyncReport } from "@/lib/locations/sync";
 import { peerStore } from "@/lib/ocpi/registry";
 import type { Peer } from "@/lib/ocpi/store";
-import { assertLive } from "@/lib/server/demo";
+import { assertLive, isDemo } from "@/lib/server/demo";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
+
+/** The last pull of one module from a peer. */
+export type ModuleSync = {
+  module: SyncModule;
+  /** When the last pull ended, ok or not; null: never pulled. */
+  lastPullAt: string | null;
+  lastFullSyncAt: string | null;
+  ok: boolean | null;
+  items: number;
+  invalid: number;
+  /** A pull is running, or stopped part way (the next pull resumes it). */
+  running: boolean;
+  error?: string;
+  code?: string;
+  nextStep?: string;
+};
 
 /** A peer as the admin web shows it: no token, no ciphertext. */
 export type PeerSummary = {
@@ -24,11 +42,54 @@ export type PeerSummary = {
   parties: string[];
   modules: string[];
   registeredAt: string | null;
+  /** Per module this server pulls; only in the peer list. */
+  sync?: ModuleSync[];
+  demo?: boolean;
+};
+
+const SYNC_MODULES: SyncModule[] = ["locations", "tariffs", "sessions", "cdrs"];
+
+function moduleSync(module: SyncModule, s: SyncState | null): ModuleSync {
+  const r = s?.lastResult ?? null;
+  const failed = r && !r.ok;
+  const help = failed
+    ? (explainStatus(r.statusCode, r.httpStatus) ??
+      explainMessage(r.error ?? ""))
+    : null;
+  return {
+    module,
+    lastPullAt: r?.finishedAt ?? null,
+    lastFullSyncAt: s?.lastFullSyncAt ?? null,
+    ok: r ? r.ok : null,
+    items: r?.items ?? 0,
+    invalid: r?.invalid ?? 0,
+    running: Boolean(s?.run),
+    ...(failed && {
+      error: r.error ?? "The pull failed.",
+      code: help!.code,
+      nextStep: help!.nextStep,
+    }),
+  };
+}
+
+/** The demo's built-in mock CPO: never pulled over the network. */
+const DEMO_PEER: PeerSummary = {
+  id: DEMO_PEER_ID,
+  label: "Mock CPO (demo, built in)",
+  direction: "outbound",
+  status: "registered",
+  versionsUrl: null,
+  parties: ["CPO ZZ-MCK (Mock CPO)"],
+  modules: ["cdrs", "locations", "sessions", "tariffs"],
+  registeredAt: null,
+  demo: true,
 };
 
 export type ActionState = {
   ok?: boolean;
   message?: string;
+  code?: string;
+  nextStep?: string;
   peer?: PeerSummary;
   peers?: PeerSummary[];
   /** Shown once, right after an invitation. Only its hash is stored. */
@@ -139,14 +200,30 @@ export async function managePeerAction(
   });
 }
 
-/** Every peer, for the admin. */
+/** Every peer, with the last pull and its error per module, for the admin. */
 export async function listPeersAction(
   _prev: ActionState,
   form: FormData,
 ): Promise<ActionState> {
   return asAdmin(form, async () => {
-    const peers = (await peerStore().listPeers()).map(summary);
-    return { ok: true, peers, message: `${peers.length} peer(s).` };
+    const locations = locationStore();
+    const peers: PeerSummary[] = await Promise.all(
+      (await peerStore().listPeers()).map(async (p) => ({
+        ...summary(p),
+        sync: await Promise.all(
+          SYNC_MODULES.map(async (m) =>
+            moduleSync(m, await locations.getSyncState(p.id, m)),
+          ),
+        ),
+      })),
+    );
+    if (isDemo()) peers.unshift(DEMO_PEER);
+    const failing = peers.filter((p) => p.sync?.some((m) => m.ok === false));
+    return {
+      ok: true,
+      peers,
+      message: `${peers.length} peer(s)${failing.length ? `; ${failing.length} with a failed pull (see below)` : ""}.`,
+    };
   });
 }
 

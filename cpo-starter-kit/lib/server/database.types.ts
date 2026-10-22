@@ -187,6 +187,54 @@ export type Database = {
         Update: { processed_at?: Timestamp | null };
         Relationships: [];
       };
+      cpo_checkouts: {
+        Row: {
+          id: string;
+          operator_id: string;
+          request_id: string;
+          reference: string;
+          kind: string;
+          sticker_code: string;
+          station_id: number;
+          connector_id: number;
+          tariff_id: number;
+          hold_minor: number;
+          currency: string;
+          phase: string;
+          bill_id: string | null;
+          payment_id: string | null;
+          checkout_url: string | null;
+          start_requested_at: Timestamp | null;
+          start_operation_id: string | null;
+          transaction_id: number | null;
+          stop_requested_at: Timestamp | null;
+          stop_retried_at: Timestamp | null;
+          meter_wh: number | null;
+          meter_at: Timestamp | null;
+          alert: string | null;
+          final_minor: number | null;
+          captured_minor: number | null;
+          error: string | null;
+          checked_at: Timestamp | null;
+          settled_at: Timestamp | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          session_started_at: Timestamp | null;
+          session_ended_at: Timestamp | null;
+          energy_wh: number | null;
+          connector_number: number | null;
+          stop_reason: string | null;
+          detail_at: Timestamp | null;
+          detail_checked_at: Timestamp | null;
+          refunded_minor: number | null;
+          refund_checked_at: Timestamp | null;
+        };
+        // Written only through cpo_claim_checkout, cpo_record_checkout and the
+        // reports' cpo_record_checkout_details and cpo_record_checkout_payment.
+        Insert: { operator_id: string; request_id: string };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
       cpo_staff_tokens: {
         Row: {
           operator_id: string;
@@ -206,6 +254,38 @@ export type Database = {
           token_id?: number | null;
           registered_at?: Timestamp | null;
         };
+        Relationships: [];
+      };
+      cpo_free_tokens: {
+        Row: {
+          operator_id: string;
+          id_token: string;
+          token_id: number | null;
+          created_at: Timestamp;
+          registered_at: Timestamp | null;
+        };
+        Insert: {
+          operator_id: string;
+          id_token: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Update: {
+          id_token?: string;
+          token_id?: number | null;
+          registered_at?: Timestamp | null;
+        };
+        Relationships: [];
+      };
+      cpo_transaction_marks: {
+        Row: {
+          station_id: number;
+          last_transaction_id: number;
+          updated_at: Timestamp;
+        };
+        // Written only through cpo_advance_transaction_mark.
+        Insert: { station_id: number; last_transaction_id: number };
+        Update: { [_ in never]: never };
         Relationships: [];
       };
       cpo_tariffs: {
@@ -241,6 +321,7 @@ export type Database = {
           definition: Json;
           ivora_tariff_id: number | null;
           attempt: number;
+          attempted_at: Timestamp;
           archived_at: Timestamp | null;
           created_by: string | null;
           created_at: Timestamp;
@@ -256,6 +337,7 @@ export type Database = {
         Update: {
           ivora_tariff_id?: number | null;
           attempt?: number;
+          attempted_at?: Timestamp;
           archived_at?: Timestamp | null;
         };
         Relationships: [];
@@ -454,6 +536,10 @@ export type Database = {
         Args: { p_operator_id: string; p_id: string; p_changes: Json };
         Returns: boolean;
       };
+      cpo_advance_transaction_mark: {
+        Args: { p_station_id: number; p_transaction_id: number };
+        Returns: undefined;
+      };
       cpo_record_ivora_event: {
         Args: { p_id: string; p_type: string; p_station_id: number | null };
         Returns: boolean;
@@ -526,6 +612,73 @@ export type Database = {
           p_connectors: Json;
         };
         Returns: undefined;
+      };
+      cpo_claim_checkout: {
+        Args: {
+          p_operator_id: string;
+          p_request_id: string;
+          p_kind: string;
+          p_sticker_code: string;
+          p_station_id: number;
+          p_connector_id: number;
+          p_tariff_id: number;
+          p_hold_minor: number;
+          p_currency: string;
+        };
+        Returns: Json;
+      };
+      cpo_record_checkout: {
+        Args: { p_operator_id: string; p_id: string; p_changes: Json };
+        Returns: boolean;
+      };
+      cpo_report_checkouts: {
+        Args: {
+          p_operator_id: string;
+          p_from: Timestamp;
+          p_to: Timestamp;
+          p_station_id: number | null;
+          p_status: string;
+          p_limit: number;
+          p_offset: number;
+          p_after_created_at: Timestamp | null;
+          p_after_id: string | null;
+        };
+        Returns: Database["public"]["Tables"]["cpo_checkouts"]["Row"][];
+      };
+      cpo_report_totals: {
+        Args: {
+          p_operator_id: string;
+          p_from: Timestamp;
+          p_to: Timestamp;
+          p_station_id: number | null;
+          p_status: string;
+        };
+        Returns: Json;
+      };
+      cpo_record_checkout_details: {
+        Args: {
+          p_operator_id: string;
+          p_id: string;
+          p_started_at: Timestamp | null;
+          p_ended_at: Timestamp | null;
+          p_energy_wh: number | null;
+          p_connector_number: number | null;
+          p_stop_reason: string | null;
+        };
+        Returns: boolean;
+      };
+      cpo_report_payments_due: {
+        Args: { p_limit: number };
+        Returns: { id: string; operator_id: string; payment_id: string }[];
+      };
+      cpo_record_checkout_payment: {
+        Args: {
+          p_operator_id: string;
+          p_id: string;
+          p_captured_minor: number;
+          p_refunded_minor: number;
+        };
+        Returns: boolean;
       };
     };
     Enums: { [_ in never]: never };

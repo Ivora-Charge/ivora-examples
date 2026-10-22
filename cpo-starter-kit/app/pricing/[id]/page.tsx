@@ -7,6 +7,7 @@ import {
   defaultSimulation,
   editorValues,
   getPricing,
+  idleGraceDefault,
   loadTariff,
 } from "@/lib/server/pricing";
 import { holdMinor } from "@/lib/server/pricing/tariff";
@@ -30,10 +31,15 @@ export default async function Page({
 }) {
   const me = await requireRole("manager");
   const { id } = await params;
-  const t = await loadTariff(getPricing(), me, id);
+  const pricing = getPricing();
+  const t = await loadTariff(pricing, me, id);
   if (!t || !t.definition) notFound();
   const created = (await searchParams).created;
   const def = t.definition;
+  // Only asked when the editor has no grace period of its own to show.
+  const graceDefault = def.idleMinorPerMinute
+    ? def.idleGraceMinutes
+    : await idleGraceDefault(pricing, me, def);
   return (
     <>
       <p>
@@ -104,7 +110,7 @@ export default async function Page({
         <TariffEditor
           tariffId={t.id}
           revision={t.revision}
-          initial={editorValues(t.name, def, def)}
+          initial={editorValues(t.name, def, def, graceDefault)}
           currency={def.currency}
           timeZones={TIME_ZONES}
           simulation={defaultSimulation(def.timeZone)}

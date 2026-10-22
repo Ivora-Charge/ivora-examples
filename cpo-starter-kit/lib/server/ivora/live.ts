@@ -2,6 +2,7 @@ import "server-only";
 import { isDemo } from "../env";
 import { IvoraError } from "./errors";
 import type {
+  Bill,
   Branding,
   Fault,
   IvoraClient,
@@ -11,14 +12,18 @@ import type {
   LocationInput,
   Operation,
   Page,
+  Payment,
   PaymentAccount,
   Quote,
   Station,
   StationInput,
+  Stats,
   Tariff,
   TariffArchived,
   TokenRecord,
   Transaction,
+  TransactionDetail,
+  TransactionListItem,
 } from "./types";
 
 export interface LiveOptions {
@@ -141,6 +146,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
   const roots = {
     tenant: `${origin}/v1/tenants/${o.tenantId}/`,
     stripe: `${origin}/payment/stripe/v1/tenants/${o.tenantId}/`,
+    billing: `${origin}/v1/billing/`,
   };
 
   async function once<T>(
@@ -348,7 +354,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
       );
     },
     getTransaction(transactionId) {
-      return request<Transaction>("GET", `transactions/${transactionId}`);
+      return request<TransactionDetail>("GET", `transactions/${transactionId}`);
     },
     async findToken(externalReference) {
       return (
@@ -378,6 +384,12 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
           `transactions${query({ limit: o.limit ?? 50, station_id: o.station_id })}`,
         )
       ).data;
+    },
+    listTransactionsAfter(o) {
+      return request<Page<TransactionListItem>>(
+        "GET",
+        `transactions${query({ station_id: o.station_id, after: o.after || undefined, limit: o.limit ?? 100 })}`,
+      );
     },
     // A PUT replaces the whole record, so repeating it is harmless; the key still
     // makes a retried request count once.
@@ -421,6 +433,80 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         key: undefined,
         readOnly: true,
       });
+    },
+    quoteTariff(tariffId, session) {
+      return request<Quote>("POST", `tariffs/${tariffId}/quote`, {
+        body: { session },
+        readOnly: true,
+      });
+    },
+    createBill(input, key) {
+      return request<Bill>("POST", "bills", {
+        body: { ...input, source: "csms" },
+        key,
+      });
+    },
+    getBill(billId) {
+      return request<Bill>("GET", `bills/${encodeURIComponent(billId)}`);
+    },
+    startBill(billId, key) {
+      return request<Operation>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/start`,
+        { key },
+      );
+    },
+    createPayment(input, key) {
+      return request<Payment>("POST", "payments", {
+        body: input,
+        key,
+        root: "stripe",
+      });
+    },
+    getTariff(tariffId) {
+      return request<Tariff>("GET", `tariffs/${tariffId}`);
+    },
+    finalizeBill(billId, transactionId, key) {
+      return request<Bill>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/finalize`,
+        { body: { transaction_id: transactionId }, key },
+      );
+    },
+    getPayment(paymentId) {
+      return request<Payment>(
+        "GET",
+        `payments/${encodeURIComponent(paymentId)}`,
+        { root: "stripe" },
+      );
+    },
+    // No amount: Ivora captures exactly the final bill.
+    capturePayment(paymentId, key) {
+      return request<Payment>(
+        "POST",
+        `payments/${encodeURIComponent(paymentId)}/capture`,
+        { key, root: "stripe" },
+      );
+    },
+    releasePayment(paymentId, key) {
+      return request<Payment>(
+        "POST",
+        `payments/${encodeURIComponent(paymentId)}/release`,
+        { key, root: "stripe" },
+      );
+    },
+    async recordHoldStop(billId, key) {
+      await request<unknown>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/alerts`,
+        { body: { kind: "hold_stop" }, key, root: "billing" },
+      );
+    },
+    getStats(q) {
+      return request<Stats>(
+        "GET",
+        `stats${query({ from: q.from, to: q.to, bucket: q.bucket, time_zone: q.time_zone, top: q.top })}`,
+      );
     },
   };
 }

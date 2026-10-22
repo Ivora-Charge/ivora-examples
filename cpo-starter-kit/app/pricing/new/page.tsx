@@ -29,7 +29,7 @@ export default async function Page() {
         </p>
         <TariffEditor
           tariffId={null}
-          initial={editorValues("", null, base)}
+          initial={editorValues("", null, base, base.idleGrace)}
           currency={base.currency}
           timeZones={TIME_ZONES}
           simulation={defaultSimulation(base.timeZone)}

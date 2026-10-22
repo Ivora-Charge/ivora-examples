@@ -232,6 +232,23 @@ describe("live Ivora client", () => {
     ]);
   });
 
+  it("pages a station's transactions on from a cursor, oldest first", async () => {
+    const { ivora, calls } = client([
+      ok({ data: [{ id: 1201, station_id: 9103 }], next_cursor: null }),
+      ok({ data: [], next_cursor: null }),
+    ]);
+    const page = await ivora.listTransactionsAfter({
+      station_id: 9103,
+      after: 1200,
+    });
+    expect(page.data.map((t) => t.id)).toEqual([1201]);
+    await ivora.listTransactionsAfter({ station_id: 9103, after: 0, limit: 5 });
+    expect(calls.map((c) => c.url)).toEqual([
+      `${BASE}/v1/tenants/42/transactions?station_id=9103&after=1200&limit=100`,
+      `${BASE}/v1/tenants/42/transactions?station_id=9103&limit=5`,
+    ]);
+  });
+
   it("stops on a cursor that does not move and says when it hit the page ceiling", async () => {
     const stuck = client([
       ok({ data: [{ id: 1 }], next_cursor: 5 }),

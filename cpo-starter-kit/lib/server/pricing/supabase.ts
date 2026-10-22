@@ -57,7 +57,7 @@ export function createSupabasePricingStore(): PricingStore {
         svc()
           .from("cpo_tariff_versions")
           .select(
-            "tariff_id, version, definition, ivora_tariff_id, attempt, created_at, archived_at",
+            "tariff_id, version, definition, ivora_tariff_id, attempt, attempted_at, created_at, archived_at",
           )
           .eq("operator_id", operatorId)
           .order("version", { ascending: false })
@@ -80,6 +80,7 @@ export function createSupabasePricingStore(): PricingStore {
           version: v.version,
           ivoraTariffId: v.ivora_tariff_id,
           attempt: v.attempt,
+          attemptedAt: v.attempted_at,
           definition: v.definition as unknown as TariffDefinition,
           createdAt: v.created_at,
           archivedAt: v.archived_at,

@@ -111,6 +111,24 @@ export interface LiveStore {
     t: StaffToken,
     o?: { replace?: boolean },
   ): Promise<StaffToken>;
+  /** The operator's free charging token (driver checkout on free tariffs). */
+  getFreeToken(operatorId: string): Promise<StaffToken | null>;
+  /** Like putStaffToken, for the free charging token. */
+  putFreeToken(
+    operatorId: string,
+    t: StaffToken,
+    o?: { replace?: boolean },
+  ): Promise<StaffToken>;
+  /**
+   * The highest transaction ID at this station that every session finder is done with
+   * (lib/server/live/transactions.ts); null before the first scan.
+   */
+  getTransactionMark(stationId: number): Promise<number | null>;
+  /** Moves the mark up to transactionId; never down (two scans at once keep the higher). */
+  advanceTransactionMark(
+    stationId: number,
+    transactionId: number,
+  ): Promise<void>;
   /** True for a new event, false for a redelivery. */
   recordEvent(e: StoredEvent): Promise<boolean>;
   markProcessed(eventId: string): Promise<void>;

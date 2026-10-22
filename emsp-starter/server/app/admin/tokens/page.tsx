@@ -6,12 +6,12 @@ import { isDemo } from "@/lib/server/demo";
 import { DEMO_DRIVER_REF } from "@/lib/tokens/registry";
 import { TokenAdmin } from "./token-admin";
 
-export const metadata: Metadata = { title: "Driver tokens" };
+export const metadata: Metadata = { title: "Drivers and tokens" };
 
 export default function TokensPage() {
   return (
     <>
-      <h1>Driver tokens</h1>
+      <h1>Drivers and tokens</h1>
       <section className="card" aria-labelledby="about">
         <h2 id="about">Who can charge</h2>
         <p>

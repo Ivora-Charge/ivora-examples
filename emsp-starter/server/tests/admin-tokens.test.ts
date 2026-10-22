@@ -49,7 +49,7 @@ describe("admin token actions (demo mode)", () => {
         {},
         form({ driverRef: DEMO_DRIVER_REF, adminSecret: "wrong" }),
       ),
-    ).toEqual({ ok: false, message: "Wrong admin secret." });
+    ).toMatchObject({ ok: false, message: "Wrong admin secret." });
   });
 
   it("looks up the demo driver, issues, blocks and adds a card, pushing nothing", async () => {
@@ -85,13 +85,13 @@ describe("admin token actions (demo mode)", () => {
         {},
         form({ uid, type: "CARD", intent: "block", adminSecret: SECRET }),
       ),
-    ).toEqual({ ok: false, message: "Type must be APP_USER or RFID." });
+    ).toMatchObject({ ok: false, message: "Type must be APP_USER or RFID." });
     expect(
       await addRfidCardAction(
         {},
         form({ driverRef: "nobody", uid: "0A0B0C0D", adminSecret: SECRET }),
       ),
-    ).toEqual({
+    ).toMatchObject({
       ok: false,
       message:
         "This driver has no app token yet: create one first, then add the card.",

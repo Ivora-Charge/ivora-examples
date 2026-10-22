@@ -403,4 +403,41 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
     >`select private from cpo_station_pricing where station_id = 9102`;
     expect(rows).toEqual([{ private: true }]);
   });
+
+  /** One driver's tap: a paid claim on connector 91011 of station 9101. */
+  const claimCheckout = (
+    c: postgres.Sql | postgres.TransactionSql,
+    req: string,
+  ) =>
+    c<
+      { r: { id?: string; created?: boolean; busy?: string } }[]
+    >`select cpo_claim_checkout(${operator}, ${req}, 'paid', 'ABCD2345', 9101, 91011, 9401, 2500, 'USD') as r`.then(
+      (x) => x[0].r,
+    );
+
+  it("gives a connector to one of two drivers who tap at the same moment", async () => {
+    await reset();
+    const secondPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let claimed!: (id: string) => void;
+    const firstId = new Promise<string>((r) => (claimed = r));
+    // The first driver's claim is inserted but not committed yet.
+    const tx = a.begin(async (t) => {
+      const r = await claimCheckout(t, "40000000-0000-4000-8000-000000000001");
+      claimed(r.id!);
+      await released;
+    });
+    const id = await firstId;
+    // The second driver's claim waits on the first's row, then sees it: busy, and
+    // nothing inserted, so no second bill or hold can follow.
+    const second = claimCheckout(b, "40000000-0000-4000-8000-000000000002");
+    await waitingForLock(secondPid);
+    release();
+    await tx;
+    expect(await second).toEqual({ busy: id });
+    const rows =
+      await a`select 1 from cpo_checkouts where connector_id = 91011`;
+    expect(rows).toHaveLength(1);
+  });
 });
