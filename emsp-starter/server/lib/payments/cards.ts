@@ -1,5 +1,5 @@
 import "server-only";
-import { DEMO_CARD_ID } from "@/lib/accounts/registry";
+import { DEMO_CARD_ID, DEMO_DECLINE_CARD_ID } from "@/lib/accounts/registry";
 import type { Driver } from "@/lib/accounts/store";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
@@ -160,6 +160,15 @@ export async function listCards(
         expYear: nowOf(deps).getUTCFullYear() + 3,
         isDefault: driver.defaultPaymentMethodId === DEMO_CARD_ID,
       },
+      {
+        // Declines a higher hold during a session (lib/driver-app/demo-charging.ts).
+        id: DEMO_DECLINE_CARD_ID,
+        brand: "mastercard",
+        last4: "0341",
+        expMonth: 12,
+        expYear: nowOf(deps).getUTCFullYear() + 3,
+        isDefault: driver.defaultPaymentMethodId === DEMO_DECLINE_CARD_ID,
+      },
     ];
   if (!driver.stripeCustomerId) return [];
   const stripe = stripeOf(deps);
@@ -178,7 +187,8 @@ async function ownCard(
   if (typeof id !== "string" || !PM.test(id))
     throw new PaymentError("No such card.", 404);
   if (isDemo()) {
-    if (id !== DEMO_CARD_ID) throw new PaymentError("No such card.", 404);
+    if (id !== DEMO_CARD_ID && id !== DEMO_DECLINE_CARD_ID)
+      throw new PaymentError("No such card.", 404);
     return id;
   }
   if (!driver.stripeCustomerId) throw new PaymentError("No such card.", 404);

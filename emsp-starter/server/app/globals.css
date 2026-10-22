@@ -257,3 +257,12 @@ th.num {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+
+/* A driver's photo of a reported problem. */
+.report-photo {
+  display: block;
+  max-width: min(100%, 480px);
+  height: auto;
+  margin-top: var(--space-md);
+  border-radius: var(--radius-md);
+}

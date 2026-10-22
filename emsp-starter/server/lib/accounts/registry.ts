@@ -8,6 +8,11 @@ import { SupabaseAccountStore } from "./store-supabase";
 
 /** The demo driver's saved card: a placeholder, never a real card or Stripe object. */
 export const DEMO_CARD_ID = "pm_demo4242";
+/**
+ * A second demo card, to try what happens when a card does not allow a higher hold
+ * during a long session (`hold_increment_declined`). Demo mode only, never charged.
+ */
+export const DEMO_DECLINE_CARD_ID = "pm_demo0341";
 
 const holder = globalThis as unknown as {
   __emspDemoAccounts?: MemoryAccountStore;

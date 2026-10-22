@@ -15,6 +15,7 @@ import { connectToCpo } from "@/lib/ocpi/handshake";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import type { Session } from "@/lib/ocpi/session-objects";
 import { MemoryPeerStore, type Peer } from "@/lib/ocpi/store";
+import { cdrOfStart, history, receiptView } from "@/lib/driver-app/charges";
 import { onPaymentEvent, type PaymentEvent } from "@/lib/payments/events";
 import {
   holdCurrency,
@@ -1137,6 +1138,26 @@ describe("incremental authorization", () => {
       review: "increment_declined",
     });
     expect(outbox.sent[0].text).toContain(INCREMENT_DECLINED_REASON);
+
+    // The app's history and receipt say why, as a code it puts in its own words.
+    const [item] = await history(DRIVER, deps());
+    expect(item).toMatchObject({
+      chargeId: command.id,
+      stopCode: "hold_increment_declined",
+      receipt: true,
+      session: { stopCode: "hold_increment_declined", open: false },
+      payment: { status: "captured", charged: 2400, held: 2500 },
+    });
+    const start = (await commands.get(command.id))!;
+    const stored = (await cdrOfStart(start, sessions))!;
+    expect(
+      receiptView(start, await paymentOf(command.id), stored.cdr, stored.id),
+    ).toMatchObject({
+      charged: 2400,
+      sessionCost: { amount: 2400, vatIncluded: true },
+      stopCode: "hold_increment_declined",
+      demo: false,
+    });
   });
 
   it("never raises the hold of a card without incremental authorization", async () => {

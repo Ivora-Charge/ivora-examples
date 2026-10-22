@@ -48,6 +48,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             <Link href="/admin/payments">Payments and refunds</Link>
             <Link href="/admin/reconciliation">Reconciliation</Link>
             <Link href="/admin/tokens">Drivers and tokens</Link>
+            <Link href="/admin/problems">Problems</Link>
             <Link href="/admin/sign-in">Sign in</Link>
           </nav>
         </header>

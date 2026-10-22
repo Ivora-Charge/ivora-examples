@@ -2,7 +2,7 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { expireCommands } from "@/lib/commands/manage";
 import { commandStore } from "@/lib/commands/registry";
 import { locationStore } from "@/lib/locations/registry";
-import { installPaymentListeners } from "@/lib/payments/listen";
+import { installDriverAppListeners } from "@/lib/driver-app/listen";
 import { paymentDeps } from "@/lib/payments/registry";
 import { sweepPayments } from "@/lib/payments/settle";
 import { syncAllPeers } from "@/lib/locations/sync";
@@ -18,8 +18,8 @@ import { tokenStore } from "@/lib/tokens/registry";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 
-// Pulled CDRs settle their payments too.
-installPaymentListeners();
+// Pulled CDRs settle their payments too; timed-out commands tell the driver.
+installDriverAppListeners();
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
