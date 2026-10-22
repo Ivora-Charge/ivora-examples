@@ -1,10 +1,14 @@
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 import type { Report, State } from "./types";
 import Timeline from "./timeline";
 import { StatusChip } from "./timeline";
-import { statusOf } from "@/lib/timeline";
+import PowerChart from "./power-chart";
+import SimControls from "./sim-controls";
+import ApiPanel from "./api-panel";
+import Wall from "./wall";
+import { clock, statusOf } from "@/lib/timeline";
 
 const ERRORS_URL = "https://ivoracharge.com/developers/guides/reference/errors";
 
@@ -49,6 +53,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
   const [by, setBy] = useState<"vehicle" | "driver">("vehicle");
   const [report, setReport] = useState<Report | null>(null);
+  const [month, setMonth] = useState<"this" | "last">("this");
   const [loadError, setLoadError] = useState<LoadError | null>(null);
   const [tab, setTab] = useState<Tab>("overview");
   const [tv, setTv] = useState(false);
@@ -61,15 +66,20 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
   } | null>(null);
   const [newDriver, setNewDriver] = useState({ name: "", idTag: "" });
 
-  const load = useCallback(async () => {
+  const speed = s?.sim?.speed ?? 0;
+  const nowIso = s?.now;
+  const monthKey = useMemo(() => {
+    const d = new Date(nowIso ?? Date.now());
+    if (month === "last") d.setUTCMonth(d.getUTCMonth() - 1, 1);
+    return d.toISOString().slice(0, 7);
+  }, [nowIso, month]);
+
+  const loadState = useCallback(async () => {
     try {
       const r = await fetch("/api/state");
       if (r.status === 401) return location.reload();
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       setS(await r.json());
-      const rep = await fetch(`/api/reports?by=${by}`);
-      if (!rep.ok) throw new Error(`HTTP ${rep.status} (report)`);
-      setReport(await rep.json());
       setLoadError(null);
     } catch (e) {
       setLoadError({
@@ -77,12 +87,35 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
         text: "Could not load the depot.",
       });
     }
-  }, [by]);
+  }, []);
+  const loadReport = useCallback(async () => {
+    try {
+      const rep = await fetch(`/api/reports?by=${by}&month=${monthKey}`);
+      if (!rep.ok) throw new Error(`HTTP ${rep.status} (report)`);
+      setReport(await rep.json());
+    } catch (e) {
+      setLoadError({
+        code: e instanceof Error ? e.message : "network",
+        text: "Could not load the report.",
+      });
+    }
+  }, [by, monthKey]);
+  const load = useCallback(async () => {
+    await loadState();
+    await loadReport();
+  }, [loadState, loadReport]);
+  // The demo clock runs on the server and catches up on each read: poll every
+  // second while it runs, every ten seconds otherwise.
   useEffect(() => {
-    load();
-    const t = setInterval(load, 10000);
+    loadState();
+    const t = setInterval(loadState, speed > 0 ? 1000 : 10000);
     return () => clearInterval(t);
-  }, [load]);
+  }, [loadState, speed]);
+  useEffect(() => {
+    loadReport();
+    const t = setInterval(loadReport, 10000);
+    return () => clearInterval(t);
+  }, [loadReport]);
   useEffect(() => {
     if (!tv) return;
     const esc = (e: KeyboardEvent) => e.key === "Escape" && setTv(false);
@@ -123,10 +156,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
   const count = { charging: 0, waiting: 0, ready: 0, late: 0 };
   for (const r of s.rows) count[statusOf(r)]++;
   const freeKw = Math.max(0, cap - s.totalKw);
-  const nowLabel = new Date(s.now).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
+  const nowLabel = clock(Date.parse(s.now));
 
   const gauge = (
     <section className="panel gauge" aria-labelledby="power">
@@ -174,25 +204,11 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
 
   if (tv)
     return (
-      <main id="main" className="tvmode">
-        <header className="top">
-          <h1>Depot overview</h1>
-          <span className="num clock">{nowLabel}</span>
-          <button onClick={() => setTv(false)}>Exit wall display (Esc)</button>
-        </header>
-        <div className="grid2">
-          {gauge}
-          <section className="panel flush" aria-labelledby="tl-h">
-            <h2 id="tl-h">Departures</h2>
-            <Timeline s={s} />
-          </section>
-        </div>
-        {loadError && (
-          <p className="msg warn" role="alert">
-            {loadError.text} {loadError.code}. The figures may be out of date.
-          </p>
-        )}
-      </main>
+      <Wall
+        s={s}
+        onExit={() => setTv(false)}
+        error={loadError ? `${loadError.text} ${loadError.code}` : undefined}
+      />
     );
 
   return (
@@ -204,8 +220,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
       {s.demo && (
         <div className="banner" role="status">
           <b>Demo</b>: simulated depot with sample vehicles and drivers. No
-          charger commands or API requests are sent. Simulated clock:{" "}
-          {new Date(s.now).toLocaleString()}
+          charger commands or API requests are sent.
         </div>
       )}
       <div className="tabs" role="tablist" aria-label="Sections">
@@ -259,26 +274,10 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
           <div className="grid2">
             <div className="side">
               {gauge}
-              {s.demo && (
-                <div className="actions">
-                  <button
-                    onClick={() =>
-                      post("/api/state", { action: "advance", minutes: 60 })
-                    }
-                  >
-                    Advance 1 h
-                  </button>
-                  <button
-                    onClick={() =>
-                      post("/api/state", { action: "advance", minutes: 480 })
-                    }
-                  >
-                    Advance 8 h
-                  </button>
-                </div>
-              )}
+              {s.demo && <SimControls s={s} post={post} />}
             </div>
             <div className="main-col">
+              {s.demo && <PowerChart s={s} />}
               <section className="panel flush" aria-labelledby="tl-h">
                 <h2 id="tl-h">Departures</h2>
                 <Timeline s={s} />
@@ -291,19 +290,25 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     listed here.
                   </p>
                 ) : (
-                  <ul className="log">
-                    {s.events.map((e) => (
-                      <li key={e.id}>
-                        <span className="num">
-                          {new Date(e.at).toLocaleTimeString()}
-                        </span>
-                        <b>{e.type}</b>
-                        <span>{e.detail}</span>
-                      </li>
-                    ))}
-                  </ul>
+                  <div
+                    className="logbox"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Event log"
+                  >
+                    <ul className="log">
+                      {s.events.map((e) => (
+                        <li key={e.id}>
+                          <span className="num">{clock(Date.parse(e.at))}</span>
+                          <b>{e.type}</b>
+                          <span>{e.detail}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
                 )}
               </section>
+              {s.demo && <ApiPanel s={s} />}
             </div>
           </div>
         )}
@@ -627,7 +632,18 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                 <option value="vehicle">Per vehicle</option>
                 <option value="driver">Per driver</option>
               </select>
-              <a href={`/api/reports?by=${by}&format=csv`}>Download CSV</a>
+              <label htmlFor="report-month">Month</label>
+              <select
+                id="report-month"
+                value={month}
+                onChange={(e) => setMonth(e.target.value as "this" | "last")}
+              >
+                <option value="this">This month</option>
+                <option value="last">Last month</option>
+              </select>
+              <a href={`/api/reports?by=${by}&month=${monthKey}&format=csv`}>
+                Download CSV
+              </a>
             </div>
             <p className="note">
               <small className="num">
@@ -639,7 +655,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
               <div className="skel" style={{ height: 160 }} />
             ) : report.rows.length === 0 ? (
               <p className="empty">
-                No sessions this month yet. Cost appears here once a charge
+                No sessions in this month. Cost appears here once a charge
                 finishes.
               </p>
             ) : (

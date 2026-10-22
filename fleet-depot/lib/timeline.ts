@@ -95,7 +95,10 @@ export function statusOf(r: {
   session?: unknown;
   remainingKwh?: number;
   readyBy?: boolean;
+  /** Demo: how the vehicle left, once its session ended at departure. */
+  departed?: { ready: boolean };
 }): VehicleStatus {
+  if (!r.session && r.departed) return r.departed.ready ? "ready" : "late";
   if (!r.session) return "waiting";
   if (r.readyBy === false) return "late";
   if (r.remainingKwh !== undefined && r.remainingKwh <= 0.05) return "ready";

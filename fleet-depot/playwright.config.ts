@@ -5,7 +5,9 @@ const PORT = 3291;
 // Runs the built app in demo mode: no credentials, no network beyond localhost.
 export default defineConfig({
   testDir: "e2e",
-  timeout: 60_000,
+  timeout: 90_000,
+  // One server holds the demo clock, so the specs run one at a time.
+  workers: 1,
   use: { baseURL: `http://localhost:${PORT}`, ...devices["Desktop Chrome"] },
   webServer: {
     command: `npx next start -p ${PORT}`,

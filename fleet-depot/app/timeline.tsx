@@ -22,12 +22,19 @@ export function StatusChip({ status }: { status: keyof typeof STATUS_LABEL }) {
 function describe(r: Row, status: string, dep?: number) {
   const where = r.session
     ? `plugged in at ${r.session.station} connector ${r.session.connector}, ${r.session.allocatedKw.toFixed(1)} kW, ${r.session.deliveredKwh.toFixed(1)} kWh delivered`
-    : "not plugged in";
+    : r.departed
+      ? r.departed.ready
+        ? "left ready"
+        : "left before it was ready"
+      : "not plugged in";
+  const charger = r.plan
+    ? `, charger ${r.plan.charger} ${r.plan.type} ${r.plan.ratedKw} kW`
+    : "";
   const left =
     r.remainingKwh !== undefined
       ? `, ${r.remainingKwh.toFixed(1)} kWh left`
       : "";
-  return `${r.vehicle.name}: ${status}, ${where}${left}${dep ? `, departs ${clock(dep)}` : ""}`;
+  return `${r.vehicle.name}: ${status}, ${where}${charger}${left}${dep ? `, departs ${clock(dep)}` : ""}`;
 }
 
 /** One vehicle per row on a shared time axis. On phones the axis moves into each row as start, now, departure labels. */
@@ -83,10 +90,24 @@ export default function Timeline({ s }: { s: State }) {
                 <b>{r.vehicle.name}</b>
                 <span className="num">{r.vehicle.plate}</span>
                 {r.driver && <span>{r.driver}</span>}
+                {r.plan && (
+                  <span className="chg">
+                    <span
+                      className={`ctype ${r.plan.type === "DC fast" ? "dc" : "ac"}`}
+                    >
+                      {r.plan.type}
+                    </span>{" "}
+                    <span className="num">
+                      {r.plan.charger} · {r.plan.ratedKw} kW
+                    </span>
+                  </span>
+                )}
                 <span className="num conn">
                   {r.session
                     ? `${r.session.station} / ${r.session.connector}`
-                    : "not plugged in"}
+                    : r.departed
+                      ? "left"
+                      : "not plugged in"}
                 </span>
               </div>
               <div

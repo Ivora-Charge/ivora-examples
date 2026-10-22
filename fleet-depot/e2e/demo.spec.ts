@@ -1,32 +1,165 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-test("demo: vehicles arrive, share the site cap, and show up in the report", async ({
+const state = (page: Page) => page.waitForResponse("**/api/state");
+
+async function openDepot(page: Page) {
+  await page.goto("/depot");
+  await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
+  const r = state(page);
+  await page.getByRole("button", { name: "Reset demo" }).click();
+  await r;
+  await expect(page.locator(".top .clock")).toHaveText("16:30");
+}
+
+async function advance(page: Page, hours: number) {
+  for (let i = 0; i < hours; i++) {
+    const r = state(page);
+    await page.getByRole("button", { name: "Advance 1 h" }).click();
+    await r;
+  }
+}
+
+test("landing: the demo banner, the Ivora panel, and a way into the console", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1200, height: 900 });
   await page.goto("/");
   await expect(
     page.getByRole("status").filter({ hasText: "Demo" }),
   ).toBeVisible();
+  const how = page.getByRole("region", { name: "How it works on Ivora" });
+  await expect(how).toContainText("Smart charging profiles");
+  await expect(how).toContainText("RFID cards");
+  await expect(how).toContainText("Webhooks");
+  await expect(
+    how.getByRole("link", { name: "Ivora API docs" }),
+  ).toHaveAttribute("href", "https://ivoracharge.com/developers");
   await page.getByRole("link", { name: "Try the demo" }).click();
-  await expect(
-    page.getByRole("status").filter({ hasText: "Demo" }),
-  ).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
+});
+
+test("the night: the at-risk van is flagged, prioritised and turns Ready; every vehicle leaves Ready", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openDepot(page);
   await expect(page.getByText("not plugged in").first()).toBeVisible();
+  await expect(page.locator(".row")).toHaveCount(12);
+  // Level 2 and DC chargers are labelled on the rows.
+  await expect(page.locator(".ctype.dc").first()).toHaveText("DC fast");
+  await expect(page.locator(".ctype.ac").first()).toHaveText("L2 AC");
 
-  // 16:30 -> 22:30: every vehicle has arrived.
-  for (let i = 0; i < 6; i++) {
-    const r = page.waitForResponse("**/api/state");
-    await page.getByRole("button", { name: "Advance 1 h" }).click();
-    await r;
-  }
-  await expect(page.getByText("DEMO-ST-1 / 6", { exact: true })).toBeVisible();
-  await expect(page.getByText("not plugged in")).toHaveCount(0);
+  // 16:30 to 21:30: the last van plugs in and the depot is at the cap.
+  await advance(page, 5);
+  const van = page.locator(".row", { hasText: "Cargo van 6" });
+  await expect(van.locator(".chip")).toHaveText("at risk");
+  await expect(page.locator(".row .chip.late")).toHaveCount(1);
+  await expect(page.getByLabel(/Site power over the night/)).toBeVisible();
+
+  // 23:30: the dispatcher moved a departure, so the van is served first and recovers.
+  await advance(page, 2);
+  await expect(van.locator(".chip")).toHaveText("charging");
+  await expect(page.locator(".row .chip.late")).toHaveCount(0);
   await expect(
-    page.getByText(/accepted \(\d+ W now, simulated\)/).first(),
+    page
+      .getByRole("region", { name: "Event log" })
+      .getByText(/departure moved to 07:15/),
+  ).toBeVisible();
+  await expect(
+    page.getByText("charging_profile.accepted").first(),
   ).toBeVisible();
 
-  // Edit a departure: labelled form, plan recomputed.
+  // The rest of the night.
+  await advance(page, 9);
+  await expect(page.locator(".row .chip.ready")).toHaveCount(12);
+  await expect(page.locator(".row .chip.late")).toHaveCount(0);
+  await expect(page.locator(".peaks")).toContainText(
+    /Peak 1[45]\d kW vs 2\d\d kW unmanaged/,
+  );
+  await expect(page.getByText("The night is over")).toBeVisible();
+});
+
+test("60x: the clock runs, the chart fills, pause stops it, reset starts over", async ({
+  page,
+}) => {
+  await openDepot(page);
+  const clock = page.locator(".top .clock");
+  await page.getByRole("button", { name: "60×" }).click();
+  await expect(page.getByRole("button", { name: "60×" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await expect(clock).not.toHaveText("16:30", { timeout: 10_000 });
+  await page.getByRole("button", { name: "Pause" }).click();
+  await expect(page.getByRole("button", { name: "Pause" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  const at = await clock.textContent();
+  await page.waitForTimeout(2500);
+  expect(await clock.textContent()).toBe(at);
+  await page.getByRole("button", { name: "Reset demo" }).click();
+  await expect(clock).toHaveText("16:30");
+});
+
+test("no console errors and no layout shift while the clock runs at 60x", async ({
+  page,
+}) => {
+  const errors: string[] = [];
+  page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  page.on("pageerror", (e) => errors.push(e.message));
+  await openDepot(page);
+  await advance(page, 4);
+  await page.evaluate(() => {
+    const w = window as unknown as { __cls: number };
+    w.__cls = 0;
+    new PerformanceObserver((l) => {
+      for (const e of l.getEntries() as unknown as {
+        hadRecentInput: boolean;
+        value: number;
+      }[])
+        if (!e.hadRecentInput) w.__cls += e.value;
+    }).observe({ type: "layout-shift", buffered: false });
+  });
+  await page.getByRole("button", { name: "60×" }).click();
+  await page.waitForTimeout(6000);
+  await page.getByRole("button", { name: "Pause" }).click();
+  const cls = await page.evaluate(
+    () => (window as unknown as { __cls: number }).__cls,
+  );
+  expect(cls).toBeLessThan(0.02);
+  expect(errors).toEqual([]);
+});
+
+test("cost per vehicle and per driver, and the CSV downloads", async ({
+  page,
+}) => {
+  await openDepot(page);
+  await page.getByRole("tab", { name: "Sessions and cost" }).click();
+  for (const [by, file] of [
+    ["driver", /^depot-driver-\d{4}-\d{2}\.csv$/],
+    ["vehicle", /^depot-vehicle-\d{4}-\d{2}\.csv$/],
+  ] as const) {
+    await page.getByLabel("Group by").selectOption(by);
+    await expect(page.locator(".cost li").first()).toBeVisible();
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      page.getByRole("link", { name: "Download CSV" }).click(),
+    ]);
+    expect(download.suggestedFilename()).toMatch(file);
+    const path = await download.path();
+    const text = (await import("node:fs")).readFileSync(path, "utf8");
+    const lines = text.trim().split("\n");
+    expect(lines[0]).toBe("name,sessions,energy_kwh,cost_eur");
+    expect(lines.length).toBeGreaterThan(5);
+  }
+  await page.getByLabel("Month").selectOption("last");
+  await expect(page.locator(".cost li").first()).toBeVisible();
+});
+
+test("card import is labelled and reports per-line errors", async ({
+  page,
+}) => {
+  await openDepot(page);
   await page.getByRole("tab", { name: "Vehicles and cards" }).click();
   await page.getByRole("button", { name: "Edit" }).first().click();
   await page.getByLabel("Target %").fill("80");
@@ -34,19 +167,6 @@ test("demo: vehicles arrive, share the site cap, and show up in the report", asy
   await expect(
     page.getByText("Saved; charging plan recomputed."),
   ).toBeVisible();
-
-  // Report and CSV link.
-  await page.getByRole("tab", { name: "Sessions and cost" }).click();
-  await page.getByLabel("Group by").selectOption("driver");
-  await expect(
-    page.getByRole("link", { name: "Download CSV" }),
-  ).toHaveAttribute("href", /by=driver&format=csv/);
-  const csv = await page.request.get("/api/reports?by=driver&format=csv");
-  expect(csv.headers()["content-type"]).toContain("text/csv");
-  expect((await csv.text()).split("\n")[0]).toContain("cost");
-
-  // Card import is labelled and reports per-line errors.
-  await page.getByRole("tab", { name: "Vehicles and cards" }).click();
   await page
     .getByLabel(/Import cards as CSV/)
     .fill("idTag,driverName\nDEMO7001,Sample Driver\nbad tag!,X");
@@ -54,7 +174,33 @@ test("demo: vehicles arrive, share the site cap, and show up in the report", asy
   await expect(page.getByText(/Imported 1, 1 rejected: line 3/)).toBeVisible();
 });
 
-test("demo: refuses cross-origin writes", async ({ request }) => {
+for (const [width, height] of [
+  [1920, 1080],
+  [1280, 720],
+]) {
+  test(`wall display fits ${width}x${height} without scrolling`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height });
+    await openDepot(page);
+    await advance(page, 5);
+    await page.getByRole("tab", { name: "Settings" }).click();
+    await page.getByRole("button", { name: /Wall display/ }).click();
+    await expect(
+      page.getByRole("heading", { name: "Next departures" }),
+    ).toBeVisible();
+    await expect(page.locator(".nextlist li")).toHaveCount(6);
+    const fits = await page.evaluate(() => {
+      const w = document.querySelector(".wall")!;
+      return w.scrollHeight <= w.clientHeight && w.scrollWidth <= w.clientWidth;
+    });
+    expect(fits).toBe(true);
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
+  });
+}
+
+test("refuses cross-origin writes", async ({ request }) => {
   const r = await request.post("/api/state", {
     headers: { origin: "https://evil.example" },
     data: { action: "advance", minutes: 60 },
@@ -66,10 +212,8 @@ test("phone: mini-timeline labels never overlap as the clock advances", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/depot");
+  await openDepot(page);
   await expect(page.locator(".row").first()).toBeVisible();
-  // Runs after the flow above (same file, in order): 22:30 to 14:30 next day,
-  // past every departure.
   for (let h = 0; h <= 16; h++) {
     for (const width of [390, 360]) {
       await page.setViewportSize({ width, height: 844 });
@@ -98,8 +242,10 @@ test("phone: mini-timeline labels never overlap as the clock advances", async ({
       });
       expect(clashes, `after ${h} h at ${width} px`).toEqual([]);
     }
-    const r = page.waitForResponse("**/api/state");
-    await page.getByRole("button", { name: "Advance 1 h" }).click();
+    const advanceBtn = page.getByRole("button", { name: "Advance 1 h" });
+    if (await advanceBtn.isDisabled()) break;
+    const r = state(page);
+    await advanceBtn.click();
     await r;
   }
 });

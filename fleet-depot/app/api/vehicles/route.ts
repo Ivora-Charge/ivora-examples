@@ -36,7 +36,9 @@ export async function POST(req: Request) {
         id: prev?.id ?? randomUUID(),
         name,
         plate: String(b.plate ?? prev?.plate ?? "").slice(0, 20),
-        kind: (["van", "bus", "car"] as const).includes(b.kind as never)
+        kind: (["van", "bus", "car", "truck"] as const).includes(
+          b.kind as never,
+        )
           ? (b.kind as Vehicle["kind"])
           : (prev?.kind ?? "van"),
         batteryKwh: num(

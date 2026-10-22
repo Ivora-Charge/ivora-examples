@@ -17,6 +17,7 @@ export interface Vehicle {
   id: string;
   name: string;
   plate: string;
+  kind?: string;
   batteryKwh: number;
   maxKw: number;
   driverId?: string;
@@ -32,6 +33,16 @@ export interface Row {
   socReported: boolean;
   remainingKwh?: number;
   readyBy?: boolean;
+  /** Demo only: the charger this vehicle is planned on. */
+  plan?: {
+    charger: string;
+    outlet: number;
+    outlets: number;
+    type: "L2 AC" | "DC fast";
+    ratedKw: number;
+  };
+  /** Demo only: how the vehicle left (set once its session has ended at departure). */
+  departed?: { ready: boolean; shortfallKwh: number };
 }
 export interface State {
   demo: boolean;
@@ -48,6 +59,19 @@ export interface State {
     cardError?: string;
   }[];
   events: { id: string; at: string; type: string; detail: string }[];
+  /** Demo only: the clock and the night's power history. */
+  sim?: {
+    speed: 0 | 1 | 60;
+    start: number;
+    end: number;
+    done: boolean;
+    peakKw: number;
+    ghostPeakKw: number;
+    /** Top of the power chart's axis, kW. */
+    axisMaxKw: number;
+    /** [epoch ms, actual kW, kW without load management] */
+    samples: [number, number, number][];
+  };
 }
 export interface Report {
   currency: string;

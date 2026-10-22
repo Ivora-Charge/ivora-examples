@@ -2,7 +2,7 @@
 
 Depot charging for fleets (vans, buses, company cars) on the Ivora API. It is for operators who want every vehicle ready by its departure time, the site's power limit respected, and a monthly energy and cost figure per vehicle and per driver.
 
-![Depot overview: departure timeline, site power against the 60 kW cap](docs/screens/overview-desktop-light.png)
+![Depot overview: departure timeline and the night's site power against the 150 kW demo cap](docs/screens/overview-desktop-light.png)
 
 The UI ships as **Rotabay**, a calm operations console with tabular numbers and status shown by shape as well as colour. Screens in light and dark, desktop and phone, are in [`docs/screens/`](docs/screens).
 
@@ -45,13 +45,17 @@ Light and dark follow the system setting; the header button switches and remembe
 
 ## Screens
 
-The landing page is at `/`; the console is at `/depot` with four tabs (Overview, Vehicles and cards, Sessions and cost, Settings) and a wall-display mode (Settings, or Esc to leave). The overview shows a departure timeline: one row per vehicle with energy delivered, the planned charge, a departure tick and a now line; on phones each row carries its own mini timeline labelled start, now and departure. Charts have text alternatives. The delivered bar is an estimate drawn back from now at the current power, because the state carries energy, not the plug-in time.
+The landing page is at `/`, with a short "How it works on Ivora" panel (smart charging profiles, RFID cards through the token list, webhooks, and a link to the [API docs](https://ivoracharge.com/developers)). The console is at `/depot` with four tabs (Overview, Vehicles and cards, Sessions and cost, Settings) and a wall-display mode (Settings, or Esc to leave).
 
-Regenerate the screenshots in `docs/screens/` (light and dark, desktop 1440 px and phone 390 px) with `npm run build && npm run screenshots`.
+- **Overview:** the demo clock, a site power chart for the night, the departure timeline (one row per vehicle, labelled with its charger: L2 AC or DC fast), the event log and a "Calls behind the story" panel. The chart shows the actual kW held under the cap against a dashed line "without load management", with both peaks as numbers. The dashed line is a comparison, computed from the same demo data: every plugged-in vehicle at its charger's full rating (or the vehicle's own limit if lower). On phones each timeline row carries its own mini timeline labelled start, now and departure. Charts have text alternatives.
+- **Sessions and cost:** energy and cost per vehicle or per driver for this month or last month, with a CSV download.
+- **Wall display:** dark, big numbers for a TV: site kW against the cap with a slim bar, vehicles Ready, Charging, Waiting and At risk, and the next departures with their state. It fits 1920×1080 and 1280×720 without scrolling.
 
-| Overview (dark, phone)                    | Wall display (dark)                             |
-| ----------------------------------------- | ----------------------------------------------- |
-| ![](docs/screens/overview-phone-dark.png) | ![](docs/screens/wall-display-desktop-dark.png) |
+Regenerate the screenshots in `docs/screens/` (light and dark, desktop 1440 px and phone 390 px, plus the wall display at 1920×1080 dark) with `npm run build && npm run screenshots`.
+
+| Overview (dark, phone)                    | Wall display (1920×1080, dark)                    |
+| ----------------------------------------- | ------------------------------------------------- |
+| ![](docs/screens/overview-phone-dark.png) | ![](docs/screens/wall-display-1920x1080-dark.png) |
 
 ## Run locally
 
@@ -62,7 +66,15 @@ npm ci
 npm run dev
 ```
 
-With no credentials it starts in **demo mode**, with a persistent "Demo" banner. Six simulated vehicles arrive between 17:00 and 21:00 and leave between 05:30 and 08:00 on a simulated clock (use "Advance 1 h" and "Advance 8 h"). Earlier sessions are seeded so the report has data. Demo mode never calls the Ivora API or any other service: the client refuses to send in demo mode, and a test checks this.
+With no credentials it starts in **demo mode**, with a persistent "Demo" banner. Demo mode never calls the Ivora API or any other service: the client refuses to send in demo mode, and a test checks this. Names, plates and card values are made up.
+
+### The demo depot
+
+- **12 vehicles** (electric vans of 52 to 135 kWh, a shuttle bus and a box truck of 400 kWh) on **8 chargers**: six Level 2 AC (11 and 19 kW, some with two outlets) and two DC fast (60 kW). The demo site cap is **150 kW**; live mode keeps `SITE_CAP_KW`.
+- Vehicles arrive between 16:30 and 21:30 with a low state of charge and must leave between 05:30 and 08:00 with a target charge. Ten drivers have RFID cards (two vans are shared). About six weeks of earlier sessions are seeded, so reports and costs have data for this month and last month.
+- **Demo clock:** Pause, 1× and 60× (the night plays in about 15 minutes at 60×), plus "Advance 1 h" and "Advance 8 h". The clock runs on the server and catches up whenever the state is read, so a wall display on another screen follows it. **Reset demo** starts the night again.
+- **The story.** At 21:30 the last van (Cargo van 6) plugs in with 6% charge and must leave at 06:30. The depot is at the cap, the split serves earlier departures first, and the board flags the van as at risk. At 23:00 a scripted change moves the box truck's departure to 07:15, which puts the van ahead of it in the departure order. The van turns charging and every vehicle leaves Ready. The story comes only from the demo data and the clock; the power split and profile logic are the live ones.
+- The "Calls behind the story" panel is labelled "Demo: these are the calls the app would make". It lists the real calls and webhooks behind each step (`POST …/stations/{id}/charging-profiles`, `POST …/stations/{id}/composite-schedule`, `meter.sampled`, `connector.status_changed`, `charging_profile.accepted`). Nothing is sent.
 
 ## Connect real services
 
@@ -74,7 +86,7 @@ With no credentials it starts in **demo mode**, with a persistent "Demo" banner.
 | `IVORA_WEBHOOK_SECRET`                    | The signing secret returned once when you register the webhook endpoint                                                     |
 | `OPERATOR_PASSWORD`                       | **Required in live mode.** Protects the dashboard and every API route except webhooks. Without it live mode refuses to run. |
 | `DATABASE_URL` / `SQLITE_PATH`            | Postgres connection string, or SQLite file (default `./data/depot.db`)                                                      |
-| `SITE_CAP_KW`                             | Depot limit in kW (default 60)                                                                                              |
+| `SITE_CAP_KW`                             | Depot limit in kW (default 60; demo mode uses 150)                                                                          |
 | `BASELINE_PROFILE`                        | Set to `1` (or `true`) to keep a per-charger baseline profile in live mode (default off; demo mode ignores it)              |
 | `DEFAULT_CONNECTOR_KW`                    | Power reserved for a session whose card matches no vehicle, when the station reports no rating (default 11)                 |
 | `REPLAN_INTERVAL_SECONDS`                 | Live mode replans on this timer as well as on events, to retry failed decreases and follow departures (default 60)          |

@@ -1,7 +1,31 @@
 import type { Depot } from "./depot";
 import { endSession, logEvent, replan, startSession } from "./depot";
 import type { Driver, Vehicle } from "./types";
+import { energyNeededKwh, whToKwh } from "./units";
 
+/** Demo site limit, kW. Live mode keeps SITE_CAP_KW. */
+export const DEMO_CAP_KW = 150;
+
+/** A charge point. A dual-outlet AC unit has two outlets, each at the rated power. */
+interface Charger {
+  id: number;
+  name: string;
+  type: "L2 AC" | "DC fast";
+  kw: number;
+  outlets: number;
+}
+export const CHARGERS: Charger[] = [
+  { id: 1, name: "AC-1", type: "L2 AC", kw: 19, outlets: 2 },
+  { id: 2, name: "AC-2", type: "L2 AC", kw: 19, outlets: 2 },
+  { id: 3, name: "AC-3", type: "L2 AC", kw: 11, outlets: 2 },
+  { id: 4, name: "AC-4", type: "L2 AC", kw: 11, outlets: 2 },
+  { id: 5, name: "AC-5", type: "L2 AC", kw: 11, outlets: 1 },
+  { id: 6, name: "AC-6", type: "L2 AC", kw: 11, outlets: 1 },
+  { id: 7, name: "DC-1", type: "DC fast", kw: 60, outlets: 1 },
+  { id: 8, name: "DC-2", type: "DC fast", kw: 60, outlets: 1 },
+];
+
+/** Made-up names. Card values are invented and carry no real format. */
 const DRIVERS = [
   "Avery Stone",
   "Jordan Lee",
@@ -9,21 +33,243 @@ const DRIVERS = [
   "Riley Park",
   "Casey Moreno",
   "Morgan Diaz",
+  "Taylor Brandt",
+  "Quinn Abara",
+  "Devon Hale",
+  "Robin Castell",
 ];
-const FLEET: Omit<
-  Vehicle,
-  "id" | "driverId" | "departure" | "need" | "socPercent"
->[] = [
-  { name: "Van 1", plate: "DEMO-V1", kind: "van", batteryKwh: 75, maxKw: 11 },
-  { name: "Van 2", plate: "DEMO-V2", kind: "van", batteryKwh: 75, maxKw: 11 },
-  { name: "Van 3", plate: "DEMO-V3", kind: "van", batteryKwh: 60, maxKw: 11 },
-  { name: "Bus 1", plate: "DEMO-B1", kind: "bus", batteryKwh: 250, maxKw: 22 },
-  { name: "Car 1", plate: "DEMO-C1", kind: "car", batteryKwh: 58, maxKw: 11 },
-  { name: "Car 2", plate: "DEMO-C2", kind: "car", batteryKwh: 58, maxKw: 7.4 },
+
+interface Plan {
+  name: string;
+  plate: string;
+  kind: Vehicle["kind"];
+  batteryKwh: number;
+  maxKw: number;
+  charger: number;
+  outlet: number;
+  /** Hours after midnight on the demo day. */
+  arrive: number;
+  /** Hours after midnight on the next morning. */
+  depart: number;
+  socPercent: number;
+  targetPercent: number;
+  /** Index into DRIVERS; `alt` is a second driver who shares the vehicle in the history. */
+  driver: number;
+  alt?: number;
+}
+// 12 vehicles on 8 chargers (6 L2 AC, 2 DC), 12 outlets. The last van is the scripted at-risk one.
+const PLANS: Plan[] = [
+  {
+    name: "Shuttle bus 1",
+    plate: "DEMO-B1",
+    kind: "bus",
+    batteryKwh: 400,
+    maxKw: 60,
+    charger: 7,
+    outlet: 1,
+    arrive: 20,
+    depart: 5.5,
+    socPercent: 6,
+    targetPercent: 100,
+    driver: 0,
+  },
+  {
+    name: "Box truck 1",
+    plate: "DEMO-T1",
+    kind: "truck",
+    batteryKwh: 400,
+    maxKw: 60,
+    charger: 8,
+    outlet: 1,
+    arrive: 20.5,
+    depart: 5.5,
+    socPercent: 8,
+    targetPercent: 100,
+    driver: 1,
+  },
+  {
+    name: "Delivery van XL 1",
+    plate: "DEMO-X1",
+    kind: "van",
+    batteryKwh: 135,
+    maxKw: 19,
+    charger: 1,
+    outlet: 1,
+    arrive: 19,
+    depart: 5.5,
+    socPercent: 6,
+    targetPercent: 100,
+    driver: 2,
+  },
+  {
+    name: "Delivery van XL 2",
+    plate: "DEMO-X2",
+    kind: "van",
+    batteryKwh: 135,
+    maxKw: 19,
+    charger: 1,
+    outlet: 2,
+    arrive: 20.5,
+    depart: 5.75,
+    socPercent: 8,
+    targetPercent: 100,
+    driver: 3,
+  },
+  {
+    name: "Cargo van 1",
+    plate: "DEMO-C1",
+    kind: "van",
+    batteryKwh: 89,
+    maxKw: 19,
+    charger: 2,
+    outlet: 1,
+    arrive: 17,
+    depart: 5.5,
+    socPercent: 8,
+    targetPercent: 100,
+    driver: 4,
+  },
+  {
+    name: "Cargo van 2",
+    plate: "DEMO-C2",
+    kind: "van",
+    batteryKwh: 89,
+    maxKw: 19,
+    charger: 2,
+    outlet: 2,
+    arrive: 21,
+    depart: 6,
+    socPercent: 6,
+    targetPercent: 100,
+    driver: 5,
+  },
+  {
+    name: "Cargo van 3",
+    plate: "DEMO-C3",
+    kind: "van",
+    batteryKwh: 89,
+    maxKw: 11,
+    charger: 3,
+    outlet: 1,
+    arrive: 19.5,
+    depart: 6,
+    socPercent: 10,
+    targetPercent: 95,
+    driver: 6,
+    alt: 7,
+  },
+  {
+    name: "Cargo van 4",
+    plate: "DEMO-C4",
+    kind: "van",
+    batteryKwh: 68,
+    maxKw: 11,
+    charger: 3,
+    outlet: 2,
+    arrive: 20.5,
+    depart: 5.75,
+    socPercent: 8,
+    targetPercent: 100,
+    driver: 7,
+  },
+  {
+    name: "Cargo van 5",
+    plate: "DEMO-C5",
+    kind: "van",
+    batteryKwh: 68,
+    maxKw: 11,
+    charger: 4,
+    outlet: 1,
+    arrive: 21,
+    depart: 6,
+    socPercent: 8,
+    targetPercent: 100,
+    driver: 8,
+    alt: 9,
+  },
+  {
+    name: "City van 1",
+    plate: "DEMO-S1",
+    kind: "van",
+    batteryKwh: 52,
+    maxKw: 11,
+    charger: 4,
+    outlet: 2,
+    arrive: 19.5,
+    depart: 7.5,
+    socPercent: 88,
+    targetPercent: 85,
+    driver: 9,
+  },
+  {
+    name: "City van 2",
+    plate: "DEMO-S2",
+    kind: "van",
+    batteryKwh: 52,
+    maxKw: 11,
+    charger: 5,
+    outlet: 1,
+    arrive: 17,
+    depart: 8,
+    socPercent: 90,
+    targetPercent: 85,
+    driver: 0,
+    alt: 9,
+  },
+  {
+    name: "Cargo van 6",
+    plate: "DEMO-C6",
+    kind: "van",
+    batteryKwh: 89,
+    maxKw: 19,
+    charger: 6,
+    outlet: 1,
+    arrive: 21.5,
+    depart: 6.5,
+    socPercent: 6,
+    targetPercent: 100,
+    driver: 1,
+  },
 ];
-const ARRIVE_H = [17, 17.5, 18, 18.5, 20, 21]; // hours after midnight
-const DEPART_H = [6, 6.5, 7, 5.5, 7.5, 8]; // next morning
-const SOC = [25, 30, 20, 35, 40, 15];
+
+/** The scripted at-risk vehicle (Cargo van 6): arrives last, needs the most, leaves early. */
+export const AT_RISK_VEHICLE = "v11";
+
+/**
+ * Scripted data change on the demo clock: the dispatcher moves a departure.
+ * The earliest-departure-first split then serves the late van before it.
+ */
+const EVENTS = [
+  { atHour: 23, vehicle: "v1", departHour: 7.25, text: "route change" },
+];
+
+/** Where the night ends: the demo clock stops here. */
+const NIGHT_END_H = 24 + 8.5;
+const MIN = 60_000;
+
+export interface Sample {
+  /** Epoch ms, actual allocated kW, and the "without load management" comparison. */
+  t: number;
+  kw: number;
+  ghostKw: number;
+}
+export interface Outcome {
+  ready: boolean;
+  shortfallKwh: number;
+}
+export interface DemoState {
+  base: number;
+  speed: 0 | 1 | 60;
+  lastReal: number;
+  samples: Sample[];
+  outcomes: Record<string, Outcome>;
+  applied: string[];
+  /** Vehicle id to the time it plugs in (epoch ms). */
+  arrivals: Record<string, number>;
+}
+
+const states = new WeakMap<Depot, DemoState>();
+export const demoState = (d: Depot) => states.get(d);
 
 /** Local-day-based demo times; the simulated clock starts at 16:30 on the current day. */
 export function dayStart(d: Date) {
@@ -31,105 +277,239 @@ export function dayStart(d: Date) {
   x.setHours(0, 0, 0, 0);
   return x;
 }
-const atHour = (base: Date, h: number) =>
-  new Date(base.getTime() + h * 3600_000);
+const atHour = (base: number, h: number) => base + Math.round(h * 3600_000);
+
+export const indexOf = (vehicleId: string) => Number(vehicleId.slice(1));
+
+/** Where a vehicle is planned to charge, for labels. */
+export function planOf(vehicleId: string) {
+  const p = PLANS[indexOf(vehicleId)];
+  const c = p && CHARGERS.find((x) => x.id === p.charger);
+  if (!p || !c) return undefined;
+  return {
+    charger: c.name,
+    outlet: p.outlet,
+    outlets: c.outlets,
+    type: c.type,
+    ratedKw: Math.min(c.kw, p.maxKw),
+  };
+}
+
+/** Small deterministic generator, so seeded history is the same on every run. */
+function rng(seed: number) {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
 
 export async function seedDemo(depot: Depot) {
   await depot.store.clear();
-  const base = dayStart(new Date());
-  depot.clock = atHour(base, 16.5);
-  for (let i = 0; i < FLEET.length; i++) {
-    const driver: Driver = {
-      id: `d${i}`,
-      name: DRIVERS[i],
-      idTag: `DEMO${1000 + i}`,
-      cardBlocked: false,
-    };
+  depot.settings.siteCapKw = DEMO_CAP_KW;
+  const base = dayStart(new Date()).getTime();
+  depot.clock = new Date(atHour(base, 16.5));
+  const state: DemoState = {
+    base,
+    speed: 0,
+    lastReal: Date.now(),
+    samples: [],
+    outcomes: {},
+    applied: [],
+    arrivals: {},
+  };
+  states.set(depot, state);
+  const drivers: Driver[] = DRIVERS.map((name, i) => ({
+    id: `d${i}`,
+    name,
+    idTag: `FLT-${(0x4a10 + i * 0x2f3).toString(16).toUpperCase()}-${7000 + i * 13}`,
+    cardBlocked: false,
+  }));
+  for (const d of drivers) await depot.store.put("drivers", d.id, d);
+  for (const [i, p] of PLANS.entries()) {
     const v: Vehicle = {
-      ...FLEET[i],
       id: `v${i}`,
-      driverId: driver.id,
-      departure: atHour(base, 24 + DEPART_H[i]).toISOString(),
-      need: { kind: "battery", targetPercent: 90 },
-      socPercent: SOC[i],
+      name: p.name,
+      plate: p.plate,
+      kind: p.kind,
+      batteryKwh: p.batteryKwh,
+      maxKw: p.maxKw,
+      driverId: `d${p.driver}`,
+      departure: new Date(atHour(base, 24 + p.depart)).toISOString(),
+      need: { kind: "battery", targetPercent: p.targetPercent },
+      socPercent: p.socPercent,
     };
-    await depot.store.put("drivers", driver.id, driver);
     await depot.store.put("vehicles", v.id, v);
+    state.arrivals[v.id] = atHour(base, p.arrive);
   }
-  // Earlier sessions this month so the report has data (kept in the same month as the clock).
-  const month = base.toISOString().slice(0, 7);
-  for (let day = 0; day < 6; day++) {
-    for (let i = 0; i < FLEET.length; i++) {
-      const started = new Date(
-        base.getTime() - (day + 1) * 86400_000 + ARRIVE_H[i] * 3600_000,
-      );
-      if (started.toISOString().slice(0, 7) !== month) continue;
-      const kwh = FLEET[i].batteryKwh * 0.5 + day * 2;
-      await depot.store.put("transactions", `seed-${day}-${i}`, {
-        id: `seed-${day}-${i}`,
+  await seedHistory(depot, base);
+  await logEvent(
+    depot,
+    "demo.ready",
+    "Simulated depot: 12 vehicles on 8 chargers, a 150 kW site cap, vehicles leave 05:30-08:00",
+  );
+}
+
+/** About six weeks of earlier sessions, so this month and last month both have reports. */
+async function seedHistory(depot: Depot, base: number) {
+  const rand = rng(20261023);
+  for (let day = 1; day <= 45; day++) {
+    const dayMs = base - day * 86400_000;
+    const weekday = new Date(dayMs).getDay();
+    for (const [i, p] of PLANS.entries()) {
+      // Not every vehicle runs every day; weekends are quiet.
+      if (rand() > (weekday === 0 || weekday === 6 ? 0.35 : 0.88)) continue;
+      const arrive = p.arrive + (rand() - 0.5) * 2;
+      const startedAt = new Date(dayMs + Math.round(arrive * 3600_000));
+      const share = 0.35 + rand() * 0.5;
+      const kwh = Math.round(p.batteryKwh * share * 10) / 10;
+      const driver = p.alt !== undefined && rand() < 0.4 ? p.alt : p.driver;
+      const id = `seed-${day}-${i}`;
+      await depot.store.put("transactions", id, {
+        id,
         vehicleId: `v${i}`,
-        driverId: `d${i}`,
-        startedAt: started.toISOString(),
+        driverId: `d${driver}`,
+        startedAt: startedAt.toISOString(),
         meterStartWh: 1_000_000,
         meterStopWh: 1_000_000 + Math.round(kwh * 1000),
       });
     }
   }
-  await logEvent(
-    depot,
-    "demo.ready",
-    "Simulated depot: vehicles arrive 17:00-21:00 and leave 05:30-08:00",
-  );
 }
 
-/** Advance the simulated clock: arrivals, energy delivery, departures. */
+/** Start the night again: the same depot, the clock back at 16:30, paused. */
+export async function resetDemo(depot: Depot) {
+  await seedDemo(depot);
+}
+
+export function setSpeed(depot: Depot, speed: number) {
+  const s = states.get(depot);
+  if (!s) return;
+  s.speed = speed === 1 || speed === 60 ? speed : 0;
+  s.lastReal = Date.now();
+}
+
+/** Lazy clock: at 1x or 60x the demo clock catches up with real time whenever the state is read. */
+export async function tickDemo(depot: Depot) {
+  const s = states.get(depot);
+  if (!depot.demo || !s || s.speed === 0) return;
+  const real = Date.now();
+  // A tab that was asleep does not make the night jump.
+  const elapsed = Math.min(real - s.lastReal, 5000);
+  s.lastReal = real;
+  if (elapsed <= 0) return;
+  await advanceDemo(depot, (elapsed / MIN) * s.speed);
+  if (depot.clock!.getTime() >= nightEnd(s) - 1) s.speed = 0;
+}
+
+const nightEnd = (s: DemoState) => atHour(s.base, NIGHT_END_H);
+
+/** Energy a vehicle still needs, kWh, given what its session delivered. */
+function remainingKwh(v: Vehicle, deliveredKwh: number) {
+  if (v.need?.kind === "kwh") return Math.max(0, v.need.kwh - deliveredKwh);
+  return energyNeededKwh({
+    kind: "battery",
+    batteryKwh: v.batteryKwh,
+    currentPercent: (v.socPercent ?? 0) + (deliveredKwh / v.batteryKwh) * 100,
+    targetPercent: v.need?.targetPercent ?? 100,
+  });
+}
+
+/** Advance the simulated clock: arrivals, energy delivery, departures, scripted changes. */
 export async function advanceDemo(depot: Depot, minutes: number) {
-  if (!depot.demo || !depot.clock) return;
-  const base = dayStart(depot.clock);
-  const steps = Math.max(1, Math.ceil(minutes / 5));
-  for (let n = 0; n < steps; n++) {
-    const dtH = minutes / steps / 60;
-    depot.clock = new Date(depot.clock.getTime() + dtH * 3600_000);
-    const t = depot.clock;
+  const st = states.get(depot);
+  if (!depot.demo || !depot.clock || !st) return;
+  const end = Math.min(depot.clock.getTime() + minutes * MIN, nightEnd(st));
+  while (depot.clock.getTime() < end - 1) {
+    const from = depot.clock.getTime();
     const vehicles = await depot.store.list("vehicles");
-    let sessions = await depot.store.list("sessions");
-    for (const s of sessions) {
+    // Stop at the next arrival, departure or scripted change so each happens on time.
+    const marks = [
+      ...Object.values(st.arrivals),
+      ...vehicles.map((v) => (v.departure ? Date.parse(v.departure) : 0)),
+      ...EVENTS.map((e) => atHour(st.base, e.atHour)),
+    ].filter((m) => m > from);
+    const t = Math.min(end, from + 5 * MIN, ...marks);
+    const dtH = (t - from) / 3600_000;
+    depot.clock = new Date(t);
+    for (const s of await depot.store.list("sessions")) {
       s.meterWh += Math.round(s.allocatedKw * dtH * 1000);
       await depot.store.put("sessions", s.id, s);
     }
-    for (let i = 0; i < vehicles.length; i++) {
-      const v = vehicles[i];
-      const idx = Number(v.id.slice(1));
-      const arrive = atHour(base, ARRIVE_H[idx]);
-      const depart = new Date(v.departure!);
-      sessions = await depot.store.list("sessions");
-      const active = sessions.find((s) => s.vehicleId === v.id);
-      if (
-        !active &&
-        t >= arrive &&
-        t < depart &&
-        !(await hasTxSince(depot, v.id, arrive))
-      ) {
-        await startSession(depot, {
-          vehicleId: v.id,
-          stationId: 1,
-          stationName: "DEMO-ST-1",
-          connectorId: 100 + idx,
-          connectorNumber: idx + 1,
-          meterStartWh: 2_000_000,
-        });
+    for (const e of EVENTS) {
+      if (t < atHour(st.base, e.atHour) || st.applied.includes(e.vehicle))
+        continue;
+      st.applied.push(e.vehicle);
+      const v = vehicles.find((x) => x.id === e.vehicle);
+      if (!v) continue;
+      v.departure = new Date(atHour(st.base, 24 + e.departHour)).toISOString();
+      await depot.store.put("vehicles", v.id, v);
+      await logEvent(
+        depot,
+        "departure.changed",
+        `${v.name}: departure moved to ${new Date(v.departure).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })} (${e.text})`,
+      );
+    }
+    for (const v of await depot.store.list("vehicles")) {
+      const plan = PLANS[indexOf(v.id)];
+      const charger = CHARGERS.find((c) => c.id === plan.charger)!;
+      const depart = Date.parse(v.departure!);
+      const active = (await depot.store.list("sessions")).find(
+        (s) => s.vehicleId === v.id,
+      );
+      if (!active && t >= st.arrivals[v.id] && t < depart) {
+        const had = (await depot.store.list("transactions")).some(
+          (x) =>
+            x.vehicleId === v.id &&
+            Date.parse(x.startedAt) >= st.arrivals[v.id],
+        );
+        if (!had)
+          await startSession(depot, {
+            vehicleId: v.id,
+            stationId: charger.id,
+            stationName: `DEMO-${charger.name}`,
+            connectorId: charger.id * 100 + plan.outlet,
+            connectorNumber: plan.outlet,
+            connectorKw: charger.kw,
+            meterStartWh: 2_000_000,
+          });
       } else if (active && t >= depart) {
+        const left = remainingKwh(
+          v,
+          whToKwh(active.meterWh - active.meterStartWh),
+        );
+        st.outcomes[v.id] = { ready: left <= 0.1, shortfallKwh: left };
         await endSession(depot, active.id);
       }
     }
+    await replan(depot);
+    await sample(depot, st, t);
   }
-  await replan(depot);
 }
 
-async function hasTxSince(depot: Depot, vehicleId: string, since: Date) {
-  const txs = await depot.store.list("transactions");
-  return txs.some(
-    (x) =>
-      x.vehicleId === vehicleId && Date.parse(x.startedAt) >= since.getTime(),
-  );
+/** Record actual power and the comparison line at time t. */
+async function sample(depot: Depot, st: DemoState, t: number) {
+  const sessions = await depot.store.list("sessions");
+  const kw = sessions.reduce((a, s) => a + s.allocatedKw, 0);
+  let ghostKw = 0;
+  for (const v of await depot.store.list("vehicles")) {
+    const plugged = t >= st.arrivals[v.id] && t < Date.parse(v.departure ?? "");
+    if (plugged) ghostKw += planOf(v.id)?.ratedKw ?? 0;
+  }
+  st.samples.push({ t, kw, ghostKw });
 }
+
+export function peaks(st: DemoState) {
+  return {
+    peakKw: Math.max(0, ...st.samples.map((s) => s.kw)),
+    ghostPeakKw: Math.max(0, ...st.samples.map((s) => s.ghostKw)),
+  };
+}
+
+export const nightWindow = (st: DemoState) => ({
+  start: atHour(st.base, 16.5),
+  end: nightEnd(st),
+});
