@@ -2,7 +2,13 @@ import "server-only";
 import type { CheckoutRecord } from "../checkout/types";
 import { demoHistory } from "../ivora/demo-history";
 import type { IvoraClient } from "../ivora/types";
-import { matchesFilter, newestFirst, reportStatus, totalsOf } from "./records";
+import {
+  afterCursor,
+  matchesFilter,
+  newestFirst,
+  reportStatus,
+  totalsOf,
+} from "./records";
 import type { ReportCheckout, ReportsStore } from "./types";
 
 // Demo reports: six months of sample checkouts (demo-history.ts) and the visitor's own
@@ -29,6 +35,7 @@ async function fromRecord(
     phase: r.phase,
     alert: r.alert,
     createdAt: new Date(r.createdAt).toISOString(),
+    cursor: new Date(r.createdAt).toISOString(),
     settledAt: r.settledAt,
     transactionId: r.transactionId,
     billId: r.billId,
@@ -71,13 +78,7 @@ export function createDemoReportsStore(o: {
         .filter((c) => matchesFilter(c, f))
         .sort(newestFirst);
       const after = page.after;
-      if (after) {
-        const at = Date.parse(after.createdAt);
-        rows = rows.filter((c) => {
-          const t = Date.parse(c.createdAt);
-          return t < at || (t === at && c.id < after.id);
-        });
-      }
+      if (after) rows = rows.filter((c) => afterCursor(c, after));
       const from = Math.max(0, page.offset ?? 0);
       return rows.slice(from, from + Math.min(Math.max(page.limit, 1), 500));
     },
@@ -90,10 +91,10 @@ export function createDemoReportsStore(o: {
     async recordDetails() {
       return false;
     },
-    async refundsDue() {
+    async paymentsDue() {
       return [];
     },
-    async recordRefund() {
+    async recordPayment() {
       return false;
     },
   };

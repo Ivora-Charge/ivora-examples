@@ -230,7 +230,7 @@ export type Database = {
           refund_checked_at: Timestamp | null;
         };
         // Written only through cpo_claim_checkout, cpo_record_checkout and the
-        // reports' cpo_record_checkout_details and cpo_record_checkout_refund.
+        // reports' cpo_record_checkout_details and cpo_record_checkout_payment.
         Insert: { operator_id: string; request_id: string };
         Update: { [_ in never]: never };
         Relationships: [];
@@ -667,8 +667,17 @@ export type Database = {
         };
         Returns: boolean;
       };
-      cpo_record_checkout_refund: {
-        Args: { p_operator_id: string; p_id: string; p_refunded_minor: number };
+      cpo_report_payments_due: {
+        Args: { p_limit: number };
+        Returns: { id: string; operator_id: string; payment_id: string }[];
+      };
+      cpo_record_checkout_payment: {
+        Args: {
+          p_operator_id: string;
+          p_id: string;
+          p_captured_minor: number;
+          p_refunded_minor: number;
+        };
         Returns: boolean;
       };
     };

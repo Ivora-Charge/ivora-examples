@@ -33,6 +33,7 @@ import {
   type SessionDetails,
 } from "@/lib/server/reports";
 import {
+  afterCursor,
   matchesFilter,
   newestFirst,
   totalsOf,
@@ -345,6 +346,7 @@ function checkout(o: Partial<ReportCheckout> = {}): ReportCheckout {
     stopReason: "EVDisconnected",
     detailAt: "2026-10-10T15:06:00.000Z",
     ...o,
+    cursor: o.cursor ?? o.createdAt ?? "2026-10-10T14:00:00.000Z",
   };
 }
 
@@ -366,24 +368,19 @@ const october = (o: Partial<ReportFilter> = {}): ReportFilter => ({
 /** A reports store over an array, with the same rules as the database. */
 function memoryStore(rows: ReportCheckout[]): ReportsStore & {
   details: [string, SessionDetails][];
-  refunds: [string, number][];
+  payments: [string, { capturedMinor: number; refundedMinor: number }][];
 } {
   const details: [string, SessionDetails][] = [];
-  const refunds: [string, number][] = [];
+  const payments: [string, { capturedMinor: number; refundedMinor: number }][] =
+    [];
   return {
     mode: "live",
     details,
-    refunds,
+    payments,
     async list(f, page) {
       let all = rows.filter((c) => matchesFilter(c, f)).sort(newestFirst);
-      if (page.after) {
-        const at = Date.parse(page.after.createdAt);
-        const id = page.after.id;
-        all = all.filter((c) => {
-          const t = Date.parse(c.createdAt);
-          return t < at || (t === at && c.id < id);
-        });
-      }
+      const after = page.after;
+      if (after) all = all.filter((c) => afterCursor(c, after));
       const from = page.offset ?? 0;
       return all.slice(from, from + page.limit);
     },
@@ -397,11 +394,11 @@ function memoryStore(rows: ReportCheckout[]): ReportsStore & {
       details.push([id, d]);
       return true;
     },
-    async refundsDue() {
+    async paymentsDue() {
       return [];
     },
-    async recordRefund(_op, id, minor) {
-      refunds.push([id, minor]);
+    async recordPayment(_op, id, p) {
+      payments.push([id, p]);
       return true;
     },
   };
@@ -446,6 +443,26 @@ describe("driver revenue: captured minus refunded, never the bill", () => {
       },
     ]);
     expect(t.byStatus.attention).toBe(1);
+  });
+
+  it("counts the hold as collected once Ivora's staff capture it for a bill above the hold", () => {
+    const c = checkout({
+      phase: "attention",
+      finalMinor: 2740,
+      capturedMinor: 2500,
+      refundedMinor: 0,
+    });
+    expect(toRow(c, places)).toMatchObject({
+      status: "charged",
+      billedMinor: 2740,
+      capturedMinor: 2500,
+      netMinor: 2500,
+    });
+    expect(totalsOf([c]).currencies[0]).toMatchObject({
+      charged: 1,
+      billedMinor: 2740,
+      capturedMinor: 2500,
+    });
   });
 
   it("takes refunds off, and keeps free sessions out of the money", () => {
@@ -672,9 +689,8 @@ describe("CSV export", () => {
     const store = memoryStore(rows);
     const list = vi.spyOn(store, "list");
     const r = await sessionsCsv(csvDeps(store), october(), places, {
-      maxRows: 100,
-      seconds: 45,
-      pageRows: 3,
+      startedAt: NOW,
+      limits: { maxRows: 100, seconds: 45, pageRows: 3 },
     });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
@@ -689,7 +705,7 @@ describe("CSV export", () => {
     const lines = text.trimEnd().split("\r\n");
     expect(lines).toHaveLength(8);
     expect(new Set(lines.slice(1)).size).toBe(7);
-    expect(list.mock.calls.map((c) => c[1].after?.createdAt ?? null)).toEqual([
+    expect(list.mock.calls.map((c) => c[1].after?.at ?? null)).toEqual([
       null,
       rows[4].createdAt,
       rows[1].createdAt,
@@ -699,9 +715,8 @@ describe("CSV export", () => {
   it("refuses more rows than one file holds before sending anything", async () => {
     const store = memoryStore([checkout(), checkout(), checkout()]);
     const r = await sessionsCsv(csvDeps(store), october(), places, {
-      maxRows: 2,
-      seconds: 45,
-      pageRows: 500,
+      startedAt: NOW,
+      limits: { maxRows: 2, seconds: 45, pageRows: 500 },
     });
     expect(r).toMatchObject({ ok: false, status: 422 });
     if (!r.ok) expect(r.error).toMatch(/3 sessions match.*up to 2/);
@@ -713,7 +728,9 @@ describe("CSV export", () => {
       throw new Error("db down");
     };
     vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(await sessionsCsv(csvDeps(store), october(), places)).toMatchObject({
+    expect(
+      await sessionsCsv(csvDeps(store), october(), places, { startedAt: NOW }),
+    ).toMatchObject({
       ok: false,
       status: 502,
     });
@@ -733,9 +750,8 @@ describe("CSV export", () => {
     };
     vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await sessionsCsv(csvDeps(store), october(), places, {
-      maxRows: 100,
-      seconds: 45,
-      pageRows: 2,
+      startedAt: NOW,
+      limits: { maxRows: 100, seconds: 45, pageRows: 2 },
     });
     if (!r.ok) throw new Error("expected a stream");
     await expect(new Response(r.body).text()).rejects.toThrow();
@@ -755,12 +771,111 @@ describe("CSV export", () => {
       return real(f, p);
     };
     const t = await sessionsCsv(csvDeps(slow, clock), october(), places, {
-      maxRows: 100,
-      seconds: 45,
-      pageRows: 1,
+      startedAt: NOW,
+      limits: { maxRows: 100, seconds: 45, pageRows: 1 },
     });
     if (!t.ok) throw new Error("expected a stream");
     await expect(new Response(t.body).text()).rejects.toThrow(/45 seconds/);
+  });
+
+  /** The whole file, or "hang" if the stream stops being pulled. */
+  const readAll = (body: ReadableStream<Uint8Array>) =>
+    Promise.race([
+      new Response(body).text(),
+      new Promise<string>((resolve) => setTimeout(() => resolve("hang"), 2000)),
+    ]);
+
+  const minutes = (count: number) =>
+    Array.from({ length: count }, (_, i) =>
+      checkout({
+        createdAt: new Date(
+          Date.parse("2026-10-05T00:00:00Z") + i * 60_000,
+        ).toISOString(),
+      }),
+    );
+
+  it.each([
+    [0, 500],
+    [2, 2],
+    [500, 500],
+    [1000, 500],
+    [10_000, 500],
+    [7, 3],
+  ])(
+    "ends the file at %i rows read %i at a time (never hangs on an empty last page)",
+    async (count, pageRows) => {
+      const store = memoryStore(minutes(count));
+      const r = await sessionsCsv(csvDeps(store), october(), places, {
+        startedAt: NOW,
+        limits: { maxRows: 10_000, seconds: 45, pageRows },
+      });
+      if (!r.ok) throw new Error(r.error);
+      const text = await readAll(r.body);
+      expect(text).not.toBe("hang");
+      const lines = text.trimEnd().split("\r\n");
+      expect(lines).toHaveLength(count + 1);
+      expect(new Set(lines).size).toBe(count + 1);
+    },
+  );
+
+  it("pages on the full database timestamp: rows in the same millisecond are all exported", async () => {
+    // Six checkouts in one millisecond, apart only in microseconds (as Postgres keeps
+    // them and PostgREST returns them).
+    const rows = Array.from({ length: 6 }, (_, i) =>
+      checkout({
+        createdAt: "2026-10-05T00:00:00.123Z",
+        cursor: `2026-10-05T00:00:00.1230${i}${i}+00:00`,
+      }),
+    );
+    const store = memoryStore(rows);
+    const list = vi.spyOn(store, "list");
+    const r = await sessionsCsv(csvDeps(store), october(), places, {
+      startedAt: NOW,
+      limits: { maxRows: 100, seconds: 45, pageRows: 3 },
+    });
+    if (!r.ok) throw new Error(r.error);
+    const lines = (await readAll(r.body)).trimEnd().split("\r\n");
+    expect(lines).toHaveLength(7);
+    for (const c of rows) expect(lines.join("\n")).toContain(c.reference);
+    expect(list.mock.calls[1][1].after).toEqual({
+      at: "2026-10-05T00:00:00.123033+00:00",
+      id: rows[3].id,
+    });
+  });
+
+  it("counts the time budget from the request's start", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = memoryStore(minutes(3));
+    // The site and charger reads already took 46 seconds: refused before any byte.
+    expect(
+      await sessionsCsv(csvDeps(store), october(), places, {
+        startedAt: NOW - 46_000,
+      }),
+    ).toMatchObject({ ok: false, status: 504 });
+    // 40 seconds gone: a 10-second page read runs past 45 and fails the download.
+    const clock = { t: NOW };
+    const real = store.list.bind(store);
+    store.list = async (f, p) => {
+      clock.t += 10_000;
+      return real(f, p);
+    };
+    const r = await sessionsCsv(csvDeps(store, clock), october(), places, {
+      startedAt: NOW - 40_000,
+      limits: { maxRows: 100, seconds: 45, pageRows: 1 },
+    });
+    if (!r.ok) throw new Error("expected a stream");
+    await expect(new Response(r.body).text()).rejects.toThrow(/45 seconds/);
+  });
+
+  it("fails the download when a database read hangs past the budget", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const store = memoryStore(minutes(3));
+    store.list = () => new Promise(() => {});
+    const r = await sessionsCsv(csvDeps(store), october(), places, {
+      startedAt: NOW - 44_950,
+    });
+    if (!r.ok) throw new Error("expected a stream");
+    await expect(new Response(r.body).text()).rejects.toThrow(/45 seconds/);
   });
 });
 
@@ -809,7 +924,10 @@ describe("the sweep: session details and refunds", () => {
 
   function sweepClient(
     tx: Record<number, TransactionDetail | Error>,
-    pay: Record<string, { refunded_minor?: number } | Error>,
+    pay: Record<
+      string,
+      { captured_minor?: number; refunded_minor?: number } | Error
+    >,
   ) {
     const calls: string[] = [];
     const ivora = {
@@ -837,10 +955,11 @@ describe("the sweep: session details and refunds", () => {
       { operatorId: "op-1", id: "b", transactionId: 2 },
       { operatorId: "op-1", id: "c", transactionId: 3 },
     ];
-    store.refundsDue = async () => [
+    store.paymentsDue = async () => [
       { operatorId: "op-1", id: "d", paymentId: "pay_d" },
       { operatorId: "op-1", id: "e", paymentId: "pay_e" },
       { operatorId: "op-1", id: "f", paymentId: "pay_f" },
+      { operatorId: "op-1", id: "g", paymentId: "pay_g" },
     ];
     const { ivora, calls } = sweepClient(
       {
@@ -849,17 +968,19 @@ describe("the sweep: session details and refunds", () => {
         3: new IvoraError(404, "transaction_not_found", "gone"),
       },
       {
-        pay_d: { refunded_minor: 1240 },
-        pay_e: {},
+        pay_d: { captured_minor: 1240, refunded_minor: 1240 },
+        pay_e: { captured_minor: 830 },
         pay_f: new IvoraError(429, "rate_limited", "slow down"),
+        // A bill above its hold that Ivora's staff captured: the hold, as collected.
+        pay_g: { captured_minor: 2500 },
       },
     );
     vi.spyOn(console, "error").mockImplementation(() => {});
     const r = await refreshReportRecords(
       { ivora, store, now: () => NOW },
-      { details: 10, refunds: 10 },
+      { startedAt: NOW, details: 10, payments: 10 },
     );
-    expect(r).toEqual({ details: 1, refunds: 2 });
+    expect(r).toEqual({ details: 1, payments: 3 });
     expect(calls).toEqual([
       "tx:1",
       "tx:2",
@@ -867,6 +988,7 @@ describe("the sweep: session details and refunds", () => {
       "pay:pay_d",
       "pay:pay_e",
       "pay:pay_f",
+      "pay:pay_g",
     ]);
     // Every detail check is noted (so others get their turn); only ended ones keep data.
     expect(store.details.map(([id, d]) => [id, d.endedAt])).toEqual([
@@ -875,9 +997,10 @@ describe("the sweep: session details and refunds", () => {
       ["c", null],
     ]);
     // A payment that couldn't be read is not recorded: it is read again later.
-    expect(store.refunds).toEqual([
-      ["d", 1240],
-      ["e", 0],
+    expect(store.payments).toEqual([
+      ["d", { capturedMinor: 1240, refundedMinor: 1240 }],
+      ["e", { capturedMinor: 830, refundedMinor: 0 }],
+      ["g", { capturedMinor: 2500, refundedMinor: 0 }],
     ]);
   });
 
@@ -886,7 +1009,7 @@ describe("the sweep: session details and refunds", () => {
     store.detailsDue = async () => [
       { operatorId: "op-1", id: "a", transactionId: 1 },
     ];
-    store.refundsDue = async () => [
+    store.paymentsDue = async () => [
       { operatorId: "op-1", id: "d", paymentId: "pay_d" },
     ];
     const used = new Set<string>();
@@ -896,8 +1019,45 @@ describe("the sweep: session details and refunds", () => {
         return Reflect.get(target, prop, recv);
       },
     });
-    await refreshReportRecords({ ivora, store, now: () => NOW });
+    await refreshReportRecords(
+      { ivora, store, now: () => NOW },
+      { startedAt: NOW },
+    );
     expect([...used].sort()).toEqual(["getPayment", "getTransaction"]);
+  });
+
+  it("starts no read past SWEEP_SECONDS from the cron request's start", async () => {
+    const store = memoryStore([]);
+    store.detailsDue = async () => [
+      { operatorId: "op-1", id: "a", transactionId: 1 },
+      { operatorId: "op-1", id: "b", transactionId: 1 },
+    ];
+    store.paymentsDue = async () => [
+      { operatorId: "op-1", id: "d", paymentId: "pay_d" },
+    ];
+    const { ivora, calls } = sweepClient({ 1: detail() }, { pay_d: {} });
+    // Settlement took 31 seconds: nothing this run.
+    expect(
+      await refreshReportRecords(
+        { ivora, store, now: () => NOW },
+        { startedAt: NOW - 31_000 },
+      ),
+    ).toEqual({ details: 0, payments: 0 });
+    expect(calls).toEqual([]);
+    // 25 seconds gone, and each read takes 3: two reads, then it stops.
+    const clock = { t: NOW };
+    const slow = {
+      ...ivora,
+      getTransaction: async (id: number) => {
+        clock.t += 3_000;
+        return ivora.getTransaction(id);
+      },
+    } as IvoraClient;
+    await refreshReportRecords(
+      { ivora: slow, store, now: () => clock.t },
+      { startedAt: NOW - 25_000 },
+    );
+    expect(calls).toEqual(["tx:1", "tx:1"]);
   });
 });
 
@@ -950,6 +1110,7 @@ describe("reports in demo mode", () => {
       d,
       reportFilter(demoStaff, q),
       r.context.places,
+      { startedAt: Date.now() },
     );
     if (!csv.ok) throw new Error(csv.error);
     const lines = (await new Response(csv.body).text()).trimEnd().split("\r\n");

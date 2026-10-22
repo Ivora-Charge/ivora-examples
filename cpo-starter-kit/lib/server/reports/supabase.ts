@@ -27,8 +27,6 @@ function check<R extends { error: DbError }>(r: R): R {
 const DAY_MS = 86_400_000;
 /** The sweep copies details of sessions settled in the last 30 days. */
 const DETAILS_DAYS = 30;
-/** And reads each charged payment's refunds once a day for 90 days. */
-const REFUND_DAYS = 90;
 
 export const toReportCheckout = (r: Row): ReportCheckout => ({
   id: r.id,
@@ -39,6 +37,9 @@ export const toReportCheckout = (r: Row): ReportCheckout => ({
   phase: r.phase as CheckoutPhase,
   alert: r.alert as CheckoutAlert | null,
   createdAt: new Date(r.created_at).toISOString(),
+  // As PostgREST returns it (microseconds and offset): sent back unchanged as the
+  // export's keyset, so rows in the same millisecond are not skipped.
+  cursor: r.created_at,
   settledAt: r.settled_at,
   transactionId: r.transaction_id,
   billId: r.bill_id,
@@ -112,7 +113,7 @@ export function createSupabaseReportsStore(
           ...range(f),
           p_limit: page.limit,
           p_offset: page.offset ?? 0,
-          p_after_created_at: page.after?.createdAt ?? null,
+          p_after_created_at: page.after?.at ?? null,
           p_after_id: page.after?.id ?? null,
         }),
       );
@@ -155,34 +156,23 @@ export function createSupabaseReportsStore(
       );
       return data === true;
     },
-    async refundsDue(limit) {
-      const since = new Date(now() - REFUND_DAYS * DAY_MS).toISOString();
-      const stale = new Date(now() - DAY_MS).toISOString();
+    async paymentsDue(limit) {
       const { data } = check(
-        await svc()
-          .from("cpo_checkouts")
-          .select("id, operator_id, payment_id")
-          .eq("kind", "paid")
-          .eq("phase", "settled")
-          .gt("captured_minor", 0)
-          .not("payment_id", "is", null)
-          .gte("settled_at", since)
-          .or(`refund_checked_at.is.null,refund_checked_at.lt.${stale}`)
-          .order("refund_checked_at", { ascending: true, nullsFirst: true })
-          .limit(limit),
+        await svc().rpc("cpo_report_payments_due", { p_limit: limit }),
       );
       return (data ?? []).map((r) => ({
         operatorId: r.operator_id,
         id: r.id,
-        paymentId: r.payment_id!,
+        paymentId: r.payment_id,
       }));
     },
-    async recordRefund(operatorId, id, refundedMinor) {
+    async recordPayment(operatorId, id, p) {
       const { data } = check(
-        await svc().rpc("cpo_record_checkout_refund", {
+        await svc().rpc("cpo_record_checkout_payment", {
           p_operator_id: operatorId,
           p_id: id,
-          p_refunded_minor: refundedMinor,
+          p_captured_minor: p.capturedMinor,
+          p_refunded_minor: p.refundedMinor,
         }),
       );
       return data === true;

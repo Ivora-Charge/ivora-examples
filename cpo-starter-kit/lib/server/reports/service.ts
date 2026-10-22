@@ -30,6 +30,7 @@ import {
   STATUS_FILTERS,
   type Preset,
   type ReportCheckout,
+  type ReportCursor,
   type ReportFilter,
   type ReportQuery,
   type ReportsStore,
@@ -476,7 +477,11 @@ export const CSV_COLUMNS = [
 export const CSV_MAX_ROWS = 10_000;
 /** Rows read from the database at a time. */
 const CSV_PAGE = 500;
-/** The export stops (and the download fails) past this, within the route's maxDuration. */
+/**
+ * The export's budget, counted from the request's start (the site and charger reads
+ * before it can take 20 s with 429 waits): past it the download fails, well inside the
+ * route's maxDuration of 60 seconds.
+ */
 export const CSV_SECONDS = 45;
 
 /**
@@ -538,28 +543,79 @@ export const csvHeader = () => `${CSV_COLUMNS.join(",")}\r\n`;
 
 export type CsvResult =
   | { ok: true; body: ReadableStream<Uint8Array>; rows: number }
-  | { ok: false; status: 422 | 502; error: string };
+  | { ok: false; status: 422 | 502 | 504; error: string };
+
+export interface CsvLimits {
+  maxRows: number;
+  seconds: number;
+  pageRows: number;
+}
+
+class ExportTimeout extends Error {
+  constructor(seconds: number) {
+    super(`export ran past ${seconds} seconds`);
+    this.name = "ExportTimeout";
+  }
+}
+
+/** `p`, or an ExportTimeout once `deadline` passes (a database read that hangs). */
+async function before<T>(
+  p: Promise<T>,
+  deadline: number,
+  now: () => number,
+  seconds: number,
+): Promise<T> {
+  const left = deadline - now();
+  if (left <= 0) throw new ExportTimeout(seconds);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      p,
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new ExportTimeout(seconds)), left);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /**
  * The export as a stream: the header, then the rows, CSV_PAGE at a time, newest
- * first, each page after the last row of the one before (so checkouts made meanwhile
- * shift nothing). It counts the matching rows first: more than CSV_MAX_ROWS, or a
- * database error, is an error status before anything is sent. Once streaming, a failed
- * read or a run past CSV_SECONDS errors the stream, so the download fails instead of
- * ending as a clean file that is missing rows. Only the kit's database is read: no
- * Ivora request per row.
+ * first, each page after the last row of the one before (a keyset on the full
+ * database timestamp and the ID, so checkouts made meanwhile shift nothing and rows in
+ * the same millisecond are never skipped). It counts the matching rows first: more
+ * than CSV_MAX_ROWS, or a database error, is an error status before anything is sent.
+ * The stream closes as soon as a page comes back short (or empty). Once streaming, a
+ * failed read or a run past the budget (CSV_SECONDS from `startedAt`, the request's
+ * start) errors the stream, so the download fails instead of ending as a clean file
+ * that is missing rows. Only the kit's database is read: no Ivora request per row.
  */
 export async function sessionsCsv(
   d: Pick<ReportsDeps, "store" | "now">,
   f: ReportFilter,
   ctx: StationContext,
-  limits = { maxRows: CSV_MAX_ROWS, seconds: CSV_SECONDS, pageRows: CSV_PAGE },
+  o: { startedAt: number; limits?: CsvLimits },
 ): Promise<CsvResult> {
+  const limits = o.limits ?? {
+    maxRows: CSV_MAX_ROWS,
+    seconds: CSV_SECONDS,
+    pageRows: CSV_PAGE,
+  };
+  const deadline = o.startedAt + limits.seconds * 1000;
+  const timeUp = () => ({
+    ok: false as const,
+    status: 504 as const,
+    error: `The export ran past ${limits.seconds} seconds before it could start. Try again, or pick a shorter period.`,
+  });
   let expected: number;
   try {
-    expected = (await d.store.totals(f)).checkouts;
+    expected = (
+      await before(d.store.totals(f), deadline, d.now, limits.seconds)
+    ).checkouts;
   } catch (e) {
     logFailure("export", e);
+    if (e instanceof ExportTimeout) return timeUp();
     return { ok: false, status: 502, error: describeError(e) };
   }
   if (expected > limits.maxRows)
@@ -568,10 +624,9 @@ export async function sessionsCsv(
       status: 422,
       error: `${expected.toLocaleString("en-US")} sessions match, and one file holds up to ${limits.maxRows.toLocaleString("en-US")}. Pick a shorter period, one charger or one status, and download each part.`,
     };
-  const deadline = d.now() + limits.seconds * 1000;
+  if (d.now() >= deadline) return timeUp();
   const enc = new TextEncoder();
-  let after: { createdAt: string; id: string } | undefined;
-  let done = false;
+  let after: ReportCursor | undefined;
   return {
     ok: true,
     rows: expected,
@@ -580,29 +635,30 @@ export async function sessionsCsv(
         controller.enqueue(enc.encode(csvHeader()));
       },
       async pull(controller) {
+        let rows: ReportCheckout[];
         try {
-          if (done) {
-            controller.close();
-            return;
-          }
-          if (d.now() > deadline)
-            throw new Error(`export ran past ${limits.seconds} seconds`);
-          const rows = await d.store.list(f, {
-            limit: limits.pageRows,
-            after,
-          });
-          const last = rows.at(-1);
-          if (last) after = { createdAt: last.createdAt, id: last.id };
-          done = rows.length < limits.pageRows;
-          if (rows.length)
-            controller.enqueue(
-              enc.encode(rows.map((c) => csvLine(toRow(c, ctx))).join("")),
-            );
+          rows = await before(
+            d.store.list(f, { limit: limits.pageRows, after }),
+            deadline,
+            d.now,
+            limits.seconds,
+          );
         } catch (e) {
           logFailure("export", e);
           // A cut-off download must not look complete.
           controller.error(e);
+          return;
         }
+        const last = rows.at(-1);
+        if (last) {
+          after = { at: last.cursor, id: last.id };
+          controller.enqueue(
+            enc.encode(rows.map((c) => csvLine(toRow(c, ctx))).join("")),
+          );
+        }
+        // A short or empty page is the last: close now (an empty pull that enqueues
+        // nothing would never be pulled again, and the download would hang).
+        if (rows.length < limits.pageRows) controller.close();
       },
     }),
   };
@@ -626,12 +682,17 @@ export function payoutsUrl(livemode: boolean | null): string {
     : "https://dashboard.stripe.com/payouts";
 }
 
-// ---- The sweep: session details and refunds ----
+// ---- The sweep: session details, refunds and captures ----
 
 /** Per sweep run (every minute): well inside Ivora's 180 requests a minute per key. */
 export const SWEEP_DETAILS = 10;
-export const SWEEP_REFUNDS = 10;
-const SWEEP_SECONDS = 20;
+export const SWEEP_PAYMENTS = 10;
+/**
+ * The sweep starts no new read this long after the cron request began (settlement
+ * runs first). One read can take 20 s with 429 waits, so the run ends inside the
+ * route's maxDuration of 60 seconds; what is left waits for the next run.
+ */
+export const SWEEP_SECONDS = 30;
 
 /** An ended session's details from GET /transactions/{id}; endedAt null while it runs. */
 export function sessionDetails(t: TransactionDetail): SessionDetails {
@@ -657,22 +718,28 @@ const NOTHING: SessionDetails = {
   stopReason: null,
 };
 
+const nonNegative = (v: number | null | undefined) =>
+  Math.max(0, safeInt(v) ?? 0);
+
 /**
  * Called by the settlement sweep after it settles: copies the details of ended
- * sessions (GET /transactions/{id}, once each) and re-reads charged payments for
- * refunds (GET /payments/{id}, once a day for 90 days), a few per run. Read-only
- * towards Ivora: it sends no command and moves no money. A failed read is noted and
- * tried again on a later run, after the others.
+ * sessions (GET /transactions/{id}, once each) and re-reads payments (GET
+ * /payments/{id}, once a day for 90 days): charged ones for refunds, and paid
+ * checkouts that need you (for example a bill above its hold) in case Ivora's staff
+ * captured the hold, which then counts as collected. Read-only towards Ivora: it
+ * sends no command and moves no money. A failed read is noted and tried again on a
+ * later run, after the others. `startedAt` is the cron request's start.
  */
 export async function refreshReportRecords(
   d: Pick<ReportsDeps, "ivora" | "store" | "now">,
-  o = { details: SWEEP_DETAILS, refunds: SWEEP_REFUNDS },
-): Promise<{ details: number; refunds: number }> {
-  const deadline = d.now() + SWEEP_SECONDS * 1000;
+  o: { startedAt: number; details?: number; payments?: number },
+): Promise<{ details: number; payments: number }> {
+  const deadline = o.startedAt + SWEEP_SECONDS * 1000;
   let details = 0;
-  let refunds = 0;
-  for (const due of await d.store.detailsDue(o.details)) {
-    if (d.now() > deadline) break;
+  let payments = 0;
+  if (d.now() >= deadline) return { details, payments };
+  for (const due of await d.store.detailsDue(o.details ?? SWEEP_DETAILS)) {
+    if (d.now() >= deadline) return { details, payments };
     let found = NOTHING;
     try {
       found = sessionDetails(await d.ivora.getTransaction(due.transactionId));
@@ -682,17 +749,20 @@ export async function refreshReportRecords(
     await d.store.recordDetails(due.operatorId, due.id, found);
     if (found.endedAt) details++;
   }
-  for (const due of await d.store.refundsDue(o.refunds)) {
-    if (d.now() > deadline) break;
+  if (d.now() >= deadline) return { details, payments };
+  for (const due of await d.store.paymentsDue(o.payments ?? SWEEP_PAYMENTS)) {
+    if (d.now() >= deadline) break;
     try {
       const p = await d.ivora.getPayment(due.paymentId);
-      const refunded = safeInt(p.refunded_minor) ?? 0;
-      await d.store.recordRefund(due.operatorId, due.id, Math.max(0, refunded));
-      refunds++;
+      await d.store.recordPayment(due.operatorId, due.id, {
+        capturedMinor: nonNegative(p.captured_minor),
+        refundedMinor: nonNegative(p.refunded_minor),
+      });
+      payments++;
     } catch (e) {
       // Not recorded: the payment is read again on a later run.
-      logFailure("refund check", e);
+      logFailure("payment check", e);
     }
   }
-  return { details, refunds };
+  return { details, payments };
 }

@@ -21,9 +21,10 @@ export const PRESET_LABELS: Record<Preset, string> = {
 
 /**
  * A checkout's status in reports (the database's cpo_report_status says the same):
- * in_progress while settlement still works on it, attention when it needs the
- * operator, charged for a paid session that captured money, no_charge otherwise
- * (released, failed, free, or nothing captured).
+ * in_progress while settlement still works on it, charged for a paid session that
+ * captured money (also one that needed the operator until Ivora's staff captured its
+ * hold), attention when it needs the operator, no_charge otherwise (released, failed,
+ * free, or nothing captured).
  */
 export type ReportStatus =
   "in_progress" | "charged" | "no_charge" | "attention";
@@ -104,6 +105,12 @@ export interface ReportCheckout {
   alert: CheckoutAlert | null;
   /** When the driver tapped (UTC, ISO 8601): reports put the session in this period. */
   createdAt: string;
+  /**
+   * The same time exactly as the database holds it (microseconds), with `id` the
+   * export's keyset cursor. createdAt is cut to milliseconds, so paging on it would
+   * skip rows made in the same millisecond as a page's last one.
+   */
+  cursor: string;
   settledAt: string | null;
   transactionId: number | null;
   billId: string | null;
@@ -170,10 +177,16 @@ export interface DueDetails {
   id: string;
   transactionId: number;
 }
-export interface DueRefund {
+export interface DuePayment {
   operatorId: string;
   id: string;
   paymentId: string;
+}
+
+/** The export's keyset: the last row's full created_at and its ID. */
+export interface ReportCursor {
+  at: string;
+  id: string;
 }
 
 /**
@@ -183,15 +196,16 @@ export interface DueRefund {
 export interface ReportsStore {
   readonly mode: "live" | "demo";
   /**
-   * Newest first. `offset` pages the Reports page; `after` (a row's createdAt and id)
-   * pages the export, which new checkouts can't shift. At most 500.
+   * Newest first. `offset` pages the Reports page; `after` (a row's `cursor` and id,
+   * a keyset on the full database timestamp) pages the export, which new checkouts
+   * can't shift. At most 500.
    */
   list(
     f: ReportFilter,
     page: {
       limit: number;
       offset?: number;
-      after?: { createdAt: string; id: string };
+      after?: ReportCursor;
     },
   ): Promise<ReportCheckout[]>;
   totals(f: ReportFilter): Promise<ReportTotals>;
@@ -203,13 +217,20 @@ export interface ReportsStore {
     id: string,
     d: SessionDetails,
   ): Promise<boolean>;
-  /** Charged payments not read for a day (settled in the last 90 days). */
-  refundsDue(limit: number): Promise<DueRefund[]>;
-  /** Capped at what was captured. */
-  recordRefund(
+  /**
+   * Payments not read for a day (settled in the last 90 days): charged ones, for
+   * refunds, and paid checkouts that need you (for example a bill above its hold),
+   * in case Ivora's staff captured the hold since.
+   */
+  paymentsDue(limit: number): Promise<DuePayment[]>;
+  /**
+   * What the payment says. A capture is kept only for a checkout that needs you and
+   * has none recorded, capped at its hold; the refund is capped at what was captured.
+   */
+  recordPayment(
     operatorId: string,
     id: string,
-    refundedMinor: number,
+    p: { capturedMinor: number; refundedMinor: number },
   ): Promise<boolean>;
 }
 

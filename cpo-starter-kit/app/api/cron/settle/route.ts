@@ -4,7 +4,9 @@ import { config, isDemo } from "@/lib/server/env";
 import { getReports, refreshReportRecords } from "@/lib/server/reports";
 
 export const dynamic = "force-dynamic";
-// The loop starts no new checkout after SETTLE_BUDGET_MS (25 s), so it ends inside this.
+// The loop starts no new checkout after SETTLE_BUDGET_MS (25 s), and the reports
+// refresh starts no new read after SWEEP_SECONDS (30 s) from the request's start, so
+// a run ends inside this even with one 20-second read in flight.
 export const maxDuration = 60;
 
 const reply = (status: number, body: Record<string, unknown>) =>
@@ -17,16 +19,17 @@ const reply = (status: number, body: Record<string, unknown>) =>
  * sessions before their cost reaches the card hold, finalizes and captures ended ones,
  * and releases unused holds. Safe to run twice at once (every write has its key).
  * Then, for Reports, it copies a few ended sessions' details and re-reads a few
- * charged payments for refunds (reads only).
+ * payments for refunds and captures (reads only).
  */
 export async function GET(req: Request) {
+  const startedAt = Date.now();
   if (isDemo()) return reply(404, { error: "Demo mode settles nothing" });
   if (!cronAuthorized(req.headers.get("authorization"), config.cronSecret))
     return reply(401, { error: "unauthorized" });
   const checked = await settleOpenCheckouts(getCheckout(), { limit: 50 });
-  let reports: { details: number; refunds: number } | null = null;
+  let reports: { details: number; payments: number } | null = null;
   try {
-    reports = await refreshReportRecords(getReports());
+    reports = await refreshReportRecords(getReports(), { startedAt });
   } catch (e) {
     // Settlement ran; reports catch up on the next run.
     console.error(

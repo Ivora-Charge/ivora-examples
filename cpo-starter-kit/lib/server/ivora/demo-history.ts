@@ -124,6 +124,7 @@ export function demoHistory(now: number): DemoHistory {
         phase: "settled",
         alert: null,
         createdAt: ISO(tapped),
+        cursor: ISO(tapped),
         settledAt: ISO(settledAt),
         transactionId: id,
         billId: null,
@@ -189,16 +190,19 @@ export function demoHistory(now: number): DemoHistory {
         finalized_at: ISO(settledAt),
       });
       const above = total > HOLD_MINOR;
+      // Above the hold: some since captured by Ivora's staff (the hold, not the bill).
+      const holdCaptured = above && b[6] % 2 === 0;
       const refunded = !above && b[5] % 25 === 1;
       const checked = settledAt + 3_600_000;
+      const captured = above ? (holdCaptured ? HOLD_MINOR : null) : total;
       checkouts.push({
         ...base,
         billId,
         phase: above ? "attention" : "settled",
         finalMinor: total,
-        capturedMinor: above ? null : total,
-        refundedMinor: above ? null : refunded ? total : 0,
-        refundCheckedAt: above ? null : ISO(checked),
+        capturedMinor: captured,
+        refundedMinor: captured === null ? null : refunded ? total : 0,
+        refundCheckedAt: above && !holdCaptured ? null : ISO(checked),
       });
     }
   }

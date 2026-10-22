@@ -2,6 +2,7 @@ import "server-only";
 import type {
   CurrencyTotals,
   ReportCheckout,
+  ReportCursor,
   ReportFilter,
   ReportStatus,
   ReportTotals,
@@ -16,9 +17,13 @@ export function reportStatus(
   c: Pick<ReportCheckout, "phase" | "kind" | "capturedMinor">,
 ): ReportStatus {
   if (UNSETTLED.has(c.phase)) return "in_progress";
-  if (c.phase === "attention") return "attention";
-  if (c.phase === "settled" && c.kind === "paid" && (c.capturedMinor ?? 0) > 0)
+  if (
+    (c.phase === "settled" || c.phase === "attention") &&
+    c.kind === "paid" &&
+    (c.capturedMinor ?? 0) > 0
+  )
     return "charged";
+  if (c.phase === "attention") return "attention";
   return "no_charge";
 }
 
@@ -31,11 +36,20 @@ export function matchesFilter(c: ReportCheckout, f: ReportFilter): boolean {
   return reportStatus(c) === f.status;
 }
 
-/** Newest first, then by ID (the database's order). */
+const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * Newest first, then by ID (the database's order). `cursor` is the full timestamp;
+ * the demo's and the tests' cursors are UTC ISO text of one length, so text order is
+ * time order.
+ */
 export function newestFirst(a: ReportCheckout, b: ReportCheckout): number {
-  const t = Date.parse(b.createdAt) - Date.parse(a.createdAt);
-  return t || (b.id < a.id ? -1 : b.id > a.id ? 1 : 0);
+  return cmp(b.cursor, a.cursor) || cmp(b.id, a.id);
 }
+
+/** The rows after a keyset cursor, in newestFirst order. */
+export const afterCursor = (c: ReportCheckout, after: ReportCursor) =>
+  c.cursor < after.at || (c.cursor === after.at && c.id < after.id);
 
 export function totalsOf(rows: ReportCheckout[]): ReportTotals {
   const byStatus: Record<ReportStatus, number> = {

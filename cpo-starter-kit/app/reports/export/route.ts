@@ -9,8 +9,9 @@ import {
 
 export const dynamic = "force-dynamic";
 /**
- * The export reads only the kit's database and stops at CSV_SECONDS (45), so the
- * download fails visibly rather than running into this limit.
+ * The export reads only the kit's database and stops CSV_SECONDS (45) after the
+ * request began, counting the site and charger reads before it, so the download fails
+ * visibly rather than running into this limit.
  */
 export const maxDuration = 60;
 
@@ -28,6 +29,7 @@ const text = (body: string, status: number) =>
  * streamed. Viewers and above; the columns are in the README.
  */
 export async function GET(request: Request) {
+  const startedAt = Date.now();
   let staff;
   try {
     staff = checkRole(await currentStaff(), "viewer");
@@ -47,6 +49,7 @@ export async function GET(request: Request) {
     d,
     reportFilter(staff, r.context.query),
     r.context.places,
+    { startedAt },
   );
   if (!csv.ok) return text(csv.error, csv.status);
   return new Response(csv.body, {

@@ -220,7 +220,8 @@ describe("row level security", () => {
           `select * from cpo_report_checkouts('${operatorA}',now()-interval '1 day',now(),null,'all',50,0,null,null)`,
           `select cpo_report_totals('${operatorA}',now()-interval '1 day',now(),null,'all')`,
           `select cpo_record_checkout_details('${operatorA}','${OWNER_A}',now(),now(),1,1,'Local')`,
-          `select cpo_record_checkout_refund('${operatorA}','${OWNER_A}',0)`,
+          `select cpo_record_checkout_payment('${operatorA}','${OWNER_A}',0,0)`,
+          `select * from cpo_report_payments_due(1)`,
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -1832,29 +1833,130 @@ describe("reports", () => {
     ).toBe(false);
   });
 
-  it("records refunds only on charged, settled paid checkouts, capped at the capture", async () => {
-    const refund = (id: string, minor: number, op = operatorB) =>
-      call<{ ok: boolean }>(
-        "select cpo_record_checkout_refund($1,$2,$3) as ok",
-        [op, id, minor],
-      ).then((x) => x.rows[0].ok);
-    const refunded = async (id: string) =>
-      (
-        await pg.query<{ refunded_minor: number | null }>(
-          "select refunded_minor from cpo_checkouts where id=$1",
-          [id],
-        )
-      ).rows[0].refunded_minor;
-    expect(await refund(ids.refunded, 5000)).toBe(true);
-    expect(await refunded(ids.refunded)).toBe(1240);
+  const payment = (
+    id: string,
+    captured: number,
+    refunded: number,
+    op = operatorB,
+  ) =>
+    call<{ ok: boolean }>(
+      "select cpo_record_checkout_payment($1,$2,$3,$4) as ok",
+      [op, id, captured, refunded],
+    ).then((x) => x.rows[0].ok);
+  const money = async (id: string) =>
+    (
+      await pg.query<{
+        captured_minor: number | null;
+        refunded_minor: number | null;
+      }>(
+        "select captured_minor, refunded_minor from cpo_checkouts where id=$1",
+        [id],
+      )
+    ).rows[0];
+
+  it("records refunds only on charged paid checkouts, capped at the capture", async () => {
+    expect(await payment(ids.refunded, 1240, 5000)).toBe(true);
+    expect(await money(ids.refunded)).toEqual({
+      captured_minor: 1240,
+      refunded_minor: 1240,
+    });
     // A refund that failed in the end: the payment says 0 again.
-    expect(await refund(ids.refunded, 0)).toBe(true);
-    expect(await refunded(ids.refunded)).toBe(0);
-    for (const id of [ids.small, ids.above, ids.free, ids.open])
-      expect(await refund(id, 10)).toBe(false);
-    expect(await refund(ids.eur, 10, operatorA)).toBe(false);
-    await expect(refund(ids.eur, -1)).rejects.toThrow(/cpo_invalid/);
-    await refund(ids.refunded, 300);
+    expect(await payment(ids.refunded, 1240, 0)).toBe(true);
+    expect((await money(ids.refunded)).refunded_minor).toBe(0);
+    // Settlement's own capture is never overwritten by what the payment says.
+    expect(await payment(ids.refunded, 9999, 300)).toBe(true);
+    expect(await money(ids.refunded)).toEqual({
+      captured_minor: 1240,
+      refunded_minor: 300,
+    });
+    for (const id of [ids.small, ids.free, ids.open])
+      expect(await payment(id, 10, 10)).toBe(false);
+    expect(await payment(ids.eur, 500, 10, operatorA)).toBe(false);
+    await expect(payment(ids.eur, 500, -1)).rejects.toThrow(/cpo_invalid/);
+    await expect(payment(ids.eur, -1, 0)).rejects.toThrow(/cpo_invalid/);
+  });
+
+  it("counts the hold as collected once Ivora's staff capture a bill above it", async () => {
+    // Not captured yet: noted, nothing recorded.
+    expect(await payment(ids.above, 0, 0)).toBe(true);
+    expect(await money(ids.above)).toEqual({
+      captured_minor: null,
+      refunded_minor: null,
+    });
+    // Captured: kept, capped at the hold, and the row counts as charged.
+    expect(await payment(ids.above, 2740, 0)).toBe(true);
+    expect(await money(ids.above)).toEqual({
+      captured_minor: 2500,
+      refunded_minor: 0,
+    });
+    const t = await totals();
+    expect(t.byStatus).toMatchObject({ charged: 3, attention: 0 });
+    expect(t.currencies.find((c) => c.currency === "USD")).toMatchObject({
+      charged: 2,
+      capturedMinor: 1240 + 2500,
+    });
+    // Back as it was, for the other tests.
+    await pg.query(
+      "update cpo_checkouts set captured_minor=null, refunded_minor=null, refund_checked_at=null where id=$1",
+      [ids.above],
+    );
+  });
+
+  it("lists the payments due: charged ones and needs-you ones not yet captured, once a day", async () => {
+    await pg.query(
+      "update cpo_checkouts set payment_id='pay_' || left(id::text, 8), settled_at=now() - interval '1 hour', refund_checked_at=null where operator_id=$1",
+      [operatorB],
+    );
+    const due = async () =>
+      (
+        await call<{ id: string }>(
+          "select id from cpo_report_payments_due(50)",
+          [],
+        )
+      ).rows.map((x) => x.id);
+    const first = await due();
+    for (const id of [ids.refunded, ids.eur, ids.above])
+      expect(first).toContain(id);
+    for (const id of [ids.small, ids.free, ids.open])
+      expect(first).not.toContain(id);
+    // Read today: not due again until tomorrow.
+    await payment(ids.refunded, 1240, 300);
+    expect(await due()).not.toContain(ids.refunded);
+    // Settled more than 90 days ago: no longer read.
+    await pg.query(
+      "update cpo_checkouts set settled_at=now() - interval '91 days' where id=$1",
+      [ids.eur],
+    );
+    expect(await due()).not.toContain(ids.eur);
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_B, async () => {
+        await expect(
+          pg.query("select * from cpo_report_payments_due(10)"),
+        ).rejects.toThrow(/permission denied/);
+      });
+  });
+
+  it("pages after the full timestamp: rows in the same millisecond are never skipped", async () => {
+    const made: string[] = [];
+    for (let i = 1; i <= 6; i++)
+      made.push(await insert({ created_at: `2025-12-01T00:00:00.12300${i}Z` }));
+    const page = (after: [string, string] | null) =>
+      call<{ id: string; cursor: string }>(
+        "select id, to_json(created_at) #>> '{}' as cursor from cpo_report_checkouts($1,'2025-12-01T00:00:00Z','2025-12-02T00:00:00Z',null,'all',2,0,$2,$3)",
+        [operatorB, after?.[0] ?? null, after?.[1] ?? null],
+      ).then((x) => x.rows);
+    const seen: string[] = [];
+    let after: [string, string] | null = null;
+    for (;;) {
+      const rows = await page(after);
+      seen.push(...rows.map((x) => x.id));
+      if (rows.length < 2) break;
+      const last = rows.at(-1)!;
+      // The cursor keeps the microseconds, as PostgREST returns it.
+      expect(last.cursor).toMatch(/\.12300\d/);
+      after = [last.cursor, last.id];
+    }
+    expect(seen).toEqual([...made].reverse());
   });
 });
 

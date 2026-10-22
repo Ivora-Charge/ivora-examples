@@ -6,7 +6,9 @@ begin;
 -- so the kit never scans it for a period. Instead the settlement sweep copies each
 -- ended session's details (start, end, energy, stop reason) from
 -- GET /transactions/{id} once, and re-reads each charged payment's refunds from
--- GET /payments/{id} once a day for 90 days. Both are additive columns.
+-- GET /payments/{id} once a day for 90 days (and the payment of a paid checkout that
+-- needs the operator, in case Ivora's staff captured its hold). Both are additive
+-- columns.
 --
 -- 10-30 rule: no new tables. The functions are for the service role only; nothing is
 -- read through the Data API. `npm run check:migrations` enforces this in CI.
@@ -22,8 +24,8 @@ alter table public.cpo_checkouts
   add column if not exists detail_at timestamptz,
   add column if not exists detail_checked_at timestamptz,
   -- What was refunded of the captured amount (integer minor units), as the payment
-  -- last said, and when the sweep last read it. Refunds are made outside the kit (the
-  -- Ivora dashboard or API); never more than was captured.
+  -- last said, and when the sweep last read the payment. Refunds are made outside the
+  -- kit (the Ivora dashboard or API); never more than was captured.
   add column if not exists refunded_minor integer check (refunded_minor >= 0),
   add column if not exists refund_checked_at timestamptz;
 
@@ -35,20 +37,22 @@ create index if not exists cpo_checkouts_details_due
   on public.cpo_checkouts(detail_checked_at nulls first)
   where detail_at is null and transaction_id is not null
     and phase in ('settled', 'attention');
-create index if not exists cpo_checkouts_refunds_due
+create index if not exists cpo_checkouts_payments_due
   on public.cpo_checkouts(refund_checked_at nulls first)
-  where kind = 'paid' and phase = 'settled' and captured_minor > 0;
+  where kind = 'paid' and payment_id is not null
+    and (captured_minor > 0 or (phase = 'attention' and captured_minor is null));
 
 -- A checkout's status in reports: in_progress (settlement still works on it),
--- attention (it needs the operator), charged (a paid session with money captured) or
+-- charged (a paid session with money captured, including one that needed the operator
+-- until Ivora's staff captured its hold), attention (it needs the operator) or
 -- no_charge (released, failed, free, or captured nothing).
 create or replace function public.cpo_report_status(p_row public.cpo_checkouts)
 returns text language sql immutable set search_path = '' as $$
   select case
     when p_row.phase in ('creating', 'open', 'settling', 'releasing') then 'in_progress'
-    when p_row.phase = 'attention' then 'attention'
-    when p_row.phase = 'settled' and p_row.kind = 'paid'
+    when p_row.phase in ('settled', 'attention') and p_row.kind = 'paid'
       and coalesce(p_row.captured_minor, 0) > 0 then 'charged'
+    when p_row.phase = 'attention' then 'attention'
     else 'no_charge'
   end
 $$;
@@ -169,25 +173,65 @@ $$;
 revoke execute on function public.cpo_record_checkout_details(uuid, uuid, timestamptz, timestamptz, bigint, integer, text) from public, anon, authenticated;
 grant execute on function public.cpo_record_checkout_details(uuid, uuid, timestamptz, timestamptz, bigint, integer, text) to service_role;
 
--- Records what the payment says was refunded, capped at what was captured. Only for a
--- settled paid checkout that captured money. Returns false otherwise.
-create or replace function public.cpo_record_checkout_refund(
-  p_operator_id uuid, p_id uuid, p_refunded_minor integer
+-- The payments the sweep reads next, least recently read first: charged ones (for
+-- refunds) and paid checkouts that need the operator and captured nothing yet (Ivora's
+-- staff may capture the hold of a bill above it), each at most once a day, for 90 days
+-- after settlement. At most 50.
+create or replace function public.cpo_report_payments_due(p_limit integer)
+returns table (id uuid, operator_id uuid, payment_id text)
+language sql stable security definer set search_path = '' as $$
+  select c.id, c.operator_id, c.payment_id from public.cpo_checkouts c
+  where c.kind = 'paid' and c.payment_id is not null
+    and (c.captured_minor > 0 or (c.phase = 'attention' and c.captured_minor is null))
+    and c.phase in ('settled', 'attention')
+    and c.settled_at >= now() - interval '90 days'
+    and (c.refund_checked_at is null or c.refund_checked_at < now() - interval '1 day')
+  order by c.refund_checked_at nulls first, c.id
+  limit least(greatest(coalesce(p_limit, 10), 1), 50)
+$$;
+revoke execute on function public.cpo_report_payments_due(integer) from public, anon, authenticated;
+grant execute on function public.cpo_report_payments_due(integer) to service_role;
+
+-- Records what the payment says. For a paid checkout that needs the operator and has
+-- no capture recorded, a capture (Ivora's staff captured the hold) is kept, capped at
+-- the hold; settlement's own capture is never overwritten. The refund is capped at
+-- what was captured (none without a capture). Notes the read either way. Returns
+-- false for a checkout that isn't due (unknown, free, or settled with nothing
+-- captured).
+create or replace function public.cpo_record_checkout_payment(
+  p_operator_id uuid, p_id uuid, p_captured_minor integer, p_refunded_minor integer
 )
 returns boolean language plpgsql security definer set search_path = '' as $$
+declare
+  v public.cpo_checkouts;
+  v_captured integer;
 begin
-  if p_refunded_minor is null or p_refunded_minor < 0 then
+  if p_captured_minor is null or p_captured_minor < 0
+    or p_refunded_minor is null or p_refunded_minor < 0 then
     raise exception 'cpo_invalid' using errcode = 'P0001';
   end if;
+  select * into v from public.cpo_checkouts c
+  where c.id = p_id and c.operator_id = p_operator_id and c.kind = 'paid'
+    and (c.captured_minor > 0 or (c.phase = 'attention' and c.captured_minor is null))
+    and c.phase in ('settled', 'attention')
+  for update;
+  if not found then
+    return false;
+  end if;
+  v_captured := case
+    when v.captured_minor is null and p_captured_minor > 0
+      then least(p_captured_minor, v.hold_minor)
+    else v.captured_minor end;
   update public.cpo_checkouts set
-    refunded_minor = least(p_refunded_minor, captured_minor),
+    captured_minor = v_captured,
+    refunded_minor = case when v_captured is null then null
+      else least(p_refunded_minor, v_captured) end,
     refund_checked_at = now()
-  where id = p_id and operator_id = p_operator_id and kind = 'paid'
-    and phase = 'settled' and captured_minor > 0;
-  return found;
+  where id = v.id;
+  return true;
 end;
 $$;
-revoke execute on function public.cpo_record_checkout_refund(uuid, uuid, integer) from public, anon, authenticated;
-grant execute on function public.cpo_record_checkout_refund(uuid, uuid, integer) to service_role;
+revoke execute on function public.cpo_record_checkout_payment(uuid, uuid, integer, integer) from public, anon, authenticated;
+grant execute on function public.cpo_record_checkout_payment(uuid, uuid, integer, integer) to service_role;
 
 commit;
