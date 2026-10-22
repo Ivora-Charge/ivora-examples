@@ -24,6 +24,7 @@ import { pullSessions } from "@/lib/sessions/pull";
 import { addRfidCard } from "@/lib/tokens/manage";
 import { tokensReceiver } from "@/lib/tokens/push";
 import type { DriverToken } from "@/lib/tokens/store";
+import { authorizationsAsked, stopLeftoverStart } from "./guards";
 import { createHarness, waitFor, type Harness } from "./harness";
 import { laneFromEnv, type ExpectStart } from "./lanes";
 
@@ -143,14 +144,14 @@ function describeScenario(scenario: ExpectStart) {
     afterAll(async () => {
       if (!h) return;
       try {
-        // A real charger must never be left charging by a failed run.
-        if (h.lane === "real" && run.sessionId && !run.sessionCompleted)
-          await h
-            .api("POST", `/api/v1/charges/${run.startId}/stop`, {
-              token: run.accessToken,
-              body: { requestId: `e2e-cleanup-${randomUUID()}` },
-            })
-            .catch(() => undefined);
+        // A charger must never be left charging by a failed run: whatever start the
+        // CPO accepted, even against the scenario, is stopped before we unregister.
+        if (!run.sessionCompleted)
+          await stopLeftoverStart(h, run, { tick: pull }).catch((e) =>
+            console.error(
+              `Cleanup failed: ${e instanceof Error ? e.message : "unknown error"}`,
+            ),
+          );
         const peer = run.peer && (await h.stores.peers.getPeer(run.peer.id));
         if (peer?.status === "registered" && !h.keepRegistration)
           await unregisterPeer(peer.id, {
@@ -596,19 +597,16 @@ function describeScenario(scenario: ExpectStart) {
         return;
       }
       // A real CPO asks on its own (at a start, or a card at the charger): check what
-      // it asked during this run.
-      const asked = h.stores.peers.auditLog.filter(
-        (a) => a.action === "token.authorize",
-      );
+      // it asked about this run's tokens. Questions about other tokens prove nothing.
+      const asked = authorizationsAsked(h, [app, rfid]);
       ctx.skip(
         asked.length === 0,
-        "the CPO did not ask for real-time authorization during this run",
+        "the CPO did not ask for real-time authorization of this run's app token or RFID card",
       );
-      for (const a of asked) {
-        const d = a.details as { allowed: string; type: string };
-        if (a.subjectId === rfid.id) expect(d.allowed).toBe("NOT_ALLOWED");
-        if (a.subjectId === app.id) expect(d.allowed).toBe("ALLOWED");
-      }
+      for (const a of asked)
+        expect(a.allowed, `${a.type} token`).toBe(
+          a.tokenId === rfid.id ? "NOT_ALLOWED" : "ALLOWED",
+        );
     });
 
     it.skip("UNLOCK_CONNECTOR: this eMSP does not send it yet", () => {});

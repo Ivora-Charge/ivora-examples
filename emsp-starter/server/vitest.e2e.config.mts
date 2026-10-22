@@ -19,7 +19,8 @@ export default defineConfig({
     include: ["tests/e2e/**/*.e2e.ts"],
     // A real charger takes minutes; each wait has its own limit (OCPI_E2E_TIMEOUT_SECONDS).
     testTimeout: real ? 60 * 60_000 : 30_000,
-    hookTimeout: real ? 10 * 60_000 : 30_000,
+    // The cleanup may wait twice (session link, then STOP_SESSION result), then unregister.
+    hookTimeout: real ? 30 * 60_000 : 30_000,
     // One CPO, one run at a time.
     fileParallelism: false,
   },

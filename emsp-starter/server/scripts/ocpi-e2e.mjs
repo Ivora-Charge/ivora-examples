@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 const real = !!process.env.OCPI_E2E_VERSIONS_URL?.trim();
 console.log(
   real
-    ? `OCPI e2e: real CPO lane (OCPI_E2E_VERSIONS_URL is set), remote start expected ${process.env.OCPI_E2E_EXPECT_START?.trim() || "rejected"}`
+    ? `OCPI e2e: real CPO lane (OCPI_E2E_VERSIONS_URL is set; OCPI_E2E_EXPECT_START is ${process.env.OCPI_E2E_EXPECT_START?.trim() ? "set" : "not set, so rejected"})`
     : "OCPI e2e: mock CPO lane (OCPI_E2E_VERSIONS_URL is not set)",
 );
 
