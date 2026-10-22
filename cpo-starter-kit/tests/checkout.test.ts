@@ -407,7 +407,8 @@ function fakeIvora() {
     }));
     return {
       data,
-      next_cursor: rows.length > data.length ? data[data.length - 1].id : null,
+      // As Ivora: the last item's ID, also on the last page; `after` when empty.
+      next_cursor: data.length ? data[data.length - 1].id : after,
     };
   }
   /** The driver paid: Ivora's bill read then starts the charger. */

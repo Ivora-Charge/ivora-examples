@@ -61,6 +61,46 @@ export interface StaffToken {
   tokenId: number | null;
 }
 
+/**
+ * A session the kit tracks (cpo_active_sessions): what Ivora's `GET /transactions/{id}`
+ * reported when it was last read. `active` false is final (the session ended); ended
+ * sessions are kept for a day so a station page can show them.
+ */
+export interface TrackedSession {
+  transactionId: number;
+  stationId: number;
+  connectorId: number | null;
+  connectorNumber: number | null;
+  /** As Ivora shows it: masked to the last 4 characters behind ****. */
+  idToken: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  energyWh: number | null;
+  active: boolean;
+  /** When the kit last read the session from Ivora (ISO 8601). */
+  checkedAt: string;
+  /** When its energy last grew, or it ended (ISO 8601). */
+  changedAt: string;
+}
+
+/** A station's tracker mark (cpo_active_marks). */
+export interface TrackerMark {
+  /** The highest transaction ID the scan is done with. */
+  mark: number;
+  /** When a scan last reached the end of the station's list; null: never. */
+  scannedAt: string | null;
+}
+
+/**
+ * A seed's binary search so far: something exists after `lo`; nothing existed after
+ * `hi` when it was probed (null: not found yet). Saved after each probe, so a search
+ * cut short by a budget carries on from there on the next scan instead of from 0.
+ */
+export interface SeedProgress {
+  lo: number;
+  hi: number | null;
+}
+
 /** One webhook delivery, as the kit stores it to deduplicate. */
 export interface StoredEvent {
   id: string;
@@ -129,6 +169,53 @@ export interface LiveStore {
     stationId: number,
     transactionId: number,
   ): Promise<void>;
+  /**
+   * Every running tracked session (see TrackedSession), of one station or of all,
+   * newest transaction first. Not capped: the store pages through them all.
+   */
+  listActiveSessions(o?: { stationId?: number }): Promise<TrackedSession[]>;
+  /**
+   * One page of a station's ended sessions (kept for a day), newest first: those with
+   * a transaction ID below `before`, if set.
+   */
+  listEndedSessions(
+    stationId: number,
+    o?: { before?: number; limit?: number },
+  ): Promise<TrackedSession[]>;
+  /** One tracked session, running or ended. */
+  getTrackedSession(transactionId: number): Promise<TrackedSession | null>;
+  /**
+   * Records a session read from Ivora. Idempotent; a session that ended stays ended
+   * (a late report of it as running is ignored). checkedAt and changedAt are stamped
+   * by the store.
+   */
+  trackSession(
+    s: Omit<TrackedSession, "checkedAt" | "changedAt">,
+  ): Promise<void>;
+  /** Drops a session Ivora no longer knows (its read answered 404). */
+  forgetSession(transactionId: number): Promise<void>;
+  /**
+   * Drops the sessions and marks of stations not in `keep`, the operator's complete
+   * station list.
+   */
+  forgetRemovedStations(keep: number[]): Promise<void>;
+  /** The session tracker's own high-water mark for a station (not the checkout one). */
+  getTrackerMark(stationId: number): Promise<number | null>;
+  /** Every station's tracker mark. */
+  listTrackerMarks(): Promise<Map<number, TrackerMark>>;
+  /**
+   * Moves the tracker mark up to transactionId; never down. `scanned` also records
+   * that a scan reached the end of the station's list now.
+   */
+  advanceTrackerMark(
+    stationId: number,
+    transactionId: number,
+    o?: { scanned?: boolean },
+  ): Promise<void>;
+  /** A station's unfinished mark seeding (see SeedProgress); null: none. */
+  getTrackerSeed(stationId: number): Promise<SeedProgress | null>;
+  /** Saves a seed's search progress; a concurrent search's narrower bounds are kept. */
+  saveTrackerSeed(stationId: number, p: SeedProgress): Promise<void>;
   /** True for a new event, false for a redelivery. */
   recordEvent(e: StoredEvent): Promise<boolean>;
   markProcessed(eventId: string): Promise<void>;

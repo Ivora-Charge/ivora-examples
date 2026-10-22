@@ -62,6 +62,8 @@ const TABLES = [
   "cpo_checkouts",
   "cpo_free_tokens",
   "cpo_transaction_marks",
+  "cpo_active_sessions",
+  "cpo_active_marks",
 ] as const;
 
 beforeAll(async () => {
@@ -1994,6 +1996,198 @@ describe("transaction marks", () => {
           pg.query("select * from cpo_transaction_marks"),
         ).rejects.toThrow(/permission denied/);
         await expect(advance(9103, 5000)).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("tracked sessions", () => {
+  const track = (id: number, active: boolean, energy: number | null = null) =>
+    pg.query(
+      "select public.cpo_track_session($1, 9103, 91031, 1, '****ABCD', now(), null, $2, $3)",
+      [id, energy, active],
+    );
+  const row = async (id: number) =>
+    (
+      await pg.query<{ active: boolean; energy_wh: string | null }>(
+        "select active, energy_wh from cpo_active_sessions where transaction_id=$1",
+        [id],
+      )
+    ).rows[0];
+
+  it("records a session once, keeps the highest energy, and an ended session stays ended", async () => {
+    await as("service_role", null, async () => {
+      await track(5001, true, 3);
+      await track(5001, true, 9);
+      await track(5001, true, 4);
+      expect(await row(5001)).toMatchObject({ active: true });
+      expect(Number((await row(5001)).energy_wh)).toBe(9);
+      await track(5001, false, 10);
+      // A late report of it as running changes nothing.
+      await track(5001, true, 11);
+      expect(await row(5001)).toMatchObject({ active: false });
+      expect(Number((await row(5001)).energy_wh)).toBe(10);
+      await expect(track(0, true)).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
+  it("purges sessions that ended over a day ago", async () => {
+    await as("service_role", null, async () => {
+      await track(5002, false);
+      await pg.query(
+        "update cpo_active_sessions set updated_at = now() - interval '2 days' where transaction_id=5002",
+      );
+      await track(5003, true);
+      expect(await row(5002)).toBeUndefined();
+      expect(await row(5003)).toMatchObject({ active: true });
+    });
+  });
+
+  it("moves the tracker mark only up", async () => {
+    await as("service_role", null, async () => {
+      const mark = async () =>
+        String(
+          (
+            await pg.query<{ last_transaction_id: string }>(
+              "select last_transaction_id from cpo_active_marks where station_id=9104",
+            )
+          ).rows[0]?.last_transaction_id,
+        );
+      await pg.query("select public.cpo_advance_active_mark(9104, 700)");
+      await pg.query("select public.cpo_advance_active_mark(9104, 300)");
+      expect(await mark()).toBe("700");
+      await expect(
+        pg.query("select public.cpo_advance_active_mark(0, 1)"),
+      ).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
+  it("stamps scanned_at only when a scan reached the end, and keeps the mark", async () => {
+    await as("service_role", null, async () => {
+      const get = async () =>
+        (
+          await pg.query<{ last_transaction_id: string; scanned: boolean }>(
+            "select last_transaction_id::text, scanned_at is not null as scanned from cpo_active_marks where station_id=9105",
+          )
+        ).rows[0];
+      await pg.query("select public.cpo_advance_active_mark(9105, 40)");
+      expect(await get()).toMatchObject({ scanned: false });
+      await pg.query("select public.cpo_advance_active_mark(9105, 0, true)");
+      expect(await get()).toMatchObject({
+        last_transaction_id: "40",
+        scanned: true,
+      });
+    });
+  });
+
+  it("saves a seed's search progress, keeping the narrower bounds of two searches", async () => {
+    await as("service_role", null, async () => {
+      const get = async () =>
+        (
+          await pg.query<{ lo: string; hi: string | null; mark: string }>(
+            "select seed_lo::text as lo, seed_hi::text as hi, last_transaction_id::text as mark from cpo_active_marks where station_id=9106",
+          )
+        ).rows[0];
+      await pg.query("select public.cpo_save_active_seed(9106, 2000, null)");
+      expect(await get()).toEqual({ lo: "2000", hi: null, mark: "0" });
+      await pg.query("select public.cpo_save_active_seed(9106, 4000, 8000)");
+      // An older search's wider bounds don't undo it.
+      await pg.query("select public.cpo_save_active_seed(9106, 2000, 16000)");
+      expect(await get()).toMatchObject({ lo: "4000", hi: "8000" });
+      await pg.query("select public.cpo_save_active_seed(9106, 6000, 8000)");
+      expect(await get()).toMatchObject({ lo: "6000", hi: "8000" });
+      // Sessions came in after hi was probed: search up from lo again.
+      await pg.query("select public.cpo_save_active_seed(9106, 9000, null)");
+      expect(await get()).toMatchObject({ lo: "9000", hi: null });
+      // The mark and scanned_at are untouched by it, and the mark still moves up.
+      await pg.query("select public.cpo_advance_active_mark(9106, 8500)");
+      expect(await get()).toMatchObject({ mark: "8500" });
+      await expect(
+        pg.query("select public.cpo_save_active_seed(9106, -1, null)"),
+      ).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
+  it("stores what the table can't hold as unknown instead of failing", async () => {
+    await as("service_role", null, async () => {
+      await pg.query(
+        "select public.cpo_track_session(5010, 9103, 0, 1, $1, null, null, -5, true)",
+        ["x".repeat(41)],
+      );
+      expect(
+        (
+          await pg.query(
+            "select connector_id, id_token, energy_wh from cpo_active_sessions where transaction_id=5010",
+          )
+        ).rows[0],
+      ).toEqual({ connector_id: null, id_token: null, energy_wh: null });
+    });
+  });
+
+  it("moves changed_at only when the energy grows or the session ends", async () => {
+    await as("service_role", null, async () => {
+      const changed = async () =>
+        (
+          await pg.query<{ changed_at: Date }>(
+            "select changed_at from cpo_active_sessions where transaction_id=5011",
+          )
+        ).rows[0].changed_at.getTime();
+      await track(5011, true, 100);
+      await pg.query(
+        "update cpo_active_sessions set changed_at = now() - interval '13 hours' where transaction_id=5011",
+      );
+      const old = await changed();
+      await track(5011, true, 100);
+      await track(5011, true, null);
+      expect(await changed()).toBe(old);
+      await track(5011, true, 101);
+      expect(await changed()).toBeGreaterThan(old);
+    });
+  });
+
+  it("forgets one session, and the sessions and marks of removed stations", async () => {
+    await as("service_role", null, async () => {
+      await track(5012, true);
+      await pg.query("select public.cpo_forget_session(5012)");
+      expect(await row(5012)).toBeUndefined();
+      await track(5013, true);
+      await pg.query(
+        "select public.cpo_track_session(5014, 9106, null, null, null, null, null, null, true)",
+      );
+      await pg.query("select public.cpo_advance_active_mark(9106, 7)");
+      await pg.query("select public.cpo_forget_removed_stations($1)", [
+        [9103, 9104, 9105],
+      ]);
+      expect(await row(5013)).toMatchObject({ active: true });
+      expect(await row(5014)).toBeUndefined();
+      expect(
+        (await pg.query("select 1 from cpo_active_marks where station_id=9106"))
+          .rows,
+      ).toEqual([]);
+      await expect(
+        pg.query("select public.cpo_forget_removed_stations(null)"),
+      ).rejects.toThrow(/cpo_invalid/);
+    });
+  });
+
+  it("is not readable or writable from the browser", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        await expect(
+          pg.query("select * from cpo_active_sessions"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          pg.query("select * from cpo_active_marks"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(track(5004, true)).rejects.toThrow(/permission denied/);
+        await expect(
+          pg.query("select public.cpo_advance_active_mark(9104, 1)"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          pg.query("select public.cpo_forget_session(5001)"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          pg.query("select public.cpo_forget_removed_stations('{}')"),
+        ).rejects.toThrow(/permission denied/);
       });
   });
 });

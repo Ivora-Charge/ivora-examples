@@ -287,6 +287,14 @@ export interface Stats {
  * a transaction ID) and its items carry no ID token or connector: read
  * `GET /transactions/{id}` for those.
  */
+/** Limits for a read that is part of a larger budget (Live's session tracking). */
+export interface ReadLimits {
+  /** Epoch ms: no try and no wait between tries goes past it. */
+  deadline?: number;
+  /** A 429 comes back at once with its Retry-After, instead of being waited out. */
+  failOn429?: boolean;
+}
+
 export type TransactionListItem = Pick<Transaction, "id"> &
   Partial<
     Pick<Transaction, "station_id" | "active" | "started_at" | "ended_at">
@@ -644,12 +652,18 @@ export interface IvoraClient {
    * One page of `GET /transactions`, oldest first: transactions with an ID above
    * `after` (lib/server/live/transactions.ts follows it from a stored high-water mark).
    */
-  listTransactionsAfter(o: {
-    station_id: number;
-    after: number;
-    limit?: number;
-  }): Promise<Page<TransactionListItem>>;
-  getTransaction(transactionId: number): Promise<TransactionDetail>;
+  listTransactionsAfter(
+    o: {
+      station_id: number;
+      after: number;
+      limit?: number;
+    },
+    limits?: ReadLimits,
+  ): Promise<Page<TransactionListItem>>;
+  getTransaction(
+    transactionId: number,
+    limits?: ReadLimits,
+  ): Promise<TransactionDetail>;
   /** The token with this external_reference, if any (`GET /tokens`). */
   findToken(externalReference: string): Promise<TokenRecord | null>;
   /** Adopts the token by external_reference when the create may already have happened. */

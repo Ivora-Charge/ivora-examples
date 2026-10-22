@@ -24,13 +24,21 @@ const sessionLabel = (s: SessionView) =>
 
 export default async function Page({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ ended_before?: string | string[] }>;
 }) {
   const me = await requireRole("viewer");
   const { id } = await params;
   if (!/^\d{1,15}$/.test(id)) notFound();
-  const r = await loadStation(getLive(), me, Number(id));
+  // The next page of ended sessions, if asked for.
+  const before = (await searchParams).ended_before;
+  const endedBefore =
+    typeof before === "string" && /^\d{1,15}$/.test(before)
+      ? Number(before)
+      : undefined;
+  const r = await loadStation(getLive(), me, Number(id), { endedBefore });
   if (!r.ok)
     return (
       <>
@@ -67,6 +75,7 @@ export default async function Page({
         readAt={d.readAt}
         webhooks={!demo && Boolean(config.webhookSecret)}
         pending={Boolean(d.pending)}
+        retryAfter={d.retryAfter}
       />
       <section className="card" aria-labelledby="status-heading">
         <h2 id="status-heading">
@@ -201,8 +210,14 @@ export default async function Page({
 
       <section className="card" aria-labelledby="sessions-heading">
         <h2 id="sessions-heading">Sessions</h2>
+        {!d.sessionsComplete && (
+          <p className="notice" role="note">
+            This list may be incomplete: Ivora was slow or refused a read, or
+            the charger hasn&apos;t been checked for a few minutes.
+          </p>
+        )}
         {d.recent.length === 0 ? (
-          <p className="muted">No sessions yet.</p>
+          <p className="muted">No running or recent sessions.</p>
         ) : (
           <ul className="rows" aria-label="Sessions">
             {d.recent.map((x) => (
@@ -218,6 +233,7 @@ export default async function Page({
                   {x.idToken ? ` · token ${x.idToken}` : ""}
                   {x.staff ? " · staff/test session" : ""}
                   {x.free ? " · free session" : ""}
+                  {x.stalled ? " · no energy for 12 hours" : ""}
                 </span>
                 <span className={x.active ? "pill busy" : "pill ok"}>
                   {x.active ? "Charging" : "Ended"}
@@ -238,6 +254,13 @@ export default async function Page({
               </li>
             ))}
           </ul>
+        )}
+        {d.endedBefore !== null && (
+          <p>
+            <Link href={`/live/stations/${s.id}?ended_before=${d.endedBefore}`}>
+              Older ended sessions →
+            </Link>
+          </p>
         )}
       </section>
 

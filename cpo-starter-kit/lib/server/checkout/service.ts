@@ -20,6 +20,7 @@ import {
   running,
   STARTABLE,
 } from "../live/service";
+import { trackTransaction } from "../live/active";
 import { scanNewTransactions } from "../live/transactions";
 import type { LiveStore } from "../live/types";
 import { stripeView } from "../onboarding/stripe";
@@ -61,6 +62,7 @@ export interface CheckoutDeps {
     | "putFreeToken"
     | "getTransactionMark"
     | "advanceTransactionMark"
+    | "trackSession"
   >;
   limiter: RateLimiter;
   /** Keys the rate-limit digests, so sources and connectors are never stored plain. */
@@ -1488,6 +1490,8 @@ export async function findFreeTransactions(
     return tokens.get(operatorId)!;
   };
   const offer = async (t: Transaction) => {
+    // The Live view's session list learns of the free session here too.
+    await trackTransaction({ store: d.tokens }, t).catch(() => undefined);
     for (const r of waiting) {
       if (r.transactionId) continue;
       if (

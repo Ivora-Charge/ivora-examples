@@ -30,7 +30,8 @@ function api(rows: Transaction[]) {
       }));
       return {
         data,
-        next_cursor: all.length > data.length ? data[data.length - 1].id : null,
+        // As Ivora: the last item's ID, also on the last page; `after` when empty.
+        next_cursor: data.length ? data[data.length - 1].id : o.after,
       };
     },
   );
@@ -77,7 +78,8 @@ describe("finding new sessions at a station", () => {
     expect(r).toEqual({ complete: true, reads: 1 });
     expect(offered).toEqual([1201]);
     expect(a.read).toHaveBeenCalledTimes(1);
-    expect(a.list).toHaveBeenCalledTimes(13);
+    // 13 pages, plus the one-item probe that finds no long history to seed past.
+    expect(a.list).toHaveBeenCalledTimes(14);
     // The new session is younger than MARK_LAG_MS: it stays above the mark.
     expect(await m.getTransactionMark(STATION)).toBe(1200);
     // The next scan starts at the mark: one page, and the young session offered again.
