@@ -4,7 +4,7 @@ import { join, relative } from "node:path";
 import { createI18n } from "../src/i18n/core";
 import en from "../src/i18n/en.json";
 import { present } from "../src/lib/present";
-import type { LocationSummary } from "../src/lib/types";
+import type { DisplayComponent, LocationSummary } from "../src/lib/types";
 
 const root = join(__dirname, "..");
 const files = (dir: string): string[] =>
@@ -65,11 +65,11 @@ describe("strings", () => {
 
 describe("formats by locale", () => {
   const plain = (s: string) => s.replace(/\s/g, " ");
-  it("formats money from ten-thousandths, with up to 4 decimals", () => {
-    expect(createI18n("en-GB").money(7139, "EUR")).toBe("€0.7139");
-    expect(createI18n("en-GB").money(6050, "EUR")).toBe("€0.605");
+  it("formats money from ten-thousandths, rounded to the currency's minor unit", () => {
+    expect(createI18n("en-GB").money(7139, "EUR")).toBe("€0.71");
+    expect(createI18n("en-GB").money(6050, "EUR")).toBe("€0.61");
     expect(createI18n("en-GB").money(20000, "EUR")).toBe("€2.00");
-    expect(plain(createI18n("de-DE").money(7139, "EUR"))).toBe("0,7139 €");
+    expect(plain(createI18n("de-DE").money(7139, "EUR"))).toBe("0,71 €");
     expect(createI18n("ja-JP").money(150000, "JPY")).toBe("￥15");
   });
 
@@ -108,7 +108,7 @@ describe("presenting places", () => {
   } as unknown as LocationSummary;
 
   it("leads with the energy price, or says no fee", () => {
-    expect(p.lead(place.price)).toEqual({ amount: "€0.4719", unit: "per kWh" });
+    expect(p.lead(place.price)).toEqual({ amount: "€0.47", unit: "per kWh" });
     expect(p.lead({ free: true, summary: "Free" })).toEqual({
       amount: "No fee",
       unit: "",
@@ -117,6 +117,34 @@ describe("presenting places", () => {
     // An older server without a structured price: its own words.
     expect(p.lead({ free: false, summary: "€0.40 per kWh" }).amount).toBe(
       "€0.40 per kWh",
+    );
+  });
+
+  it("shows our computed price, and the CPO's own text only without one", () => {
+    const energy: DisplayComponent = {
+      type: "ENERGY",
+      unit: "kWh",
+      priceE4: 7139,
+      vatIncluded: true,
+      text: "",
+      conditions: [],
+    };
+    const priced = {
+      tariffId: "T1",
+      currency: "EUR",
+      free: false,
+      components: [energy],
+      altText: "0.59 per kWh.",
+      summary: "",
+    };
+    const shown = p.detailPrice(priced);
+    expect(shown.amount).toBe("€0.71");
+    expect(shown.vat).toBe("VAT included");
+    expect(shown.operatorNote).toBeUndefined();
+    const unstructured = p.detailPrice({ ...priced, components: [] });
+    expect(unstructured.amount).toBe("Price not shared");
+    expect(unstructured.operatorNote).toBe(
+      "The operator's note: 0.59 per kWh.",
     );
   });
 

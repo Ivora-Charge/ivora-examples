@@ -28,6 +28,11 @@ export const config = {
   get mapAttribution(): string | undefined {
     return clean(process.env.EXPO_PUBLIC_MAP_ATTRIBUTION);
   },
+  /** Where the attribution links to, as your map provider asks (its copyright page). */
+  get mapAttributionUrl(): string | undefined {
+    const url = clean(process.env.EXPO_PUBLIC_MAP_ATTRIBUTION_URL);
+    return url && /^https:\/\//i.test(url) ? url : undefined;
+  },
 };
 
 /**

@@ -85,10 +85,8 @@ describe("the offline demo's search", () => {
   });
 
   it("finds a place by words, a charger by its reference and an EVSE by its ID", () => {
-    expect(names({ text: "market hall" })).toEqual([
-      "Market Hall",
-      "Market Hall 2",
-    ]);
+    expect(names({ text: "market hall" })).toEqual(["Market Hall"]);
+    expect(names({ text: "plaza" })).toEqual(["Library Plaza"]);
     expect(names({ text: "zz-mck-e11" })).toEqual(["Station Square"]);
     expect(run({ text: "ZZ*MCK*E11" }).items[0].matching_evse_count).toBe(1);
     expect(names({ text: "nowhere at all" })).toEqual([]);

@@ -198,7 +198,13 @@ export function brandStyle(c: Palette): StyleSpecification {
 export function mapStyle(
   c: Palette,
   scheme: Scheme,
-): { style: string | StyleSpecification; attribution: string; tiles: boolean } {
+): {
+  style: string | StyleSpecification;
+  attribution: string;
+  /** Where the attribution links to; none when the provider gave no page. */
+  attributionUrl?: string;
+  tiles: boolean;
+} {
   const url = config.mapStyle;
   if (url?.toLowerCase() === "none")
     return { style: plain(c), attribution: "", tiles: false };
@@ -206,11 +212,13 @@ export function mapStyle(
     return {
       style: (scheme === "dark" && config.mapStyleDark) || url,
       attribution: config.mapAttribution ?? "© OpenStreetMap contributors",
+      attributionUrl: config.mapAttributionUrl,
       tiles: true,
     };
   return {
     style: brandStyle(c),
     attribution: OPENFREEMAP.attribution,
+    attributionUrl: OPENFREEMAP.copyrightUrl,
     tiles: true,
   };
 }

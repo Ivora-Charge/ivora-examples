@@ -11,6 +11,7 @@ export default function Account() {
   const auth = useAuth();
   return (
     <ScrollView
+      role="main"
       style={{ backgroundColor: c.background }}
       contentContainerStyle={styles.page}
     >

@@ -6,7 +6,9 @@ const KEY = "driver-session";
 
 /**
  * The web build keeps the session in sessionStorage: it lasts while the tab is open
- * and is gone when it closes, so a shared computer does not stay signed in. Native
+ * and is gone when it closes, so a shared computer does not stay signed in. Page
+ * script can read it; the build's Content-Security-Policy keeps other script out, and
+ * the README ("Sessions on the web") explains the httpOnly cookie alternative. Native
  * builds use the keychain or keystore instead (`session-store.ts`).
  */
 export async function loadSession(): Promise<Stored | null> {

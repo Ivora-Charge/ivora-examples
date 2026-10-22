@@ -96,7 +96,11 @@ export function ChargerDetail({
     (list?.find((d) => d.language === lang) ?? list?.[0])?.text;
 
   const header = (
-    <View style={[styles.header, { backgroundColor: c.primary }]}>
+    <View
+      style={[styles.header, { backgroundColor: c.primary }]}
+      // Web: focus rings in here use `focusOnPrimary` (see WebStyles.web.tsx).
+      {...({ dataSet: { onPrimary: "true" } } as object)}
+    >
       <View style={styles.headerTop}>
         <Text
           style={[
@@ -118,7 +122,8 @@ export function ChargerDetail({
       </View>
       <Text
         role="heading"
-        aria-level={1}
+        // The card sits under the map screen's own heading; the page is a screen.
+        aria-level={variant === "card" ? 2 : 1}
         style={[
           type.heading,
           styles.name,
@@ -183,7 +188,11 @@ export function ChargerDetail({
     const directions = text(l.directions);
     body = (
       <View>
-        <Section title={t("detail.price")} first>
+        <Section
+          level={variant === "card" ? 3 : 2}
+          title={t("detail.price")}
+          first
+        >
           {price ? (
             <View style={styles.gapSm} testID="detail-price">
               <View style={styles.priceRow}>
@@ -230,7 +239,7 @@ export function ChargerDetail({
               {[
                 priced?.minPrice && t("price.min", { amount: priced.minPrice }),
                 priced?.maxPrice && t("price.max", { amount: priced.maxPrice }),
-                priced?.altText,
+                price.operatorNote,
               ]
                 .filter(Boolean)
                 .map((s) => (
@@ -262,7 +271,10 @@ export function ChargerDetail({
           )}
         </Section>
 
-        <Section title={t("detail.connectors")}>
+        <Section
+          level={variant === "card" ? 3 : 2}
+          title={t("detail.connectors")}
+        >
           <View role="list">
             {l.evses.flatMap((e) =>
               e.connectors.map((x) => {
@@ -368,7 +380,10 @@ export function ChargerDetail({
         </Section>
 
         {directions ? (
-          <Section title={t("detail.gettingThere")}>
+          <Section
+            level={variant === "card" ? 3 : 2}
+            title={t("detail.gettingThere")}
+          >
             <Text
               style={[type.body, { color: c.text, fontSize: fs(fontSize.md) }]}
             >
@@ -425,6 +440,7 @@ export function ChargerDetail({
   if (variant === "page")
     return (
       <ScrollView
+        role="main"
         style={{ backgroundColor: c.background }}
         contentContainerStyle={styles.pageContent}
       >
@@ -437,6 +453,8 @@ export function ChargerDetail({
     );
   return (
     <View
+      role="region"
+      aria-label={place?.name ?? t("detail.title")}
       style={[styles.card, { backgroundColor: c.surface }]}
       testID="detail-card"
     >

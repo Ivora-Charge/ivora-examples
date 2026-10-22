@@ -40,9 +40,7 @@ test("offline demo: the map screen is labelled demo, lists the sample chargers a
   ).toBeVisible();
   await expect(page.getByTestId("result-count")).toContainText("places");
   await expect(page.getByTestId("place-Station Square")).toBeVisible();
-  await expect(page.getByTestId("place-Station Square")).toContainText(
-    "€0.7139",
-  );
+  await expect(page.getByTestId("place-Station Square")).toContainText("€0.71");
   await expect(page.getByTestId("map-attribution")).toContainText(
     "OpenStreetMap contributors",
   );
@@ -61,7 +59,7 @@ test("search by place, charger reference or EVSE ID, and filter", async ({
   await open(page);
   const search = page.getByRole("searchbox", { name: "Search chargers" });
   await search.fill("market hall");
-  await expect(page.getByTestId("result-count")).toHaveText(/^2 places/);
+  await expect(page.getByTestId("result-count")).toHaveText(/^1 place\b/);
   await expect(page.getByTestId("place-Market Hall")).toBeVisible();
 
   await search.fill("ZZ*MCK*E11");
@@ -86,7 +84,7 @@ test("a charger's page: price from the tariff, connectors, hours and directions"
   await open(page);
   await page.getByTestId("place-Town Hall Garage").click();
   await expect(page.getByTestId("detail-name")).toHaveText("Town Hall Garage");
-  await expect(page.getByTestId("detail-price")).toContainText("€0.4235");
+  await expect(page.getByTestId("detail-price")).toContainText("€0.42");
   await expect(page.getByTestId("detail-price")).toContainText("per kWh");
   await expect(page.getByTestId("connector")).toHaveCount(2);
   await expect(page.getByTestId("connector").first()).toContainText(
@@ -151,4 +149,62 @@ test("dark mode uses the dark tokens", async ({ page }) => {
       page.evaluate(() => getComputedStyle(document.body).backgroundColor),
     )
     .toBe("rgb(15, 13, 30)");
+});
+
+test("the charger header's close or back button has a ring that shows on violet", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByTestId("place-Station Square").click();
+  const close = page.getByTestId("detail-close");
+  await expect(close).toBeVisible();
+  await close.focus();
+  // Keyboard focus, so :focus-visible applies.
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Tab");
+  await expect(close).toBeFocused();
+  // focusOnPrimary in light mode (white on the violet header, see brand tokens).
+  await expect
+    .poll(() => close.evaluate((el) => getComputedStyle(el).outlineColor))
+    .toBe("rgb(255, 255, 255)");
+});
+
+test("the charger's price is ours, rounded to cents; the CPO's free text is not shown over it", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByTestId("place-Station Square").click();
+  const price = page.getByTestId("detail-price");
+  await expect(price).toContainText("€0.71");
+  await expect(price).toContainText("VAT included");
+  await expect(price).not.toContainText("€0.7139");
+  await expect(price).not.toContainText("0.59 per kWh");
+});
+
+test("the web build carries a strict Content-Security-Policy, and the app runs under it", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    (window as unknown as { cspViolations: string[] }).cspViolations = [];
+    document.addEventListener("securitypolicyviolation", (e) =>
+      (window as unknown as { cspViolations: string[] }).cspViolations.push(
+        `${e.violatedDirective} ${e.blockedURI}`,
+      ),
+    );
+  });
+  await open(page);
+  const policy = await page
+    .locator('meta[http-equiv="Content-Security-Policy"]')
+    .getAttribute("content");
+  expect(policy).toContain("script-src 'self';");
+  expect(policy).toMatch(
+    /connect-src 'self' https:\/\/tiles\.openfreemap\.org;/,
+  );
+  await page.getByTestId("place-Station Square").click();
+  await expect(page.getByTestId("detail-price")).toBeVisible();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { cspViolations: string[] }).cspViolations,
+    ),
+  ).toEqual([]);
 });

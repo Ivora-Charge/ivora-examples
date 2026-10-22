@@ -212,7 +212,7 @@ export default function MapScreen() {
 
   if (wide)
     return (
-      <View style={styles.row}>
+      <View style={styles.row} role="main">
         <View
           style={[
             styles.panel,
@@ -273,6 +273,7 @@ export default function MapScreen() {
 
   return (
     <View
+      role="main"
       style={[styles.flex, { backgroundColor: c.mapLand }]}
       onLayout={(e) => setHeight(e.nativeEvent.layout.height)}
     >

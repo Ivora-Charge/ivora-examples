@@ -12,7 +12,9 @@ export function DemoBanner({ offline }: { offline: boolean }) {
   return (
     <View
       style={[styles.banner, { backgroundColor: c.demoBackground }]}
-      role="status"
+      role="region"
+      aria-label={t("demo.label")}
+      aria-live="polite"
       testID="demo-banner"
     >
       <Text

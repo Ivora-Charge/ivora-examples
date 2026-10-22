@@ -2,7 +2,6 @@ import { Component, type ReactNode } from "react";
 import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
 import { i18n, t, tn } from "../i18n";
 import type { Bounds, LatLng } from "../lib/geo";
-import { OPENFREEMAP } from "../lib/map-style";
 import { present } from "../lib/present";
 import { placeKind } from "../lib/status";
 import type { LocationSummary } from "../lib/types";
@@ -127,28 +126,41 @@ export function YouMarker() {
 /** The map data credit, always readable, above the sheet and the tab bar. */
 export function Attribution({
   text,
+  url,
   bottom,
 }: {
   text: string;
+  /** The map provider's page for it (see `mapStyle`); plain text without one. */
+  url?: string;
   bottom: number;
 }) {
   const { c } = useTheme();
   const { fs } = useScale();
   if (!text) return null;
+  const style = [
+    styles.attribution,
+    { bottom: bottom + space.xs, backgroundColor: c.surface },
+  ];
+  const label = (
+    <Text style={[type.body, { color: c.muted, fontSize: fs(fontSize.xs) }]}>
+      {text}
+    </Text>
+  );
+  if (!url)
+    return (
+      <View style={style} testID="map-attribution">
+        {label}
+      </View>
+    );
   return (
     <Pressable
       role="link"
       aria-label={`${t("map.attribution")}: ${text}`}
-      onPress={() => void Linking.openURL(OPENFREEMAP.copyrightUrl)}
-      style={[
-        styles.attribution,
-        { bottom: bottom + space.xs, backgroundColor: c.surface },
-      ]}
+      onPress={() => void Linking.openURL(url)}
+      style={style}
       testID="map-attribution"
     >
-      <Text style={[type.body, { color: c.muted, fontSize: fs(fontSize.xs) }]}>
-        {text}
-      </Text>
+      {label}
     </Pressable>
   );
 }

@@ -30,8 +30,18 @@ const TEXT_PAIRS: [string, string][] = [
   ["text", "mapLand"],
 ];
 
-/** The focus ring: 3:1 against everything it can touch (WCAG 2.2, 2.4.13 and 1.4.11). */
-const FOCUS_NEIGHBOURS = ["background", "surface", "tint", "mapLand"];
+/**
+ * The focus ring: 3:1 against everything it can touch (WCAG 2.2, 2.4.13 and 1.4.11).
+ * On a `primary` fill (the charger header) the ring is `focusOnPrimary`.
+ */
+const FOCUS_NEIGHBOURS = [
+  "background",
+  "surface",
+  "tint",
+  "mapLand",
+  "primary",
+];
+const ringOn = (n: string) => (n === "primary" ? "focusOnPrimary" : "focus");
 
 describe("brand tokens", () => {
   it("define every colour as a hex value, with the same keys in light and dark", () => {
@@ -60,9 +70,19 @@ describe("brand tokens", () => {
     (s) => {
       const c = palette(s) as Record<string, string>;
       for (const n of FOCUS_NEIGHBOURS)
-        expect(contrast(c.focus, c[n]), `focus on ${n}`).toBeGreaterThanOrEqual(
-          3,
-        );
+        expect(
+          contrast(c[ringOn(n)], c[n]),
+          `${ringOn(n)} on ${n}`,
+        ).toBeGreaterThanOrEqual(3);
+    },
+  );
+
+  it.each(SCHEMES)(
+    "keep the selected charger's ring apart from the focus ring in %s mode",
+    (s) => {
+      const c = palette(s);
+      expect(c.selected).not.toBe(c.focus);
+      expect(contrast(c.selected, c.focus)).toBeGreaterThanOrEqual(1.5);
     },
   );
 

@@ -26,7 +26,7 @@ export function TabBar({
   const { fs } = useScale();
   return (
     <View
-      role="tablist"
+      role="navigation"
       aria-label={t("nav.label")}
       style={[
         rail ? styles.rail : styles.bar,
@@ -42,46 +42,45 @@ export function TabBar({
           <Mark size={34} />
         </View>
       )}
-      {state.routes.map((route, i) => {
-        const tab = TABS[route.name];
-        if (!tab) return null;
-        const on = state.index === i;
-        const fg = on ? c.text : c.muted;
-        return (
-          <Pressable
-            key={route.key}
-            role="tab"
-            aria-selected={on}
-            aria-label={tab.label()}
-            onPress={() => navigateToTab(route.key)}
-            testID={`tab-${route.name}`}
-            style={rail ? styles.railItem : styles.item}
-          >
-            <View style={[styles.pill, on && { backgroundColor: c.tint }]}>
-              <Icon name={tab.icon} color={on ? c.primary : fg} />
-            </View>
-            <Text
-              style={[
-                on ? type.strong : type.body,
-                { color: fg, fontSize: fs(fontSize.xs + 1) },
-              ]}
+      <View role="tablist" style={rail ? styles.railTabs : styles.barTabs}>
+        {state.routes.map((route, i) => {
+          const tab = TABS[route.name];
+          if (!tab) return null;
+          const on = state.index === i;
+          const fg = on ? c.text : c.muted;
+          return (
+            <Pressable
+              key={route.key}
+              role="tab"
+              aria-selected={on}
+              aria-label={tab.label()}
+              onPress={() => navigateToTab(route.key)}
+              testID={`tab-${route.name}`}
+              style={rail ? styles.railItem : styles.item}
             >
-              {tab.label()}
-            </Text>
-          </Pressable>
-        );
-      })}
+              <View style={[styles.pill, on && { backgroundColor: c.tint }]}>
+                <Icon name={tab.icon} color={on ? c.primary : fg} />
+              </View>
+              <Text
+                style={[
+                  on ? type.strong : type.body,
+                  { color: fg, fontSize: fs(fontSize.xs + 1) },
+                ]}
+              >
+                {tab.label()}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  bar: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    paddingTop: space.sm,
-    borderTopWidth: 1,
-  },
+  bar: { paddingTop: space.sm, borderTopWidth: 1 },
+  barTabs: { flexDirection: "row", justifyContent: "space-around" },
+  railTabs: { alignItems: "center", gap: space.sm },
   rail: {
     width: 92,
     alignItems: "center",

@@ -163,8 +163,11 @@ export function Section({
   children,
   aside,
   first = false,
+  level = 2,
 }: {
   title: string;
+  /** The heading level: one below the screen's or card's own heading. */
+  level?: 2 | 3;
   children: ReactNode;
   aside?: ReactNode;
   /** The first section has no rule above it. */
@@ -182,7 +185,7 @@ export function Section({
       <View style={styles.sectionHead}>
         <Text
           role="heading"
-          aria-level={3}
+          aria-level={level}
           style={[
             type.strong,
             styles.caps,

@@ -14,7 +14,7 @@
     "ios": "expo start --ios",
     "android": "expo start --android",
     "postinstall": "node scripts/copy-map-worker.mjs",
-    "build": "node scripts/copy-map-worker.mjs && expo export --platform web",
+    "build": "node scripts/copy-map-worker.mjs && expo export --platform web && node --env-file-if-exists=.env --env-file-if-exists=.env.production --env-file-if-exists=.env.local --env-file-if-exists=.env.production.local scripts/csp.mjs",
     "serve": "expo serve",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
@@ -49,6 +49,7 @@
     "react-native-web": "~0.21.4"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@playwright/test": "~1.63.0",
     "@types/geojson": "^7946.0.16",
     "@types/node": "^26.6.5",

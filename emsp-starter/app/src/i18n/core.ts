@@ -87,7 +87,8 @@ export function createI18n(
 
   /**
    * A price in ten-thousandths of the currency's major unit (4235 is €0.4235), as the
-   * server sends it: the currency's usual decimals, and up to 4 when the price has them.
+   * server sends it, rounded to the currency's minor unit (€0.42), as drivers read
+   * prices. The server keeps the exact figure for billing.
    */
   const money = (priceE4: number, currency: string) => {
     const digits = currencyDigits(currency);
@@ -97,10 +98,10 @@ export function createI18n(
         style: "currency",
         currency,
         minimumFractionDigits: digits,
-        maximumFractionDigits: Math.max(digits, 4),
+        maximumFractionDigits: digits,
       }).format(value);
     } catch {
-      return `${value.toFixed(Math.max(digits, 2))} ${currency}`;
+      return `${value.toFixed(digits)} ${currency}`;
     }
   };
 

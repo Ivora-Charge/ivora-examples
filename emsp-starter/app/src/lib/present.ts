@@ -58,13 +58,25 @@ export function present(i: I18n) {
       : t("price.line", vars);
   };
 
-  /** The detail's price: the lead component big, the rest as lines. */
+  /**
+   * The detail's price: the lead component big, the rest as lines. The CPO's own
+   * free text (OCPI `tariff_alt_text`) is often without VAT or in another language, so
+   * it is shown only when there are no structured prices, and then as the CPO's note.
+   */
   const detailPrice = (p: DisplayPrice) => {
     const paid = p.components.filter((c) => c.priceE4 > 0);
     const main = paid.find((c) => c.type === "ENERGY") ?? paid[0];
+    const structured = p.free || p.components.length > 0;
     return {
-      amount:
-        p.free || !main ? t("price.noFee") : i.money(main.priceE4, p.currency),
+      operatorNote:
+        !structured && p.altText
+          ? t("price.operatorNote", { text: p.altText })
+          : undefined,
+      amount: !structured
+        ? t("price.unknown")
+        : p.free || !main
+          ? t("price.noFee")
+          : i.money(main.priceE4, p.currency),
       unit: p.free || !main ? "" : unit(main),
       vat: !main
         ? ""

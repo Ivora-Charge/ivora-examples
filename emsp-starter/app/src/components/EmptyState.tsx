@@ -21,6 +21,7 @@ export function EmptyState({
   const { fs } = useScale();
   return (
     <ScrollView
+      role="main"
       style={{ backgroundColor: c.background }}
       contentContainerStyle={styles.page}
     >

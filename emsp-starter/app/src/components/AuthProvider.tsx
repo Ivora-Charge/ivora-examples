@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from "react";
 import * as api from "../lib/api";
+import { keepSessionFresh } from "../lib/session-refresh";
 import { loadSession, saveSession, type Stored } from "../lib/session-store";
 import type { Driver } from "../lib/types";
 
@@ -28,12 +29,12 @@ const AuthContext = createContext<AuthApi>({
   signOut: async () => {},
 });
 
-const expired = (s: Stored) =>
-  Date.parse(s.session.expiresAt) - 60_000 < Date.now();
-
 /**
- * The signed-in driver, kept between launches (see session-store). An expired access
- * token is refreshed once at start; when that fails, the driver signs in again.
+ * The signed-in driver, kept between launches (see session-store). The session is
+ * refreshed shortly before its access token expires, at launch too when it already
+ * has (see session-refresh). Being offline or a server error keeps the driver signed
+ * in and tries again later; only a refresh token the server turns down (400 or 401)
+ * signs the driver out.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<Auth>({ state: "loading" });
@@ -41,30 +42,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let live = true;
-    (async () => {
-      let s = await loadSession();
-      if (s && expired(s)) {
-        try {
-          s = {
-            ...s,
-            session: await api.refreshSession(s.session.refreshToken),
-          };
-          await saveSession(s);
-        } catch {
-          s = null;
-          await saveSession(null);
-        }
-      }
+    void loadSession().then((s) => {
       if (!live) return;
       setStored(s);
       setAuth(
         s ? { state: "signedIn", driver: s.driver } : { state: "signedOut" },
       );
-    })();
+    });
     return () => {
       live = false;
     };
   }, []);
+
+  useEffect(() => {
+    if (!stored) return;
+    return keepSessionFresh(stored.session, {
+      refresh: api.refreshSession,
+      onRefreshed: (session) => {
+        const next = { ...stored, session };
+        void saveSession(next);
+        setStored(next);
+      },
+      onRejected: () => {
+        void saveSession(null);
+        setStored(null);
+        setAuth({ state: "signedOut" });
+      },
+    });
+  }, [stored]);
 
   const signIn = useCallback(async (email: string, code: string) => {
     const s = await api.verifyCode(email, code);

@@ -33,17 +33,12 @@ export function PlaceRow({
         : avail.kind === "down"
           ? c.danger
           : c.muted;
-  const label = t("place.a11y", {
-    name: place.name,
-    status: avail.text,
-    power: i18n.kw(place.max_power_kw),
-    price: [price.amount, price.unit].filter(Boolean).join(" "),
-    distance,
-  }).trim();
   return (
     <Pressable
+      // No aria-label: the row's name is its own text (power, name, status, distance,
+      // price), so the words a driver sees are the ones voice control and screen
+      // readers use (WCAG 2.5.3).
       role="button"
-      aria-label={label}
       aria-current={selected ? "true" : undefined}
       onPress={onPress}
       testID={`place-${place.name}`}
@@ -61,7 +56,7 @@ export function PlaceRow({
         pressed && styles.pressed,
       ]}
     >
-      <PowerTile kw={place.max_power_kw} kind={avail.kind} />
+      <PowerTile kw={place.max_power_kw} kind={avail.kind} announce />
       <View style={styles.middle}>
         <Text
           style={[

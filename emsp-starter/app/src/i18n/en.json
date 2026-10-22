@@ -1,5 +1,6 @@
 {
   "demo.badge": "Demo",
+  "demo.label": "Demo mode",
   "demo.offline": "Sample chargers from a built-in test network. Nothing is sent anywhere, nothing charges and no card is charged.",
   "demo.server": "The server is in demo mode, with sample chargers from a mock CPO. Nothing charges and no card is charged.",
 
@@ -53,7 +54,6 @@
   "results.retry": "Try again",
 
   "place.free": "{free} of {total} free",
-  "place.a11y": "{name}. {status}. Up to {power}. {price}. {distance}",
   "place.selected": "Selected",
 
   "status.free": "Free",
@@ -73,6 +73,7 @@
   "price.line": "{price} {unit}",
   "price.min": "Minimum {amount}",
   "price.max": "At most {amount}",
+  "price.operatorNote": "The operator's note: {text}",
   "price.displayOnly": "You pay what the charger's operator bills for your session.",
 
   "unit.kw": "{n} kW",

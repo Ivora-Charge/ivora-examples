@@ -138,7 +138,11 @@ function NativeMap({
           </Marker>
         ) : null}
       </Map>
-      <Attribution text={map.attribution} bottom={insets.bottom} />
+      <Attribution
+        text={map.attribution}
+        url={map.attributionUrl}
+        bottom={insets.bottom}
+      />
     </View>
   );
 }

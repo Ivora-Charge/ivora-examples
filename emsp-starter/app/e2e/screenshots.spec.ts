@@ -14,6 +14,14 @@ for (const scheme of ["light", "dark"] as const)
     await expect(page.getByTestId("place-Station Square")).toBeVisible();
     const phone = info.project.name === "mobile";
     if (!phone) await page.getByTestId("place-Station Square").click();
+    // Phones: one step closer, so the clusters open into tiles of every status.
+    else {
+      await page.waitForTimeout(1500);
+      await page
+        .getByRole("button", { name: /^2 places/ })
+        .first()
+        .click();
+    }
     await page.waitForTimeout(4000);
     await page.screenshot({
       path: `docs/${phone ? "phone" : "desktop"}-${scheme}.png`,
