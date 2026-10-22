@@ -128,8 +128,9 @@ async function Content() {
   );
 }
 
-/** The page behind its loading skeleton. */
-export default function Page() {
+/** Checks the role first (a real redirect), then the page behind its loading skeleton. */
+export default async function Page() {
+  await requireRole("viewer");
   return (
     <Loading shape="list">
       <Content />

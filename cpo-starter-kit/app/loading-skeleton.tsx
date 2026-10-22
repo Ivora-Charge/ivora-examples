@@ -32,9 +32,11 @@ export function LoadingSkeleton({ shape = "list" }: { shape?: Shape }) {
 }
 
 /**
- * A page's own loading boundary. Pages check what can answer 404 (a module that is
- * off, a malformed id) before it, because once the skeleton streams the status is
- * fixed at 200. Per page, not a loading.tsx, so it never wraps a child route's 404.
+ * A page's own loading boundary. Pages run what can answer 404 or redirect (a module
+ * that is off, the role check) before it, because once the skeleton streams the status
+ * is fixed at 200. Pages whose whole load is a record lookup that can 404 (a charger,
+ * tariff, card or station) have no skeleton. Per page, not a loading.tsx, so it never
+ * wraps a child route's 404.
  */
 export function Loading({
   shape,

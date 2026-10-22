@@ -39,7 +39,14 @@ describe("proxy, signed out", () => {
   });
 
   it("sends deep links to sign-in (the kit keeps no return path)", async () => {
-    for (const path of ["/chargers", "/pricing/123", "/reports?period=7d"])
+    for (const path of [
+      "/chargers",
+      "/pricing/123",
+      "/reports?period=7d",
+      // Public pages match exactly, not as a prefix.
+      "/welcome-anything",
+      "/login/more",
+    ])
       expect(await visit(path), path).toBe("/login");
   });
 

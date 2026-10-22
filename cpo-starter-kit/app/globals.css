@@ -9,6 +9,8 @@ body {
   margin: 0;
   background: var(--color-bg);
   color: var(--color-text);
+  /* Checkboxes, radios and ranges follow the brand (and the operator's) colour. */
+  accent-color: var(--color-primary);
   font-family: var(--font-sans);
   font-size: var(--font-size-md);
   line-height: var(--line-height);
@@ -20,11 +22,11 @@ a {
   color: var(--color-link);
   font-weight: var(--font-weight-medium);
   text-decoration: underline;
-  text-decoration-thickness: 1px;
+  text-decoration-thickness: var(--border-width);
   text-underline-offset: 0.2em;
 }
 a:hover {
-  text-decoration-thickness: 2px;
+  text-decoration-thickness: var(--underline-hover);
 }
 
 :focus-visible {
@@ -334,6 +336,10 @@ h2 {
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+}
+/* Two stats a row on a phone: an odd last one takes the whole row (undone from 900px). */
+.stats > :last-child:nth-child(odd) {
+  grid-column: 1 / -1;
 }
 .stat {
   display: flex;
@@ -701,6 +707,8 @@ h2 .muted {
 .checklist .check-state {
   grid-column: 3;
   grid-row: 1;
+  /* Level with the step name, which is a 44 px target. */
+  align-self: center;
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-bold);
   color: var(--color-text-muted);
@@ -940,6 +948,23 @@ h2 .muted {
   }
   .stat {
     padding: var(--space-4) var(--space-5);
+  }
+  .stats > :last-child:nth-child(odd) {
+    grid-column: auto;
+  }
+  .public-bar,
+  .driver-bar {
+    padding: var(--space-3) var(--space-6);
+  }
+  .public-bar .theme-toggle {
+    width: auto;
+    padding: 0 var(--space-4);
+  }
+  .public-bar .theme-label {
+    position: static;
+    width: auto;
+    height: auto;
+    clip-path: none;
   }
 }
 
@@ -1285,6 +1310,10 @@ textarea:focus-visible {
 .report-filters .field {
   flex: 1 1 10rem;
 }
+/* The period names are long: a row of their own on a phone. */
+.report-filters .field:has(#period) {
+  flex-basis: 16rem;
+}
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -1376,7 +1405,7 @@ textarea:focus-visible {
 
 /* Press, hover and live-status changes. Reduced motion turns transitions off above. */
 .link-button:hover {
-  text-decoration-thickness: 2px;
+  text-decoration-thickness: var(--underline-hover);
 }
 .button.secondary:active,
 .menu-button:active {
@@ -1704,23 +1733,6 @@ main.public-main {
     grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
   }
 }
-@media (min-width: 900px) {
-  .public-bar,
-  .driver-bar {
-    padding: var(--space-3) var(--space-6);
-  }
-  .public-bar .theme-toggle {
-    width: auto;
-    padding: 0 var(--space-4);
-  }
-  .public-bar .theme-label {
-    position: static;
-    width: auto;
-    height: auto;
-    clip-path: none;
-  }
-}
-
 /* Driver pages (/c/<code>, the demo checkout): one phone-width column. */
 .driver-bar {
   justify-content: space-between;
@@ -1748,7 +1760,7 @@ main.public-main {
   );
   background-size: 200% 100%;
   border-radius: var(--radius-sm);
-  animation: skeleton-pulse 1.4s ease-in-out infinite;
+  animation: skeleton-pulse var(--pulse) ease-in-out infinite;
 }
 .skeleton-title {
   width: 40%;
@@ -1783,12 +1795,6 @@ main.public-main {
   }
 }
 
-/* Two stats a row on a phone: an odd last one takes the whole row. */
-@media (max-width: 899px) {
-  .stats > :last-child:nth-child(odd) {
-    grid-column: 1 / -1;
-  }
-}
 .charge-board h1 .muted {
   display: block;
   margin-top: var(--space-1);

@@ -24,7 +24,6 @@ import {
 } from "../actions";
 import { ChargerAction, Confirm } from "../forms";
 import { Check, StatusPill } from "../status";
-import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "Charger" };
 
@@ -33,7 +32,11 @@ const when = (iso: string | null) =>
     ? new Date(iso).toISOString().replace("T", " ").slice(0, 19) + " UTC"
     : "Never";
 
-async function Content({ params }: { params: Promise<{ key: string }> }) {
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ key: string }>;
+}) {
   const me = await requireRole("viewer");
   const { key } = await params;
   const r = await loadCharger(getChargers(), me, key);
@@ -450,14 +453,5 @@ async function StickersCard({
         <p className="muted">No sticker codes yet.</p>
       )}
     </section>
-  );
-}
-
-/** The page behind its loading skeleton. */
-export default function Page(props: Parameters<typeof Content>[0]) {
-  return (
-    <Loading shape="detail">
-      <Content {...props} />
-    </Loading>
   );
 }

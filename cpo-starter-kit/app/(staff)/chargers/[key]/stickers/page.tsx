@@ -6,7 +6,6 @@ import { getChargers, loadCharger } from "@/lib/server/chargers";
 import { qrBase, qrSvg } from "@/lib/server/qr";
 import { stickerUrl } from "@/lib/server/qr-base";
 import { PrintButton } from "./print-button";
-import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "QR stickers" };
 
@@ -14,7 +13,11 @@ export const metadata = { title: "QR stickers" };
  * One sticker per connector, to print. Each QR code is <your domain>/c/<code>: never an
  * Ivora or hosting-provider address, and refused until that domain is set.
  */
-async function Content({ params }: { params: Promise<{ key: string }> }) {
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ key: string }>;
+}) {
   const me = await requireRole("viewer");
   const { key } = await params;
   const r = await loadCharger(getChargers(), me, key);
@@ -98,14 +101,5 @@ async function Content({ params }: { params: Promise<{ key: string }> }) {
         </>
       )}
     </>
-  );
-}
-
-/** The page behind its loading skeleton. */
-export default function Page(props: Parameters<typeof Content>[0]) {
-  return (
-    <Loading shape="detail">
-      <Content {...props} />
-    </Loading>
   );
 }

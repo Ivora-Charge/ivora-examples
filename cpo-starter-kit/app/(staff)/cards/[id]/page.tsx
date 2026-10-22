@@ -23,7 +23,6 @@ import {
   PeriodSelect,
   StatePill,
 } from "../shared";
-import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "Card" };
 
@@ -90,7 +89,7 @@ function Sessions({ v }: { v: CardDetail }) {
   );
 }
 
-async function Content({
+export default async function Page({
   params,
   searchParams,
 }: {
@@ -283,16 +282,5 @@ async function Content({
         </p>
       )}
     </>
-  );
-}
-
-/** Answers 404 first, then the page behind its loading skeleton. */
-export default async function Page(props: Parameters<typeof Content>[0]) {
-  if (!config.fleetModule) notFound();
-  if (!/^\d{1,15}$/.test((await props.params).id)) notFound();
-  return (
-    <Loading shape="detail">
-      <Content {...props} />
-    </Loading>
   );
 }

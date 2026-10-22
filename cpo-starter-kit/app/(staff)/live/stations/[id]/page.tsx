@@ -15,7 +15,6 @@ import { CommandsCard } from "../../commands";
 import { CommandForm, RecheckForm, ResendForm } from "../../forms";
 import { Refresher } from "../../refresher";
 import { commandTitle, ConnectorPill, StatePill, when } from "../../status";
-import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "Live charger" };
 
@@ -23,7 +22,7 @@ export const metadata = { title: "Live charger" };
 const sessionLabel = (s: SessionView) =>
   `${s.staff ? "staff " : s.free ? "free " : ""}session ${s.id}${s.connectorNumber ? ` on connector ${s.connectorNumber}` : ""} (since ${when(s.startedAt)}, ${formatKwh(s.energyKwh)}${s.idToken ? `, token ${s.idToken}` : ""})`;
 
-async function Content({
+export default async function Page({
   params,
   searchParams,
 }: {
@@ -344,15 +343,5 @@ async function Content({
         showStation={false}
       />
     </>
-  );
-}
-
-/** Answers 404 first, then the page behind its loading skeleton. */
-export default async function Page(props: Parameters<typeof Content>[0]) {
-  if (!/^\d{1,15}$/.test((await props.params).id)) notFound();
-  return (
-    <Loading shape="detail">
-      <Content {...props} />
-    </Loading>
   );
 }

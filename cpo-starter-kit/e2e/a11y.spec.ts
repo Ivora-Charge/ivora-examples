@@ -54,6 +54,23 @@ test("main screens pass axe in light and dark and do not scroll sideways on a ph
     }
 });
 
+test("main screens do not scroll sideways on a tablet or a desktop", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  for (const width of [768, 1440]) {
+    await page.setViewportSize({ width, height: 1000 });
+    for (const path of PAGES) {
+      await page.goto(path);
+      await page.waitForLoadState("networkidle");
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - window.innerWidth,
+      );
+      expect(overflow, `${path} at ${width} px`).toBeLessThanOrEqual(0);
+    }
+  }
+});
+
 test("driver pages pass axe in light and dark and do not scroll sideways on a phone", async ({
   page,
 }) => {
@@ -75,7 +92,18 @@ test("driver pages pass axe in light and dark and do not scroll sideways on a ph
 test("missing pages answer 404, outside and inside the staff app", async ({
   page,
 }) => {
-  for (const path of ["/no-such-page", "/live/stations/abc", "/cards/abc"]) {
+  for (const path of [
+    "/no-such-page",
+    "/live/stations/abc",
+    "/cards/abc",
+    // Well-formed but unknown: the lookup runs before anything streams.
+    "/chargers/no-such-charger",
+    "/chargers/no-such-charger/stickers",
+    "/pricing/no-such-tariff",
+    "/live/stations/99999",
+    "/cards/99999",
+    "/demo/checkout/nope",
+  ]) {
     const res = await page.goto(path);
     expect(res?.status(), path).toBe(404);
     await expect(

@@ -5,7 +5,6 @@ import { config, isDemo } from "@/lib/server/env";
 import { demoPayment } from "@/lib/server/ivora/demo";
 import { cookieDemoFleet } from "@/lib/server/ivora/demo-cookie";
 import { demoPayAction } from "../../actions";
-import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "Demo checkout" };
 
@@ -13,7 +12,11 @@ export const metadata = { title: "Demo checkout" };
  * Demo mode only: stands in for Stripe Checkout, where a real driver enters their card
  * on a page run by Ivora and Stripe. No card is asked for and nothing is charged.
  */
-async function Content({ params }: { params: Promise<{ payment: string }> }) {
+export default async function Page({
+  params,
+}: {
+  params: Promise<{ payment: string }>;
+}) {
   if (!isDemo()) notFound();
   const { payment } = await params;
   const p = await demoPayment(cookieDemoFleet(), payment);
@@ -58,15 +61,5 @@ async function Content({ params }: { params: Promise<{ payment: string }> }) {
         </p>
       )}
     </section>
-  );
-}
-
-/** Answers 404 first, then the page behind its loading skeleton. */
-export default async function Page(props: Parameters<typeof Content>[0]) {
-  if (!isDemo()) notFound();
-  return (
-    <Loading shape="driver">
-      <Content {...props} />
-    </Loading>
   );
 }

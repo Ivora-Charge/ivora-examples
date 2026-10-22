@@ -12,7 +12,6 @@ import {
 } from "@/lib/server/pricing";
 import { holdMinor } from "@/lib/server/pricing/tariff";
 import { FinishTariff, TariffEditor } from "../forms";
-import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "Tariff" };
 
@@ -23,7 +22,7 @@ const when = (iso: string) =>
     timeZone: "UTC",
   }).format(Date.parse(iso)) + " UTC";
 
-async function Content({
+export default async function Page({
   params,
   searchParams,
 }: {
@@ -146,14 +145,5 @@ async function Content({
         </ul>
       </section>
     </>
-  );
-}
-
-/** The page behind its loading skeleton. */
-export default function Page(props: Parameters<typeof Content>[0]) {
-  return (
-    <Loading shape="detail">
-      <Content {...props} />
-    </Loading>
   );
 }

@@ -329,9 +329,10 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
   );
 }
 
-/** Answers 404 first, then the page behind its loading skeleton. */
+/** Answers 404 and checks the role first (real status codes), then the page behind its loading skeleton. */
 export default async function Page(props: Parameters<typeof Content>[0]) {
   if (!config.fleetModule) notFound();
+  await requireRole("viewer");
   return (
     <Loading shape="stats">
       <Content {...props} />

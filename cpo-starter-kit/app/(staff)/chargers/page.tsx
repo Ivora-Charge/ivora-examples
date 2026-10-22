@@ -104,8 +104,9 @@ async function Content({
   );
 }
 
-/** The page behind its loading skeleton. */
-export default function Page(props: Parameters<typeof Content>[0]) {
+/** Checks the role first (a real redirect), then the page behind its loading skeleton. */
+export default async function Page(props: Parameters<typeof Content>[0]) {
+  await requireRole("viewer");
   return (
     <Loading shape="list">
       <Content {...props} />
