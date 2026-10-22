@@ -77,7 +77,8 @@ create table public.emsp_payments (
   -- For an admin: why this payment needs a person. Never auto-charged.
   review text check (review in (
     'cdr_above_hold', 'hold_expired', 'currency_mismatch', 'vat_unknown',
-    'increment_declined', 'credit_cdr', 'hold_unknown', 'dispute', 'refund_outside'
+    'increment_declined', 'credit_cdr', 'hold_unknown', 'dispute', 'refund_outside',
+    'second_cdr'
   )),
   -- The amount the CDR is above what could be captured, in minor units.
   shortfall_amount bigint check (shortfall_amount >= 0),
@@ -112,8 +113,11 @@ create table public.emsp_payment_refunds (
   request_id text not null check (request_id ~ '^[A-Za-z0-9._:-]{8,64}$'),
   amount bigint not null check (amount > 0),
   reason text not null default '' check (char_length(reason) <= 300),
-  -- 'pending': reserved, being sent to Stripe. 'failed' gives the amount back.
-  status text not null default 'pending' check (status in ('pending', 'succeeded', 'failed')),
+  -- 'pending': reserved; sent with no answer yet, or (with stripe_refund_id) pending at
+  -- Stripe. 'requires_action': Stripe waits on the bank. 'failed' gives the amount back.
+  status text not null default 'pending' check (status in (
+    'pending', 'requires_action', 'succeeded', 'failed'
+  )),
   stripe_refund_id text unique check (stripe_refund_id ~ '^re_[A-Za-z0-9_]+$'),
   actor text not null check (char_length(actor) between 1 and 100),
   created_at timestamptz not null default now(),
@@ -187,8 +191,10 @@ $$;
 revoke execute on function public.emsp_payment_reserve_refund(uuid, text, bigint, text, text) from public, anon, authenticated;
 grant execute on function public.emsp_payment_reserve_refund(uuid, text, bigint, text, text) to service_role;
 
--- Settles a refund and keeps the payment's refunded amount the sum of its succeeded
--- refunds, under the same lock. Only a pending refund changes.
+-- Records a refund's status and keeps the payment's refunded amount the sum of its
+-- succeeded refunds, under the same lock. A pending or requires_action refund may move
+-- to any status; a succeeded one only to failed (Stripe can fail it later); a failed
+-- one never changes.
 create function public.emsp_payment_settle_refund(
   p_refund_id uuid,
   p_status text,
@@ -210,7 +216,8 @@ begin
   set status = p_status,
       stripe_refund_id = coalesce(p_stripe_refund_id, stripe_refund_id),
       updated_at = now()
-  where id = p_refund_id and status = 'pending'
+  where id = p_refund_id
+    and (status in ('pending', 'requires_action') or (status = 'succeeded' and p_status = 'failed'))
   returning * into r;
   if not found then
     select * into r from public.emsp_payment_refunds where id = p_refund_id;

@@ -96,6 +96,7 @@ export type Refund = {
   amount: number;
   status: "pending" | "requires_action" | "succeeded" | "failed" | "canceled";
   payment_intent: string | null;
+  metadata?: Record<string, string>;
 };
 
 export type EphemeralKey = { id: string; secret: string };

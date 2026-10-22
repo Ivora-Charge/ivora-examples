@@ -7,12 +7,13 @@ import { isDemo } from "@/lib/server/demo";
 import { emitPaymentEvent } from "./events";
 import { cdrAmount } from "./money";
 import type { PaymentDeps } from "./registry";
-import type {
-  Payment,
-  PaymentPatch,
-  PaymentStatus,
-  Refund,
-  ReviewReason,
+import {
+  refundStatusOf,
+  type Payment,
+  type PaymentPatch,
+  type PaymentStatus,
+  type Refund,
+  type ReviewReason,
 } from "./store";
 import { StripeError, StripeUnknownError, type PaymentIntent } from "./stripe";
 
@@ -238,20 +239,54 @@ export async function sendReceipt(
 
 /**
  * Settles the payment of a CDR's START_SESSION command. Safe to call more than once
- * and at once (the CDR event and the sweep): each step is a compare-and-swap, and the
- * capture has one idempotency key per command.
+ * and at once (the CDR event, the sweep and the webhook): each step is a
+ * compare-and-swap, and the capture has one idempotency key per command.
+ *
+ * `captured` is Stripe's word (a webhook) that the hold was captured already, by a
+ * capture of ours whose answer was lost or that has not been written yet: the payment
+ * is then recorded from the CDR, as if our capture had answered, without capturing.
  */
 export async function settleCdr(
   stored: StoredCdr,
   deps: PaymentDeps,
+  captured?: PaymentIntent,
 ): Promise<Payment | null> {
   if (!stored.commandId) return null;
   let p = await deps.payments.getByCommand(stored.commandId);
   if (!p) return null;
+  const onStripe =
+    captured?.status === "succeeded" && captured.id === p.paymentIntentId
+      ? captured
+      : null;
   const cdr = stored.cdr;
   if (cdr.credit) return flag(p, "credit_cdr", deps);
-  // One CDR settles a payment; another one for the same start is for a person.
-  if (p.cdrId && p.cdrId !== stored.id) return p;
+  // One CDR settles a payment; another one for the same start (a correction, say) is
+  // for a person: nothing more is charged or refunded automatically.
+  if (p.cdrId && p.cdrId !== stored.id) {
+    if (p.review === "second_cdr" && !p.reviewedAt) return p;
+    // Already looked at, and this CDR was there then: not new.
+    if (
+      p.review === "second_cdr" &&
+      p.reviewedAt &&
+      Date.parse(stored.receivedAt) <= Date.parse(p.reviewedAt)
+    )
+      return p;
+    return (
+      await move(
+        p,
+        [p.status],
+        { review: "second_cdr", reviewedAt: null },
+        deps,
+        "payment.review",
+        {
+          reason: "second_cdr",
+          cdr_id: stored.id,
+          cdr_amount: cdrAmount(cdr.total_cost, cdr.currency).minor,
+          cdr_currency: cdr.currency,
+        },
+      )
+    ).payment;
+  }
   const { minor, vatKnown } = cdrAmount(cdr.total_cost, cdr.currency);
   const fromCdr: PaymentPatch = {
     cdrId: stored.id,
@@ -268,16 +303,40 @@ export async function settleCdr(
       : flag(p, "hold_expired", deps, { ...fromCdr, shortfallAmount: minor });
   }
   if (p.status !== "held") return p;
-  if (p.cdrId && p.review === "currency_mismatch") return p;
+  if (p.cdrId && p.review === "currency_mismatch" && !onStripe) return p;
 
-  if (cdr.currency !== p.currency)
-    return flag(p, "currency_mismatch", deps, {
-      ...fromCdr,
-      releaseAfter: null,
-    });
+  if (cdr.currency !== p.currency) {
+    if (!onStripe)
+      return flag(p, "currency_mismatch", deps, {
+        ...fromCdr,
+        releaseAfter: null,
+      });
+    // Captured on Stripe all the same (an admin's capture, or the Dashboard): keep
+    // the record true, still for a person.
+    return (
+      await move(
+        p,
+        ["held"],
+        {
+          ...fromCdr,
+          status: "captured",
+          capturedAmount: onStripe.amount_received,
+          releaseAfter: null,
+          review: "currency_mismatch",
+        },
+        deps,
+        "payment.captured",
+        { amount: onStripe.amount_received, source: "stripe" },
+      )
+    ).payment;
+  }
 
   const now = nowOf(deps);
-  if (p.holdExpiresAt && Date.parse(p.holdExpiresAt) <= now.getTime()) {
+  if (
+    !onStripe &&
+    p.holdExpiresAt &&
+    Date.parse(p.holdExpiresAt) <= now.getTime()
+  ) {
     return (
       await move(
         p,
@@ -295,15 +354,16 @@ export async function settleCdr(
     ).payment;
   }
 
-  if (minor === 0) {
+  if (minor === 0 && !onStripe) {
     p = await cancelHold(p, deps, "cancel", fromCdr);
     if (p.status === "released") await sendReceipt(p, stored, deps);
     return p;
   }
 
   const capture = Math.min(minor, p.authorizedAmount);
-  let captured = capture;
-  if (!isDemo()) {
+  let taken = capture;
+  if (onStripe) taken = onStripe.amount_received;
+  else if (!isDemo()) {
     if (!deps.stripe || !p.paymentIntentId) return p;
     try {
       const pi = await deps.stripe.capture(
@@ -311,7 +371,7 @@ export async function settleCdr(
         capture,
         holdKey(p.commandId, "capture"),
       );
-      captured = pi.amount_received;
+      taken = pi.amount_received;
     } catch (e) {
       if (e instanceof StripeUnknownError) return p; // the sweep tries again
       if (!(e instanceof StripeError)) throw e;
@@ -338,31 +398,39 @@ export async function settleCdr(
         );
         return p;
       }
-      captured = pi.amount_received;
+      taken = pi.amount_received;
     }
   }
   const above = minor > p.authorizedAmount;
   // A new reason replaces an older one (a declined raise is then also a CDR above
-  // the hold); without one, the older reason stays.
-  const review: ReviewReason | null = above
-    ? "cdr_above_hold"
-    : vatKnown
-      ? null
-      : "vat_unknown";
+  // the hold); without one, the older reason stays. Stripe holding another amount
+  // than ours means it was captured outside this server.
+  const review: ReviewReason | null =
+    taken !== capture
+      ? "refund_outside"
+      : above
+        ? "cdr_above_hold"
+        : vatKnown
+          ? null
+          : "vat_unknown";
   const r = await move(
     p,
     ["held"],
     {
       ...fromCdr,
       status: "captured",
-      capturedAmount: captured,
+      capturedAmount: taken,
       releaseAfter: null,
       ...(review ? { review, reviewedAt: null } : {}),
       shortfallAmount: above ? minor - p.authorizedAmount : null,
     },
     deps,
     "payment.captured",
-    { amount: captured, cdr_amount: minor },
+    {
+      amount: taken,
+      cdr_amount: minor,
+      ...(onStripe ? { source: "stripe" } : {}),
+    },
   );
   if (r.moved) await sendReceipt(r.payment, stored, deps);
   return r.payment;
@@ -579,7 +647,9 @@ export async function refundPayment(
   let refund: Refund = reserved.refund;
   if (reserved.outcome === "replayed" && refund.amount !== input.amount)
     throw new PaymentError("This request ID was used for another refund.", 409);
-  if (refund.status !== "pending") return refund;
+  // Settled, or at Stripe already (pending there, or waiting on the bank): its webhook
+  // settles it. Sending it again could refund twice once Stripe forgets the key.
+  if (refund.status !== "pending" || refund.stripeRefundId) return refund;
 
   if (isDemo())
     return (
@@ -596,11 +666,10 @@ export async function refundPayment(
       },
       holdKey(p.commandId, `refund:${refund.requestId}`),
     );
-    const failed = r.status === "failed" || r.status === "canceled";
     refund =
       (await deps.payments.settleRefund(
         refund.id,
-        failed ? "failed" : "succeeded",
+        refundStatusOf(r.status),
         r.id,
       )) ?? refund;
   } catch (e) {
@@ -657,11 +726,40 @@ export async function captureForReview(
     } catch (e) {
       if (e instanceof StripeUnknownError)
         throw new PaymentError("Stripe did not answer. Try again.", 502);
-      if (e instanceof StripeError)
+      if (!(e instanceof StripeError)) throw e;
+      // Refused: perhaps captured already (an earlier try whose answer was lost, with
+      // another amount and so another key) or dropped. Go by what Stripe holds.
+      let pi: PaymentIntent | null = null;
+      try {
+        pi = await deps.stripe.getPaymentIntent(p.paymentIntentId);
+      } catch {
+        // Unknown: refuse below; the payment stays held for another try.
+      }
+      if (pi?.status === "succeeded")
+        return (
+          await move(
+            p,
+            ["held"],
+            {
+              status: "captured",
+              capturedAmount: pi.amount_received,
+              releaseAfter: null,
+              reviewedAt: nowOf(deps).toISOString(),
+            },
+            deps,
+            "payment.captured",
+            { amount: pi.amount_received, source: "stripe" },
+          )
+        ).payment;
+      if (pi?.status === "canceled") {
+        await syncFromStripe(p, pi, deps);
         throw new PaymentError(
-          `Stripe refused the capture (${e.code ?? e.type}).`,
+          "The hold is gone on Stripe (it expired or was cancelled): nothing was charged.",
         );
-      throw e;
+      }
+      throw new PaymentError(
+        `Stripe refused the capture (${e.code ?? e.type}).`,
+      );
     }
   }
   return (

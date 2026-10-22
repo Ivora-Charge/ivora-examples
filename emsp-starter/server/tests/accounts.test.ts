@@ -270,6 +270,56 @@ describe("passwordless sign-in (demo mode)", () => {
     ).toBe(429);
   });
 
+  it("stays limited when the caller forges X-Forwarded-For", async () => {
+    const forged = (
+      n: number,
+      email: string,
+      extra: Record<string, string> = {},
+    ) =>
+      codePOST(
+        post(
+          "/api/v1/auth/code",
+          { email },
+          { headers: { "x-forwarded-for": `198.51.100.${n}`, ...extra } },
+        ),
+      );
+    // No trusted header: a raw X-Forwarded-For is never a key, so a fresh value per
+    // request gets no fresh quota for an email.
+    const email = "forged@example.com";
+    for (let i = 0; i < SIGN_IN_LIMITS.code.perEmail.limit; i++)
+      expect((await forged(i, email)).status).toBe(202);
+    expect((await forged(200, email)).status).toBe(429);
+
+    // Behind a proxy that appends the client to X-Forwarded-For, only its last entry
+    // counts: a forged first entry is ignored.
+    process.env.TRUSTED_PROXY_HEADER = "x-forwarded-for";
+    resetSignInLimitsForTests();
+    const viaProxy = (n: number) =>
+      codePOST(
+        post(
+          "/api/v1/auth/code",
+          { email: `p${n}@example.com` },
+          { headers: { "x-forwarded-for": `198.51.100.${n}, 203.0.113.7` } },
+        ),
+      );
+    for (let i = 0; i < SIGN_IN_LIMITS.code.perClient.limit; i++)
+      expect((await viaProxy(i)).status).toBe(202);
+    expect((await viaProxy(99)).status).toBe(429);
+
+    // With another trusted header, X-Forwarded-For is not read at all.
+    process.env.TRUSTED_PROXY_HEADER = "x-client-ip";
+    resetSignInLimitsForTests();
+    for (let i = 0; i < SIGN_IN_LIMITS.code.perClient.limit; i++)
+      expect(
+        (await forged(i, `q${i}@example.com`, { "x-client-ip": "203.0.113.8" }))
+          .status,
+      ).toBe(202);
+    expect(
+      (await forged(250, "q99@example.com", { "x-client-ip": "203.0.113.8" }))
+        .status,
+    ).toBe(429);
+  });
+
   it("allows the app's web origins only, for driver data", async () => {
     process.env.APP_ORIGINS = "https://app.example.test";
     const pre = codeOPTIONS(

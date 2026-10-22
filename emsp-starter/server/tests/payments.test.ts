@@ -34,17 +34,22 @@ import {
   INCREMENT_DECLINED_REASON,
   PaymentError,
   refundPayment,
+  markReviewed,
   releaseForReview,
   settleCdr,
   sweepPayments,
 } from "@/lib/payments/settle";
-import { MemoryPaymentStore, type Payment } from "@/lib/payments/store";
+import {
+  MemoryPaymentStore,
+  refundMayMove,
+  type Payment,
+} from "@/lib/payments/store";
 import { stripeClient } from "@/lib/payments/stripe";
 import { handleEvent, verifySignature } from "@/lib/payments/webhook";
 import { POST as webhookPOST } from "@/app/api/webhooks/stripe/route";
 import { DemoOutbox, setMailerForTests } from "@/lib/receipts/mailer";
 import { setSessionStoreForTests } from "@/lib/sessions/registry";
-import { MemorySessionStore } from "@/lib/sessions/store";
+import { MemorySessionStore, type StoredCdr } from "@/lib/sessions/store";
 import { createAppToken } from "@/lib/tokens/manage";
 import { setTokenStoreForTests } from "@/lib/tokens/registry";
 import { MemoryTokenStore } from "@/lib/tokens/store";
@@ -231,6 +236,23 @@ async function cdr(
 
 const paymentOf = async (commandId: string) =>
   (await payments.getByCommand(commandId))!;
+
+/** A CDR as stored for a start, without the CDR event (for direct settleCdr calls). */
+const storedCdr = (
+  command: Command,
+  sessionId: string,
+  totalCost: { excl_vat: number; incl_vat?: number },
+  over: Partial<StoredCdr> = {},
+): StoredCdr => ({
+  cdr: cpo.cdrFor(sessionId, { totalCost }),
+  id: crypto.randomUUID(),
+  peerId: one.id,
+  driverRef: DRIVER,
+  commandId: command.id,
+  source: "push",
+  receivedAt: new Date().toISOString(),
+  ...over,
+});
 
 describe("money", () => {
   it("rounds a CDR amount to minor units once, half up", () => {
@@ -433,6 +455,81 @@ describe("capture from the CDR", () => {
     await sweepPayments(deps());
     expect(stripe.callsTo(/\/capture$/)).toHaveLength(1);
     expect(outbox.sent).toHaveLength(1);
+    expect((await paymentOf(command.id)).review).toBeNull();
+  });
+
+  it("captures once and sends one receipt when the same CDR is settled twice at once", async () => {
+    const { command, payment } = await charging();
+    const c = storedCdr(command, "SESSION-1", { excl_vat: 10, incl_vat: 12 });
+    const both = await Promise.all([
+      settleCdr(c, deps()),
+      settleCdr(c, deps()),
+    ]);
+    expect(both.map((p) => p!.status)).toEqual(["captured", "captured"]);
+    // One key, so Stripe captured once, whatever the number of requests.
+    const keys = new Set(stripe.callsTo(/\/capture$/).map((x) => x.key));
+    expect([...keys]).toEqual([`emsp:${command.id}:capture`]);
+    expect(stripe.intent(payment.paymentIntentId!)!.amount_received).toBe(1200);
+    expect(await paymentOf(command.id)).toMatchObject({
+      status: "captured",
+      capturedAmount: 1200,
+      cdrId: c.id,
+    });
+    expect(outbox.sent).toHaveLength(1);
+    expect(events.filter((e) => e.type === "payment.captured")).toHaveLength(1);
+  });
+
+  it("flags a second, different CDR for the same start and charges nothing more", async () => {
+    const { command, payment } = await charging();
+    await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 });
+    expect((await paymentOf(command.id)).capturedAmount).toBe(1200);
+    // A corrected CDR from the CPO, 24.00 after 12.00 was captured.
+    const corrected = {
+      ...cpo.cdrFor("SESSION-1", { totalCost: { excl_vat: 20, incl_vat: 24 } }),
+      id: "CDR-SESSION-1-FIX",
+    };
+    await cpo.postCdr(corrected, { push: true });
+    const flagged = await paymentOf(command.id);
+    expect(flagged).toMatchObject({
+      status: "captured",
+      capturedAmount: 1200,
+      cdrAmount: 1200,
+      review: "second_cdr",
+      reviewedAt: null,
+    });
+    expect(stripe.callsTo(/\/capture$/)).toHaveLength(1);
+    expect(stripe.callsTo(/^\/v1\/refunds$/)).toHaveLength(0);
+    expect(outbox.sent).toHaveLength(1);
+    expect(events.map((e) => e.type)).toEqual([
+      "payment.captured",
+      "payment.review",
+    ]);
+    const audits = peers.auditLog.filter(
+      (a) => a.subjectId === payment.id && a.action === "payment.review",
+    );
+    expect(audits.at(-1)!.details).toMatchObject({
+      reason: "second_cdr",
+      cdr_amount: 2400,
+    });
+
+    // Looked at: the same CDR again is not new; a later one is.
+    const [second] = (await sessions.findCdrsByCommand(command.id)).filter(
+      (c) => c.cdr.id === "CDR-SESSION-1-FIX",
+    );
+    await markReviewed(
+      payment.id,
+      deps({ now: () => new Date(Date.now() + 1000) }),
+    );
+    expect((await settleCdr(second, deps()))!.reviewedAt).not.toBeNull();
+    const third = await settleCdr(
+      {
+        ...second,
+        id: crypto.randomUUID(),
+        receivedAt: new Date(Date.now() + 60_000).toISOString(),
+      },
+      deps(),
+    );
+    expect(third).toMatchObject({ review: "second_cdr", reviewedAt: null });
   });
 
   it("captures the hold and flags the rest for review when the CDR is above it", async () => {
@@ -492,6 +589,42 @@ describe("capture from the CDR", () => {
     );
     expect(done).toMatchObject({ status: "captured", capturedAmount: 1400 });
     expect(done.reviewedAt).not.toBeNull();
+  });
+
+  it("follows Stripe when an admin's capture answer was lost and they retry another amount", async () => {
+    const { command, payment } = await charging();
+    await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 }, { currency: "GBP" });
+    stripe.state.failures.push({
+      path: /\/capture$/,
+      kind: "network",
+      times: 2,
+      after: true,
+    });
+    await expect(
+      captureForReview({ paymentId: payment.id, amount: 1400 }, deps()),
+    ).rejects.toThrow("did not answer");
+    // Stripe captured 1400, but the payment is still held here.
+    expect((await paymentOf(command.id)).status).toBe("held");
+    const done = await captureForReview(
+      { paymentId: payment.id, amount: 1300 },
+      deps(),
+    );
+    expect(done).toMatchObject({ status: "captured", capturedAmount: 1400 });
+    expect(done.reviewedAt).not.toBeNull();
+    expect(stripe.intent(payment.paymentIntentId!)!.amount_received).toBe(1400);
+  });
+
+  it("marks the payment expired and charges nothing when an admin captures a dropped hold", async () => {
+    const { payment } = await charging();
+    await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 }, { currency: "GBP" });
+    stripe.expire(payment.paymentIntentId!);
+    await expect(
+      captureForReview({ paymentId: payment.id, amount: 1000 }, deps()),
+    ).rejects.toThrow("nothing was charged");
+    expect((await payments.get(payment.id))!).toMatchObject({
+      status: "expired",
+      capturedAmount: 0,
+    });
   });
 
   it("flags a late CDR after the hold expired and charges nothing", async () => {
@@ -728,6 +861,102 @@ describe("refunds", () => {
     ).toMatchObject({ status: "succeeded" });
     expect(stripe.intent(payment.paymentIntentId!)!.refunded).toBe(300);
     expect((await payments.get(payment.id))!.refundedAmount).toBe(300);
+  });
+
+  it("records a refund Stripe has pending as pending, never sends it again, and settles it from the webhook", async () => {
+    const { payment } = await charging();
+    await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 });
+    stripe.state.refundStatus = "pending";
+    const r = await refundPayment(
+      { paymentId: payment.id, amount: 300, requestId: "refund-0151" },
+      deps(),
+    );
+    expect(r).toMatchObject({ status: "pending" });
+    expect(r.stripeRefundId).toMatch(/^re_/);
+    expect((await payments.get(payment.id))!.refundedAmount).toBe(0);
+    // The same request again does not go to Stripe again.
+    expect(
+      await refundPayment(
+        { paymentId: payment.id, amount: 300, requestId: "refund-0151" },
+        deps(),
+      ),
+    ).toMatchObject({ id: r.id, status: "pending" });
+    expect(stripe.callsTo(/^\/v1\/refunds$/)).toHaveLength(1);
+    // Nor does it leave room to refund it twice.
+    await expect(
+      refundPayment(
+        { paymentId: payment.id, amount: 901, requestId: "refund-0152" },
+        deps(),
+      ),
+    ).rejects.toThrow("more than what is left");
+
+    const refundEvent = (type: string, status: string) => ({
+      id: `evt_${crypto.randomUUID().replace(/-/g, "")}`,
+      type,
+      data: {
+        object: {
+          ...stripe.state.refunds.get(r.stripeRefundId!)!,
+          status,
+        },
+      },
+    });
+    await handleEvent(refundEvent("refund.updated", "succeeded"), deps());
+    expect((await payments.listRefunds(payment.id))[0].status).toBe(
+      "succeeded",
+    );
+    expect((await payments.get(payment.id))!.refundedAmount).toBe(300);
+    // Stripe can fail a refund that had succeeded: the amount is given back.
+    await handleEvent(refundEvent("refund.failed", "failed"), deps());
+    expect((await payments.listRefunds(payment.id))[0].status).toBe("failed");
+    expect((await payments.get(payment.id))!.refundedAmount).toBe(0);
+    // A failed refund stays failed.
+    await handleEvent(refundEvent("refund.updated", "succeeded"), deps());
+    expect((await payments.listRefunds(payment.id))[0].status).toBe("failed");
+  });
+
+  it("records requires_action, and settles a refund whose answer was lost from its webhook", async () => {
+    const { payment } = await charging();
+    await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 });
+    stripe.state.refundStatus = "requires_action";
+    expect(
+      await refundPayment(
+        { paymentId: payment.id, amount: 100, requestId: "refund-0161" },
+        deps(),
+      ),
+    ).toMatchObject({ status: "requires_action" });
+
+    stripe.state.refundStatus = "succeeded";
+    stripe.state.failures.push({
+      path: /^\/v1\/refunds$/,
+      kind: "network",
+      times: 2,
+      after: true,
+    });
+    await expect(
+      refundPayment(
+        { paymentId: payment.id, amount: 200, requestId: "refund-0162" },
+        deps(),
+      ),
+    ).rejects.toThrow("Stripe did not answer");
+    const lost = [...stripe.state.refunds.values()].at(-1)!;
+    await handleEvent(
+      {
+        id: `evt_${crypto.randomUUID().replace(/-/g, "")}`,
+        type: "refund.created",
+        data: { object: lost },
+      },
+      deps(),
+    );
+    const mine = (await payments.listRefunds(payment.id)).find(
+      (x) => x.requestId === "refund-0162",
+    )!;
+    expect(mine).toMatchObject({
+      status: "succeeded",
+      stripeRefundId: lost.id,
+    });
+    expect((await payments.get(payment.id))!.refundedAmount).toBe(200);
+    expect(refundMayMove("failed", "succeeded")).toBe(false);
+    expect(refundMayMove("succeeded", "pending")).toBe(false);
   });
 
   it("refuses a refund of a payment that was not captured", async () => {
@@ -989,6 +1218,93 @@ describe("the Stripe webhook", () => {
     expect((await accounts.getDriver(DRIVER))!.defaultPaymentMethodId).toBe(
       "pm_new123",
     );
+  });
+
+  describe("a capture Stripe reports while the payment is still held", () => {
+    /** Hold 25.00, CDR 40.00, both capture answers lost: Stripe captured 25.00. */
+    async function lostCapture() {
+      const { command, payment } = await charging();
+      stripe.state.failures.push({
+        path: /\/capture$/,
+        kind: "network",
+        times: 2,
+        after: true,
+      });
+      await cdr("SESSION-1", { excl_vat: 33.33, incl_vat: 40 });
+      expect((await paymentOf(command.id)).status).toBe("held");
+      const pi = stripe.intent(payment.paymentIntentId!)!;
+      expect(pi.status).toBe("succeeded");
+      const succeeded = JSON.parse(
+        event("payment_intent.succeeded", { ...pi, object: "payment_intent" }),
+      );
+      return { command, payment, succeeded };
+    }
+    const settled = {
+      status: "captured",
+      capturedAmount: 2500,
+      cdrAmount: 4000,
+      cdrCurrency: "EUR",
+      review: "cdr_above_hold",
+      shortfallAmount: 1500,
+    };
+
+    it("settles from the CDR when the webhook comes before the sweep", async () => {
+      const { command, succeeded } = await lostCapture();
+      const calls = stripe.state.calls.length;
+      await handleEvent(succeeded, deps());
+      const p = await paymentOf(command.id);
+      expect(p).toMatchObject(settled);
+      expect(p.cdrId).not.toBeNull();
+      // Recorded from Stripe's word: no capture request of its own.
+      expect(stripe.state.calls.length).toBe(calls);
+      expect(outbox.sent).toHaveLength(1);
+      expect(outbox.sent[0].text).toContain("not charged automatically");
+      // The sweep finds nothing left to do.
+      expect(await sweepPayments(deps())).toEqual({
+        settled: 0,
+        released: 0,
+        expired: 0,
+      });
+      expect(await paymentOf(command.id)).toMatchObject(settled);
+      expect(outbox.sent).toHaveLength(1);
+    });
+
+    it("changes nothing when the sweep settled it before the webhook", async () => {
+      const { command, succeeded } = await lostCapture();
+      await sweepPayments(deps());
+      expect(await paymentOf(command.id)).toMatchObject(settled);
+      await handleEvent(succeeded, deps());
+      expect(await paymentOf(command.id)).toMatchObject(settled);
+      expect(outbox.sent).toHaveLength(1);
+      expect(events.filter((e) => e.type === "payment.captured")).toHaveLength(
+        1,
+      );
+    });
+
+    it("keeps the Dashboard path for a capture with no CDR", async () => {
+      const { command, payment } = await charging();
+      const pi = stripe.intent(payment.paymentIntentId!)!;
+      Object.assign(pi, {
+        status: "succeeded",
+        amount_received: 1000,
+        amount_capturable: 0,
+      });
+      await handleEvent(
+        JSON.parse(
+          event("payment_intent.succeeded", {
+            ...pi,
+            object: "payment_intent",
+          }),
+        ),
+        deps(),
+      );
+      expect(await paymentOf(command.id)).toMatchObject({
+        status: "captured",
+        capturedAmount: 1000,
+        review: "refund_outside",
+        cdrId: null,
+      });
+    });
   });
 
   it("flags money refunded outside this server", async () => {

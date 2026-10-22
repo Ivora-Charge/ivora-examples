@@ -168,12 +168,22 @@ describe("issuing tokens and pushing them to every CPO", () => {
       addRfidCard({ driverRef: "driver-2", uid: "04A1B2C3" }, deps()),
     ).rejects.toThrow("no app token yet");
 
+    // Until RFID billing lands, a card is NEVER: a CPO must always ask us.
+    await expect(
+      addRfidCard(
+        {
+          driverRef: "driver-1",
+          uid: "04A1B2C3",
+          whitelist: "ALLOWED_OFFLINE",
+        },
+        deps(),
+      ),
+    ).rejects.toThrow("RFID cards are NEVER");
     const { token: card } = await addRfidCard(
       {
         driverRef: "driver-1",
         uid: "04:a1:b2:c3:d4:e5:f6",
         visualNumber: "CARD-0001",
-        whitelist: "ALLOWED_OFFLINE",
       },
       deps(),
     );
@@ -183,13 +193,22 @@ describe("issuing tokens and pushing them to every CPO", () => {
       contractId: app.contractId,
       groupId: app.groupId,
       visualNumber: "CARD-0001",
-      whitelist: "ALLOWED_OFFLINE",
+      whitelist: "NEVER",
     });
     expect(cpo2.pushedToken("04A1B2C3D4E5F6", "RFID")).toMatchObject({
       contract_id: app.contractId,
       visual_number: "CARD-0001",
       valid: true,
+      whitelist: "NEVER",
     });
+    for (const list of ["ALWAYS", "ALLOWED", "ALLOWED_OFFLINE"])
+      await expect(
+        setWhitelist(card.uid, "RFID", list, deps()),
+      ).rejects.toThrow("RFID cards are NEVER");
+    // A card stored with another value (made before this rule) is still sent as NEVER.
+    expect(toOcpiToken({ ...card, whitelist: "ALWAYS" }).whitelist).toBe(
+      "NEVER",
+    );
     await expect(
       addRfidCard({ driverRef: "driver-1", uid: "04a1b2c3d4e5f6" }, deps()),
     ).rejects.toThrow("already registered");
@@ -659,7 +678,7 @@ describe("real-time authorization", () => {
     ).toBe(false);
   });
 
-  it("allows an active token, with a reference and the location echoed", async () => {
+  it("refuses an RFID card (NOT_ALLOWED) until RFID billing lands, store error or not", async () => {
     await registerBoth();
     await createAppToken({ driverRef: "driver-1" }, deps());
     const { token: card } = await addRfidCard(
@@ -671,8 +690,44 @@ describe("real-time authorization", () => {
       location: { location_id: "LOC1", evse_uids: ["LOC1-1"] },
     });
     expect(info).toMatchObject({
-      allowed: "ALLOWED",
+      allowed: "NOT_ALLOWED",
       token: { uid: card.uid, type: "RFID", valid: true },
+      info: { language: "en" },
+    });
+    expect(info.authorization_reference).toBeUndefined();
+    expect(info.location).toBeUndefined();
+    // Even with an account in good standing.
+    const now = new Date().toISOString();
+    await accounts.ensureDriver("driver-1", "d1@example.com", now);
+    await accounts.updateDriver(
+      "driver-1",
+      { defaultPaymentMethodId: "pm_123" },
+      now,
+    );
+    expect((await cpo2.authorize(card.uid)).allowed).toBe("NOT_ALLOWED");
+    vi.spyOn(accounts, "getDriver").mockRejectedValue(new Error("down"));
+    expect((await cpo2.authorize(card.uid)).allowed).toBe("NOT_ALLOWED");
+    expect(
+      peers.auditLog.some(
+        (e) =>
+          e.action === "token.authorize" && e.details?.allowed === "ALLOWED",
+      ),
+    ).toBe(false);
+  });
+
+  it("allows an active token, with a reference and the location echoed", async () => {
+    await registerBoth();
+    const { token: card } = await createAppToken(
+      { driverRef: "driver-1" },
+      deps(),
+    );
+    const info = await cpo.authorize(card.uid, {
+      type: "APP_USER",
+      location: { location_id: "LOC1", evse_uids: ["LOC1-1"] },
+    });
+    expect(info).toMatchObject({
+      allowed: "ALLOWED",
+      token: { uid: card.uid, type: "APP_USER", valid: true },
       location: { location_id: "LOC1", evse_uids: ["LOC1-1"] },
     });
     expect(info.authorization_reference).toMatch(/^[0-9a-f-]{36}$/);
@@ -687,7 +742,9 @@ describe("real-time authorization", () => {
       },
     });
     // Without a body.
-    expect((await cpo2.authorize(card.uid)).allowed).toBe("ALLOWED");
+    expect((await cpo2.authorize(card.uid, { type: "APP_USER" })).allowed).toBe(
+      "ALLOWED",
+    );
   });
 
   it("answers BLOCKED for a blocked token, at once, and ALLOWED again once unblocked", async () => {
@@ -807,6 +864,28 @@ describe("driver standing", () => {
     expect(await driverStanding(t, accounts)).toBe("not_allowed");
     // The registry's store is the default.
     expect(await driverStanding(t)).toBe("not_allowed");
+  });
+
+  it("fails closed: an account that cannot be read may not charge", async () => {
+    await registerBoth();
+    const t = (await createAppToken({ driverRef: "d-1" }, deps())).token;
+    const now = new Date().toISOString();
+    await accounts.ensureDriver("d-1", "d1@example.com", now);
+    await accounts.updateDriver(
+      "d-1",
+      { defaultPaymentMethodId: "pm_123" },
+      now,
+    );
+    expect((await cpo.authorize(t.uid, { type: "APP_USER" })).allowed).toBe(
+      "ALLOWED",
+    );
+    vi.spyOn(accounts, "getDriver").mockRejectedValue(
+      new Error("database down"),
+    );
+    expect(await driverStanding(t, accounts)).toBe("not_allowed");
+    const info = await cpo.authorize(t.uid, { type: "APP_USER" });
+    expect(info.allowed).toBe("NOT_ALLOWED");
+    expect(info.authorization_reference).toBeUndefined();
   });
 });
 

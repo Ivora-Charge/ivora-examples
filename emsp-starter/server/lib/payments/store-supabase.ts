@@ -265,7 +265,7 @@ export class SupabasePaymentStore implements PaymentStore {
 
   async settleRefund(
     refundId: string,
-    status: "succeeded" | "failed",
+    status: RefundStatus,
     stripeRefundId: string | null,
   ) {
     const [row] = await this.rest<{ refund: RefundRow }[]>(
@@ -278,6 +278,14 @@ export class SupabasePaymentStore implements PaymentStore {
       },
     );
     return row ? refund(row.refund) : null;
+  }
+
+  async getRefundByStripeId(stripeRefundId: string) {
+    const [row] = await this.rest<RefundRow[]>(
+      "GET",
+      `emsp_payment_refunds?stripe_refund_id=${eq(stripeRefundId)}&select=*&limit=1`,
+    );
+    return row ? refund(row) : null;
   }
 
   async listRefunds(paymentId: string) {

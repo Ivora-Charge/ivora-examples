@@ -143,7 +143,11 @@ export async function refundAction(
       message:
         refund.status === "succeeded"
           ? `Refunded ${refund.amount} (minor units).`
-          : `The refund ${refund.status === "failed" ? "failed" : "is pending"}.`,
+          : refund.status === "failed"
+            ? "The refund failed."
+            : refund.status === "requires_action"
+              ? "The refund waits on the bank or the Stripe Dashboard; its webhook settles it."
+              : "The refund is pending; its webhook settles it.",
       payments: [summary(p, await d.payments.listRefunds(p.id))],
     };
   });

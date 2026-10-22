@@ -1,9 +1,9 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
 import type { PaymentDeps } from "./registry";
-import { audit, cancelHold, holdKey, nowOf } from "./settle";
-import type { Payment } from "./store";
-import type { Charge, PaymentIntent } from "./stripe";
+import { audit, cancelHold, holdKey, nowOf, settleCdr } from "./settle";
+import { refundStatusOf, type Payment } from "./store";
+import type { Charge, PaymentIntent, Refund as StripeRefund } from "./stripe";
 
 /**
  * The Stripe webhook (`POST /api/webhooks/stripe`): payment intent and charge events
@@ -111,8 +111,19 @@ async function onIntent(pi: PaymentIntent, deps: PaymentDeps) {
     );
     if (done)
       await audit(deps, `payment.${done.status}`, done, { source: "webhook" });
-  } else if (pi.status === "succeeded" && !p.cdrId) {
-    // Captured outside the CDR flow (the Dashboard): keep the record true.
+  } else if (pi.status === "succeeded") {
+    // Captured while still held here: our own capture whose answer was lost, or one
+    // not written yet. With the start's CDR, record it from the CDR (amount, review,
+    // shortfall, receipt) exactly as the capture would have.
+    const cdrs = await deps.sessions.findCdrsByCommand(p.commandId);
+    const cdr = p.cdrId
+      ? cdrs.find((c) => c.id === p.cdrId)
+      : cdrs.find((c) => !c.cdr.credit);
+    if (cdr) {
+      await settleCdr(cdr, deps, pi);
+      return;
+    }
+    // No CDR: captured outside the CDR flow (the Dashboard). Keep the record true.
     const done = await deps.payments.transition(
       p.id,
       ["held"],
@@ -158,6 +169,35 @@ async function onCharge(type: string, charge: Charge, deps: PaymentDeps) {
       if (done)
         await audit(deps, "payment.review", done, { reason: "refund_outside" });
     }
+  }
+}
+
+/** A refund's status, from Stripe: pending ones settle here, and late failures too. */
+async function onRefund(re: StripeRefund, deps: PaymentDeps) {
+  if (typeof re.id !== "string" || !/^re_[A-Za-z0-9_]+$/.test(re.id)) return;
+  let r = await deps.payments.getRefundByStripeId(re.id);
+  if (!r) {
+    // A refund whose answer to us was lost: found by the IDs we put on it.
+    const id = re.metadata?.refund_id;
+    const paymentId = re.metadata?.payment_id;
+    if (typeof id !== "string" || typeof paymentId !== "string") return;
+    const p = await deps.payments.get(paymentId);
+    if (!p || !re.payment_intent || p.paymentIntentId !== re.payment_intent)
+      return;
+    r =
+      (await deps.payments.listRefunds(p.id)).find((x) => x.id === id) ?? null;
+    if (!r) return;
+  }
+  const status = refundStatusOf(re.status);
+  const done = await deps.payments.settleRefund(r.id, status, re.id);
+  if (done && done.status !== r.status) {
+    const p = await deps.payments.get(done.paymentId);
+    if (p)
+      await audit(deps, `payment.refund_${done.status}`, p, {
+        refund_id: done.id,
+        amount: done.amount,
+        source: "webhook",
+      });
   }
 }
 
@@ -208,7 +248,15 @@ export async function handleEvent(
       object.object === "payment_intent"
     )
       await onIntent(object as unknown as PaymentIntent, deps);
-    else if (event.type.startsWith("charge.dispute."))
+    else if (
+      ["refund.created", "refund.updated", "refund.failed"].includes(
+        event.type,
+      ) ||
+      (event.type.startsWith("charge.refund.") && object.object === "refund")
+    ) {
+      if (object.object === "refund")
+        await onRefund(object as unknown as StripeRefund, deps);
+    } else if (event.type.startsWith("charge.dispute."))
       await onDispute(object, deps);
     else if (event.type.startsWith("charge.") && object.object === "charge")
       await onCharge(event.type, object as unknown as Charge, deps);

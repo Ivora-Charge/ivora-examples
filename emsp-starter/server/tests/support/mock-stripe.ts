@@ -58,6 +58,8 @@ export function createMockStripe({ now = () => Date.now() } = {}) {
     holdDays: 7,
     /** Refuse every increment_authorization. */
     declineIncrements: false,
+    /** The status a new refund gets (Stripe's: succeeded, pending, requires_action…). */
+    refundStatus: "succeeded",
     /** Failures to inject, first match first: drops the request or answers 5xx. */
     failures: [] as {
       path: RegExp;
@@ -314,8 +316,9 @@ export function createMockStripe({ now = () => Date.now() } = {}) {
         id: id("re"),
         object: "refund",
         amount,
-        status: "succeeded",
+        status: state.refundStatus,
         payment_intent: pi.id,
+        metadata: metadataOf(p),
       };
       state.refunds.set(r.id, r);
       return { status: 200, body: r };

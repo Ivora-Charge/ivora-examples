@@ -24,6 +24,8 @@ const REVIEW_TEXT: Record<string, string> = {
   hold_unknown: "Stripe never answered the hold; the webhook cancels any hold",
   dispute: "The driver disputed the charge with their bank",
   refund_outside: "Money moved outside this server (the Stripe Dashboard)",
+  second_cdr:
+    "Another CDR came for this charge: compare it with the one settled (see the audit log)",
 };
 
 function PaymentFacts({ p }: { p: PaymentSummary }) {

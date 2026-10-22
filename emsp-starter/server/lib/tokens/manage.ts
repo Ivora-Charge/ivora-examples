@@ -52,6 +52,21 @@ export class TokenError extends Error {
  */
 export const DEFAULT_WHITELIST: WhitelistType = "ALLOWED_OFFLINE";
 
+/**
+ * RFID cards are always NEVER until RFID billing lands (a later part): a card has no
+ * payment hold behind it, so a CPO must never let one charge from a cached copy. With
+ * NEVER it asks us in real time, and we answer NOT_ALLOWED (see authorize.ts).
+ */
+export const RFID_WHITELIST: WhitelistType = "NEVER";
+
+function rfidWhitelist(input: string | undefined): WhitelistType {
+  if (input === undefined || input === "" || input === RFID_WHITELIST)
+    return RFID_WHITELIST;
+  throw new TokenError(
+    "RFID cards are NEVER until RFID billing is available: a card has no payment hold.",
+  );
+}
+
 /** Attempts at a compare-and-swap change before giving up. */
 const MAX_ATTEMPTS = 5;
 
@@ -172,7 +187,7 @@ export async function addRfidCard(
     if (Number.isNaN(ms)) throw new TokenError("Expiry must be a date.");
     expiresAt = new Date(ms).toISOString();
   }
-  const list = whitelist(input.whitelist);
+  const list = rfidWhitelist(input.whitelist);
   const app = (await deps.tokens.listByDriver(ref)).find(
     (t) => t.type === "APP_USER",
   );
@@ -274,13 +289,13 @@ export function unblockToken(
 }
 
 /** Changes when a CPO may let the token charge without asking us. */
-export function setWhitelist(
+export async function setWhitelist(
   uid: string,
   type: DriverTokenType,
   value: string,
   deps: TokenDeps,
 ): Promise<TokenResult> {
-  const list = whitelist(value);
+  const list = type === "RFID" ? rfidWhitelist(value) : whitelist(value);
   return changeToken(
     uid,
     type,

@@ -47,6 +47,8 @@ export const REVIEW_REASONS = [
   "dispute",
   /** Money was refunded outside this server (the Stripe Dashboard, say). */
   "refund_outside",
+  /** Another CDR came for a start already settled from one (a correction, say). */
+  "second_cdr",
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
@@ -97,7 +99,34 @@ export type PaymentPatch = Partial<
   >
 >;
 
-export type RefundStatus = "pending" | "succeeded" | "failed";
+/**
+ * - `pending`: reserved. Without `stripeRefundId`, sent with no answer yet (the same
+ *   request retries it); with one, Stripe has it and its webhook settles it.
+ * - `requires_action`: Stripe needs something from the driver's bank or the Dashboard.
+ * - `succeeded`, `failed` (Stripe's `canceled` too). A failed refund gives its amount
+ *   back; Stripe may fail a refund that had succeeded.
+ */
+export const REFUND_STATUSES = [
+  "pending",
+  "requires_action",
+  "succeeded",
+  "failed",
+] as const;
+export type RefundStatus = (typeof REFUND_STATUSES)[number];
+
+/** Our status for a Stripe refund status. */
+export const refundStatusOf = (stripe: string): RefundStatus =>
+  stripe === "canceled"
+    ? "failed"
+    : (REFUND_STATUSES as readonly string[]).includes(stripe)
+      ? (stripe as RefundStatus)
+      : "pending";
+
+/** A refund may move from pending or requires_action to any status, or succeeded to failed. */
+export const refundMayMove = (from: RefundStatus, to: RefundStatus) =>
+  from === "pending" ||
+  from === "requires_action" ||
+  (from === "succeeded" && to === "failed");
 
 export type Refund = {
   id: string;
@@ -151,12 +180,16 @@ export interface PaymentStore {
     reason: string;
     actor: string;
   }): Promise<ReserveOutcome>;
-  /** Settles a pending refund and recounts the payment's refunded amount. */
+  /**
+   * Records a refund's status (as `refundMayMove` allows; else it is unchanged) and
+   * recounts the payment's refunded amount from its succeeded refunds.
+   */
   settleRefund(
     refundId: string,
-    status: "succeeded" | "failed",
+    status: RefundStatus,
     stripeRefundId: string | null,
   ): Promise<Refund | null>;
+  getRefundByStripeId(stripeRefundId: string): Promise<Refund | null>;
   listRefunds(paymentId: string): Promise<Refund[]>;
   /** True when this Stripe event was handled already. */
   hasEvent(id: string): Promise<boolean>;
@@ -308,12 +341,12 @@ export class MemoryPaymentStore implements PaymentStore {
 
   async settleRefund(
     refundId: string,
-    status: "succeeded" | "failed",
+    status: RefundStatus,
     stripeRefundId: string | null,
   ) {
     const r = this.refunds.get(refundId);
     if (!r) return null;
-    if (r.status === "pending") {
+    if (refundMayMove(r.status, status)) {
       Object.assign(r, {
         status,
         stripeRefundId: stripeRefundId ?? r.stripeRefundId,
@@ -325,6 +358,12 @@ export class MemoryPaymentStore implements PaymentStore {
         .reduce((sum, x) => sum + x.amount, 0);
     }
     return structuredClone(r);
+  }
+
+  async getRefundByStripeId(stripeRefundId: string) {
+    for (const r of this.refunds.values())
+      if (r.stripeRefundId === stripeRefundId) return structuredClone(r);
+    return null;
   }
 
   async listRefunds(paymentId: string) {

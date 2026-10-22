@@ -166,6 +166,8 @@ Every driver has one **APP_USER** token, the one the app charges with, and may h
 | `ALWAYS`                                                                                                                                     | The CPO never asks; it charges from its cached copy. A block or expiry reaches it only through a push.                                                                                       |
 | A token is `active`, `blocked` (until unblocked) or `expired` (an RFID card past its expiry date); OCPI's `valid` is true only while active. |
 
+**RFID cards cannot charge yet.** Until RFID billing lands (a later part), no energy may be free, and a card has no payment hold behind it. So every RFID card is pushed and served with whitelist `NEVER` (a card made before this rule is still sent as `NEVER`; `/admin/tokens` refuses any other value for a card), and real-time authorization answers `NOT_ALLOWED` for every RFID card, whatever the account. A CPO must ask us before it lets a card charge, and we say no. The app's APP_USER flow (a hold before START_SESSION) is unchanged. **How it will be lifted:** the RFID-billing part places a hold (or another payment guarantee) when a CPO asks to authorize a card, captures from that session's CDR as the app flow does, and then switches `RFID_CHARGING` in `lib/tokens/authorize.ts` and `RFID_WHITELIST` in `lib/tokens/manage.ts`. If you made RFID cards before this version, set each one's whitelist to `NEVER` on `/admin/tokens` once, so the change is pushed to every CPO.
+
 A driver's app token is made at their first sign-in (`ensureAccount`, `lib/accounts/sign-in.ts`), with the account ID (the Supabase Auth user ID) as the **driver reference**. `/admin/tokens` can still create one for any driver reference of up to 64 characters; a reference without an account has no standing to check, so real-time authorization rests on the token alone, and the app cannot start with it (no account, no hold).
 
 **Tokens Sender.** `GET /ocpi/2.2.1/tokens` serves every token, oldest `last_updated` first, at most 100 per page (`X-Limit`), with `X-Total-Count`, a `Link` to the next page on `PUBLIC_BASE_URL`, `offset`, `limit`, `date_from` (inclusive) and `date_to` (exclusive). A CPO that pulls with `date_from` gets every change, pushed or missed.
@@ -174,13 +176,13 @@ A driver's app token is made at their first sign-in (`ensureAccount`, `lib/accou
 
 **Real-time authorization** (`lib/tokens/authorize.ts`). `POST /ocpi/2.2.1/tokens/{token_uid}/authorize?type=` (type defaults to `RFID`), with an optional `LocationReferences` body, answers an `AuthorizationInfo`:
 
-| `allowed`     | When                                                                                                    |
-| ------------- | ------------------------------------------------------------------------------------------------------- |
-| `ALLOWED`     | The token is active. Comes with a new `authorization_reference` and the location and EVSEs asked about. |
-| `BLOCKED`     | The token is blocked. Takes effect at once, before any push lands.                                      |
-| `EXPIRED`     | The token is expired, or past its expiry date even if the expiry sweep has not run yet.                 |
-| `NO_CREDIT`   | The driver's account has no default card (`driverStanding`).                                            |
-| `NOT_ALLOWED` | The driver's account is restricted.                                                                     |
+| `allowed`     | When                                                                                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ALLOWED`     | The token is active. Comes with a new `authorization_reference` and the location and EVSEs asked about.                                                             |
+| `BLOCKED`     | The token is blocked. Takes effect at once, before any push lands.                                                                                                  |
+| `EXPIRED`     | The token is expired, or past its expiry date even if the expiry sweep has not run yet.                                                                             |
+| `NO_CREDIT`   | The driver's account has no default card (`driverStanding`).                                                                                                        |
+| `NOT_ALLOWED` | The driver's account is restricted; or the token is an RFID card (see above); or the account could not be read (it fails closed: never `ALLOWED` on a store error). |
 
 The token's own status comes first, then the driver's standing. Unknown tokens, and types we do not issue (`AD_HOC_USER`, `OTHER`), get `2004 Unknown Token` (HTTP 404); an invalid body or `type` gets `2001`. The answer carries the token as the CPO should cache it, and every answer goes to the audit log with its `authorization_reference`. Both endpoints need a registered peer's token and the `OCPI-from`/`OCPI-to` routing headers, with `OCPI-to` this eMSP and `OCPI-from` one of the peer's **CPO** parties.
 
@@ -302,7 +304,7 @@ All need the driver's Bearer token; answers are JSON, `no-store`.
 2. **Capture** (`settle.ts`), on the session's CDR (the `cdr.received` event, and the cron sweep for any the event missed): the CDR's `total_cost.incl_vat`, rounded **once**, half up, to minor units (12.345 EUR is 1235), **never more than the hold**. A payment captures only from a CDR the Sessions module linked to **its own START_SESSION** (through the start's own session; a CDR of another session with the same `authorization_reference` is the driver's by token only, and charges nothing here).
 3. **CDR above the hold:** the whole hold is captured and the payment goes to **admin review** (`cdr_above_hold`) with the difference (`shortfall_amount`). Nothing more is ever charged automatically.
 4. **Release:** a start that ends without charging (refused, not supported, failed) cancels its hold at once. A start whose outcome we never learnt (no answer, or the CPO's `TIMEOUT`) keeps its hold for 30 minutes in case a session appears; the cron sweep then releases it if none did, or leaves it for the session's CDR. A **zero-cost** CDR releases the hold.
-5. **Refunds**, from `/admin/payments`: partial or whole, never more than was captured in total (reserved in the database under a lock on the payment), one per admin request ID.
+5. **Refunds**, from `/admin/payments`: partial or whole, never more than was captured in total (reserved in the database under a lock on the payment), one per admin request ID. A refund keeps Stripe's own status: `succeeded`, `failed` (or Stripe's `canceled`), or still open, `pending` or `requires_action`, which keeps its amount reserved until the refund webhook settles it. A refund Stripe has (one with a Stripe refund ID) is never sent again; one whose answer was lost is retried with the same key, or settled by its webhook. Stripe can fail a refund that had succeeded; its amount is then free to refund again.
 
 **Edge cases**, all to admin review and never charged automatically:
 
@@ -314,10 +316,12 @@ All need the driver's Bearer token; answers are JSON, `no-store`.
 | A credit CDR for the start                   | `credit_cdr`: refund the driver if it is owed.                                                                                                                                                                                                                                                          |
 | Stripe never answered the hold               | The start is refused and the payment flagged `hold_unknown`; when Stripe's webhook reports a hold for it, it is cancelled (`cancel-orphan`).                                                                                                                                                            |
 | A dispute, or a refund made in the Dashboard | `dispute`, `refund_outside`, from the webhook.                                                                                                                                                                                                                                                          |
+| Another CDR for a start already settled      | Nothing more is charged or refunded: `second_cdr` (a correction, say 24.00 after 12.00 was captured). The audit log has the new CDR's amount; refund or charge the difference yourself.                                                                                                                 |
+| A capture whose answer was lost              | Stripe's `payment_intent.succeeded` settles it from the start's CDR, exactly as the capture would have (amount, `cdr_above_hold` and its shortfall, receipt), whether it comes before or after the sweep. Only a capture with no CDR (made in the Dashboard) is recorded as `refund_outside`.           |
 
 **Idempotency.** Every Stripe write carries an `Idempotency-Key` derived from the charge request (the START_SESSION command ID) and the action: `emsp:<command>:hold`, `:capture`, `:cancel`, `:increment:<n>`, `:refund:<request ID>`; card setup uses the driver's ID. A write with no answer is retried once with the same key and otherwise left for the sweep, which retries with the same key: one hold, one capture, whatever happens. Stripe keeps keys for at least 24 hours.
 
-**Webhook** (`POST /api/webhooks/stripe`): every request is checked against `STRIPE_WEBHOOK_SECRET` (the `Stripe-Signature` HMAC, at most 5 minutes old), and each event is handled once by its ID (`emsp_stripe_events`). Subscribe to `payment_intent.amount_capturable_updated`, `payment_intent.canceled`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, `charge.expired`, `charge.dispute.created` and `setup_intent.succeeded`.
+**Webhook** (`POST /api/webhooks/stripe`): every request is checked against `STRIPE_WEBHOOK_SECRET` (the `Stripe-Signature` HMAC, at most 5 minutes old), and each event is handled once by its ID (`emsp_stripe_events`). Subscribe to `payment_intent.amount_capturable_updated`, `payment_intent.canceled`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, `charge.expired`, `charge.dispute.created`, `refund.created`, `refund.updated`, `refund.failed` and `setup_intent.succeeded`. On an older API version without the `refund.*` events, `charge.refund.updated` does the same.
 
 **Events** (`events.ts`), for the app (part 11): `payment.captured`, `payment.released`, `payment.review` and `hold_increment_declined`.
 
@@ -337,6 +341,18 @@ The CPO must send the running cost on the session; without it there is nothing t
 ### Receipts
 
 `lib/receipts/`. When a payment settles from its CDR, the driver gets one email receipt: where and when, the energy, the CPO's total, what was charged, and why the session stopped if we stopped it. One provider interface (`Mailer`); **Resend** is the example (`RESEND_API_KEY`, `RECEIPT_FROM`), with the idempotency key `receipt:<payment id>`. Use another provider by implementing `Mailer` and returning it from `mailer()`. A failed send is logged and not retried. **Demo mode never sends**: receipts go to an in-memory outbox.
+
+### Try it in Stripe test mode
+
+Everything above runs against Stripe's test mode first, with no real money. Use a Stripe account of your own (a new one is fine) and its **test** keys.
+
+1. In the Dashboard, switch to test mode and copy the test keys into `.env.local`: `STRIPE_SECRET_KEY=sk_test_...` and `STRIPE_PUBLISHABLE_KEY=pk_test_...`. Set `HOLD_AMOUNTS` (for example `EUR:2500`) and leave `DEMO_MODE` unset.
+2. Forward webhooks to your local server with the [Stripe CLI](https://docs.stripe.com/stripe-cli): `stripe listen --forward-to localhost:3000/api/webhooks/stripe`. It prints a `whsec_...` signing secret for this session: set it as `STRIPE_WEBHOOK_SECRET` and restart the server.
+3. Sign in from the app (or the web build), save a card in the PaymentSheet with one of [Stripe's test cards](https://docs.stripe.com/testing): `4242 4242 4242 4242` authorises; `4000 0000 0000 9995` is declined (insufficient funds), to see a refused hold; `4000 0027 6000 3184` needs 3-D Secure, which an off-session hold cannot do. Any future expiry date and any CVC.
+4. Start a session at a charger of a CPO you are connected to in test (the mock CPO in the tests does the same in process). The hold appears in the Dashboard as **Uncaptured**; the CDR captures it; `/admin/payments` refunds it.
+5. To try webhooks without a session, `stripe trigger payment_intent.succeeded` sends a test event (it belongs to no payment here, so it is acknowledged and changes nothing).
+
+Test-mode keys only ever reach test-mode data. Switch to live keys only after you have followed the whole flow once.
 
 ### Go live with payments
 
@@ -393,7 +409,7 @@ OCPI 2.2.1 as the eMSP role, with any CPO; Supabase (Postgres and Auth); Stripe 
 
 - `ADMIN_SECRET`, while set, still opens admin actions beside admin sign-in. Wrong secrets are limited to 5 per client and 50 in total per 15 minutes, counted per server instance. Admin sessions are not refreshed: sign in again when the access token expires.
 - Sign-in rate limits are counted per server instance.
-- Sessions started with an RFID card have no hold, so their CDRs are not charged by this part; real-time authorization still answers `NO_CREDIT` for an account without a card.
+- **RFID cards cannot charge** until RFID billing lands: they are `NEVER` on every CPO and real-time authorization answers `NOT_ALLOWED`, so no session runs without a payment hold. See [Tokens](#tokens-and-real-time-authorization) for how it will be lifted.
 - A receipt that fails to send is not retried. Payment events and the incremental-authorization check run in the server process on session events; the cron sweep settles CDRs the events missed.
 - The admin web shows payments by ID; reconciliation of payments against CDRs per day arrives with the admin web.
 - The OCPI version details list credentials, locations, tariffs, tokens, commands, sessions and CDRs. Charging preferences (an eMSP's `PUT` to a CPO's Sessions Sender) are not sent.

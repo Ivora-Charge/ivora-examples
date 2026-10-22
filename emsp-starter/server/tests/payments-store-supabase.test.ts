@@ -252,72 +252,96 @@ describe("payments in Supabase", () => {
     ).toMatchObject({ capturedAmount: 2500 });
   });
 
-  it("reserves refunds under a lock: never more than captured, never twice per request", async () => {
-    const p = await newPayment();
-    await payments.transition(
-      p.id,
-      ["pending"],
-      { status: "held", authorizedAmount: 2500 },
-      NOW,
-    );
-    const reserve = (requestId: string, amount: number) =>
-      payments.reserveRefund({
-        paymentId: p.id,
-        requestId,
-        amount,
-        reason: "",
-        actor: "admin",
-      });
-    expect((await reserve("refund-0001", 100)).outcome).toBe("exceeds"); // not captured yet
-    await payments.transition(
-      p.id,
-      ["held"],
-      { status: "captured", capturedAmount: 1000 },
-      NOW,
-    );
-
-    // Two at once for 600 each: only one fits in 1000.
-    const both = await Promise.all([
-      reserve("refund-0002", 600),
-      reserve("refund-0003", 600),
-    ]);
-    expect(both.map((r) => r.outcome).sort()).toEqual(["created", "exceeds"]);
-    const made = both.find((r) => r.outcome === "created")!.refund!;
-    expect(await reserve(made.requestId, 600)).toMatchObject({
-      outcome: "replayed",
-      refund: { id: made.id },
-    });
-    expect((await payments.get(p.id))!.refundedAmount).toBe(0);
-
-    expect(
-      await payments.settleRefund(made.id, "succeeded", "re_1Abc"),
-    ).toMatchObject({ status: "succeeded", stripeRefundId: "re_1Abc" });
-    expect((await payments.get(p.id))!.refundedAmount).toBe(600);
-    // Settled once only.
-    expect(await payments.settleRefund(made.id, "failed", null)).toMatchObject({
-      status: "succeeded",
-    });
-    const failed = (await reserve("refund-0004", 400)).refund!;
-    await payments.settleRefund(failed.id, "failed", null);
-    // A failed refund gives its amount back.
-    expect((await reserve("refund-0005", 400)).outcome).toBe("created");
-    expect((await payments.listRefunds(p.id)).map((r) => r.status)).toEqual([
-      "succeeded",
-      "failed",
-      "pending",
-    ]);
-    expect(
-      (
-        await payments.reserveRefund({
-          paymentId: crypto.randomUUID(),
-          requestId: "refund-0006",
-          amount: 1,
+  it(
+    "reserves refunds under a lock: never more than captured, never twice per request",
+    { timeout: 20_000 },
+    async () => {
+      const p = await newPayment();
+      await payments.transition(
+        p.id,
+        ["pending"],
+        { status: "held", authorizedAmount: 2500 },
+        NOW,
+      );
+      const reserve = (requestId: string, amount: number) =>
+        payments.reserveRefund({
+          paymentId: p.id,
+          requestId,
+          amount,
           reason: "",
-          actor: "a",
-        })
-      ).outcome,
-    ).toBe("not_found");
-  });
+          actor: "admin",
+        });
+      expect((await reserve("refund-0001", 100)).outcome).toBe("exceeds"); // not captured yet
+      await payments.transition(
+        p.id,
+        ["held"],
+        { status: "captured", capturedAmount: 1000 },
+        NOW,
+      );
+
+      // Two at once for 600 each: only one fits in 1000.
+      const both = await Promise.all([
+        reserve("refund-0002", 600),
+        reserve("refund-0003", 600),
+      ]);
+      expect(both.map((r) => r.outcome).sort()).toEqual(["created", "exceeds"]);
+      const made = both.find((r) => r.outcome === "created")!.refund!;
+      expect(await reserve(made.requestId, 600)).toMatchObject({
+        outcome: "replayed",
+        refund: { id: made.id },
+      });
+      expect((await payments.get(p.id))!.refundedAmount).toBe(0);
+
+      expect(
+        await payments.settleRefund(made.id, "succeeded", "re_1Abc"),
+      ).toMatchObject({ status: "succeeded", stripeRefundId: "re_1Abc" });
+      expect((await payments.get(p.id))!.refundedAmount).toBe(600);
+      expect(await payments.getRefundByStripeId("re_1Abc")).toMatchObject({
+        id: made.id,
+      });
+      expect(await payments.getRefundByStripeId("re_none")).toBeNull();
+      // A succeeded refund never goes back to pending.
+      expect(
+        await payments.settleRefund(made.id, "pending", null),
+      ).toMatchObject({ status: "succeeded" });
+      const failed = (await reserve("refund-0004", 400)).refund!;
+      // Waiting on the bank: still reserved, not refunded.
+      expect(
+        await payments.settleRefund(failed.id, "requires_action", "re_2Abc"),
+      ).toMatchObject({ status: "requires_action", stripeRefundId: "re_2Abc" });
+      expect((await reserve("refund-0007", 1)).outcome).toBe("exceeds");
+      await payments.settleRefund(failed.id, "failed", null);
+      // A failed refund gives its amount back, and stays failed.
+      expect(
+        await payments.settleRefund(failed.id, "succeeded", null),
+      ).toMatchObject({ status: "failed" });
+      expect((await reserve("refund-0005", 400)).outcome).toBe("created");
+      expect((await payments.listRefunds(p.id)).map((r) => r.status)).toEqual([
+        "succeeded",
+        "failed",
+        "pending",
+      ]);
+      expect(
+        (
+          await payments.reserveRefund({
+            paymentId: crypto.randomUUID(),
+            requestId: "refund-0006",
+            amount: 1,
+            reason: "",
+            actor: "a",
+          })
+        ).outcome,
+      ).toBe("not_found");
+
+      // Stripe can fail a refund that had succeeded: the amount comes back.
+      expect(
+        await payments.settleRefund(made.id, "failed", null),
+      ).toMatchObject({
+        status: "failed",
+      });
+      expect((await payments.get(p.id))!.refundedAmount).toBe(0);
+    },
+  );
 
   it("records each Stripe event once", async () => {
     expect(await payments.hasEvent("evt_1Abc")).toBe(false);
