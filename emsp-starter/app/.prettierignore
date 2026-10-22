@@ -11,3 +11,4 @@ test-results
 playwright-report
 src/demo/locations.json
 public/maplibre-gl-worker.mjs
+.vercel

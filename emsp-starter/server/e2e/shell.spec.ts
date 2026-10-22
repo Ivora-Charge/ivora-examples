@@ -12,9 +12,6 @@ test("demo: admin overview is labelled and shows the OCPI identity", async ({
   await expect(page.getByText("2.2.1")).toBeVisible();
   await expect(page.getByText("DMO", { exact: true })).toBeVisible();
   await expect(page).toHaveTitle(/admin$/);
-
-  if (process.env.SCREENSHOT)
-    await page.screenshot({ path: "docs/screenshot.png", fullPage: false });
 });
 
 test("demo: status API reports demo mode", async ({ request }) => {

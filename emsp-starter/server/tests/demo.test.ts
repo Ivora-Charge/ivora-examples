@@ -46,9 +46,13 @@ describe("demo mode", () => {
     expect(isDemo()).toBe(false);
     expect(mode()).toBe("live");
     for (const name of Object.keys(LIVE)) {
-      process.env[name] = "  ";
-      expect(isDemo()).toBe(true);
-      expect(missingForLive()).toEqual([name]);
+      // `demo` is the Deploy to Vercel form's "not yet" (README: Deploy).
+      for (const unset of ["  ", "demo", " Demo "]) {
+        process.env[name] = unset;
+        expect(isDemo()).toBe(true);
+        expect(missingForLive()).toEqual([name]);
+        expect(configErrors()).toEqual([]);
+      }
       process.env[name] = LIVE[name as keyof typeof LIVE];
     }
     for (const on of ["true", "1", "yes", "on", " TRUE "]) {

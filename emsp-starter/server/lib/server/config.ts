@@ -6,10 +6,14 @@ export const OCPI_VERSION = "2.2.1";
 /** Identity used in demo mode, when EMSP_COUNTRY_CODE / EMSP_PARTY_ID are unset. */
 export const DEMO_PARTY = { countryCode: "ZZ", partyId: "DMO" } as const;
 
-/** An empty value counts as unset, so `FOO=` in .env behaves like a missing variable. */
+/**
+ * An empty value counts as unset, so `FOO=` in .env behaves like a missing variable.
+ * So does `demo`: the Deploy to Vercel form takes no empty field, so `demo` stands for
+ * "not yet" and the deployment stays in demo mode until a real value replaces it.
+ */
 function env(name: string): string | undefined {
   const v = process.env[name]?.trim();
-  return v ? v : undefined;
+  return v && v.toLowerCase() !== "demo" ? v : undefined;
 }
 
 /**
