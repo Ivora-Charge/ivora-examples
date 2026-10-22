@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 import { ocpiUrls } from "@/lib/server/config";
 import { adminEnabled } from "@/lib/server/admin";
 import { isDemo } from "@/lib/server/demo";
@@ -24,15 +25,10 @@ export default function PeersPage() {
             CPO, so registering at one is refused.
           </p>
         )}
-        {!adminEnabled() && (
-          <p className="note">
-            Admin actions are disabled until <code>ADMIN_SECRET</code> (at least
-            32 characters) is set on the server.
-          </p>
-        )}
         <p className="note">
-          Temporary: these actions ask for <code>ADMIN_SECRET</code> until admin
-          sign-in arrives.
+          Admin actions need an admin signed in (
+          <Link href="/admin/sign-in">sign in</Link>)
+          {adminEnabled() ? ", or the server's ADMIN_SECRET." : "."}
         </p>
       </section>
       <PeerAdmin />

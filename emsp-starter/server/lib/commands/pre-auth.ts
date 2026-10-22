@@ -1,4 +1,5 @@
 import "server-only";
+import { paymentsPreAuth } from "@/lib/payments/hold";
 import type { Command } from "./store";
 
 /**
@@ -6,9 +7,9 @@ import type { Command } from "./store";
  * `hold` succeeds, and a start that ends without charging (refused, not supported,
  * failed, timed out) calls `release` at once.
  *
- * Payments arrive in part 7, which replaces `stubPreAuth` in `preAuth()` with a card
- * hold. Until then the stub approves every start and holds nothing: run live mode only
- * on a private deployment. Tests install their own hook with setPreAuthForTests.
+ * `preAuth()` is the card hold of lib/payments (paymentsPreAuth): a manual-capture
+ * PaymentIntent on the driver's default card, captured later from the session's CDR.
+ * Tests install their own hook with setPreAuthForTests.
  */
 export type HoldResult =
   | { ok: true; reference: string | null }
@@ -22,12 +23,13 @@ export type PreAuth = {
    * no hold was placed, and more than once (a hold placed after the start timed out is
    * released again). `uncertain`: we never learnt whether the CPO started a session
    * (no answer before the deadline, or the CPO's CommandResult TIMEOUT); a session may
-   * still appear for this authorization_reference, and part 7 decides how such a
-   * session is paid.
+   * still appear for this authorization_reference: lib/payments keeps that hold a
+   * while, and charges it from the session's CDR if one comes.
    */
   release(command: Command, why: { uncertain: boolean }): Promise<void>;
 };
 
+/** Approves every start and holds nothing. For tests that are not about payments. */
 export const stubPreAuth: PreAuth = {
   async hold() {
     return { ok: true, reference: null };
@@ -37,9 +39,9 @@ export const stubPreAuth: PreAuth = {
 
 const holder = globalThis as unknown as { __emspPreAuthOverride?: PreAuth };
 
-/** The hook in use: the stub until part 7 replaces it here. */
+/** The hook in use: card holds on the network's Stripe account (demo: none). */
 export function preAuth(): PreAuth {
-  return holder.__emspPreAuthOverride ?? stubPreAuth;
+  return holder.__emspPreAuthOverride ?? paymentsPreAuth();
 }
 
 /** Tests only: use `hook` instead, or go back to the stub with undefined. */
