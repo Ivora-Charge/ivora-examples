@@ -629,6 +629,8 @@ export async function refundPayment(
     throw new PaymentError("Enter an amount in minor units (cents), above 0.");
   if (!REQUEST_ID.test(input.requestId))
     throw new PaymentError("Invalid request ID.");
+  const reason = input.reason?.trim().slice(0, 300) ?? "";
+  if (!reason) throw new PaymentError("Give a reason for the refund.");
   const p = await deps.payments.get(input.paymentId);
   if (!p) throw new PaymentError("No such payment.", 404);
   if (p.status !== "captured")
@@ -637,7 +639,7 @@ export async function refundPayment(
     paymentId: p.id,
     requestId: input.requestId,
     amount: input.amount,
-    reason: (input.reason ?? "").slice(0, 300),
+    reason,
     actor: deps.actor ?? "admin",
   });
   if (reserved.outcome === "not_found")
@@ -651,10 +653,18 @@ export async function refundPayment(
   // settles it. Sending it again could refund twice once Stripe forgets the key.
   if (refund.status !== "pending" || refund.stripeRefundId) return refund;
 
-  if (isDemo())
-    return (
-      (await deps.payments.settleRefund(refund.id, "succeeded", null)) ?? refund
-    );
+  if (isDemo()) {
+    refund =
+      (await deps.payments.settleRefund(refund.id, "succeeded", null)) ??
+      refund;
+    await audit(deps, "payment.refund_succeeded", await reread(p.id, deps), {
+      refund_id: refund.id,
+      amount: refund.amount,
+      reason,
+      demo: true,
+    });
+    return refund;
+  }
   if (!deps.stripe || !p.paymentIntentId)
     throw new PaymentError("Payments are not set up on this network.", 503);
   try {
@@ -681,7 +691,12 @@ export async function refundPayment(
     if (!(e instanceof StripeError)) throw e;
     refund =
       (await deps.payments.settleRefund(refund.id, "failed", null)) ?? refund;
-    await audit(deps, "payment.refund_failed", p, { code: e.code ?? e.type });
+    await audit(deps, "payment.refund_failed", p, {
+      code: e.code ?? e.type,
+      refund_id: refund.id,
+      amount: refund.amount,
+      reason,
+    });
     throw new PaymentError(`Stripe refused the refund (${e.code ?? e.type}).`);
   }
   await audit(
@@ -691,6 +706,7 @@ export async function refundPayment(
     {
       refund_id: refund.id,
       amount: refund.amount,
+      reason,
     },
   );
   return refund;

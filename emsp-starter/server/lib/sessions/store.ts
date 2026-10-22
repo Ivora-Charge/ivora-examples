@@ -123,6 +123,17 @@ export type ReconciliationQuery = {
   peerId?: string;
 };
 
+/** What the admin's session list asks for: newest start first. */
+export type SessionListQuery = {
+  peerId?: string;
+  /** Any of these statuses; all when unset. */
+  statuses?: readonly string[];
+  driverRef?: string;
+  /** Only sessions that started before this (exclusive): the next page. */
+  before?: string;
+  limit: number;
+};
+
 export interface SessionStore {
   getSession(key: SessionKey): Promise<StoredSession | null>;
   getSessionById(id: string): Promise<StoredSession | null>;
@@ -156,18 +167,23 @@ export interface SessionStore {
   /** Records why we stopped a session. */
   setStopReason(id: string, reason: string, now: string): Promise<void>;
   reconcile(query: ReconciliationQuery): Promise<ReconciliationRow[]>;
+  /** Sessions, newest start first. */
+  listSessions(query: SessionListQuery): Promise<StoredSession[]>;
 }
 
 const e4 = (n: number) => Number(toE4(n));
-const utcDay = (dateTime: string) =>
+/** The UTC day of an OCPI DateTime, YYYY-MM-DD. */
+export const utcDay = (dateTime: string) =>
   new Date(dateTimeMs(dateTime)).toISOString().slice(0, 10);
-const inRange = (dateTime: string, q: ReconciliationQuery) => {
+export const inRange = (dateTime: string, q: ReconciliationQuery) => {
   const t = dateTimeMs(dateTime);
   return t >= Date.parse(q.from) && t < Date.parse(q.to);
 };
-const OPEN = ["ACTIVE", "PENDING", "RESERVATION"];
+/** Sessions still running, or about to. */
+export const OPEN_SESSION_STATUSES = ["ACTIVE", "PENDING", "RESERVATION"];
+const OPEN = OPEN_SESSION_STATUSES;
 /** Byte order, like the database's `collate "C"`. */
-const byCode = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+export const byCode = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** Sessions and CDRs in memory: for demo mode (nothing persists) and for tests. */
 export class MemorySessionStore implements SessionStore {
@@ -300,6 +316,25 @@ export class MemorySessionStore implements SessionStore {
   async setStopReason(id: string, reason: string, now: string) {
     for (const s of this.sessions.values())
       if (s.id === id) Object.assign(s, { stopReason: reason, updatedAt: now });
+  }
+
+  async listSessions(q: SessionListQuery) {
+    const before = q.before ? Date.parse(q.before) : Infinity;
+    return [...this.sessions.values()]
+      .filter(
+        (s) =>
+          (!q.peerId || s.peerId === q.peerId) &&
+          (!q.statuses || q.statuses.includes(s.session.status)) &&
+          (!q.driverRef || s.driverRef === q.driverRef) &&
+          dateTimeMs(s.session.start_date_time) < before,
+      )
+      .sort(
+        (a, b) =>
+          dateTimeMs(b.session.start_date_time) -
+            dateTimeMs(a.session.start_date_time) || byCode(b.id, a.id),
+      )
+      .slice(0, q.limit)
+      .map((s) => structuredClone(s));
   }
 
   /** The same figures as the database function emsp_reconciliation. */

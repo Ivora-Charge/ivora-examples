@@ -763,7 +763,7 @@ describe("admin sign-in and the admin role table", () => {
         {},
         form({ email: "driver@example.com", code: DEMO_CODE }),
       ),
-    ).toEqual({
+    ).toMatchObject({
       ok: false,
       message: "This account is not an admin.",
     });
@@ -777,7 +777,7 @@ describe("admin sign-in and the admin role table", () => {
         form({ email: "viewer@example.com", code: DEMO_CODE }),
       ),
     ).toMatchObject({ ok: true });
-    expect(await reviewListAction({}, form({}))).toEqual({
+    expect(await reviewListAction({}, form({}))).toMatchObject({
       ok: false,
       message: "Your admin role is read-only.",
     });

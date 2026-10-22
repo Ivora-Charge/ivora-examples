@@ -46,7 +46,12 @@ export const DEFAULT_MAX_PAGES = 50;
 export const PAGE_LIMIT = 100;
 
 export class SyncError extends Error {
-  constructor(message: string) {
+  constructor(
+    message: string,
+    /** The peer's OCPI status_code and HTTP status, when the peer answered. */
+    readonly statusCode?: number,
+    readonly httpStatus?: number,
+  ) {
     super(message);
     this.name = "SyncError";
   }
@@ -345,6 +350,10 @@ export async function pullModule(
     return report(true, r, removed);
   } catch (e) {
     const error = message(e);
+    const codes =
+      e instanceof OcpiError
+        ? { statusCode: e.statusCode, httpStatus: e.httpStatus }
+        : {};
     // Keep the run, parked, so the next call resumes at the page that failed.
     const r = state.run;
     if (r)
@@ -361,6 +370,8 @@ export async function pullModule(
               invalid: r.invalid,
               removed: 0,
               error,
+              ...(codes.statusCode && { statusCode: codes.statusCode }),
+              ...(codes.httpStatus && { httpStatus: codes.httpStatus }),
             },
           },
           r.id,
@@ -368,7 +379,11 @@ export async function pullModule(
         .catch(() => undefined);
     throw e instanceof SyncError
       ? e
-      : new SyncError(`Pulling ${module} from ${peer.label} failed: ${error}`);
+      : new SyncError(
+          `Pulling ${module} from ${peer.label} failed: ${error}`,
+          codes.statusCode,
+          codes.httpStatus,
+        );
   }
 }
 

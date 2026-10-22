@@ -5,11 +5,14 @@ import { ActionCard } from "../action-card";
 import {
   decideAction,
   lookupPaymentAction,
+  paymentAuditAction,
   refundAction,
   reviewListAction,
+  type AuditLine,
   type PaymentActionState,
   type PaymentSummary,
 } from "./actions";
+import { requestIdSpent } from "./request-id";
 
 const REVIEW_TEXT: Record<string, string> = {
   cdr_above_hold: "CDR above the hold: the hold was captured, the rest was not",
@@ -69,9 +72,38 @@ function PaymentFacts({ p }: { p: PaymentSummary }) {
       {p.refunds?.map((r) => (
         <p key={r.id} className="muted">
           Refund {r.amount} {p.currency}: {r.status}
-          {r.reason ? ` (${r.reason})` : ""}
+          {r.reason ? ` (${r.reason})` : ""}, by {r.actor} at {r.createdAt}
         </p>
       ))}
+    </div>
+  );
+}
+
+function AuditLog({ lines }: { lines: AuditLine[] }) {
+  if (!lines.length) return null;
+  return (
+    <div className="table-wrap">
+      <table>
+        <caption className="muted">Audit log, newest first</caption>
+        <thead>
+          <tr>
+            <th scope="col">When</th>
+            <th scope="col">Who</th>
+            <th scope="col">What</th>
+            <th scope="col">Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {lines.map((l, i) => (
+            <tr key={`${l.at}:${i}`}>
+              <td>{l.at}</td>
+              <td>{l.actor}</td>
+              <td>{l.action}</td>
+              <td className="ids">{l.details}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
@@ -82,9 +114,14 @@ function PaymentCard(
   return (
     <ActionCard<PaymentActionState>
       {...props}
-      details={(state) =>
-        state.payments?.map((p) => <PaymentFacts key={p.id} p={p} />)
-      }
+      details={(state) => (
+        <>
+          {state.payments?.map((p) => (
+            <PaymentFacts key={p.id} p={p} />
+          ))}
+          <AuditLog lines={state.audit ?? []} />
+        </>
+      )}
     />
   );
 }
@@ -114,7 +151,7 @@ function AmountField({ required = true }: { required?: boolean }) {
 
 export function PaymentAdmin() {
   // One request ID per refund the admin means: a retry of the same form never
-  // refunds twice. A new one after each refund that went through.
+  // refunds twice. A new one once that refund's outcome is known (request-id.ts).
   const [requestId, setRequestId] = useState(() => crypto.randomUUID());
   return (
     <>
@@ -137,22 +174,42 @@ export function PaymentAdmin() {
         title="Refund"
         action={async (prev, form) => {
           const r = await refundAction(prev, form);
-          if (r.ok) setRequestId(crypto.randomUUID());
+          if (requestIdSpent(r)) setRequestId(crypto.randomUUID());
           return r;
         }}
         submit={<button type="submit">Refund</button>}
       >
         <p className="muted">
-          Part or all of a captured payment. Sending the same form again never
-          refunds twice.
+          Part or all of a captured payment, never more than was captured.
+          Sending the same form again never refunds twice. The reason and who
+          refunded go to the audit log.
         </p>
-        <PaymentField />
-        <AmountField />
         <label>
-          Reason (optional)
-          <input name="reason" maxLength={300} />
+          Payment ID
+          <input name="paymentId" required maxLength={36} autoComplete="off" />
+        </label>
+        <AmountField required={false} />
+        <label className="check">
+          <input type="checkbox" name="full" />
+          Refund everything left (ignores the amount)
+        </label>
+        <label>
+          Reason
+          <input name="reason" required maxLength={300} />
         </label>
         <input type="hidden" name="requestId" value={requestId} />
+      </PaymentCard>
+      <PaymentCard
+        id="audit"
+        title="Audit log of a payment"
+        action={paymentAuditAction}
+        submit={<button type="submit">Show audit log</button>}
+      >
+        <p className="muted">
+          Every change of the payment: the hold, the capture, each refund with
+          its reason, and who made it.
+        </p>
+        <PaymentField />
       </PaymentCard>
       <PaymentCard
         id="decide"

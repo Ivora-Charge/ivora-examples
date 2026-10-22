@@ -25,6 +25,8 @@ export interface Location {
   /** WGS 84 degrees, when set: the Live map places the site with them. */
   latitude?: number | null;
   longitude?: number | null;
+  /** IANA time zone of the site, when set: reports show its local times in it. */
+  time_zone?: string | null;
   external_reference?: string | null;
 }
 
@@ -171,6 +173,113 @@ export interface Transaction {
   started_at: string | null;
   ended_at: string | null;
   energy_wh?: number | null;
+}
+
+/** The bill a transaction settles, as `GET /transactions/{id}` shows it. */
+export interface TransactionBill {
+  id: string;
+  status: "open" | "final";
+  currency: string;
+  /** Final amount in integer minor units; null while open. */
+  total_minor: number | null;
+  finalized_at?: string | null;
+}
+
+/**
+ * `GET /transactions/{id}` (needs billing:read): the session with its stop reason,
+ * duration and bill. The list (`GET /transactions`) carries none of these, has no date
+ * filter and lists oldest first, so reports never scan it for a period.
+ */
+export interface TransactionDetail extends Transaction {
+  /** The station's OCPP connection name. */
+  station_name?: string | null;
+  /** From started_at to ended_at, or until now while the session is active. */
+  duration_seconds?: number | null;
+  stop_reason?: string | null;
+  bill?: TransactionBill | null;
+}
+
+// ---- Overview statistics (`GET /stats`) ----
+
+export type StatsBucketSize = "hour" | "day" | "month";
+
+export interface StatsQuery {
+  /** ISO 8601 with an offset (the kit sends UTC). */
+  from: string;
+  /** ISO 8601, exclusive. */
+  to: string;
+  bucket: StatsBucketSize;
+  /** IANA time zone of the bucket boundaries. */
+  time_zone: string;
+  /** Top stations, 1 to 20. */
+  top: number;
+}
+
+/** Billed revenue in one currency: final bills' total_minor, never captures or refunds. */
+export interface RevenueLine {
+  currency: string;
+  billed_minor: number;
+  bills: number;
+}
+
+/** Session figures of the period or of one bucket. */
+export interface StatsFigures {
+  sessions: number;
+  ended_sessions: number;
+  successful_sessions: number;
+  /** successful / ended as decimal text with 4 places ("0.9500"); null when none ended. */
+  success_rate: string | null;
+  average_duration_seconds: number | null;
+  /** kWh as decimal text, summed exactly. */
+  energy_kwh: string;
+  energy_wh: number;
+}
+
+export interface StatsTotals extends StatsFigures {
+  active_sessions: number;
+  energy_unknown_sessions: number;
+}
+
+export interface StatsBucket extends StatsFigures {
+  /** Bucket start and end (exclusive), ISO 8601 in the requested time zone. */
+  start: string;
+  end: string;
+  /** Final bills finalized in the bucket; null without billing:read. */
+  revenue: RevenueLine[] | null;
+}
+
+export interface TopStation {
+  station_id: number;
+  /** Null for a station deleted since. */
+  name: string | null;
+  sessions: number;
+  energy_kwh: string;
+  energy_wh: number;
+}
+
+/** Station state now (not for the period), cached up to 30 seconds by Ivora. */
+export interface StationCounts {
+  as_of: string;
+  total: number;
+  online: number;
+  offline: number;
+  faulted: number;
+}
+
+export interface Stats {
+  bucket: StatsBucketSize;
+  time_zone: string;
+  /** The period, widened to whole buckets. */
+  start: string;
+  end: string;
+  sessions_as_of: string;
+  totals: StatsTotals;
+  /** Oldest first, empty buckets included. */
+  series: StatsBucket[];
+  top_stations: TopStation[];
+  stations: StationCounts;
+  /** Final bills by finalized_at, per currency; null without billing:read. */
+  revenue: { basis: "final_bills"; currencies: RevenueLine[] } | null;
 }
 
 /**
@@ -554,7 +663,7 @@ export interface IvoraClient {
   getTransaction(
     transactionId: number,
     limits?: ReadLimits,
-  ): Promise<Transaction>;
+  ): Promise<TransactionDetail>;
   /** The token with this external_reference, if any (`GET /tokens`). */
   findToken(externalReference: string): Promise<TokenRecord | null>;
   /** Adopts the token by external_reference when the create may already have happened. */
@@ -640,4 +749,11 @@ export interface IvoraClient {
   releasePayment(paymentId: string, key: string): Promise<Payment>;
   /** Records that the kit stopped charging near the hold (once per bill). */
   recordHoldStop(billId: string, key: string): Promise<void>;
+  /**
+   * Overview statistics (`GET /stats`): sessions, energy, success rate, average
+   * duration, a series, top stations, station state and billed revenue. More than
+   * 168 hour, 92 day or 24 month buckets, or 50,000 sessions, answers 422
+   * stats_range_too_large.
+   */
+  getStats(q: StatsQuery): Promise<Stats>;
 }

@@ -3,13 +3,13 @@ import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { PaymentAdmin } from "./payment-admin";
 
-export const metadata: Metadata = { title: "Payments" };
+export const metadata: Metadata = { title: "Payments and refunds" };
 
 export default function PaymentsPage() {
   const demo = isDemo();
   return (
     <>
-      <h1>Payments</h1>
+      <h1>Payments and refunds</h1>
       <section className="card" aria-labelledby="about">
         <h2 id="about">How drivers pay</h2>
         <p>

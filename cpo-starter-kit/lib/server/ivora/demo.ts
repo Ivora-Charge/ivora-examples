@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { demoHistory, demoStats } from "./demo-history";
 import { demoSimulate } from "./demo-pricing";
 import { IvoraError } from "./errors";
 import type {
@@ -38,6 +39,7 @@ const SAMPLE_LOCATIONS: Location[] = [
     // Open ocean off West Africa (0°N 0°E is "Null Island"): never a real site.
     latitude: 0.012,
     longitude: 0.004,
+    time_zone: "America/New_York",
     external_reference: "cpo-demo-site-1",
   },
   {
@@ -49,6 +51,7 @@ const SAMPLE_LOCATIONS: Location[] = [
     country: "USA",
     latitude: 0.006,
     longitude: 0.021,
+    time_zone: "America/New_York",
     external_reference: "cpo-demo-site-2",
   },
 ];
@@ -1407,5 +1410,22 @@ export function createDemoClient(
     async recordHoldStop(billId) {
       await bill(billId);
     },
+    // Reports: the sample history (demo-history.ts) plus the visitor's own sessions
+    // and bills.
+    async getStats(q) {
+      const { transactions: txs, bills } = await reportData();
+      return demoStats(q, txs, bills, await stations(), now());
+    },
   };
+
+  /** The visitor's sessions and bills, then the sample history's. */
+  async function reportData() {
+    const f = await fleet.load();
+    const own = await Promise.all((f.bills ?? []).map((b) => billView(b, f)));
+    const history = demoHistory(now());
+    return {
+      transactions: [...(await transactions()), ...history.transactions],
+      bills: [...own, ...history.bills],
+    };
+  }
 }

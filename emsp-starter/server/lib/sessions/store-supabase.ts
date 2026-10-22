@@ -4,6 +4,7 @@ import { toE4 } from "@/lib/locations/pricing";
 import type { Cdr, Session } from "@/lib/ocpi/session-objects";
 import {
   eq,
+  inList,
   supabaseRest,
   type SupabaseTransport,
 } from "@/lib/server/supabase-rest";
@@ -14,6 +15,7 @@ import type {
   ReconciliationQuery,
   ReconciliationRow,
   SessionKey,
+  SessionListQuery,
   SessionStore,
   SessionWrite,
   StoredCdr,
@@ -262,6 +264,22 @@ export class SupabaseSessionStore implements SessionStore {
       `emsp_cdrs?peer_id=${eq(k.peerId)}&country_code=${eq(k.countryCode.toUpperCase())}&party_id=${eq(k.partyId.toUpperCase())}&session_id=${eq(k.sessionId)}&credit=is.false&select=id&limit=1`,
     );
     return rows.length > 0;
+  }
+
+  listSessions(q: SessionListQuery) {
+    const filters = [
+      q.peerId && `peer_id=${eq(q.peerId)}`,
+      q.statuses && `status=${inList([...q.statuses])}`,
+      q.driverRef && `driver_ref=${eq(q.driverRef)}`,
+      q.before && `start_date_time=lt.${encodeURIComponent(q.before)}`,
+    ].filter(Boolean);
+    return this.sessions(
+      [
+        ...filters,
+        "order=start_date_time.desc,id.desc",
+        `limit=${Math.max(1, Math.floor(q.limit))}`,
+      ].join("&"),
+    );
   }
 
   async reconcile(q: ReconciliationQuery): Promise<ReconciliationRow[]> {

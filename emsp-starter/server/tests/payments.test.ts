@@ -813,25 +813,45 @@ describe("refunds", () => {
     // The same request again: no second refund.
     expect(
       await refundPayment(
-        { paymentId: payment.id, amount: 500, requestId: "refund-0001" },
+        {
+          paymentId: payment.id,
+          amount: 500,
+          requestId: "refund-0001",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).toMatchObject({ id: first.id });
     expect(stripe.callsTo(/^\/v1\/refunds$/)).toHaveLength(1);
     await expect(
       refundPayment(
-        { paymentId: payment.id, amount: 701, requestId: "refund-0002" },
+        {
+          paymentId: payment.id,
+          amount: 701,
+          requestId: "refund-0002",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).rejects.toThrow("more than what is left");
     await refundPayment(
-      { paymentId: payment.id, amount: 700, requestId: "refund-0003" },
+      {
+        paymentId: payment.id,
+        amount: 700,
+        requestId: "refund-0003",
+        reason: "Test refund",
+      },
       deps(),
     );
     expect((await payments.get(payment.id))!.refundedAmount).toBe(1200);
     await expect(
       refundPayment(
-        { paymentId: payment.id, amount: 1, requestId: "refund-0004" },
+        {
+          paymentId: payment.id,
+          amount: 1,
+          requestId: "refund-0004",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).rejects.toBeInstanceOf(PaymentError);
@@ -848,14 +868,24 @@ describe("refunds", () => {
     });
     await expect(
       refundPayment(
-        { paymentId: payment.id, amount: 300, requestId: "refund-0101" },
+        {
+          paymentId: payment.id,
+          amount: 300,
+          requestId: "refund-0101",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).rejects.toThrow("Stripe did not answer");
     expect((await payments.get(payment.id))!.refundedAmount).toBe(0);
     expect(
       await refundPayment(
-        { paymentId: payment.id, amount: 300, requestId: "refund-0101" },
+        {
+          paymentId: payment.id,
+          amount: 300,
+          requestId: "refund-0101",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).toMatchObject({ status: "succeeded" });
@@ -868,7 +898,12 @@ describe("refunds", () => {
     await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 });
     stripe.state.refundStatus = "pending";
     const r = await refundPayment(
-      { paymentId: payment.id, amount: 300, requestId: "refund-0151" },
+      {
+        paymentId: payment.id,
+        amount: 300,
+        requestId: "refund-0151",
+        reason: "Test refund",
+      },
       deps(),
     );
     expect(r).toMatchObject({ status: "pending" });
@@ -877,7 +912,12 @@ describe("refunds", () => {
     // The same request again does not go to Stripe again.
     expect(
       await refundPayment(
-        { paymentId: payment.id, amount: 300, requestId: "refund-0151" },
+        {
+          paymentId: payment.id,
+          amount: 300,
+          requestId: "refund-0151",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).toMatchObject({ id: r.id, status: "pending" });
@@ -885,7 +925,12 @@ describe("refunds", () => {
     // Nor does it leave room to refund it twice.
     await expect(
       refundPayment(
-        { paymentId: payment.id, amount: 901, requestId: "refund-0152" },
+        {
+          paymentId: payment.id,
+          amount: 901,
+          requestId: "refund-0152",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).rejects.toThrow("more than what is left");
@@ -920,7 +965,12 @@ describe("refunds", () => {
     stripe.state.refundStatus = "requires_action";
     expect(
       await refundPayment(
-        { paymentId: payment.id, amount: 100, requestId: "refund-0161" },
+        {
+          paymentId: payment.id,
+          amount: 100,
+          requestId: "refund-0161",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).toMatchObject({ status: "requires_action" });
@@ -934,7 +984,12 @@ describe("refunds", () => {
     });
     await expect(
       refundPayment(
-        { paymentId: payment.id, amount: 200, requestId: "refund-0162" },
+        {
+          paymentId: payment.id,
+          amount: 200,
+          requestId: "refund-0162",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).rejects.toThrow("Stripe did not answer");
@@ -963,7 +1018,12 @@ describe("refunds", () => {
     const { payment } = await charging();
     await expect(
       refundPayment(
-        { paymentId: payment.id, amount: 1, requestId: "refund-0201" },
+        {
+          paymentId: payment.id,
+          amount: 1,
+          requestId: "refund-0201",
+          reason: "Test refund",
+        },
         deps(),
       ),
     ).rejects.toThrow("Only a captured payment");
@@ -1311,7 +1371,12 @@ describe("the Stripe webhook", () => {
     const { payment } = await charging();
     await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 });
     await refundPayment(
-      { paymentId: payment.id, amount: 200, requestId: "refund-0301" },
+      {
+        paymentId: payment.id,
+        amount: 200,
+        requestId: "refund-0301",
+        reason: "Test refund",
+      },
       deps(),
     );
     const charge = (n: number) =>
@@ -1372,7 +1437,12 @@ describe("demo mode", () => {
     expect(settled).toMatchObject({ status: "captured", capturedAmount: 2321 });
     expect(
       await refundPayment(
-        { paymentId: held.id, amount: 100, requestId: "refund-demo-1" },
+        {
+          paymentId: held.id,
+          amount: 100,
+          requestId: "refund-demo-1",
+          reason: "Test refund",
+        },
         d,
       ),
     ).toMatchObject({ status: "succeeded" });

@@ -132,16 +132,16 @@ describe("admin: pull locations and tariffs", () => {
     const peer = await connect();
     expect(
       await syncPeerAction({}, form({ peerId: peer.id, adminSecret: "wrong" })),
-    ).toEqual({ ok: false, message: "Wrong admin secret." });
+    ).toMatchObject({ ok: false, message: "Wrong admin secret." });
     expect(
       await syncPeerAction({}, form({ peerId: "x", adminSecret: SECRET })),
-    ).toEqual({ ok: false, message: "Peer ID must be a UUID." });
+    ).toMatchObject({ ok: false, message: "Peer ID must be a UUID." });
     process.env.DEMO_MODE = "true";
     const demo = await syncPeerAction(
       {},
       form({ peerId: peer.id, adminSecret: SECRET }),
     );
-    expect(demo).toEqual({
+    expect(demo).toMatchObject({
       ok: false,
       message:
         "Demo mode: refused to pull locations and tariffs from a CPO. Nothing was sent.",

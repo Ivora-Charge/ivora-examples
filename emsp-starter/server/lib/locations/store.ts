@@ -59,6 +59,9 @@ export type SyncResult = {
   removed: number;
   /** Safe to show: no tokens or peer data. */
   error?: string;
+  /** The peer's OCPI status_code and HTTP status, when it answered with an error. */
+  statusCode?: number;
+  httpStatus?: number;
 };
 
 export type SyncState = {
