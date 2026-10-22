@@ -8,10 +8,19 @@ import {
   cleanLive,
   LiveDataError,
   nullAdapter,
+  POWER_MAX_AGE_MS,
+  SOC_MAX_AGE_MS,
   type LiveDataAdapter,
   type LiveSessionRef,
 } from "@/lib/live-data/adapter";
-import { CACHE_MS, ivoraAdapter } from "@/lib/live-data/ivora";
+import {
+  BLOCKED_MS,
+  CACHE_MS,
+  ERROR_CACHE_MS,
+  ivoraAdapter,
+  RATE_LIMIT_MS,
+  retryAfterMs,
+} from "@/lib/live-data/ivora";
 import { sessionLive } from "@/lib/live-data/live";
 import {
   LiveDataSettingsError,
@@ -30,6 +39,7 @@ import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore } from "@/lib/ocpi/store";
 import { decryptToken } from "@/lib/ocpi/tokens";
 import { DemoModeError } from "@/lib/server/demo";
+import { setPeerNetworkForTests } from "@/lib/server/peer-fetch";
 import { resetAdminLimitForTests } from "@/lib/server/admin";
 import { MemorySessionStore } from "@/lib/sessions/store";
 import {
@@ -105,6 +115,7 @@ function ivoraMock(
     tx?: Record<string, unknown> | null;
     meters?: ReturnType<typeof record>[];
     status?: number;
+    headers?: Record<string, string>;
   } = {},
 ) {
   const calls: { method: string; url: string; auth: string | null }[] = [];
@@ -116,7 +127,11 @@ function ivoraMock(
       url,
       auth: request.headers.get("authorization"),
     });
-    if (opts.status) return Response.json({}, { status: opts.status });
+    if (opts.status)
+      return Response.json(
+        {},
+        { status: opts.status, headers: opts.headers ?? {} },
+      );
     const u = new URL(url);
     const m = /^\/v1\/tenants\/42\/transactions\/(\d+)(\/meter-values)?$/.exec(
       u.pathname,
@@ -182,24 +197,99 @@ describe("live data shape", () => {
       cleanLive(
         {
           socPercent: 54.26,
+          socMeasuredAt: "2026-10-22T08:29:00Z",
           powerKw: 48.123,
-          measuredAt: "2026-10-22T08:29:00Z",
+          powerMeasuredAt: "2026-10-22T08:29:30Z",
         },
         now,
       ),
     ).toEqual({
       socPercent: 54.3,
+      socMeasuredAt: "2026-10-22T08:29:00.000Z",
       powerKw: 48.12,
-      measuredAt: "2026-10-22T08:29:00.000Z",
+      powerMeasuredAt: "2026-10-22T08:29:30.000Z",
     });
-    expect(cleanLive({ socPercent: 101, powerKw: -1 }, now)).toEqual({});
-    expect(cleanLive({ socPercent: NaN, powerKw: "5" }, now)).toEqual({});
+    const at = "2026-10-22T08:29:00Z";
     expect(
-      cleanLive({ socPercent: 50, measuredAt: "2026-10-22T09:30:00Z" }, now),
-    ).toEqual({ socPercent: 50 });
+      cleanLive(
+        {
+          socPercent: 101,
+          socMeasuredAt: at,
+          powerKw: -1,
+          powerMeasuredAt: at,
+        },
+        now,
+      ),
+    ).toEqual({});
+    expect(
+      cleanLive(
+        {
+          socPercent: NaN,
+          socMeasuredAt: at,
+          powerKw: "5",
+          powerMeasuredAt: at,
+        },
+        now,
+      ),
+    ).toEqual({});
     // A time alone is nothing to show.
-    expect(cleanLive({ measuredAt: "2026-10-22T08:29:00Z" }, now)).toEqual({});
+    expect(cleanLive({ socMeasuredAt: at }, now)).toEqual({});
     expect(cleanLive(null, now)).toEqual({});
+  });
+
+  it("drops readings without a time, from the future or too old, each by its own time", () => {
+    const now = Date.parse("2026-10-22T08:30:00Z");
+    // No time: cannot be checked, so not shown.
+    expect(cleanLive({ socPercent: 50, powerKw: 11 }, now)).toEqual({});
+    expect(
+      cleanLive(
+        {
+          socPercent: 50,
+          socMeasuredAt: "2026-10-22T09:30:00Z",
+          powerKw: 11,
+          powerMeasuredAt: "nonsense",
+        },
+        now,
+      ),
+    ).toEqual({});
+    // A charger in SuspendedEV, or offline: the power stops, the SoC ages slower.
+    expect(
+      cleanLive(
+        {
+          socPercent: 61,
+          socMeasuredAt: "2026-10-22T08:20:00Z",
+          powerKw: 48.5,
+          powerMeasuredAt: "2026-10-22T08:20:00Z",
+        },
+        now,
+      ),
+    ).toEqual({ socPercent: 61, socMeasuredAt: "2026-10-22T08:20:00.000Z" });
+    expect(
+      cleanLive(
+        {
+          socPercent: 61,
+          socMeasuredAt: new Date(now - SOC_MAX_AGE_MS - 1).toISOString(),
+          powerKw: 48.5,
+          powerMeasuredAt: new Date(now - POWER_MAX_AGE_MS).toISOString(),
+        },
+        now,
+      ),
+    ).toEqual({
+      powerKw: 48.5,
+      powerMeasuredAt: new Date(now - POWER_MAX_AGE_MS).toISOString(),
+    });
+    // A fresh SoC does not keep an old power alive.
+    expect(
+      cleanLive(
+        {
+          socPercent: 61,
+          socMeasuredAt: "2026-10-22T08:29:50Z",
+          powerKw: 48.5,
+          powerMeasuredAt: "2026-10-22T07:50:00Z",
+        },
+        now,
+      ),
+    ).toEqual({ socPercent: 61, socMeasuredAt: "2026-10-22T08:29:50.000Z" });
   });
 });
 
@@ -217,8 +307,9 @@ describe("Ivora live-data adapter (HTTP mocks only)", () => {
     });
     expect(await adapter(mock).getLive(ref())).toEqual({
       socPercent: 54,
+      socMeasuredAt: "2026-10-22T08:29:00Z",
       powerKw: 48.5,
-      measuredAt: "2026-10-22T08:29:00.000Z",
+      powerMeasuredAt: "2026-10-22T08:29:00Z",
     });
     expect(mock.calls.map((c) => [c.method, c.url])).toEqual([
       ["GET", `${BASE}/v1/tenants/42/transactions/1234`],
@@ -261,7 +352,7 @@ describe("Ivora live-data adapter (HTTP mocks only)", () => {
     const live = await adapter(mock).getLive(ref());
     expect(live).toEqual({
       powerKw: 11,
-      measuredAt: "2026-10-22T08:10:00.000Z",
+      powerMeasuredAt: "2026-10-22T08:10:00Z",
     });
     expect(live).not.toHaveProperty("socPercent");
   });
@@ -273,8 +364,34 @@ describe("Ivora live-data adapter (HTTP mocks only)", () => {
     });
     expect(await adapter(mock).getLive(ref())).toEqual({
       socPercent: 80,
-      measuredAt: "2026-10-22T08:19:00.000Z",
+      socMeasuredAt: "2026-10-22T08:19:00Z",
     });
+  });
+
+  it("gives each reading its own time, so an old power is not hidden behind a fresh SoC", async () => {
+    const now = Date.parse("2026-10-22T08:45:00Z");
+    // The car paused at 08:05 (SuspendedEV): the power samples stopped, the SoC did not.
+    const mock = ivoraMock({
+      meters: [
+        record(1, "2026-10-22T08:05:00Z", [soc("40"), power("48500")]),
+        record(2, "2026-10-22T08:44:30Z", [soc("41")]),
+        // A sample without a time cannot vouch for anything.
+        { ...record(3, "", [power("7000")]), timestamp: undefined as never },
+      ],
+    });
+    const raw = await adapter(mock, () => now).getLive(ref());
+    expect(raw).toEqual({
+      socPercent: 41,
+      socMeasuredAt: "2026-10-22T08:44:30Z",
+    });
+
+    // And once the charger goes quiet altogether, the app gets nothing at all.
+    const quiet = ivoraMock({
+      meters: [record(1, "2026-10-22T08:05:00Z", [soc("40"), power("48500")])],
+    });
+    const old = await adapter(quiet, () => now).getLive(ref());
+    expect(old).toMatchObject({ socPercent: 40, powerKw: 48.5 });
+    expect(cleanLive(old, now)).toEqual({});
   });
 
   it("returns nothing, without reading meters, for a transaction that is not the session's", async () => {
@@ -375,6 +492,171 @@ describe("Ivora live-data adapter (HTTP mocks only)", () => {
     const err = await down.getLive(ref()).catch((e) => e);
     expect(err).toMatchObject({ code: "ivora_unreachable" });
     expect(err.message).not.toContain(KEY);
+  });
+
+  it("reads Retry-After as seconds or a date", () => {
+    const now = Date.parse("2026-10-22T08:30:00Z");
+    expect(retryAfterMs("120", now)).toBe(120_000);
+    expect(retryAfterMs(" 0 ", now)).toBe(0);
+    expect(retryAfterMs("Thu, 22 Oct 2026 08:31:00 GMT", now)).toBe(60_000);
+    expect(retryAfterMs(null, now)).toBeUndefined();
+    expect(retryAfterMs("soon", now)).toBeUndefined();
+  });
+
+  it("backs off a rate-limited API until Retry-After has passed, for every session of the peer", async () => {
+    let now = Date.parse("2026-10-22T08:30:00Z");
+    const mock = ivoraMock({ status: 429, headers: { "Retry-After": "120" } });
+    const a = adapter(mock, () => now);
+    const code = (p: Promise<unknown>) => p.catch((e) => e.code);
+    expect(await code(a.getLive(ref()))).toBe("ivora_rate_limited");
+    expect(mock.calls).toHaveLength(1);
+    // Other sessions of the same peer wait too, and nothing is sent.
+    now += 60_000;
+    expect(await code(a.getLive(ref({ sessionId: "5678" })))).toBe(
+      "ivora_rate_limited",
+    );
+    expect(await code(a.getLive(ref({ sessionId: "9012" })))).toBe(
+      "ivora_rate_limited",
+    );
+    expect(mock.calls).toHaveLength(1);
+    // Retry-After has passed: the next poll asks again.
+    now += 60_001;
+    expect(await code(a.getLive(ref({ sessionId: "3456" })))).toBe(
+      "ivora_rate_limited",
+    );
+    expect(mock.calls).toHaveLength(2);
+
+    // An HTTP-date Retry-After, and a 429 without one: a minute.
+    const dated = ivoraMock({
+      status: 429,
+      headers: { "Retry-After": new Date(now + 300_000).toUTCString() },
+    });
+    const b = adapter(dated, () => now);
+    await code(b.getLive(ref()));
+    now += 299_000;
+    await code(b.getLive(ref({ sessionId: "5678" })));
+    expect(dated.calls).toHaveLength(1);
+    const bare = ivoraMock({ status: 429 });
+    const c = adapter(bare, () => now);
+    await code(c.getLive(ref()));
+    now += RATE_LIMIT_MS - 1;
+    await code(c.getLive(ref({ sessionId: "5678" })));
+    expect(bare.calls).toHaveLength(1);
+    now += 1;
+    await code(c.getLive(ref({ sessionId: "9012" })));
+    expect(bare.calls).toHaveLength(2);
+  });
+
+  it("pauses a rejected key for longer, and caches other failures per session briefly", async () => {
+    let now = Date.parse("2026-10-22T08:30:00Z");
+    const code = (p: Promise<unknown>) => p.catch((e) => e.code);
+
+    const revoked = ivoraMock({ status: 401 });
+    const a = adapter(revoked, () => now);
+    expect(await code(a.getLive(ref()))).toBe("ivora_unauthorized");
+    now += BLOCKED_MS - 1;
+    expect(await code(a.getLive(ref({ sessionId: "5678" })))).toBe(
+      "ivora_unauthorized",
+    );
+    expect(revoked.calls).toHaveLength(1);
+    now += 1;
+    await code(a.getLive(ref({ sessionId: "9012" })));
+    expect(revoked.calls).toHaveLength(2);
+
+    let status = 502;
+    const flaky = ivoraMock();
+    const fetch = flaky.fetch.getMockImplementation()!;
+    flaky.fetch.mockImplementation(async (url, init) =>
+      status === 502
+        ? (flaky.calls.push({ method: "GET", url, auth: null }),
+          Response.json({}, { status }))
+        : fetch(url, init),
+    );
+    const b = adapter(flaky, () => now);
+    expect(await code(b.getLive(ref()))).toBe("ivora_http_502");
+    now += ERROR_CACHE_MS - 1;
+    expect(await code(b.getLive(ref()))).toBe("ivora_http_502");
+    expect(flaky.calls).toHaveLength(1);
+    // Another session is not held back by this one's failure.
+    await code(b.getLive(ref({ sessionId: "5678" })));
+    expect(flaky.calls).toHaveLength(2);
+    status = 200;
+    now += 1;
+    expect(await b.getLive(ref())).toEqual({});
+    expect(flaky.calls.length).toBeGreaterThan(2);
+  });
+
+  it("keeps the meter pages it read when a long first read is cut off", async () => {
+    const meters = Array.from({ length: 700 }, (_, i) =>
+      record(i + 1, "2026-10-22T08:20:00Z", [soc(String(30 + (i % 50)))]),
+    );
+    const mock = ivoraMock({ meters });
+    const fetch = mock.fetch.getMockImplementation()!;
+    let hang = true;
+    mock.fetch.mockImplementation(async (url, init) => {
+      const after = new URL(url).searchParams.get("after");
+      if (hang && after === "500") {
+        mock.calls.push({ method: "GET", url, auth: null });
+        return new Promise<Response>((_, reject) =>
+          init.signal!.addEventListener("abort", () =>
+            reject(init.signal!.reason),
+          ),
+        );
+      }
+      return fetch(url, init);
+    });
+    let now = Date.parse("2026-10-22T08:30:00Z");
+    const a = adapter(mock, () => now);
+    const cut = new AbortController();
+    const first = a.getLive(ref(), cut.signal).catch((e) => e);
+    await vi.waitFor(() => expect(mock.calls).toHaveLength(3));
+    cut.abort();
+    expect(await first).toMatchObject({ code: "ivora_unreachable" });
+
+    hang = false;
+    mock.calls.length = 0;
+    now += ERROR_CACHE_MS;
+    expect(await a.getLive(ref())).toMatchObject({
+      socPercent: 30 + (699 % 50),
+    });
+    // It went on from where the cut-off read stopped.
+    expect(
+      mock.calls.map((c) => new URL(c.url).searchParams.get("after")),
+    ).toEqual([null, "500"]);
+  });
+
+  it("refuses an API URL that resolves to a private address, and logs it as an SSRF refusal", async () => {
+    Object.assign(process.env, LIVE_ENV);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const send = vi.fn(async () => Response.json(transaction()));
+    for (const address of ["10.1.2.3", "127.0.0.1"]) {
+      setPeerNetworkForTests({
+        resolve: async () => [{ address, family: 4 }],
+        send,
+      });
+      const a = ivoraAdapter({ baseUrl: BASE, tenantId: TENANT, apiKey: KEY });
+      const err = await a.getLive(ref()).catch((e) => e);
+      expect(err).toBeInstanceOf(LiveDataError);
+      expect(err.code).toBe("ivora_address_refused");
+      // Paused: the next poll does not even resolve the host again.
+      expect(
+        await a.getLive(ref({ sessionId: "5678" })).catch((e) => e.code),
+      ).toBe("ivora_address_refused");
+    }
+    // An IP literal is checked the same way.
+    const literal = ivoraAdapter({
+      baseUrl: "https://127.0.0.1:8443",
+      tenantId: TENANT,
+      apiKey: KEY,
+    });
+    expect(await literal.getLive(ref()).catch((e) => e.code)).toBe(
+      "ivora_address_refused",
+    );
+    expect(send).not.toHaveBeenCalled();
+    const logged = warn.mock.calls.flat().join(" ");
+    expect(logged).toContain("SSRF");
+    expect(logged).not.toContain("ivora_unreachable");
+    expect(logged).not.toContain(KEY);
   });
 
   it("refuses settings that are not https, a numeric tenant and a plausible key", () => {
@@ -586,6 +868,10 @@ describe("a driver's session live data", () => {
     return { sessions, active: a!.id, done: b!.id };
   }
 
+  const NOW = Date.parse("2026-10-22T08:30:00Z");
+  const at = (secondsAgo: number) =>
+    new Date(NOW - secondsAgo * 1000).toISOString();
+  const now = () => NOW;
   const fixed = (live: unknown): LiveDataAdapter => ({
     kind: "fixed",
     getLive: vi.fn(async () => live as never),
@@ -593,16 +879,28 @@ describe("a driver's session live data", () => {
 
   it("shows what the adapter returns for the driver's running session", async () => {
     const { sessions, active } = await stored();
-    const a = fixed({ socPercent: 64, powerKw: 50, extra: "dropped" });
+    const a = fixed({
+      socPercent: 64,
+      socMeasuredAt: at(30),
+      powerKw: 50,
+      powerMeasuredAt: at(30),
+      extra: "dropped",
+    });
     const res = await sessionLive(active, "driver-1", {
       sessions,
       adapterFor: async () => a,
+      now,
     });
     expect(res).toEqual({
       sessionId: active,
       status: "ACTIVE",
       kwh: charging.kwh,
-      live: { socPercent: 64, powerKw: 50 },
+      live: {
+        socPercent: 64,
+        socMeasuredAt: at(30),
+        powerKw: 50,
+        powerMeasuredAt: at(30),
+      },
       source: "fixed",
     });
     expect(a.getLive).toHaveBeenCalledWith(
@@ -613,6 +911,39 @@ describe("a driver's session live data", () => {
       }),
       expect.any(AbortSignal),
     );
+  });
+
+  it("drops stale readings: a suspended or offline charger shows no live power", async () => {
+    const { sessions, active } = await stored();
+    const stale = fixed({
+      socPercent: 64,
+      socMeasuredAt: at(10 * 60),
+      powerKw: 48.5,
+      powerMeasuredAt: at(10 * 60),
+    });
+    expect(
+      await sessionLive(active, "driver-1", {
+        sessions,
+        adapterFor: async () => stale,
+        now,
+      }),
+    ).toMatchObject({
+      live: { socPercent: 64, socMeasuredAt: at(600) },
+      source: "fixed",
+    });
+    const gone = fixed({
+      socPercent: 64,
+      socMeasuredAt: at(40 * 60),
+      powerKw: 48.5,
+      powerMeasuredAt: at(40 * 60),
+    });
+    expect(
+      await sessionLive(active, "driver-1", {
+        sessions,
+        adapterFor: async () => gone,
+        now,
+      }),
+    ).toMatchObject({ live: {}, source: null });
   });
 
   it("hides live data when the adapter has none, and never asks for a finished session", async () => {

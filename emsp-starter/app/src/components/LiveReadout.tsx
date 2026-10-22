@@ -5,9 +5,17 @@ import { color, font, fontSize, fontWeight, radius, space } from "../theme";
 /**
  * A running session's state of charge and power, when the CPO's live-data adapter
  * gives them. Renders nothing when there is neither: most CPOs send OCPI data only.
+ * Readings too old to be true now are hidden; a SoC a few minutes old says so.
  */
-export function LiveReadout({ live }: { live: LiveData | null | undefined }) {
-  const r = liveReadout(live);
+export function LiveReadout({
+  live,
+  now,
+}: {
+  live: LiveData | null | undefined;
+  /** The time to judge readings by; defaults to the clock. */
+  now?: number;
+}) {
+  const r = liveReadout(live, now);
   if (r.socPercent === undefined && r.power === undefined) return null;
   return (
     <View style={styles.row} testID="live-readout">
@@ -24,7 +32,9 @@ export function LiveReadout({ live }: { live: LiveData | null | undefined }) {
           <View style={styles.track}>
             <View style={[styles.fill, { width: `${r.socPercent}%` }]} />
           </View>
-          <Text style={styles.label}>Battery</Text>
+          <Text style={styles.label}>
+            {r.socAge ? `Battery, ${r.socAge}` : "Battery"}
+          </Text>
         </View>
       )}
       {r.power !== undefined && (

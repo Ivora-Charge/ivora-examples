@@ -24,6 +24,7 @@ export type SessionLive = {
 type Deps = {
   sessions: SessionStore;
   adapterFor: (peerId: string) => Promise<LiveDataAdapter>;
+  now?: () => number;
 };
 
 const TIMEOUT_MS = 8000;
@@ -45,7 +46,8 @@ export const liveRef = (s: StoredSession): LiveSessionRef => ({
  * Live data for one of a driver's sessions. Null when the session is not that driver's
  * (the caller answers 404, never saying whose it is). Only a running session asks its
  * adapter; a failing adapter is logged by code and the session is shown without
- * extras, so the app never breaks on a CPO's API.
+ * extras, so the app never breaks on a CPO's API. Readings too old to be true now (a
+ * suspended or offline charger) are dropped by `cleanLive`.
  */
 export async function sessionLive(
   id: string,
@@ -67,6 +69,7 @@ export async function sessionLive(
     adapter = await deps.adapterFor(stored.peerId);
     const live = cleanLive(
       await adapter.getLive(liveRef(stored), AbortSignal.timeout(TIMEOUT_MS)),
+      (deps.now ?? Date.now)(),
     );
     return {
       ...base,

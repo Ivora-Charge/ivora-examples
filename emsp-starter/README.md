@@ -51,9 +51,10 @@ Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its READ
 4. **Tokens**: APP_USER tokens with eMA contract IDs and RFID cards, the Tokens Sender (paginated), pushes to every CPO's Tokens Receiver with retries, block and unblock, and real-time authorization.
 5. **Commands**: START_SESSION and STOP_SESSION with the CommandResponse and the asynchronous CommandResult, one command per app request, a payment-hold hook before every start, and a clear state for chargers that refuse app starts.
 6. **Sessions and CDRs** (this part): received (PUT, PATCH in any order, CDR POST) and pulled from CPOs that only offer GET, CDRs kept as immutable records, linked to the driver's start command and token, internal events, and reconciliation data per peer and day.
-7. and 8. Payments and accounts.
-8. **Live-data adapter**: a pluggable, read-only adapter per CPO peer for what OCPI lacks (state of charge, power). The null adapter is the default; an Ivora API adapter is included, configured per peer with a read-only key. The app shows SoC when an adapter returns it and hides it otherwise. See [the server README](server/README.md#live-data-state-of-charge), which also explains how to write an adapter for another CPO.
-9. to 13. The driver flows and the admin web. Each part updates this README.
+7. Payments.
+8. Accounts.
+9. **Live-data adapter**: a pluggable, read-only adapter per CPO peer for what OCPI lacks (state of charge, power). The null adapter is the default; an Ivora API adapter is included, configured per peer with a read-only key. The app shows SoC when an adapter returns it and hides it otherwise. See [the server README](server/README.md#live-data-state-of-charge), which also explains how to write an adapter for another CPO.
+10. to 13. The driver flows and the admin web. Each part updates this README.
 
 ## License
 

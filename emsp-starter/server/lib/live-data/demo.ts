@@ -14,10 +14,12 @@ export function demoAdapter(now: () => number = Date.now): LiveDataAdapter {
         0,
         (now() - Date.parse(ref.startDateTime)) / 60_000,
       );
+      const at = new Date(now()).toISOString();
       return {
         socPercent: Math.min(95, Math.round(30 + minutes * 0.8)),
+        socMeasuredAt: at,
         powerKw: minutes < 60 ? 48.5 : 11,
-        measuredAt: new Date(now()).toISOString(),
+        powerMeasuredAt: at,
       };
     },
   };

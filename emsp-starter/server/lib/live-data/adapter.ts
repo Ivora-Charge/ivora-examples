@@ -10,10 +10,12 @@ import type { SessionStatus } from "@/lib/ocpi/session-objects";
 export type LiveData = {
   /** The vehicle's state of charge, 0 to 100, as the charger reports it. */
   socPercent?: number;
-  /** Power flowing to the vehicle now, in kW. */
+  /** When the charger measured `socPercent`, ISO 8601 UTC. Required with it. */
+  socMeasuredAt?: string;
+  /** Power flowing to the vehicle, in kW. */
   powerKw?: number;
-  /** When the newest of these values was measured, ISO 8601 UTC. */
-  measuredAt?: string;
+  /** When the charger measured `powerKw`, ISO 8601 UTC. Required with it. */
+  powerMeasuredAt?: string;
 };
 
 /**
@@ -65,14 +67,33 @@ export class LiveDataError extends Error {
 }
 
 const MAX_POWER_KW = 2000;
+/**
+ * How old a reading may be and still be shown. A charger that is suspended or offline
+ * stops sending meter values while its OCPI session stays ACTIVE, so an old reading
+ * would show a car charging that is not. Power changes fast; SoC slowly.
+ */
+export const POWER_MAX_AGE_MS = 3 * 60 * 1000;
+export const SOC_MAX_AGE_MS = 15 * 60 * 1000;
+/** Clock skew allowed for a reading time in the future. */
+const MAX_SKEW_MS = 60_000;
 
 const round = (n: number, places: number) =>
   Math.round(n * 10 ** places) / 10 ** places;
 
+/** The reading time as ISO 8601 UTC, or undefined when it is missing, invalid, too far ahead or older than `maxAge`. */
+function freshTime(v: unknown, now: number, maxAge: number) {
+  if (typeof v !== "string") return undefined;
+  const at = Date.parse(v);
+  if (!Number.isFinite(at) || at > now + MAX_SKEW_MS || now - at > maxAge)
+    return undefined;
+  return new Date(at).toISOString();
+}
+
 /**
- * What an adapter returned, kept only where it makes sense: a SoC from 0 to 100, a
- * power from 0 to 2,000 kW and a valid time, no later than a minute from `now`.
- * Anything else is dropped, so a bad reading is hidden rather than shown.
+ * What an adapter returned, kept only where it makes sense: a SoC from 0 to 100 measured
+ * in the last 15 minutes, and a power from 0 to 2,000 kW measured in the last 3. A value
+ * without its measurement time cannot be checked, so it is dropped too. Anything else is
+ * hidden rather than shown wrong.
  */
 export function cleanLive(raw: unknown, now = Date.now()): LiveData {
   const out: LiveData = {};
@@ -81,16 +102,16 @@ export function cleanLive(raw: unknown, now = Date.now()): LiveData {
   const num = (v: unknown) =>
     typeof v === "number" && Number.isFinite(v) ? v : undefined;
   const soc = num(r.socPercent);
-  if (soc !== undefined && soc >= 0 && soc <= 100)
+  const socAt = freshTime(r.socMeasuredAt, now, SOC_MAX_AGE_MS);
+  if (soc !== undefined && soc >= 0 && soc <= 100 && socAt) {
     out.socPercent = round(soc, 1);
-  const power = num(r.powerKw);
-  if (power !== undefined && power >= 0 && power <= MAX_POWER_KW)
-    out.powerKw = round(power, 2);
-  if (typeof r.measuredAt === "string") {
-    const at = Date.parse(r.measuredAt);
-    if (Number.isFinite(at) && at <= now + 60_000)
-      out.measuredAt = new Date(at).toISOString();
+    out.socMeasuredAt = socAt;
   }
-  if (out.socPercent === undefined && out.powerKw === undefined) return {};
+  const power = num(r.powerKw);
+  const powerAt = freshTime(r.powerMeasuredAt, now, POWER_MAX_AGE_MS);
+  if (power !== undefined && power >= 0 && power <= MAX_POWER_KW && powerAt) {
+    out.powerKw = round(power, 2);
+    out.powerMeasuredAt = powerAt;
+  }
   return out;
 }
