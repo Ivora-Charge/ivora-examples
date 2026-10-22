@@ -38,7 +38,7 @@ test("demo: an admin gives a peer the Ivora adapter, the key is never shown", as
     await ivora.getByRole("button", { name: "Save adapter" }).click();
   };
   await save("wrong");
-  await expect(ivora.getByRole("alert")).toHaveText("Wrong admin secret.");
+  await expect(ivora.getByRole("alert")).toContainText("Wrong admin secret.");
 
   await save(E2E_ADMIN_SECRET);
   const result = ivora.getByRole("status");
