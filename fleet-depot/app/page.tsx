@@ -129,7 +129,7 @@ export default function Landing() {
         <HowItWorks />
         <p>
           <a
-            href="https://ivoracharge.com/developers"
+            href="https://www.ivoracharge.com/developers"
             target="_blank"
             rel="noreferrer"
           >

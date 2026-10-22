@@ -3,7 +3,7 @@ import type { State } from "./types";
 
 type Post = (url: string, body: unknown, ok?: string) => Promise<boolean>;
 
-/** Demo clock: speed, step buttons and reset. */
+/** Demo clock: speed, step buttons and reset. The clock is this visitor's own (a cookie). */
 export default function SimControls({ s, post }: { s: State; post: Post }) {
   const sim = s.sim;
   if (!sim) return null;
@@ -20,6 +20,7 @@ export default function SimControls({ s, post }: { s: State; post: Post }) {
             [0, "Pause"],
             [1, "1×"],
             [60, "60×"],
+            [300, "Play the night (300×)"],
           ] as const
         ).map(([v, label]) => (
           <button
@@ -46,7 +47,7 @@ export default function SimControls({ s, post }: { s: State; post: Post }) {
       <p className="note small" aria-live="polite">
         {sim.done
           ? "The night is over. Reset to run it again."
-          : "60× plays the night in about 15 minutes."}
+          : "Play the night runs 16:30 to 08:30 in about 3 minutes; 60× takes about 15."}
       </p>
     </section>
   );

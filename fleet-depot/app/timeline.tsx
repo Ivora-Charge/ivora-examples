@@ -10,6 +10,8 @@ import {
 } from "@/lib/timeline";
 import type { Row, State } from "./types";
 
+const HOUR = 3600_000;
+
 export function StatusChip({ status }: { status: keyof typeof STATUS_LABEL }) {
   return (
     <span className={`chip ${status}`}>
@@ -19,14 +21,16 @@ export function StatusChip({ status }: { status: keyof typeof STATUS_LABEL }) {
   );
 }
 
-function describe(r: Row, status: string, dep?: number) {
+function describe(r: Row, status: string, dep?: number, tz?: string) {
   const where = r.session
     ? `plugged in at ${r.session.station} connector ${r.session.connector}, ${r.session.allocatedKw.toFixed(1)} kW, ${r.session.deliveredKwh.toFixed(1)} kWh delivered`
     : r.departed
       ? r.departed.ready
         ? "left ready"
         : "left before it was ready"
-      : "not plugged in";
+      : r.notArrived
+        ? "not back at the depot yet"
+        : "not plugged in";
   const charger = r.plan
     ? `, charger ${r.plan.charger} ${r.plan.type} ${r.plan.ratedKw} kW`
     : "";
@@ -34,16 +38,24 @@ function describe(r: Row, status: string, dep?: number) {
     r.remainingKwh !== undefined
       ? `, ${r.remainingKwh.toFixed(1)} kWh left`
       : "";
-  return `${r.vehicle.name}: ${status}, ${where}${charger}${left}${dep ? `, departs ${clock(dep)}` : ""}`;
+  return `${r.vehicle.name}: ${status}, ${where}${charger}${left}${dep ? `, departs ${clock(dep, tz)}` : ""}`;
 }
 
 /** One vehicle per row on a shared time axis. On phones the axis moves into each row as start, now, departure labels. */
 export default function Timeline({ s }: { s: State }) {
   const now = Date.parse(s.now);
-  const axis = axisFor(
-    now,
-    s.rows.map((r) => r.vehicle.departure),
-  );
+  const tz = s.tz;
+  // Demo: the axis is the whole night, so it fills as the night plays and
+  // the "all Ready" frame at the end still shows it.
+  const axis = s.sim
+    ? {
+        start: Math.floor(s.sim.start / HOUR) * HOUR,
+        end: Math.ceil(s.sim.end / HOUR) * HOUR,
+      }
+    : axisFor(
+        now,
+        s.rows.map((r) => r.vehicle.departure),
+      );
   const rows = [...s.rows].sort(
     (a, b) =>
       (a.vehicle.departure ? Date.parse(a.vehicle.departure) : Infinity) -
@@ -64,7 +76,7 @@ export default function Timeline({ s }: { s: State }) {
         <span className="hours">
           {ticks.map((t) => (
             <span key={t} style={{ left: `${pct(t, axis)}%` }}>
-              {clock(t)}
+              {clock(t, tz)}
             </span>
           ))}
         </span>
@@ -107,13 +119,15 @@ export default function Timeline({ s }: { s: State }) {
                     ? `${r.session.station} / ${r.session.connector}`
                     : r.departed
                       ? "left"
-                      : "not plugged in"}
+                      : r.notArrived
+                        ? "on route"
+                        : "not plugged in"}
                 </span>
               </div>
               <div
                 className="track"
                 role="img"
-                aria-label={describe(r, STATUS_LABEL[status], dep)}
+                aria-label={describe(r, STATUS_LABEL[status], dep, tz)}
               >
                 {ticks.map((t) => (
                   <i
@@ -144,26 +158,26 @@ export default function Timeline({ s }: { s: State }) {
                   className={`n ${lab.now.align}`}
                   style={{ left: `${lab.now.left}%` }}
                 >
-                  now {clock(now)}
+                  now {clock(now, tz)}
                 </span>
               </div>
               <div className="tl-lab" aria-hidden="true">
                 {lab.start && (
-                  <span style={{ left: 0 }}>start {clock(axis.start)}</span>
+                  <span style={{ left: 0 }}>start {clock(axis.start, tz)}</span>
                 )}
                 {dep && lab.dep && (
                   <span
                     className={`d ${lab.dep.align}`}
                     style={{ left: `${lab.dep.left}%` }}
                   >
-                    dep {clock(dep)}
+                    dep {clock(dep, tz)}
                   </span>
                 )}
               </div>
               <div className="right num dep-time">
                 {dep ? (
                   <>
-                    {clock(dep)}
+                    {clock(dep, tz)}
                     {r.soc !== undefined && (
                       <small>
                         {r.soc.toFixed(0)}%{r.socReported ? "" : " est."}
@@ -179,9 +193,10 @@ export default function Timeline({ s }: { s: State }) {
                 {r.session && (
                   <small className="num">
                     {r.session.allocatedKw.toFixed(1)} kW
+                    {s.demo ? " (simulated)" : ""}
                   </small>
                 )}
-                {r.session?.profile && (
+                {!s.demo && r.session?.profile && (
                   <small title={r.session.profile.detail}>
                     {r.session.profile.status}
                     {r.session.profile.composite

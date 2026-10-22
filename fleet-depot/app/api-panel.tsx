@@ -1,11 +1,11 @@
 import type { State } from "./types";
-import { API_CALLS, callsFor } from "@/lib/calls";
+import { API_CALLS, callsFor, collapseEvents } from "@/lib/calls";
 
 const DOCS = "https://www.ivoracharge.com/developers";
 
 /** The calls and webhooks behind what is happening on the board, newest first. */
 export default function ApiPanel({ s }: { s: State }) {
-  const recent = s.events
+  const recent = collapseEvents(s.events)
     .map((e) => ({ e, calls: callsFor(e.type) }))
     .filter((x) => x.calls.length > 0)
     .slice(0, 4);

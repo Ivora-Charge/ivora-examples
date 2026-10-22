@@ -31,8 +31,9 @@ describe("demo end to end", () => {
     const heavy = s.rows.filter((r) => r.vehicle.batteryKwh >= 200);
     expect(heavy).toHaveLength(2);
     for (const r of s.rows) {
+      // Depot time is UTC, whatever zone the server runs in.
       const dep = new Date(r.vehicle.departure!);
-      const h = dep.getHours() + dep.getMinutes() / 60;
+      const h = dep.getUTCHours() + dep.getUTCMinutes() / 60;
       expect(h).toBeGreaterThanOrEqual(5.5);
       expect(h).toBeLessThanOrEqual(8);
     }
@@ -95,7 +96,7 @@ describe("demo end to end", () => {
     ).toBeGreaterThanOrEqual(8);
     await resetDemo(d);
     const s = await boardState(d);
-    expect(new Date(s.now).getHours()).toBe(16);
+    expect(new Date(s.now).getUTCHours()).toBe(16);
     expect(s.rows.every((r) => !r.session)).toBe(true);
     expect(demoState(d)!.samples).toHaveLength(0);
   });

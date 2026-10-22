@@ -14,7 +14,7 @@ export default function Wall({
 }) {
   const cap = s.settings.siteCapKw;
   const used = cap > 0 ? Math.min(100, (s.totalKw / cap) * 100) : 0;
-  const count = { ready: 0, charging: 0, waiting: 0, late: 0 };
+  const count = { ready: 0, charging: 0, waiting: 0, late: 0, away: 0 };
   for (const r of s.rows) count[statusOf(r)]++;
   const next = s.rows
     .filter((r) => r.vehicle.departure && !r.departed)
@@ -35,7 +35,10 @@ export default function Wall({
       <header className="top">
         <h1>Depot overview</h1>
         {s.demo && <span className="demotag">Demo</span>}
-        <span className="num clock">{clock(Date.parse(s.now))}</span>
+        {s.tz && <span className="tzlab">Depot time</span>}
+        <span className="num clock">
+          {clock(s.sim?.at ?? Date.parse(s.now), s.tz)}
+        </span>
         <button onClick={onExit}>Exit wall display (Esc)</button>
       </header>
       <div className="wallgrid">
@@ -83,10 +86,10 @@ export default function Wall({
                 <li key={r.vehicle.id}>
                   <b>{r.vehicle.name}</b>
                   <span className="num">
-                    {clock(Date.parse(r.vehicle.departure!))}
+                    {clock(Date.parse(r.vehicle.departure!), s.tz)}
                   </span>
                   <span className="num">
-                    {r.soc !== undefined ? `${r.soc.toFixed(0)}%` : "-"}
+                    {r.soc !== undefined ? `${r.soc.toFixed(0)}% now` : "-"}
                   </span>
                   <StatusChip status={statusOf(r)} />
                 </li>

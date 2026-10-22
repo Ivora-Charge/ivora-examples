@@ -282,6 +282,14 @@ button.danger {
 .top .clock {
   margin-left: auto;
 }
+.top .tzlab {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: var(--text-label);
+}
+.top .tzlab + .clock {
+  margin-left: calc(var(--space) * -0.5);
+}
 .empty {
   padding: 16px;
   color: var(--muted);
@@ -417,6 +425,13 @@ button.danger {
 .chip.waiting .ic {
   border: 2px solid var(--muted);
   border-radius: 2px;
+}
+.chip.away {
+  color: var(--muted);
+}
+.chip.away .ic {
+  border: 2px dashed var(--muted);
+  border-radius: 50%;
 }
 .chip.ready .ic {
   background: var(--ok);

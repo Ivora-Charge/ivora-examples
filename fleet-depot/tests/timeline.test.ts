@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   axisFor,
   chargeSpans,
+  clock,
+  hourOf,
   LABEL_PCT,
   hourTicks,
   miniLabels,
@@ -99,5 +101,19 @@ describe("phone mini-timeline labels", () => {
     const l = miniLabels(21, 92);
     expect(l.start).toBe(true);
     expect(l.dep?.align).toBe("end");
+  });
+});
+
+describe("depot time", () => {
+  it("formats demo times in UTC whatever the browser's zone", () => {
+    const t = Date.UTC(2026, 9, 23, 7, 15);
+    expect(clock(t, "UTC")).toBe("07:15");
+    expect(hourOf(t, "UTC")).toBe(7);
+  });
+  it("marks a vehicle still on its route as not arrived, not waiting", () => {
+    expect(statusOf({ notArrived: true })).toBe("away");
+    expect(statusOf({ session: {}, notArrived: true, remainingKwh: 5 })).toBe(
+      "charging",
+    );
   });
 });

@@ -89,7 +89,7 @@ export function miniLabels(nowPct: number, depPct?: number) {
   };
 }
 
-export type VehicleStatus = "charging" | "waiting" | "ready" | "late";
+export type VehicleStatus = "charging" | "waiting" | "ready" | "late" | "away";
 
 export function statusOf(r: {
   session?: unknown;
@@ -97,8 +97,11 @@ export function statusOf(r: {
   readyBy?: boolean;
   /** Demo: how the vehicle left, once its session ended at departure. */
   departed?: { ready: boolean };
+  /** Demo: still on its route, not back at the depot yet. */
+  notArrived?: boolean;
 }): VehicleStatus {
   if (!r.session && r.departed) return r.departed.ready ? "ready" : "late";
+  if (!r.session && r.notArrived) return "away";
   if (!r.session) return "waiting";
   if (r.readyBy === false) return "late";
   if (r.remainingKwh !== undefined && r.remainingKwh <= 0.05) return "ready";
@@ -110,11 +113,18 @@ export const STATUS_LABEL: Record<VehicleStatus, string> = {
   waiting: "waiting",
   ready: "ready",
   late: "at risk",
+  away: "not arrived",
 };
 
-export const clock = (ms: number) =>
-  new Date(ms).toLocaleTimeString([], {
+/** HH:MM. Demo times pass the depot's zone (UTC), so every browser shows the same night. */
+export const clock = (ms: number, timeZone?: string) =>
+  new Date(ms).toLocaleTimeString(timeZone ? "en-GB" : [], {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
+    timeZone,
   });
+
+/** The hour of day (0-23) in `timeZone`, or in the browser's zone. */
+export const hourOf = (ms: number, timeZone?: string) =>
+  timeZone === "UTC" ? new Date(ms).getUTCHours() : new Date(ms).getHours();

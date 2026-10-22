@@ -32,7 +32,7 @@ test("landing: the demo banner, the Ivora panel, and a way into the console", as
   await expect(how).toContainText("Webhooks");
   await expect(
     how.getByRole("link", { name: "Ivora API docs" }),
-  ).toHaveAttribute("href", "https://ivoracharge.com/developers");
+  ).toHaveAttribute("href", "https://www.ivoracharge.com/developers");
   await page.getByRole("link", { name: "Try the demo" }).click();
   await expect(page.getByRole("tab", { name: "Overview" })).toBeVisible();
 });
@@ -42,8 +42,16 @@ test("the night: the at-risk van is flagged, prioritised and turns Ready; every 
 }) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await openDepot(page);
-  await expect(page.getByText("not plugged in").first()).toBeVisible();
+  await expect(page.getByText("on route").first()).toBeVisible();
   await expect(page.locator(".row")).toHaveCount(12);
+  // Depot time (UTC) in a Pacific browser: the night starts 16:30, the van leaves 06:30.
+  await expect(page.locator(".top .tzlab")).toHaveText("Depot time");
+  await expect(page.locator(".tl-head .hours span").first()).toHaveText(
+    "16:00",
+  );
+  await expect(
+    page.locator(".row", { hasText: "Cargo van 6" }).locator(".dep-time"),
+  ).toContainText("06:30");
   // Level 2 and DC chargers are labelled on the rows.
   await expect(page.locator(".ctype.dc").first()).toHaveText("DC fast");
   await expect(page.locator(".ctype.ac").first()).toHaveText("L2 AC");
@@ -149,7 +157,7 @@ test("cost per vehicle and per driver, and the CSV downloads", async ({
     const path = await download.path();
     const text = (await import("node:fs")).readFileSync(path, "utf8");
     const lines = text.trim().split("\n");
-    expect(lines[0]).toBe("name,sessions,energy_kwh,cost_eur");
+    expect(lines[0]).toBe("name,sessions,energy_kwh,cost_usd");
     expect(lines.length).toBeGreaterThan(5);
   }
   await page.getByLabel("Month").selectOption("last");
@@ -248,4 +256,63 @@ test("phone: mini-timeline labels never overlap as the clock advances", async ({
     await advanceBtn.click();
     await r;
   }
+});
+
+test("each visitor has their own night: another visitor's clock does not move it", async ({
+  browser,
+}) => {
+  const a = await (await browser.newContext()).newPage();
+  const b = await (await browser.newContext()).newPage();
+  await openDepot(a);
+  await openDepot(b);
+  await advance(a, 3);
+  await expect(a.locator(".top .clock")).toHaveText("19:30");
+  await b.reload();
+  await expect(b.locator(".top .clock")).toHaveText("16:30");
+  // A's night survives a reload: it lives in A's cookie.
+  await a.reload();
+  await expect(a.locator(".top .clock")).toHaveText("19:30");
+  await b.getByRole("button", { name: "Reset demo" }).click();
+  await a.reload();
+  await expect(a.locator(".top .clock")).toHaveText("19:30");
+});
+
+test("Play the night (300x): the at-risk van is flagged, then turns Ready, all leave Ready in about 3 minutes", async ({
+  page,
+}) => {
+  test.setTimeout(300_000);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await openDepot(page);
+  const van = page.locator(".row", { hasText: "Cargo van 6" });
+  const started = Date.now();
+  await page.getByRole("button", { name: "Play the night (300×)" }).click();
+  // 21:30-23:00 depot time: on screen for about 18 seconds.
+  await expect(van.locator(".chip")).toHaveText("at risk", {
+    timeout: 120_000,
+  });
+  await expect(van.locator(".chip")).toHaveText("charging", {
+    timeout: 60_000,
+  });
+  await expect(page.getByText("The night is over")).toBeVisible({
+    timeout: 200_000,
+  });
+  expect(Date.now() - started).toBeLessThan(240_000);
+  await expect(page.locator(".row .chip.ready")).toHaveCount(12);
+  await expect(page.locator(".top .clock")).toHaveText("08:30");
+});
+
+test("wall display opens from a direct link and keeps the visitor's night", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1920, height: 1080 });
+  await openDepot(page);
+  await advance(page, 2);
+  await page.goto("/depot?wall=1");
+  await expect(
+    page.getByRole("heading", { name: "Next departures" }),
+  ).toBeVisible();
+  await expect(page.locator(".wall .top .clock")).toHaveText("18:30");
+  await expect(page.locator(".nextlist li").first()).toContainText("% now");
+  await page.keyboard.press("Escape");
+  await expect(page).toHaveURL(/\/depot$/);
 });

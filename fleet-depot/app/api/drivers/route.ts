@@ -1,14 +1,16 @@
 import { guard } from "@/lib/auth";
-import { getDepot, withLock } from "@/lib/depot";
+import { withLock } from "@/lib/depot";
 import { blockDriver, createDriver, importDrivers } from "@/lib/drivers";
 import { body, fail, json } from "@/lib/http";
+import { depotOf } from "@/lib/demo-visitor";
 
 /** actions: create {name, idTag?}, import {csv}, block {id} */
 export async function POST(req: Request) {
   const denied = guard(req, { write: true });
   if (denied) return denied;
   try {
-    const d = await getDepot();
+    // Demo: the visitor's own depot (lib/demo-visitor.ts).
+    const { d } = await depotOf(req);
     const b = await body<{
       action: string;
       name: string;

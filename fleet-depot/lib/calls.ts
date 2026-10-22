@@ -54,3 +54,30 @@ export const API_CALLS: { call: string; use: string }[] = [
     use: "Webhook: the charger took the limit.",
   },
 ];
+
+interface LogLine {
+  id: string;
+  at: string;
+  type: string;
+  detail: string;
+}
+
+/**
+ * One log line per replan: the profiles a replan sends at the same moment are
+ * listed together instead of one line each. Input and output are newest first.
+ */
+export function collapseEvents<E extends LogLine>(events: E[]): E[] {
+  const out: E[] = [];
+  for (const e of events) {
+    const prev = out.at(-1);
+    if (
+      prev &&
+      e.type === "charging_profile.accepted" &&
+      prev.type === e.type &&
+      prev.at === e.at
+    )
+      out[out.length - 1] = { ...prev, detail: `${prev.detail}; ${e.detail}` };
+    else out.push(e);
+  }
+  return out;
+}

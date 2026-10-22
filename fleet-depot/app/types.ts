@@ -41,12 +41,16 @@ export interface Row {
     type: "L2 AC" | "DC fast";
     ratedKw: number;
   };
+  /** Demo only: still on its route. */
+  notArrived?: boolean;
   /** Demo only: how the vehicle left (set once its session has ended at departure). */
   departed?: { ready: boolean; shortfallKwh: number };
 }
 export interface State {
   demo: boolean;
   now: string;
+  /** Demo only: the depot's time zone ("UTC"); every demo time is shown in it. */
+  tz?: string;
   settings: { siteCapKw: number; currency: string; centsPerKwh: number };
   totalKw: number;
   rows: Row[];
@@ -61,7 +65,9 @@ export interface State {
   events: { id: string; at: string; type: string; detail: string }[];
   /** Demo only: the clock and the night's power history. */
   sim?: {
-    speed: 0 | 1 | 60;
+    speed: 0 | 1 | 60 | 300;
+    /** The simulated time now, to the minute (the board moves in 5-minute steps). */
+    at: number;
     start: number;
     end: number;
     done: boolean;

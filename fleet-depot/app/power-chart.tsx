@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from "react";
 
 import type { State } from "./types";
-import { clock } from "@/lib/timeline";
+import { clock, hourOf } from "@/lib/timeline";
 
 const H = 230;
 const M = { l: 38, r: 10, t: 12, b: 26 };
@@ -55,22 +55,32 @@ export default function PowerChart({
       : "";
   const hours: number[] = [];
   for (let t = Math.ceil(sim.start / HOUR) * HOUR; t <= sim.end; t += HOUR)
-    if (new Date(t).getHours() % 3 === 0) hours.push(t);
+    if (hourOf(t, s.tz) % 3 === 0) hours.push(t);
   const yTicks: number[] = [];
   for (let k = 0; k <= sim.axisMaxKw; k += 50) yTicks.push(k);
   const label = `Site power over the night. Peak ${sim.peakKw.toFixed(0)} kW against the ${cap} kW cap, compared with ${sim.ghostPeakKw.toFixed(0)} kW without load management.`;
   return (
     <section className="panel chart" aria-labelledby="chart-h">
       <h2 id="chart-h">Site power tonight</h2>
-      <p className="peaks num">
-        <span>
-          Peak <b>{sim.peakKw.toFixed(0)} kW</b>
-        </span>{" "}
-        <span className="vs">vs</span>{" "}
-        <span>
-          <b>{sim.ghostPeakKw.toFixed(0)} kW</b> unmanaged
-        </span>
-      </p>
+      {sim.samples.length > 0 ? (
+        <p className="peaks num">
+          <span>
+            Peak <b>{sim.peakKw.toFixed(0)} kW</b>
+          </span>{" "}
+          <span className="vs">vs</span>{" "}
+          <span>
+            <b>{sim.ghostPeakKw.toFixed(0)} kW</b> unmanaged
+          </span>
+        </p>
+      ) : (
+        <p className="peaks num">
+          <span>
+            Cap <b>{cap} kW</b>
+          </span>{" "}
+          <span className="vs">·</span>{" "}
+          <span>night starts {clock(sim.start, s.tz)}</span>
+        </p>
+      )}
       <div ref={ref} className="chartbox" style={{ height: h }}>
         {w > 0 && (
           <svg width={w} height={h} role="img" aria-label={label}>
@@ -101,7 +111,7 @@ export default function PowerChart({
                 textAnchor="middle"
                 className="axis"
               >
-                {clock(t)}
+                {clock(t, s.tz)}
               </text>
             ))}
             {area && <path d={area} fill="var(--accent)" opacity="0.16" />}
@@ -130,7 +140,13 @@ export default function PowerChart({
               stroke="var(--ink)"
               strokeWidth="2"
             />
-            <text x={M.l + 6} y={y(cap) - 6} className="axis cap-l">
+            {/* At the right end: by then the vehicles have left and both lines are low. */}
+            <text
+              x={w - M.r - 4}
+              y={y(cap) - 6}
+              textAnchor="end"
+              className="axis cap-l"
+            >
               {cap} kW cap
             </text>
           </svg>

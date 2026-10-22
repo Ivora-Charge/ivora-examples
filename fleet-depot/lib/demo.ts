@@ -6,6 +6,10 @@ import { energyNeededKwh, whToKwh } from "./units";
 /** Demo site limit, kW. Live mode keeps SITE_CAP_KW. */
 export const DEMO_CAP_KW = 150;
 
+/** Demo tariff: a flat depot rate in US dollars. Live mode keeps TARIFF_*. */
+export const DEMO_CURRENCY = "USD";
+export const DEMO_CENTS_PER_KWH = 18;
+
 /** A charge point. A dual-outlet AC unit has two outlets, each at the rated power. */
 interface Charger {
   id: number;
@@ -258,9 +262,8 @@ export interface Outcome {
   shortfallKwh: number;
 }
 export interface DemoState {
+  /** UTC midnight of the demo day, epoch ms. */
   base: number;
-  speed: 0 | 1 | 60;
-  lastReal: number;
   samples: Sample[];
   outcomes: Record<string, Outcome>;
   applied: string[];
@@ -271,12 +274,14 @@ export interface DemoState {
 const states = new WeakMap<Depot, DemoState>();
 export const demoState = (d: Depot) => states.get(d);
 
-/** Local-day-based demo times; the simulated clock starts at 16:30 on the current day. */
-export function dayStart(d: Date) {
-  const x = new Date(d);
-  x.setHours(0, 0, 0, 0);
-  return x;
-}
+/**
+ * Depot time: every demo time is UTC, on the server and in the browser, so the
+ * night reads the same whatever zone either side runs in.
+ */
+export const DEMO_TZ = "UTC";
+const DAY = 86400_000;
+/** UTC midnight of the day containing `ms`; the simulated night starts at 16:30 that day. */
+export const dayStart = (ms: number) => Math.floor(ms / DAY) * DAY;
 const atHour = (base: number, h: number) => base + Math.round(h * 3600_000);
 
 export const indexOf = (vehicleId: string) => Number(vehicleId.slice(1));
@@ -307,15 +312,15 @@ function rng(seed: number) {
   };
 }
 
-export async function seedDemo(depot: Depot) {
+/** Seed the depot for the night of `base` (a UTC midnight). The same base gives the same night. */
+export async function seedDemo(depot: Depot, base = dayStart(Date.now())) {
   await depot.store.clear();
   depot.settings.siteCapKw = DEMO_CAP_KW;
-  const base = dayStart(new Date()).getTime();
+  depot.settings.currency = DEMO_CURRENCY;
+  depot.settings.centsPerKwh = DEMO_CENTS_PER_KWH;
   depot.clock = new Date(atHour(base, 16.5));
   const state: DemoState = {
     base,
-    speed: 0,
-    lastReal: Date.now(),
     samples: [],
     outcomes: {},
     applied: [],
@@ -357,8 +362,8 @@ export async function seedDemo(depot: Depot) {
 async function seedHistory(depot: Depot, base: number) {
   const rand = rng(20261023);
   for (let day = 1; day <= 45; day++) {
-    const dayMs = base - day * 86400_000;
-    const weekday = new Date(dayMs).getDay();
+    const dayMs = base - day * DAY;
+    const weekday = new Date(dayMs).getUTCDay();
     for (const [i, p] of PLANS.entries()) {
       // Not every vehicle runs every day; weekends are quiet.
       if (rand() > (weekday === 0 || weekday === 6 ? 0.35 : 0.88)) continue;
@@ -380,32 +385,19 @@ async function seedHistory(depot: Depot, base: number) {
   }
 }
 
-/** Start the night again: the same depot, the clock back at 16:30, paused. */
+/** Start the night again: the same depot, the clock back at 16:30. */
 export async function resetDemo(depot: Depot) {
-  await seedDemo(depot);
+  await seedDemo(depot, states.get(depot)?.base);
 }
 
-export function setSpeed(depot: Depot, speed: number) {
-  const s = states.get(depot);
-  if (!s) return;
-  s.speed = speed === 1 || speed === 60 ? speed : 0;
-  s.lastReal = Date.now();
-}
+/** The simulated clock moves in whole steps of this size, from 00:00 depot time. */
+export const STEP_MS = 5 * MIN;
+/** The step at or before `ms`. Every step starts on this grid, so a replay is identical. */
+export const snap = (ms: number) => Math.floor(ms / STEP_MS) * STEP_MS;
 
-/** Lazy clock: at 1x or 60x the demo clock catches up with real time whenever the state is read. */
-export async function tickDemo(depot: Depot) {
-  const s = states.get(depot);
-  if (!depot.demo || !s || s.speed === 0) return;
-  const real = Date.now();
-  // A tab that was asleep does not make the night jump.
-  const elapsed = Math.min(real - s.lastReal, 5000);
-  s.lastReal = real;
-  if (elapsed <= 0) return;
-  await advanceDemo(depot, (elapsed / MIN) * s.speed);
-  if (depot.clock!.getTime() >= nightEnd(s) - 1) s.speed = 0;
-}
-
-const nightEnd = (s: DemoState) => atHour(s.base, NIGHT_END_H);
+export const nightStartOf = (base: number) => atHour(base, 16.5);
+export const nightEndOf = (base: number) => atHour(base, NIGHT_END_H);
+const nightEnd = (s: DemoState) => nightEndOf(s.base);
 
 /** Energy a vehicle still needs, kWh, given what its session delivered. */
 function remainingKwh(v: Vehicle, deliveredKwh: number) {
@@ -418,11 +410,21 @@ function remainingKwh(v: Vehicle, deliveredKwh: number) {
   });
 }
 
-/** Advance the simulated clock: arrivals, energy delivery, departures, scripted changes. */
+/** Advance the simulated clock by whole steps: arrivals, energy delivery, departures, scripted changes. */
 export async function advanceDemo(depot: Depot, minutes: number) {
+  if (!depot.clock) return;
+  await advanceDemoTo(depot, depot.clock.getTime() + minutes * MIN);
+}
+
+/**
+ * Move the simulated clock to the last step at or before `target`. The night is a
+ * pure function of the step it is at, so any instance replaying from 16:30 lands
+ * on the same board.
+ */
+export async function advanceDemoTo(depot: Depot, target: number) {
   const st = states.get(depot);
   if (!depot.demo || !depot.clock || !st) return;
-  const end = Math.min(depot.clock.getTime() + minutes * MIN, nightEnd(st));
+  const end = snap(Math.min(target, nightEnd(st)));
   while (depot.clock.getTime() < end - 1) {
     const from = depot.clock.getTime();
     const vehicles = await depot.store.list("vehicles");
@@ -450,7 +452,7 @@ export async function advanceDemo(depot: Depot, minutes: number) {
       await logEvent(
         depot,
         "departure.changed",
-        `${v.name}: departure moved to ${new Date(v.departure).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })} (${e.text})`,
+        `${v.name}: departure moved to ${new Date(v.departure).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: DEMO_TZ })} (${e.text})`,
       );
     }
     for (const v of await depot.store.list("vehicles")) {

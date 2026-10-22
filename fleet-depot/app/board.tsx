@@ -9,16 +9,22 @@ import SimControls from "./sim-controls";
 import ApiPanel from "./api-panel";
 import Wall from "./wall";
 import { clock, statusOf } from "@/lib/timeline";
+import { collapseEvents } from "@/lib/calls";
 
 const ERRORS_URL = "https://ivoracharge.com/developers/guides/reference/errors";
 
-/** datetime-local value in the browser's time zone. */
-function toLocalInput(iso?: string) {
+/** datetime-local value in the browser's time zone, or in UTC (demo depot time). */
+function toLocalInput(iso?: string, tz?: string) {
   if (!iso) return "";
   const d = new Date(iso);
+  if (tz === "UTC") return d.toISOString().slice(0, 16);
   const pad = (n: number) => String(n).padStart(2, "0");
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
+
+/** The instant a datetime-local value means, read in the same zone. */
+const fromLocalInput = (v: string, tz?: string) =>
+  new Date(tz === "UTC" ? `${v}Z` : v).toISOString();
 
 type Tab = "overview" | "vehicles" | "sessions" | "settings";
 const TABS: [Tab, string][] = [
@@ -116,12 +122,20 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
     const t = setInterval(loadReport, 10000);
     return () => clearInterval(t);
   }, [loadReport]);
+  const exitTv = useCallback(() => {
+    setTv(false);
+    if (location.search) history.replaceState(null, "", location.pathname);
+  }, []);
+  // A direct link for the TV: /depot?wall=1.
+  useEffect(() => {
+    if (new URLSearchParams(location.search).get("wall") === "1") setTv(true);
+  }, []);
   useEffect(() => {
     if (!tv) return;
-    const esc = (e: KeyboardEvent) => e.key === "Escape" && setTv(false);
+    const esc = (e: KeyboardEvent) => e.key === "Escape" && exitTv();
     addEventListener("keydown", esc);
     return () => removeEventListener("keydown", esc);
-  }, [tv]);
+  }, [tv, exitTv]);
 
   async function post(url: string, body: unknown, ok = "") {
     const r = await fetch(url, {
@@ -153,10 +167,10 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
   const vehiclesFree = s.rows.filter((r) => !r.session).map((r) => r.vehicle);
   const cap = s.settings.siteCapKw;
   const used = cap > 0 ? Math.min(100, (s.totalKw / cap) * 100) : 0;
-  const count = { charging: 0, waiting: 0, ready: 0, late: 0 };
+  const count = { charging: 0, waiting: 0, ready: 0, late: 0, away: 0 };
   for (const r of s.rows) count[statusOf(r)]++;
   const freeKw = Math.max(0, cap - s.totalKw);
-  const nowLabel = clock(Date.parse(s.now));
+  const nowLabel = clock(s.sim?.at ?? Date.parse(s.now), s.tz);
 
   const gauge = (
     <section className="panel gauge" aria-labelledby="power">
@@ -179,7 +193,8 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
         <span>{cap} kW cap</span>
       </div>
       <p className="sum">
-        {count.charging + count.late} charging, {count.waiting} waiting.{" "}
+        {count.charging + count.late} charging, {count.waiting} waiting
+        {count.away ? `, ${count.away} not arrived` : ""}.{" "}
         <span className="num">{freeKw.toFixed(1)} kW</span> free.
       </p>
       <dl className="kpis">
@@ -206,7 +221,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
     return (
       <Wall
         s={s}
-        onExit={() => setTv(false)}
+        onExit={exitTv}
         error={loadError ? `${loadError.text} ${loadError.code}` : undefined}
       />
     );
@@ -215,6 +230,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
     <main id="main">
       <header className="top">
         <h1>Depot overview</h1>
+        {s.tz && <span className="tzlab">Depot time</span>}
         <span className="num clock">{nowLabel}</span>
       </header>
       {s.demo && (
@@ -297,9 +313,11 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     aria-label="Event log"
                   >
                     <ul className="log">
-                      {s.events.map((e) => (
+                      {collapseEvents(s.events).map((e) => (
                         <li key={e.id}>
-                          <span className="num">{clock(Date.parse(e.at))}</span>
+                          <span className="num">
+                            {clock(Date.parse(e.at), s.tz)}
+                          </span>
                           <b>{e.type}</b>
                           <span>{e.detail}</span>
                         </li>
@@ -335,11 +353,15 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     Departs{" "}
                     <span className="num">
                       {r.vehicle.departure
-                        ? new Date(r.vehicle.departure).toLocaleString([], {
-                            weekday: "short",
-                            hour: "2-digit",
-                            minute: "2-digit",
-                          })
+                        ? new Date(r.vehicle.departure).toLocaleString(
+                            s.tz ? "en-GB" : [],
+                            {
+                              weekday: "short",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                              timeZone: s.tz,
+                            },
+                          )
                         : "-"}
                     </span>
                     {" · "}
@@ -374,7 +396,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     onClick={() =>
                       setEdit({
                         id: r.vehicle.id,
-                        departure: toLocalInput(r.vehicle.departure),
+                        departure: toLocalInput(r.vehicle.departure, s.tz),
                         needKind: r.vehicle.need?.kind ?? "battery",
                         needValue: String(
                           r.vehicle.need?.kind === "kwh"
@@ -400,7 +422,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                     {
                       id: edit.id,
                       departure: edit.departure
-                        ? new Date(edit.departure).toISOString()
+                        ? fromLocalInput(edit.departure, s.tz)
                         : "",
                       needKind: edit.needKind,
                       needValue: Number(edit.needValue),
@@ -416,7 +438,7 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
                   {s.rows.find((r) => r.vehicle.id === edit.id)?.vehicle.name}
                 </h3>
                 <label>
-                  Departure{" "}
+                  Departure{s.tz ? " (depot time)" : ""}{" "}
                   <input
                     type="datetime-local"
                     value={edit.departure}
