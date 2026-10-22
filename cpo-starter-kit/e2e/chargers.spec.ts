@@ -106,9 +106,10 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
   expect(url).toMatch(/\/c\/[A-HJ-NP-Z2-9]{8}$/);
   await page.goto(new URL(url).pathname);
   await expect(
-    page.getByRole("heading", { name: "Charge here" }),
+    page.getByRole("heading", { level: 1, name: /Bay 1, connector 1/ }),
   ).toBeVisible();
-  await expect(page.getByText(/Bay 1, connector 1/)).toBeVisible();
+  // No tariff assigned yet: not for sale.
+  await expect(page.getByText(/This connector has no price yet/)).toBeVisible();
 
   // Edit, then remove: it charged, so Ivora keeps it and the kit hides it.
   await openChargers(page, isMobile);

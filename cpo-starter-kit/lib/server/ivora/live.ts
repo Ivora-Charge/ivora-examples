@@ -2,6 +2,7 @@ import "server-only";
 import { isDemo } from "../env";
 import { IvoraError } from "./errors";
 import type {
+  Bill,
   Branding,
   Fault,
   IvoraClient,
@@ -11,6 +12,7 @@ import type {
   LocationInput,
   Operation,
   Page,
+  Payment,
   PaymentAccount,
   Quote,
   Station,
@@ -420,6 +422,35 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         body: { tariff, session },
         key: undefined,
         readOnly: true,
+      });
+    },
+    quoteTariff(tariffId, session) {
+      return request<Quote>("POST", `tariffs/${tariffId}/quote`, {
+        body: { session },
+        readOnly: true,
+      });
+    },
+    createBill(input, key) {
+      return request<Bill>("POST", "bills", {
+        body: { ...input, source: "csms" },
+        key,
+      });
+    },
+    getBill(billId) {
+      return request<Bill>("GET", `bills/${encodeURIComponent(billId)}`);
+    },
+    startBill(billId, key) {
+      return request<Operation>(
+        "POST",
+        `bills/${encodeURIComponent(billId)}/start`,
+        { key },
+      );
+    },
+    createPayment(input, key) {
+      return request<Payment>("POST", "payments", {
+        body: input,
+        key,
+        root: "stripe",
       });
     },
   };

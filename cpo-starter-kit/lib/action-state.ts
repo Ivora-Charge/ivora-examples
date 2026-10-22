@@ -2,6 +2,11 @@
 export interface ActionState {
   ok?: string;
   error?: string;
+  /**
+   * Driver checkout: the kind of error (for example `offline`), and Ivora's error code
+   * and request ID when Ivora answered, for support. Never keys or personal data.
+   */
+  errorDetail?: { kind: string; apiCode?: string; requestId?: string };
   /** Saved, but something after it needs attention (for example an Ivora push). */
   warning?: string;
   /** An invite link to share by hand (demo mode, or no email provider). */

@@ -54,6 +54,7 @@ const TABLES = [
   "cpo_tariff_versions",
   "cpo_station_pricing",
   "cpo_connector_tariffs",
+  "cpo_checkouts",
 ] as const;
 
 beforeAll(async () => {
@@ -206,6 +207,9 @@ describe("row level security", () => {
           `select cpo_claim_live_command('${operatorA}','${OWNER_A}','${OWNER_A}',1,'reset',null,null,'soft','{}')`,
           `select cpo_record_live_command('${operatorA}','${OWNER_A}','{}')`,
           "select cpo_record_ivora_event('evt_x','webhook.test',null)",
+          `select cpo_claim_checkout('${operatorA}','${OWNER_A}','ABCD2345',1,11,1,2500,'USD')`,
+          `select cpo_record_checkout('${operatorA}','${OWNER_A}','{}')`,
+          `select cpo_next_tariff_attempt('${operatorA}','${OWNER_A}','${OWNER_A}',1)`,
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -1158,6 +1162,28 @@ describe("pricing", () => {
     ).rejects.toThrow(/cpo_tariff_changed/);
   });
 
+  it("records when each create attempt started", async () => {
+    const id = await create(OWNER_A);
+    const at = async () =>
+      (
+        await pg.query<{ t: Date }>(
+          "select attempted_at as t from cpo_tariff_versions where tariff_id=$1 and version=1",
+          [id],
+        )
+      ).rows[0].t.getTime();
+    await pg.query(
+      "update cpo_tariff_versions set attempted_at = now() - interval '1 hour' where tariff_id=$1",
+      [id],
+    );
+    const before = await at();
+    await call("select cpo_next_tariff_attempt($1,$2,$3,1)", [
+      operatorA,
+      OWNER_A,
+      id,
+    ]);
+    expect((await at()) - before).toBeGreaterThan(59 * 60_000);
+  });
+
   it("never reuses a version number, and counts create attempts", async () => {
     const id = await create(OWNER_A);
     await record(id, 1, 660);
@@ -1301,6 +1327,113 @@ describe("pricing", () => {
             operatorA,
             OWNER_A,
           ]),
+        ).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("driver checkouts", () => {
+  const call = <T = unknown>(sql: string, params: unknown[]) =>
+    as("service_role", null, () =>
+      pg.query<T & Record<string, unknown>>(sql, params),
+    );
+  const REQ = "20000000-0000-4000-8000-000000000001";
+  const claim = (
+    request = REQ,
+    o: { code?: string; connector?: number; operator?: string } = {},
+  ) =>
+    call<{ r: { id: string; created: boolean } }>(
+      "select cpo_claim_checkout($1,$2,$3,9101,$4,9401,2500,'USD') as r",
+      [
+        o.operator ?? operatorA,
+        request,
+        o.code ?? "ABCD2345",
+        o.connector ?? 91011,
+      ],
+    ).then((x) => x.rows[0].r);
+  const record = (id: string, changes: object, operator = operatorA) =>
+    call<{ ok: boolean }>("select cpo_record_checkout($1,$2,$3::jsonb) as ok", [
+      operator,
+      id,
+      JSON.stringify(changes),
+    ]).then((x) => x.rows[0].ok);
+  const row = async (id: string) =>
+    (
+      await pg.query<{
+        phase: string;
+        bill_id: string | null;
+        payment_id: string | null;
+        checkout_url: string | null;
+        start_requested_at: string | null;
+        error: string | null;
+      }>(
+        "select phase, bill_id, payment_id, checkout_url, start_requested_at, error from cpo_checkouts where id=$1",
+        [id],
+      )
+    ).rows[0];
+  const BILL = `bill_${"a".repeat(32)}`;
+
+  it("makes one checkout per tap, for the same sticker and price only", async () => {
+    const first = await claim();
+    expect(first.created).toBe(true);
+    // A double tap or a retry after an uncertain answer: the same checkout.
+    expect(await claim()).toEqual({ id: first.id, created: false });
+    // The same request ID for another connector or sticker is refused.
+    await expect(claim(REQ, { connector: 91012 })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    await expect(claim(REQ, { code: "WXYZ2345" })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    // Another operator's request IDs are its own.
+    expect((await claim(REQ, { operator: operatorB })).created).toBe(true);
+    await expect(
+      claim("20000000-0000-4000-8000-000000000002", { code: "abcd2345" }),
+    ).rejects.toThrow(/check/);
+  });
+
+  it("never changes a recorded bill or payment, and never reopens a checkout", async () => {
+    const { id } = await claim("20000000-0000-4000-8000-000000000003");
+    expect(await record(id, { bill_id: BILL })).toBe(true);
+    await expect(
+      record(id, { bill_id: `bill_${"b".repeat(32)}` }),
+    ).rejects.toThrow(/cpo_invalid/);
+    // The same bill again is fine (a retry).
+    expect(await record(id, { bill_id: BILL, payment_id: "pay_1" })).toBe(true);
+    await expect(record(id, { payment_id: "pay_2" })).rejects.toThrow(
+      /cpo_invalid/,
+    );
+    await expect(record(id, { phase: "paid" })).rejects.toThrow(/cpo_invalid/);
+    await expect(
+      record(id, { checkout_url: "http://checkout.example.com/x" }),
+    ).rejects.toThrow(/check/);
+    await record(id, {
+      checkout_url: "https://checkout.example.com/x",
+      phase: "checkout",
+    });
+    await record(id, { phase: "failed", start_requested: true });
+    expect(await row(id)).toMatchObject({
+      phase: "checkout",
+      bill_id: BILL,
+      payment_id: "pay_1",
+      checkout_url: "https://checkout.example.com/x",
+    });
+    expect((await row(id)).start_requested_at).not.toBeNull();
+    // Another operator can't touch it.
+    expect(await record(id, { error: "x" }, operatorB)).toBe(false);
+  });
+
+  it("is not readable or writable from the browser", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        await expect(pg.query("select * from cpo_checkouts")).rejects.toThrow(
+          /permission denied/,
+        );
+        await expect(
+          pg.query(
+            "insert into cpo_checkouts(operator_id, request_id, sticker_code, station_id, connector_id, tariff_id, hold_minor, currency) values ($1,$2,'ABCD2345',1,1,1,2500,'USD')",
+            [operatorA, REQ],
+          ),
         ).rejects.toThrow(/permission denied/);
       });
   });

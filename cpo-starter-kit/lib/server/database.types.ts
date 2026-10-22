@@ -187,6 +187,31 @@ export type Database = {
         Update: { processed_at?: Timestamp | null };
         Relationships: [];
       };
+      cpo_checkouts: {
+        Row: {
+          id: string;
+          operator_id: string;
+          request_id: string;
+          sticker_code: string;
+          station_id: number;
+          connector_id: number;
+          tariff_id: number;
+          hold_minor: number;
+          currency: string;
+          phase: string;
+          bill_id: string | null;
+          payment_id: string | null;
+          checkout_url: string | null;
+          start_requested_at: Timestamp | null;
+          error: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+        };
+        // Written only through cpo_claim_checkout and cpo_record_checkout.
+        Insert: { operator_id: string; request_id: string };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
       cpo_staff_tokens: {
         Row: {
           operator_id: string;
@@ -241,6 +266,7 @@ export type Database = {
           definition: Json;
           ivora_tariff_id: number | null;
           attempt: number;
+          attempted_at: Timestamp;
           archived_at: Timestamp | null;
           created_by: string | null;
           created_at: Timestamp;
@@ -256,6 +282,7 @@ export type Database = {
         Update: {
           ivora_tariff_id?: number | null;
           attempt?: number;
+          attempted_at?: Timestamp;
           archived_at?: Timestamp | null;
         };
         Relationships: [];
@@ -526,6 +553,23 @@ export type Database = {
           p_connectors: Json;
         };
         Returns: undefined;
+      };
+      cpo_claim_checkout: {
+        Args: {
+          p_operator_id: string;
+          p_request_id: string;
+          p_sticker_code: string;
+          p_station_id: number;
+          p_connector_id: number;
+          p_tariff_id: number;
+          p_hold_minor: number;
+          p_currency: string;
+        };
+        Returns: Json;
+      };
+      cpo_record_checkout: {
+        Args: { p_operator_id: string; p_id: string; p_changes: Json };
+        Returns: boolean;
       };
     };
     Enums: { [_ in never]: never };

@@ -426,6 +426,35 @@ describe("demo mode", () => {
           idempotencyKey("charger", "x", "test-1-stop"),
         ),
       () => live.deleteStation(1, idempotencyKey("charger", "x", "delete")),
+      // Driver checkout: no bill, payment or start ever leaves demo mode.
+      () =>
+        live.createBill(
+          { station_id: 1, connector_id: 1, tariff_id: 1 },
+          idempotencyKey("checkout", "x", "bill"),
+        ),
+      () =>
+        live.createPayment(
+          {
+            bill_id: `bill_${"a".repeat(32)}`,
+            return_surface: "driver",
+            return_reference: "x",
+          },
+          idempotencyKey("checkout", "x", "payment"),
+        ),
+      () => live.getBill(`bill_${"a".repeat(32)}`),
+      () =>
+        live.startBill(
+          `bill_${"a".repeat(32)}`,
+          idempotencyKey("checkout", "x", "start"),
+        ),
+      () =>
+        live.quoteTariff(1, {
+          start_at: "2026-01-01T00:00:00Z",
+          time_zone: "UTC",
+          duration_minutes: 60,
+          energy_kwh: 20,
+          idle_minutes: 0,
+        }),
     ])
       await expect(call()).rejects.toThrow(/Demo mode/);
     expect(liveFetch).not.toHaveBeenCalled();

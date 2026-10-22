@@ -1,8 +1,11 @@
 import "server-only";
+import { createHash } from "node:crypto";
 import { z } from "zod";
 import { demoSimulate } from "./demo-pricing";
 import { IvoraError } from "./errors";
 import type {
+  Bill,
+  BillProgress,
   Branding,
   CommandInput,
   Fault,
@@ -10,10 +13,13 @@ import type {
   Location,
   LocationInput,
   Operation,
+  Payment,
   PaymentAccount,
+  SessionProfile,
   Station,
   StationInput,
   Tariff,
+  TariffDefinitionInput,
   TokenRecord,
   Transaction,
 } from "./types";
@@ -247,6 +253,10 @@ const DEMO_BOOT_MS = 1_500;
 const DEMO_POWER_W = 7_400;
 /** A reset charger is offline this long, then reconnects with its faults cleared. */
 export const DEMO_RESET_MS = 4_000;
+/** After a paid start, the simulated driver plugs in and charging begins this much later. */
+export const DEMO_PLUG_IN_MS = 3_000;
+/** Bills the visitor's cookie keeps (the newest ones). */
+const MAX_BILLS = 3;
 
 const fleetSchema = z.object({
   v: z.literal(1),
@@ -324,6 +334,38 @@ const fleetSchema = z.object({
       }),
     )
     .max(MAX_TRANSACTIONS),
+  /**
+   * Bills and their simulated Ivora Checkout payments (driver checkout). No card is
+   * ever charged: the "payment" is a click on the kit's own demo checkout page.
+   */
+  bills: z
+    .array(
+      z.object({
+        id: z.string().regex(/^bill_[0-9a-f]{32}$/),
+        /** The create's Idempotency-Key: the same key answers with the same bill. */
+        key: z.string().max(128),
+        station_id: z.number().int(),
+        connector_id: z.number().int(),
+        connector_number: z.number().int(),
+        tariff_id: z.number().int(),
+        hold_minor: z.number().int(),
+        currency: z.string().max(3),
+        created_at: z.number(),
+        payment: z
+          .object({
+            id: z.string().max(40),
+            key: z.string().max(128),
+            return_reference: z.string().max(128),
+            authorized_at: z.number().nullable(),
+          })
+          .nullable(),
+        /** When the start was dispatched; the session's transaction ID then. */
+        start_at: z.number().nullable(),
+        transaction_id: z.number().int().nullable(),
+      }),
+    )
+    .max(MAX_BILLS)
+    .optional(),
 });
 export type DemoFleet = z.infer<typeof fleetSchema>;
 
@@ -380,10 +422,39 @@ const ISO = (ms: number) => new Date(ms).toISOString();
 /** The API shows only an ID token's last 4 characters. */
 export const maskToken = (token: string) => `****${token.slice(-4)}`;
 
-function demoTransaction(
-  t: DemoFleet["transactions"][number],
-  now: number,
-): Transaction {
+type DemoTx = DemoFleet["transactions"][number];
+
+/**
+ * The visitor's own sessions: remote starts, and paid driver sessions, which begin
+ * DEMO_PLUG_IN_MS after their bill's start (the driver plugs in) and end when stopped.
+ */
+function ownTransactions(f: DemoFleet, now: number): DemoTx[] {
+  const paid = (f.bills ?? []).flatMap((b): DemoTx[] =>
+    b.start_at !== null &&
+    b.transaction_id !== null &&
+    now >= b.start_at + DEMO_PLUG_IN_MS
+      ? [
+          {
+            id: b.transaction_id,
+            station_id: b.station_id,
+            connector_id: b.connector_id,
+            connector_number: b.connector_number,
+            id_token: maskToken(billToken(b.id)),
+            started_at: b.start_at + DEMO_PLUG_IN_MS,
+            ended_at: f.ended?.[String(b.transaction_id)] ?? null,
+          },
+        ]
+      : [],
+  );
+  return [...f.transactions, ...paid].sort(
+    (a, b) => a.started_at - b.started_at,
+  );
+}
+
+/** A demo bill's charging token, as the API would show it masked: never a real one. */
+const billToken = (billId: string) => `DRV${billId.slice(-6).toUpperCase()}`;
+
+function demoTransaction(t: DemoTx, now: number): Transaction {
   const end = t.ended_at ?? now;
   return {
     id: t.id,
@@ -409,7 +480,7 @@ function ownStation(
   const online = s.connect_at !== null && now >= s.connect_at;
   const booted = online && now >= s.connect_at! + DEMO_BOOT_MS;
   const charging = new Set(
-    f.transactions
+    ownTransactions(f, now)
       .filter((t) => t.station_id === s.id && t.ended_at === null)
       .map((t) => t.connector_id),
   );
@@ -477,7 +548,7 @@ function sampleStation(s: Station, f: DemoFleet, now: number): Station {
     ).map((x) => x.connector_id),
   );
   const charging = new Set(
-    f.transactions
+    ownTransactions(f, now)
       .filter((x) => x.station_id === s.id && x.ended_at === null)
       .map((x) => x.connector_id),
   );
@@ -509,6 +580,102 @@ const op = (
   result: Record<string, unknown> | null = null,
 ): Operation => ({ id: `demo-op-${id}`, status: "succeeded", result });
 
+const hex = (s: string, n: number) =>
+  createHash("sha256").update(s).digest("hex").slice(0, n);
+
+/** The demo's own checkout page stands in for Stripe's: nothing is ever charged. */
+export const demoCheckoutPath = (paymentId: string) =>
+  `/demo/checkout/${encodeURIComponent(paymentId)}`;
+
+/**
+ * A demo tariff's definition by its Ivora ID, for quotes and bill estimates (the demo
+ * keeps tariffs in the pricing cookie, not here). Null when unknown.
+ */
+export type DemoTariffLookup = (
+  tariffId: number,
+) => Promise<TariffDefinitionInput | null>;
+
+type DemoBill = NonNullable<DemoFleet["bills"]>[number];
+
+/** Can a paid start go ahead now? Like the API: an online charger, a free connector. */
+function startRefusal(
+  s: Station,
+  connectorId: number,
+  txs: Transaction[],
+): IvoraError | null {
+  if (!s.online)
+    return new IvoraError(409, "station_offline", "The station is offline");
+  const c = s.connectors.find((x) => x.id === connectorId);
+  if (!c)
+    return new IvoraError(404, "connector_not_found", "Unknown connector");
+  if (txs.some((t) => t.connector_id === connectorId && t.active))
+    return new IvoraError(
+      409,
+      "connector_occupied",
+      "A session is running on this connector",
+    );
+  return null;
+}
+
+/**
+ * Demo mode only: what the simulated Stripe checkout does when the visitor "pays"
+ * (`/demo/checkout/<payment>`). The hold is authorized and, like Ivora's driver page
+ * reading the bill on the driver's return, the charger starts once if it is online and
+ * the connector is free; otherwise the bill stays `authorized` for the kit to start.
+ * Nothing is charged and nothing leaves the visitor's cookie.
+ */
+export async function authorizeDemoPayment(
+  fleet: DemoFleetStore,
+  paymentId: string,
+  now: () => number = Date.now,
+): Promise<{ returnReference: string } | null> {
+  const client = createDemoClient(fleet, now);
+  const f = await fleet.load();
+  const b = (f.bills ?? []).find((x) => x.payment?.id === paymentId);
+  if (!b?.payment) return null;
+  const t = now();
+  if (b.payment.authorized_at === null) {
+    b.payment.authorized_at = t;
+    const s = await client.getStation(b.station_id).catch(() => null);
+    const txs = await client.listTransactions({ station_id: b.station_id });
+    if (s && !startRefusal(s, b.connector_id, txs)) dispatchStart(f, b, t);
+    await fleet.save(f);
+  }
+  return { returnReference: b.payment.return_reference };
+}
+
+function dispatchStart(f: DemoFleet, b: DemoBill, t: number) {
+  b.start_at = t;
+  b.transaction_id =
+    Math.max(9800, ...(f.bills ?? []).map((x) => x.transaction_id ?? 0)) + 1;
+}
+
+/** Demo mode only: what the simulated Stripe checkout page shows. */
+export async function demoPayment(fleet: DemoFleetStore, paymentId: string) {
+  const b = (await fleet.load()).bills?.find(
+    (x) => x.payment?.id === paymentId,
+  );
+  if (!b?.payment) return null;
+  return {
+    holdMinor: b.hold_minor,
+    currency: b.currency,
+    returnReference: b.payment.return_reference,
+    authorized: b.payment.authorized_at !== null,
+  };
+}
+
+/** The demo bill a driver-return page resumes, by its return_reference. */
+export async function findDemoBill(
+  fleet: DemoFleetStore,
+  returnReference: string,
+): Promise<string | null> {
+  return (
+    (await fleet.load()).bills?.find(
+      (b) => b.payment?.return_reference === returnReference,
+    )?.id ?? null
+  );
+}
+
 /**
  * The demo implementation of the Ivora client. It answers from the sample data above
  * and the visitor's own demo fleet (`fleet`), and never sends a request anywhere: no
@@ -517,6 +684,7 @@ const op = (
 export function createDemoClient(
   fleet: DemoFleetStore = memoryDemoFleet(),
   now: () => number = Date.now,
+  tariffs: DemoTariffLookup = async () => null,
 ): IvoraClient {
   const update = async <T>(change: (f: DemoFleet) => T): Promise<T> => {
     const f = await fleet.load();
@@ -543,7 +711,9 @@ export function createDemoClient(
     const f = await fleet.load();
     const t = now();
     return [
-      ...f.transactions.map((x) => demoTransaction(x, t)).reverse(),
+      ...ownTransactions(f, t)
+        .map((x) => demoTransaction(x, t))
+        .reverse(),
       ...copy(SAMPLE_TRANSACTIONS).map((x) => sampleTransaction(x, f)),
     ];
   };
@@ -553,6 +723,77 @@ export function createDemoClient(
       throw new IvoraError(404, "station_not_found", "Unknown demo station");
     return s;
   };
+  /** Prices a session under a demo tariff, offline, like `POST /tariffs/{id}/quote`. */
+  const quote = async (tariffId: number, session: SessionProfile) => {
+    const def = await tariffs(tariffId);
+    if (!def)
+      throw new IvoraError(404, "tariff_not_found", "Unknown demo tariff");
+    return demoSimulate(def, session);
+  };
+  const billView = async (b: DemoBill, f: DemoFleet): Promise<Bill> => {
+    const t = now();
+    const tx =
+      b.transaction_id === null
+        ? undefined
+        : ownTransactions(f, t).find((x) => x.id === b.transaction_id);
+    const usage = tx ? demoTransaction(tx, t) : null;
+    const progress: BillProgress = !b.payment?.authorized_at
+      ? "awaiting_payment"
+      : b.start_at === null
+        ? "authorized"
+        : !usage
+          ? "waiting_for_vehicle"
+          : usage.active
+            ? "charging"
+            : "ended";
+    let estimated: number | null = null;
+    if (usage?.started_at) {
+      const def = await tariffs(b.tariff_id);
+      const end = usage.ended_at ? Date.parse(usage.ended_at) : t;
+      const start = Date.parse(usage.started_at);
+      if (def)
+        estimated = demoSimulate(def, {
+          start_at: usage.started_at,
+          time_zone: def.time_zone,
+          duration_minutes: Math.max(0, (end - start) / 60_000),
+          energy_kwh: (usage.energy_wh ?? 0) / 1000,
+          idle_minutes: 0,
+        }).total_minor;
+    }
+    return {
+      id: b.id,
+      station_id: b.station_id,
+      connector_id: b.connector_id,
+      tariff_id: b.tariff_id,
+      hold_minor: b.hold_minor,
+      currency: b.currency,
+      status: "open",
+      total_minor: null,
+      transaction_id: usage?.id ?? null,
+      created_at: ISO(b.created_at),
+      finalized_at: null,
+      usage: usage && {
+        transaction_id: usage.id,
+        active: usage.active === true,
+        energy_wh: usage.energy_wh ?? 0,
+        estimated_minor: estimated,
+        started_at: usage.started_at,
+        ended_at: usage.ended_at,
+      },
+      start_operation:
+        b.start_at === null
+          ? null
+          : op(`${b.id}-start`, { charger_status: "Accepted" }),
+      progress,
+    };
+  };
+  const bill = async (billId: string) => {
+    const f = await fleet.load();
+    const b = f.bills?.find((x) => x.id === billId);
+    if (!b) throw new IvoraError(404, "bill_not_found", "Unknown demo bill");
+    return { f, b };
+  };
+
   const byReference = <T extends { external_reference?: string | null }>(
     list: T[],
     ref?: string,
@@ -929,6 +1170,100 @@ export function createDemoClient(
     },
     async simulateTariff(tariff, session) {
       return demoSimulate(tariff, session);
+    },
+    quoteTariff: quote,
+    // Same key, same bill, like the API's idempotent replays.
+    async createBill(input, key) {
+      const s = await station(input.station_id);
+      const c = s.connectors.find((x) => x.id === input.connector_id);
+      if (!c)
+        throw new IvoraError(404, "connector_not_found", "Unknown connector");
+      const def = await tariffs(input.tariff_id);
+      if (!def)
+        throw new IvoraError(404, "tariff_not_found", "Unknown demo tariff");
+      const id = await update((f) => {
+        const bills = (f.bills ??= []);
+        const seen = bills.find((x) => x.key === key);
+        if (seen) return seen.id;
+        const created: DemoBill = {
+          id: `bill_${hex(`${key}|${now()}`, 32)}`,
+          key,
+          station_id: s.id,
+          connector_id: c.id,
+          connector_number: c.number ?? 1,
+          tariff_id: input.tariff_id,
+          // The sample tariffs' hold: $25.00, as the kit's paid tariffs set it.
+          hold_minor: 2500,
+          currency: def.currency,
+          created_at: now(),
+          payment: null,
+          start_at: null,
+          transaction_id: null,
+        };
+        bills.push(created);
+        f.bills = bills.slice(-MAX_BILLS);
+        return created.id;
+      });
+      const { f, b } = await bill(id);
+      return billView(b, f);
+    },
+    async getBill(billId) {
+      const { f, b } = await bill(billId);
+      return billView(b, f);
+    },
+    async startBill(billId) {
+      const { b } = await bill(billId);
+      if (!b.payment?.authorized_at)
+        throw new IvoraError(
+          409,
+          "payment_not_authorized",
+          "The bill's payment is not authorized",
+        );
+      if (b.start_at === null) {
+        const refusal = startRefusal(
+          await station(b.station_id),
+          b.connector_id,
+          await transactions(),
+        );
+        if (refusal) throw refusal;
+        await update((f) => {
+          const own = f.bills?.find((x) => x.id === billId);
+          if (own && own.start_at === null) dispatchStart(f, own, now());
+        });
+      }
+      // The bill's one start operation, whatever the key (like the API).
+      return op(`${billId}-start`, { charger_status: "Accepted" });
+    },
+    // One payment per bill: the same key (or a later one) answers with the same payment.
+    async createPayment(input, key) {
+      const p = await update((f) => {
+        const b = f.bills?.find((x) => x.id === input.bill_id);
+        if (!b)
+          throw new IvoraError(404, "bill_not_found", "Unknown demo bill");
+        b.payment ??= {
+          id: `pay_demo_${hex(key, 16)}`,
+          key,
+          return_reference: input.return_reference,
+          authorized_at: null,
+        };
+        return { ...b.payment, hold_minor: b.hold_minor, currency: b.currency };
+      });
+      return {
+        id: p.id,
+        bill_id: input.bill_id,
+        status: p.authorized_at === null ? "pending" : "authorized",
+        hold_minor: p.hold_minor,
+        currency: p.currency,
+        payment_mode: "test",
+        authorized_at: p.authorized_at === null ? null : ISO(p.authorized_at),
+        next_action:
+          p.authorized_at === null
+            ? {
+                type: "redirect_to_url",
+                redirect_to_url: { url: demoCheckoutPath(p.id) },
+              }
+            : null,
+      } satisfies Payment;
     },
   };
 }

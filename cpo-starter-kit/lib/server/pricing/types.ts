@@ -51,6 +51,11 @@ export interface TariffVersion {
   ivoraTariffId: number | null;
   /** The create request's attempt, part of its Idempotency-Key. */
   attempt: number;
+  /**
+   * When the latest create attempt was started. Discarding waits until it can no
+   * longer be in flight (see DISCARD_WAIT_SECONDS).
+   */
+  attemptedAt: string;
   /** Null for older versions the demo no longer keeps in its cookie. */
   definition: TariffDefinition | null;
   createdAt: string;
