@@ -6,6 +6,7 @@ import {
 } from "@/lib/server/supabase-rest";
 import type {
   AuditEntry,
+  AuditRecord,
   IssuedToken,
   NewToken,
   Peer,
@@ -192,5 +193,29 @@ export class SupabasePeerStore implements PeerStore {
       request_id: entry.requestId ?? null,
       details: entry.details ?? {},
     });
+  }
+
+  async listAudit(subjectId: string, limit: number): Promise<AuditRecord[]> {
+    const rows = await this.rest<
+      {
+        occurred_at: string;
+        actor: string;
+        action: string;
+        subject_id: string | null;
+        request_id: string | null;
+        details: Record<string, unknown>;
+      }[]
+    >(
+      "GET",
+      `emsp_audit_log?subject_id=${eq(subjectId)}&order=occurred_at.desc,id.desc&limit=${Math.max(1, Math.floor(limit))}&select=occurred_at,actor,action,subject_id,request_id,details`,
+    );
+    return rows.map((r) => ({
+      at: new Date(r.occurred_at).toISOString(),
+      actor: r.actor,
+      action: r.action,
+      subjectId: r.subject_id ?? undefined,
+      requestId: r.request_id ?? undefined,
+      details: r.details,
+    }));
   }
 }

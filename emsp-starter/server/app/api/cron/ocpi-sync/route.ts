@@ -2,6 +2,9 @@ import { createHash, timingSafeEqual } from "node:crypto";
 import { expireCommands } from "@/lib/commands/manage";
 import { commandStore } from "@/lib/commands/registry";
 import { locationStore } from "@/lib/locations/registry";
+import { installDriverAppListeners } from "@/lib/driver-app/listen";
+import { paymentDeps } from "@/lib/payments/registry";
+import { sweepPayments } from "@/lib/payments/settle";
 import { syncAllPeers } from "@/lib/locations/sync";
 import { peerStore } from "@/lib/ocpi/registry";
 import { pullAllSessions } from "@/lib/sessions/pull";
@@ -14,6 +17,9 @@ import { tokenStore } from "@/lib/tokens/registry";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
+
+// Pulled CDRs settle their payments too; timed-out commands tell the driver.
+installDriverAppListeners();
 
 const NO_STORE = { "Cache-Control": "no-store" };
 
@@ -37,6 +43,10 @@ function authorised(header: string | null): boolean {
  * 3. The pull of every registered peer's tariffs and locations, then of its sessions and
  *    CDRs (changes since the last pull). Each call pulls at most 20 pages per peer and
  *    module; a larger pull resumes on the next call.
+ * 4. Payments: settles held payments whose start has a CDR, releases holds queued for
+ *    release (an uncertain start with no session), and marks expired holds (at most
+ *    100 per call). Session events do this as CDRs arrive; this catches what they
+ *    missed.
  *
  * A failure of one job does not stop the others.
  */
@@ -110,6 +120,13 @@ export async function GET(request: Request) {
     ok = false;
     failed("sessions and CDRs pull", e);
   }
+  let payments: unknown;
+  try {
+    payments = await sweepPayments(paymentDeps("cron"));
+  } catch (e) {
+    ok = false;
+    failed("payment sweep", e);
+  }
   return Response.json(
     ok
       ? {
@@ -118,6 +135,7 @@ export async function GET(request: Request) {
           sessions,
           tokens,
           commands: { ended: commands },
+          payments,
         }
       : {
           error: "Something went wrong",
@@ -125,6 +143,7 @@ export async function GET(request: Request) {
           sessions,
           tokens,
           commands: { ended: commands },
+          payments,
         },
     { status: ok ? 200 : 500, headers: NO_STORE },
   );

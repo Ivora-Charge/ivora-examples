@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { brand, cssVariables } from "@/brand";
+import { fontFamilies } from "@/brand/fonts";
 import { isDemo } from "@/lib/server/demo";
 import "./globals.css";
 
@@ -24,8 +25,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en">
       <head>
-        {/* Brand tokens from brand/tokens.json; globals.css uses only these. */}
-        <style>{cssVariables()}</style>
+        {/* Brand tokens from brand/tokens.json, with the self-hosted brand fonts
+            from brand/fonts.ts; globals.css uses only these. */}
+        <style>{cssVariables(brand, fontFamilies)}</style>
       </head>
       <body>
         <a className="skip" href="#main">
@@ -44,7 +46,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
           <nav aria-label="Admin" className="nav">
             <Link href="/">Overview</Link>
             <Link href="/admin/peers">CPO peers</Link>
-            <Link href="/admin/tokens">Driver tokens</Link>
+            <Link href="/admin/sessions">Sessions</Link>
+            <Link href="/admin/payments">Payments and refunds</Link>
+            <Link href="/admin/reconciliation">Reconciliation</Link>
+            <Link href="/admin/tokens">Drivers and tokens</Link>
+            <Link href="/admin/problems">Problems</Link>
+            <Link href="/admin/sign-in">Sign in</Link>
           </nav>
         </header>
         <main id="main" tabIndex={-1}>

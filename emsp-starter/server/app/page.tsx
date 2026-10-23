@@ -2,12 +2,21 @@ import Link from "next/link";
 import { configErrors, missingForLive } from "@/lib/server/config";
 import { getStatus } from "@/lib/server/status";
 
-const COMING = [
-  "Locations and tariffs",
-  "Drivers and tokens",
-  "Sessions and CDRs",
-  "Payments",
-];
+const ADMIN_PAGES = [
+  [
+    "/admin/sessions",
+    "Sessions",
+    "live and recent, by peer, status and driver",
+  ],
+  ["/admin/payments", "Payments and refunds", "review, refunds and audit log"],
+  [
+    "/admin/reconciliation",
+    "CDR reconciliation",
+    "sessions vs CDRs vs captured amounts, per peer, with a CSV",
+  ],
+  ["/admin/tokens", "Drivers and tokens", "block and unblock, RFID cards"],
+  ["/admin/problems", "Reported problems", "what drivers report from the app"],
+] as const;
 
 export default function Overview() {
   const status = getStatus();
@@ -63,11 +72,13 @@ export default function Overview() {
           <Link href="/admin/peers">manage CPO peers</Link>.
         </p>
       </section>
-      <section className="card" aria-labelledby="coming">
-        <h2 id="coming">Coming soon</h2>
+      <section className="card" aria-labelledby="admin">
+        <h2 id="admin">Admin</h2>
         <ul>
-          {COMING.map((c) => (
-            <li key={c}>{c}</li>
+          {ADMIN_PAGES.map(([href, name, what]) => (
+            <li key={href}>
+              <Link href={href}>{name}</Link>: {what}
+            </li>
           ))}
         </ul>
       </section>

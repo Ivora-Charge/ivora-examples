@@ -21,6 +21,10 @@ import { ocpiTimestamp } from "@/lib/ocpi/types";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import type { Session } from "@/lib/ocpi/session-objects";
 import { MemoryPeerStore, type Peer } from "@/lib/ocpi/store";
+import { setDriverAppStoreForTests } from "@/lib/driver-app/registry";
+import { MemoryDriverAppStore } from "@/lib/driver-app/store";
+import { installPushListeners } from "@/lib/push/notify";
+import { setPushSenderForTests } from "@/lib/push/sender";
 import { onSessionEvent, type SessionEvent } from "@/lib/sessions/events";
 import { sessionOwner } from "@/lib/sessions/owner";
 import {
@@ -1053,5 +1057,77 @@ describe("demo mode", () => {
       },
     ]);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("push notifications and the receivers", () => {
+  it("answers the CPO without waiting for a push provider that hangs", async () => {
+    const app = new MemoryDriverAppStore();
+    await app.putPushToken(
+      {
+        token: "ExponentPushToken[device00000001]",
+        driverRef: DRIVER,
+        platform: "ios",
+        locale: "en",
+      },
+      T0.toISOString(),
+    );
+    setDriverAppStoreForTests(app);
+    const sent: string[] = [];
+    // A provider that never answers: inline, it would hold every receiver forever.
+    setPushSenderForTests({
+      name: "hanging",
+      send: (messages) => {
+        sent.push(...messages.map((m) => String(m.data.kind)));
+        return new Promise(() => {});
+      },
+    });
+    const off = installPushListeners();
+    const answered = <T>(p: Promise<T>) =>
+      Promise.race([
+        p.then(() => "answered"),
+        new Promise((r) => setTimeout(() => r("held up"), 1000)),
+      ]);
+    try {
+      const { session } = await started();
+      await cpo.putSession(session, { push: true });
+      // The session receiver: "Charging finished" is due, and the CPO still gets its answer.
+      expect(
+        await answered(
+          cpo.patchSession(
+            "SESSION-1",
+            { kwh: 12, status: "COMPLETED", end_date_time: iso(20) },
+            { push: true, at: at(20) },
+          ),
+        ),
+      ).toBe("answered");
+      expect((await held()).completedAt).not.toBeNull();
+      // The commands receiver: a refused start is due a push, and is answered too.
+      await startSession(
+        {
+          driverRef: DRIVER,
+          requestId: newRequestId(),
+          locationId: locationAppId({
+            peerId: one.id,
+            countryCode: "ZZ",
+            partyId: "MCK",
+            id: "LOC1",
+          }),
+          evseUid: "LOC1-1",
+          connectorId: "1",
+        },
+        commandDeps(),
+      );
+      expect(await answered(cpo.sendCommandResult("REJECTED"))).toBe(
+        "answered",
+      );
+      await vi.waitFor(() =>
+        expect(sent).toEqual(["charging_done", "start_failed"]),
+      );
+    } finally {
+      off();
+      setPushSenderForTests(undefined);
+      setDriverAppStoreForTests(undefined);
+    }
   });
 });

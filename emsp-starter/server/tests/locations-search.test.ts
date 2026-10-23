@@ -217,9 +217,15 @@ describe("location search", () => {
       time_zone: "Europe/Amsterdam",
       evse_count: 3,
       available_count: 2,
+      status_counts: { AVAILABLE: 2, PLANNED: 1 },
       max_power_kw: 300,
       connector_standards: ["IEC_62196_T2_COMBO"],
-      price: { free: false, summary: "€0.8349 per kWh" },
+      price: {
+        free: false,
+        summary: "€0.8349 per kWh",
+        currency: "EUR",
+        lead: { type: "ENERGY", unit: "kWh", priceE4: 8349, vatIncluded: true },
+      },
     });
     expect(parseLocationAppId(motorway.id)).toEqual({
       peerId: ONE,

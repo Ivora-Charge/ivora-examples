@@ -10,3 +10,6 @@ android
 *.tsbuildinfo
 test-results
 playwright-report
+public/maplibre-gl-worker.mjs
+.env.*.local
+.vercel

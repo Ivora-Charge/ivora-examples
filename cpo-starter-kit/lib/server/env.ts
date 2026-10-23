@@ -9,6 +9,16 @@ function env(name: string): string | undefined {
   return v ? v : undefined;
 }
 
+/**
+ * A live credential. The Deploy to Vercel button asks for each one and Vercel won't
+ * take an empty field, so `demo` stands for "not yet": it counts as unset and the
+ * deployment stays in demo mode until a real value replaces it.
+ */
+function credential(name: string): string {
+  const v = env(name);
+  return v && v.toLowerCase() !== "demo" ? v : "";
+}
+
 /** Server-side settings. Read on every call so tests and restarts see the current env. */
 export const config = {
   get apiBaseUrl() {
@@ -18,10 +28,10 @@ export const config = {
     );
   },
   get apiKey() {
-    return env("IVORA_API_KEY") ?? "";
+    return credential("IVORA_API_KEY");
   },
   get tenantId() {
-    return env("IVORA_TENANT_ID") ?? "";
+    return credential("IVORA_TENANT_ID");
   },
   /** Shown in the header and page titles. */
   get operatorName() {
@@ -88,19 +98,34 @@ export const config = {
     };
   },
   get supabaseUrl() {
-    return env("SUPABASE_URL") ?? "";
+    return credential("SUPABASE_URL");
   },
   /** The project's anon (or publishable) key. Used on the server only, with RLS. */
   get supabaseAnonKey() {
-    return env("SUPABASE_ANON_KEY") ?? "";
+    return credential("SUPABASE_ANON_KEY");
   },
   /** Bypasses RLS. Server-only, for writes that the server has already authorized. */
   get supabaseServiceRoleKey() {
-    return env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    return credential("SUPABASE_SERVICE_ROLE_KEY");
+  },
+  /**
+   * Bearer secret of the settlement sweep (/api/cron/settle), which a scheduler calls
+   * every minute. Vercel Cron sends it as `Authorization: Bearer <CRON_SECRET>`.
+   */
+  get cronSecret() {
+    return env("CRON_SECRET") ?? "";
+  },
+  /**
+   * The optional fleet and RFID cards module (Cards), off by default: on with
+   * FLEET_MODULE=1 (or true). Demo mode honours it too.
+   */
+  get fleetModule() {
+    const v = env("FLEET_MODULE")?.toLowerCase();
+    return v === "1" || v === "true";
   },
   /** One-time secret that unlocks the setup screen for the first owner. */
   get setupSecret() {
-    return env("SETUP_SECRET") ?? "";
+    return credential("SETUP_SECRET");
   },
   get resendApiKey() {
     return env("RESEND_API_KEY") ?? "";

@@ -1,14 +1,54 @@
 {
   "expo": {
-    "name": "Your Charging Network",
+    "name": "Kilolane",
     "slug": "emsp-starter",
     "scheme": "emsp-starter",
     "version": "0.1.0",
     "orientation": "portrait",
-    "userInterfaceStyle": "light",
-    "ios": { "supportsTablet": true },
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true
+    },
     "android": {},
-    "web": { "bundler": "metro", "output": "single" },
-    "plugins": ["expo-router"]
+    "web": {
+      "bundler": "metro",
+      "output": "single"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-localization",
+      "expo-secure-store",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Show chargers near you."
+        }
+      ],
+      "@maplibre/maplibre-react-native",
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Scan a charger's QR code to start charging.",
+          "recordAudioAndroid": false,
+          "microphonePermission": false
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Add a photo when you report a problem at a charger.",
+          "cameraPermission": "Take a photo when you report a problem at a charger.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-notifications",
+      [
+        "@stripe/stripe-react-native",
+        {
+          "enableGooglePay": false
+        }
+      ]
+    ]
   }
 }

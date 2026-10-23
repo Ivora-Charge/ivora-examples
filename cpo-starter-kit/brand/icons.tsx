@@ -27,6 +27,13 @@ const PATHS: Record<string, ReactNode> = {
     </>
   ),
   reports: <path d="M3 3v16a2 2 0 0 0 2 2h16M18 17V9M13 17V5M8 17v-3" />,
+  cards: (
+    <>
+      <path d="M16 10h2M16 14h2M6.17 15a3 3 0 0 1 5.66 0" />
+      <circle cx="9" cy="11" r="2" />
+      <rect x="2" y="5" width="20" height="14" rx="2" />
+    </>
+  ),
   team: (
     <>
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.128a4 4 0 0 1 0 7.744M22 21v-2a4 4 0 0 0-3-3.87" />

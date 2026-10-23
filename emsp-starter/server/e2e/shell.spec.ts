@@ -12,9 +12,6 @@ test("demo: admin overview is labelled and shows the OCPI identity", async ({
   await expect(page.getByText("2.2.1")).toBeVisible();
   await expect(page.getByText("DMO", { exact: true })).toBeVisible();
   await expect(page).toHaveTitle(/admin$/);
-
-  if (process.env.SCREENSHOT)
-    await page.screenshot({ path: "docs/screenshot.png", fullPage: false });
 });
 
 test("demo: status API reports demo mode", async ({ request }) => {
@@ -38,4 +35,30 @@ test("skip link moves focus to the main content", async ({
   await expect(skip).toBeFocused();
   await skip.press("Enter");
   await expect(page.locator("main")).toBeFocused();
+});
+
+test("the admin web uses the self-hosted brand fonts", async ({ page }) => {
+  await page.goto("/");
+  const heading = page.getByRole("heading", { name: "Overview" });
+  await expect(heading).toBeVisible();
+  const family = (l: ReturnType<typeof page.locator>) =>
+    l.evaluate((el) => getComputedStyle(el).fontFamily);
+  // next/font names each family after its constant in brand/fonts.ts, ahead of the
+  // token's name.
+  expect(await family(heading)).toMatch(/^\W*\w*bricolage/i);
+  expect(await family(page.locator("body"))).toMatch(/^\W*\w*instrument/i);
+  expect(await family(page.locator("code").first())).toMatch(/^\W*\w*mono/i);
+  expect(
+    await page.evaluate(async () => {
+      await document.fonts.ready;
+      return [...document.fonts]
+        .filter((f) => f.status === "loaded")
+        .map((f) => f.family);
+    }),
+  ).toEqual(
+    expect.arrayContaining([
+      expect.stringMatching(/bricolage/i),
+      expect.stringMatching(/instrument/i),
+    ]),
+  );
 });

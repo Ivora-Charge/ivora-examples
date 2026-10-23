@@ -25,6 +25,8 @@ export interface Location {
   /** WGS 84 degrees, when set: the Live map places the site with them. */
   latitude?: number | null;
   longitude?: number | null;
+  /** IANA time zone of the site, when set: reports show its local times in it. */
+  time_zone?: string | null;
   external_reference?: string | null;
 }
 
@@ -120,6 +122,7 @@ export interface Operation {
   id: string;
   status: "dispatching" | "succeeded" | "rejected" | "unknown";
   result: Record<string, unknown> | null;
+  created_at?: string;
 }
 
 /**
@@ -143,19 +146,64 @@ export interface TokenRecord {
   id: number;
   id_token: string;
   type?: string | null;
+  /** Accepted, Blocked or Expired through the API; other tools may set another OCPP status. */
   status: "Accepted" | "Blocked" | "Expired" | (string & {});
+  /** After it Ivora answers Expired at the charger; null for no expiry. */
+  expires_at?: string | null;
   label?: string | null;
   external_reference?: string | null;
+  /** False when the value is longer than the 20 characters an OCPP 1.6 idTag allows. */
+  ocpp16_compatible?: boolean;
+  created_at?: string | null;
+  /** Moves with every change: the Cards forms name the one they were loaded at. */
+  updated_at?: string | null;
 }
 
-/** `POST /tokens`: registers an ID token, found again by its external_reference. */
+/**
+ * `POST /tokens`: registers an ID token, found again by its external_reference. The
+ * staff and free charging tokens are `Central`; RFID cards are `ISO14443`. A value is
+ * unique per project regardless of case (`409 token_exists`).
+ */
 export interface TokenInput {
   id_token: string;
-  type: "Central";
+  type: "Central" | "ISO14443";
   status: "Accepted";
   label: string;
   /** Derived from our own record, so a retry finds the token instead of duplicating it. */
   external_reference: string;
+}
+
+/** `PATCH /tokens/{id}`: only the fields sent change; null clears expires_at or label. */
+export interface TokenUpdate {
+  status?: "Accepted" | "Blocked" | "Expired";
+  expires_at?: string | null;
+  label?: string | null;
+}
+
+/**
+ * One row of `POST /tokens/import`. Rows match existing tokens by id_token
+ * (case-insensitive); absent fields keep their value (new tokens: ISO14443, Accepted).
+ */
+export interface TokenImportRow {
+  id_token: string;
+  label: string;
+}
+
+/** What `POST /tokens/import` did (or, with dry_run, would do) with each row. */
+export interface TokenImportResult {
+  dry_run: boolean;
+  /** Rows per action: create, update, unchanged, error. */
+  counts: Record<string, number>;
+  /** Every error row, and every row that changes or would change a token. */
+  rows: {
+    /** 1-based data row. */
+    row: number;
+    id_token: string | null;
+    action: "create" | "update" | "unchanged" | "error";
+    token_id?: number | null;
+    code?: string | null;
+    message?: string | null;
+  }[];
 }
 
 export interface Transaction {
@@ -171,6 +219,131 @@ export interface Transaction {
   ended_at: string | null;
   energy_wh?: number | null;
 }
+
+/** The bill a transaction settles, as `GET /transactions/{id}` shows it. */
+export interface TransactionBill {
+  id: string;
+  status: "open" | "final";
+  currency: string;
+  /** Final amount in integer minor units; null while open. */
+  total_minor: number | null;
+  finalized_at?: string | null;
+}
+
+/**
+ * `GET /transactions/{id}` (needs billing:read): the session with its stop reason,
+ * duration and bill. The list (`GET /transactions`) carries none of these, has no date
+ * filter and lists oldest first, so reports never scan it for a period.
+ */
+export interface TransactionDetail extends Transaction {
+  /** The station's OCPP connection name. */
+  station_name?: string | null;
+  /** From started_at to ended_at, or until now while the session is active. */
+  duration_seconds?: number | null;
+  stop_reason?: string | null;
+  bill?: TransactionBill | null;
+}
+
+// ---- Overview statistics (`GET /stats`) ----
+
+export type StatsBucketSize = "hour" | "day" | "month";
+
+export interface StatsQuery {
+  /** ISO 8601 with an offset (the kit sends UTC). */
+  from: string;
+  /** ISO 8601, exclusive. */
+  to: string;
+  bucket: StatsBucketSize;
+  /** IANA time zone of the bucket boundaries. */
+  time_zone: string;
+  /** Top stations, 1 to 20. */
+  top: number;
+}
+
+/** Billed revenue in one currency: final bills' total_minor, never captures or refunds. */
+export interface RevenueLine {
+  currency: string;
+  billed_minor: number;
+  bills: number;
+}
+
+/** Session figures of the period or of one bucket. */
+export interface StatsFigures {
+  sessions: number;
+  ended_sessions: number;
+  successful_sessions: number;
+  /** successful / ended as decimal text with 4 places ("0.9500"); null when none ended. */
+  success_rate: string | null;
+  average_duration_seconds: number | null;
+  /** kWh as decimal text, summed exactly. */
+  energy_kwh: string;
+  energy_wh: number;
+}
+
+export interface StatsTotals extends StatsFigures {
+  active_sessions: number;
+  energy_unknown_sessions: number;
+}
+
+export interface StatsBucket extends StatsFigures {
+  /** Bucket start and end (exclusive), ISO 8601 in the requested time zone. */
+  start: string;
+  end: string;
+  /** Final bills finalized in the bucket; null without billing:read. */
+  revenue: RevenueLine[] | null;
+}
+
+export interface TopStation {
+  station_id: number;
+  /** Null for a station deleted since. */
+  name: string | null;
+  sessions: number;
+  energy_kwh: string;
+  energy_wh: number;
+}
+
+/** Station state now (not for the period), cached up to 30 seconds by Ivora. */
+export interface StationCounts {
+  as_of: string;
+  total: number;
+  online: number;
+  offline: number;
+  faulted: number;
+}
+
+export interface Stats {
+  bucket: StatsBucketSize;
+  time_zone: string;
+  /** The period, widened to whole buckets. */
+  start: string;
+  end: string;
+  sessions_as_of: string;
+  totals: StatsTotals;
+  /** Oldest first, empty buckets included. */
+  series: StatsBucket[];
+  top_stations: TopStation[];
+  stations: StationCounts;
+  /** Final bills by finalized_at, per currency; null without billing:read. */
+  revenue: { basis: "final_bills"; currencies: RevenueLine[] } | null;
+}
+
+/**
+ * One item of `GET /transactions`. The list runs oldest first (page on with `after`,
+ * a transaction ID) and its items carry no ID token or connector: read
+ * `GET /transactions/{id}` for those.
+ */
+/** Limits for a read that is part of a larger budget (Live's session tracking). */
+export interface ReadLimits {
+  /** Epoch ms: no try and no wait between tries goes past it. */
+  deadline?: number;
+  /** A 429 comes back at once with its Retry-After, instead of being waited out. */
+  failOn429?: boolean;
+}
+
+export type TransactionListItem = Pick<Transaction, "id"> &
+  Partial<
+    Pick<Transaction, "station_id" | "active" | "started_at" | "ended_at">
+  >;
 
 /** `PUT /v1/tenants/{id}/branding`: what drivers see on Ivora's payment pages. */
 export interface BrandingInput {
@@ -372,6 +545,189 @@ export interface Quote {
   idle_free_seconds?: number;
 }
 
+// ---- OCPI publishing (roaming placeholder) ----
+
+/** A party: the country of the registry that issued it and its 3-character party ID. */
+export interface OcpiPartyRef {
+  /** ISO 3166-1 alpha-2, capitals, for example US. */
+  country_code: string;
+  /** Three capital letters or digits. */
+  party_id: string;
+}
+
+/** The party locations publish under now. */
+export interface OcpiParty extends OcpiPartyRef {
+  /** True for Ivora's shared party US*IVR. */
+  shared: boolean;
+}
+
+/** The operator's own party request and Ivora's decision on it. */
+export interface OcpiOwnParty extends OcpiPartyRef {
+  /**
+   * approved: locations publish under it. pending_approval or rejected: they publish
+   * under the shared party with the operator's display name.
+   */
+  status: "approved" | "pending_approval" | "rejected" | (string & {});
+  /** Why Ivora rejected the pair, while status is rejected. */
+  rejection_note: string | null;
+}
+
+/** Connector facts for connectors with no hardware data (OCPI 2.2.1 values). */
+export interface OcpiConnectorDefaults {
+  standard: string;
+  format: string;
+  power_type: string;
+  max_voltage: number;
+  max_amperage: number;
+}
+
+/** `GET /v1/tenants/{id}/ocpi`. */
+export interface OcpiSettings {
+  /** The operator's choice; off by default. */
+  publish: boolean;
+  /** Ivora keeps this tenant private: never published, and publish: true is refused. */
+  private: boolean;
+  /** Whether partners receive the locations now. */
+  published: boolean;
+  display_name: string | null;
+  website: string | null;
+  time_zone: string | null;
+  /** Stored defaults merged over the Level 2 ones. */
+  connector_defaults: OcpiConnectorDefaults;
+  excluded_location_ids: number[];
+  own_party: OcpiOwnParty | null;
+  party: OcpiParty;
+  /** Null where this Ivora environment serves no OCPI yet. */
+  versions_url: string | null;
+  updated_at: string | null;
+}
+
+/** `PUT /v1/tenants/{id}/ocpi` replaces every setting: always send the whole object. */
+export interface OcpiSettingsInput {
+  publish: boolean;
+  /** 1 to 100 characters; needed to publish. */
+  display_name: string | null;
+  /** https only. */
+  website: string | null;
+  /** IANA zone for locations without their own. */
+  time_zone: string | null;
+  connector_defaults: Partial<OcpiConnectorDefaults> | null;
+  /** At most 1000. */
+  excluded_location_ids: number[];
+  /** Null publishes under Ivora's shared party. US*IVR itself is refused. */
+  own_party: OcpiPartyRef | null;
+}
+
+/** An EVSE ID imported from the operator's previous CSMS. */
+export interface OcpiEvseId {
+  station_id: number;
+  evse_number: number;
+  evse_id: string;
+  /** Whether partners receive this ID now (its party is the one in use). */
+  applies: boolean;
+  updated_at?: string | null;
+}
+
+/** `GET /v1/tenants/{id}/ocpi/evse-ids`. */
+export interface OcpiEvseIds {
+  party: OcpiParty;
+  data: OcpiEvseId[];
+}
+
+// ---- Bills and Ivora Checkout (managed Stripe payments) ----
+
+/** `POST /bills`: snapshots the tariff before charging. Usage comes from the charger. */
+export interface BillInput {
+  station_id: number;
+  /** Connector resource ID, never the OCPP connector number. */
+  connector_id: number;
+  tariff_id: number;
+}
+
+/** The driver-facing step of a managed bill (single bill reads only). */
+export type BillProgress =
+  | "awaiting_payment"
+  | "authorized"
+  | "starting"
+  | "waiting_for_vehicle"
+  | "charging"
+  | "ended"
+  | "start_failed"
+  | "canceled";
+
+/** The matched transaction once a start was dispatched; a final snapshot once final. */
+export interface BillUsage {
+  transaction_id: number | null;
+  active: boolean;
+  /** Integer Wh for arithmetic. */
+  energy_wh: number | null;
+  /** Integer minor units; equals total_minor on a final bill. */
+  estimated_minor: number | null;
+  started_at: string | null;
+  ended_at: string | null;
+  /** Latest reported charging power, W; 0 once ended; null when not reported. */
+  power_w?: number | null;
+}
+
+/**
+ * A bill. Its `charging_token` is deliberately not listed: the kit never reads, stores
+ * or shows it.
+ */
+export interface Bill {
+  id: string;
+  station_id: number;
+  connector_id: number;
+  tariff_id: number;
+  hold_minor: number;
+  currency: string;
+  status: "open" | "final";
+  total_minor: number | null;
+  transaction_id: number | null;
+  created_at: string;
+  finalized_at: string | null;
+  usage?: BillUsage | null;
+  start_operation?: Operation | null;
+  /** Null for externally settled bills and in lists. */
+  progress?: BillProgress | null;
+}
+
+/**
+ * `POST /payment/stripe/…/payments`: a hosted authorization for a bill. With
+ * return_surface driver, Stripe Checkout returns the driver to Ivora's driver page for
+ * the bill's station and connector (URLs chosen by the API), which resumes the session
+ * named by return_reference.
+ */
+export interface PaymentInput {
+  bill_id: string;
+  return_surface: "driver";
+  /** ^[A-Za-z0-9_-]{1,128}$: our own session record, never a URL. */
+  return_reference: string;
+}
+
+export interface Payment {
+  id: string;
+  bill_id: string;
+  status:
+    | "preparing"
+    | "pending"
+    | "authorized"
+    | "captured"
+    | "canceled"
+    | "refund_pending"
+    | "refund_failed"
+    | "refunded"
+    | (string & {});
+  hold_minor: number;
+  /** Integer minor units captured (0 until captured, and for a waived bill). */
+  captured_minor?: number;
+  refunded_minor?: number;
+  currency?: string;
+  payment_mode: "test" | "live" | (string & {});
+  authorized_at?: string | null;
+  /** The hosted checkout the driver completes (see checkoutUrl in lib/server/checkout). */
+  next_action: Record<string, unknown> | null;
+}
+
 export interface ListOptions {
   /** 1 to 100 (the API's maximum). */
   limit?: number;
@@ -392,7 +748,8 @@ export interface IvoraClient {
   listAllLocations(): Promise<Listed<Location>>;
   createLocation(input: LocationInput, key: string): Promise<Location>;
   listStations(o?: ListOptions): Promise<Station[]>;
-  listAllStations(): Promise<Listed<Station>>;
+  /** With `limits`, every page stays within its deadline (and hands back a 429). */
+  listAllStations(limits?: ReadLimits): Promise<Listed<Station>>;
   getStation(stationId: number): Promise<Station>;
   /** Adopts the station by external_reference when the create may already have happened. */
   createStation(input: StationInput, key: string): Promise<Station>;
@@ -426,11 +783,47 @@ export interface IvoraClient {
     limit?: number;
     station_id?: number;
   }): Promise<Transaction[]>;
-  getTransaction(transactionId: number): Promise<Transaction>;
+  /**
+   * One page of `GET /transactions`, oldest first: transactions with an ID above
+   * `after` (lib/server/live/transactions.ts follows it from a stored high-water mark).
+   */
+  listTransactionsAfter(
+    o: {
+      station_id: number;
+      after: number;
+      limit?: number;
+    },
+    limits?: ReadLimits,
+  ): Promise<Page<TransactionListItem>>;
+  getTransaction(
+    transactionId: number,
+    limits?: ReadLimits,
+  ): Promise<TransactionDetail>;
   /** The token with this external_reference, if any (`GET /tokens`). */
   findToken(externalReference: string): Promise<TokenRecord | null>;
   /** Adopts the token by external_reference when the create may already have happened. */
   createToken(input: TokenInput, key: string): Promise<TokenRecord>;
+  /**
+   * Every token in the project's list, up to MAX_LIST_PAGES pages (Cards). Payment
+   * flow charging tokens and roaming partners' tokens are never listed.
+   */
+  listAllTokens(): Promise<Listed<TokenRecord>>;
+  getToken(tokenId: number): Promise<TokenRecord>;
+  /** Blocks, unblocks, expires or relabels a token. The value and type never change. */
+  updateToken(
+    tokenId: number,
+    input: TokenUpdate,
+    key: string,
+  ): Promise<TokenRecord>;
+  /**
+   * Imports up to 5,000 rows (`POST /tokens/import`). With `dryRun` it only plans
+   * and takes no key. After `503 outcome_unknown` some rows may be applied: it is not
+   * repeated with the same key; run the same rows again with a new one.
+   */
+  importTokens(
+    rows: TokenImportRow[],
+    o: { dryRun: true } | { dryRun: false; key: string },
+  ): Promise<TokenImportResult>;
   /** Open and recent faults of one station, newest first (cleared ones kept 90 days). */
   listFaults(
     stationId: number,
@@ -466,4 +859,63 @@ export interface IvoraClient {
     tariff: TariffDefinitionInput,
     session: SessionProfile,
   ): Promise<Quote>;
+  /** OCPI publishing settings (roaming placeholder). */
+  getOcpiSettings(): Promise<OcpiSettings>;
+  /** Replaces every OCPI setting; omitted fields return to their defaults. */
+  putOcpiSettings(input: OcpiSettingsInput, key: string): Promise<OcpiSettings>;
+  /** EVSE IDs imported from a previous CSMS (read only in the kit). */
+  getOcpiEvseIds(): Promise<OcpiEvseIds>;
+  /**
+   * Prices a session under a stored tariff (`POST /tariffs/{id}/quote`), with the
+   * function bills finalize with. Read-only: stores nothing, contacts no charger.
+   */
+  quoteTariff(tariffId: number, session: SessionProfile): Promise<Quote>;
+  /** Snapshots the tariff in a new bill. Bills have no external_reference: keep the key. */
+  createBill(input: BillInput, key: string): Promise<Bill>;
+  /**
+   * One bill with its usage, start operation and progress. For a driver-return payment
+   * this read also asks Stripe and, once authorized, starts the charger once (the key
+   * holds billing:write and stations:control).
+   */
+  getBill(billId: string): Promise<Bill>;
+  /**
+   * Starts an authorized bill whose automatic start was refused (`progress`
+   * authorized). Answers with the bill's one start operation, whatever the key.
+   */
+  startBill(billId: string, key: string): Promise<Operation>;
+  /** One payment per bill: a retry with the same key answers with the same payment. */
+  createPayment(input: PaymentInput, key: string): Promise<Payment>;
+  /** One tariff by its Ivora ID (its authorization_minor is the card hold). */
+  getTariff(tariffId: number): Promise<Tariff>;
+  /**
+   * Finalizes a bill from its completed transaction (`POST /bills/{id}/finalize`).
+   * Ivora reads the usage itself and computes the immutable total_minor.
+   */
+  finalizeBill(
+    billId: string,
+    transactionId: number,
+    key: string,
+  ): Promise<Bill>;
+  /** One payment, synchronized with Stripe. */
+  getPayment(paymentId: string): Promise<Payment>;
+  /**
+   * Captures exactly the final bill (no amount is sent). Zero bills, and bills below
+   * Stripe's 50-cent minimum, release the hold instead (status canceled, captured 0).
+   * A bill above its hold answers 409 bill_exceeds_hold.
+   */
+  capturePayment(paymentId: string, key: string): Promise<Payment>;
+  /**
+   * Releases an unused authorization. Stops no charger; after a dispatched start it
+   * answers start_reserved until the start can no longer produce a session.
+   */
+  releasePayment(paymentId: string, key: string): Promise<Payment>;
+  /** Records that the kit stopped charging near the hold (once per bill). */
+  recordHoldStop(billId: string, key: string): Promise<void>;
+  /**
+   * Overview statistics (`GET /stats`): sessions, energy, success rate, average
+   * duration, a series, top stations, station state and billed revenue. More than
+   * 168 hour, 92 day or 24 month buckets, or 50,000 sessions, answers 422
+   * stats_range_too_large.
+   */
+  getStats(q: StatsQuery): Promise<Stats>;
 }

@@ -28,6 +28,7 @@ import { ocpiUrls } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { toOcpiToken, tokenValid } from "@/lib/tokens/push";
 import type { TokenStore } from "@/lib/tokens/store";
+import { emitCommandEvent } from "./events";
 import { preAuth, type HoldResult, type PreAuth } from "./pre-auth";
 import {
   FINAL_STATUSES,
@@ -73,7 +74,7 @@ export type CommandDeps = {
   peers: PeerStore;
   tokens: TokenStore;
   locations: LocationStore;
-  /** The payment hold before a start. Default: preAuth(), the stub until part 7. */
+  /** The payment hold before a start. Default: preAuth(), the card hold of lib/payments. */
   preAuth?: PreAuth;
   /** Whose session a CPO session is. Default: the driver whose start it links to. */
   sessionOwner?: SessionOwner;
@@ -359,6 +360,20 @@ async function finish(
       // nobody knows whether the charger started, so a session may still appear.
       uncertain: status === "timed_out",
     });
+  // For notifications (lib/push): after the release, so a listener sees the outcome.
+  await emitCommandEvent({
+    type: "command.finished",
+    command: {
+      id: done.id,
+      type: done.type,
+      driverRef: done.driverRef,
+      status: done.status,
+      result: done.result,
+      requestId: done.requestId,
+      createdAt: done.createdAt,
+      finishedAt: done.finishedAt,
+    },
+  });
   return done;
 }
 

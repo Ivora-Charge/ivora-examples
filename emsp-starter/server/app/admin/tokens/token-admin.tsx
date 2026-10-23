@@ -6,6 +6,7 @@ import {
   addRfidCardAction,
   changeTokenAction,
   createAppTokenAction,
+  driverAccountAction,
   driverTokensAction,
   retryPushesAction,
   type TokenActionState,
@@ -87,8 +88,27 @@ function TokenFacts({ token }: { token: TokenSummary }) {
 }
 
 function Details({ state }: { state: TokenActionState }) {
+  const d = state.driver;
   return (
     <>
+      {d && (
+        <dl className="facts">
+          <dt>Driver</dt>
+          <dd>
+            <code>{d.id}</code>
+          </dd>
+          <dt>Email</dt>
+          <dd>{d.email}</dd>
+          <dt>Status</dt>
+          <dd className={d.status === "active" ? undefined : "flag"}>
+            {d.status === "active" ? "active (may charge)" : "blocked"}
+          </dd>
+          <dt>Card on file</dt>
+          <dd>{d.hasCard ? "yes" : "no"}</dd>
+          <dt>Since</dt>
+          <dd>{d.createdAt}</dd>
+        </dl>
+      )}
       {state.tokens?.map((t) => (
         <div key={`${t.type}:${t.uid}`} className="peer">
           <TokenFacts token={t} />
@@ -129,6 +149,38 @@ export function TokenAdmin() {
       </TokenCard>
 
       <TokenCard
+        id="driver"
+        title="Block or unblock a driver"
+        action={driverAccountAction}
+        submit={
+          <>
+            <button type="submit" name="intent" value="show">
+              Show driver
+            </button>
+            <button
+              type="submit"
+              name="intent"
+              value="block"
+              className="danger"
+            >
+              Block driver
+            </button>
+            <button type="submit" name="intent" value="unblock">
+              Unblock driver
+            </button>
+          </>
+        }
+      >
+        <p className="muted">
+          A blocked driver may not charge with any of their tokens: CPOs that
+          ask us get NOT_ALLOWED, and the app refuses to start. A CPO may let a
+          whitelisted token charge without asking: block the tokens too for
+          that.
+        </p>
+        <DriverField />
+      </TokenCard>
+
+      <TokenCard
         id="app-token"
         title="Create an app token"
         action={createAppTokenAction}
@@ -154,7 +206,8 @@ export function TokenAdmin() {
       >
         <p className="muted">
           The card joins the driver&apos;s contract. The driver needs an app
-          token first.
+          token first. Until RFID billing is available, cards are pushed as
+          NEVER and refused at authorization: they cannot start charging yet.
         </p>
         <DriverField />
         <label>
@@ -175,7 +228,6 @@ export function TokenAdmin() {
           Expires (optional)
           <input name="expiresAt" type="date" />
         </label>
-        <WhitelistField />
       </TokenCard>
 
       <TokenCard

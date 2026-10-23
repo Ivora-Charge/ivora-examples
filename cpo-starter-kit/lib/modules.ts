@@ -5,6 +5,8 @@ export interface Module {
   label: string;
   summary: string;
   status: "ready" | "coming-soon";
+  /** An optional module, shown only when its flag is on (FLEET_MODULE for "fleet"). */
+  optional?: "fleet";
 }
 
 export const MODULES: Module[] = [
@@ -51,8 +53,18 @@ export const MODULES: Module[] = [
     slug: "reports",
     href: "/reports",
     label: "Reports",
-    summary: "Energy and revenue per site, charger and month, with CSV export.",
-    status: "coming-soon",
+    summary:
+      "Sessions, energy, success rate and billed revenue over a period; a sessions table with CSV export; your Stripe payouts.",
+    status: "ready",
+  },
+  {
+    slug: "cards",
+    href: "/cards",
+    label: "Cards",
+    summary:
+      "RFID cards per driver or vehicle: add, import, block or expire them, with each card's sessions and energy.",
+    status: "ready",
+    optional: "fleet",
   },
   {
     slug: "team",
@@ -65,10 +77,15 @@ export const MODULES: Module[] = [
     slug: "settings",
     href: "/settings",
     label: "Settings",
-    summary: "Company details, brand and card payments.",
+    summary: "Company details, brand, card payments and roaming.",
     status: "ready",
   },
 ];
+
+/** The sections to show: optional ones only when their flag is on. */
+export function visibleModules(flags: { fleet: boolean }): Module[] {
+  return MODULES.filter((m) => m.optional !== "fleet" || flags.fleet);
+}
 
 export function moduleBySlug(slug: string): Module {
   const m = MODULES.find((x) => x.slug === slug);

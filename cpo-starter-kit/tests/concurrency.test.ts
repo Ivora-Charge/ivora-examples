@@ -403,4 +403,110 @@ describe.skipIf(!URL_ || !local)("concurrent team changes (Postgres)", () => {
     >`select private from cpo_station_pricing where station_id = 9102`;
     expect(rows).toEqual([{ private: true }]);
   });
+
+  /** One driver's tap: a paid claim on connector 91011 of station 9101. */
+  const claimCheckout = (
+    c: postgres.Sql | postgres.TransactionSql,
+    req: string,
+  ) =>
+    c<
+      { r: { id?: string; created?: boolean; busy?: string } }[]
+    >`select cpo_claim_checkout(${operator}, ${req}, 'paid', 'ABCD2345', 9101, 91011, 9401, 2500, 'USD') as r`.then(
+      (x) => x[0].r,
+    );
+
+  it("gives a connector to one of two drivers who tap at the same moment", async () => {
+    await reset();
+    const secondPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let claimed!: (id: string) => void;
+    const firstId = new Promise<string>((r) => (claimed = r));
+    // The first driver's claim is inserted but not committed yet.
+    const tx = a.begin(async (t) => {
+      const r = await claimCheckout(t, "40000000-0000-4000-8000-000000000001");
+      claimed(r.id!);
+      await released;
+    });
+    const id = await firstId;
+    // The second driver's claim waits on the first's row, then sees it: busy, and
+    // nothing inserted, so no second bill or hold can follow.
+    const second = claimCheckout(b, "40000000-0000-4000-8000-000000000002");
+    await waitingForLock(secondPid);
+    release();
+    await tx;
+    expect(await second).toEqual({ busy: id });
+    const rows =
+      await a`select 1 from cpo_checkouts where connector_id = 91011`;
+    expect(rows).toHaveLength(1);
+  });
+
+  it("keeps a session ended when a late running report races its end", async () => {
+    const track = (
+      c: postgres.Sql | postgres.TransactionSql,
+      active: boolean,
+    ) =>
+      c`select cpo_track_session(9201, 9101, 91011, 1, '****ABCD', now(), null, 5, ${active})`;
+    await a`delete from cpo_active_sessions where transaction_id = 9201`;
+    await track(a, true);
+    const secondPid = await pidOf(b);
+    let release!: () => void;
+    const released = new Promise<void>((r) => (release = r));
+    let ended!: () => void;
+    let endFailed!: (e: unknown) => void;
+    const endedFirst = new Promise<void>((resolve, reject) => {
+      ended = resolve;
+      endFailed = reject;
+    });
+    // The end is written but not committed yet.
+    const tx = a.begin(async (t) => {
+      try {
+        await track(t, false);
+      } catch (e) {
+        // Fail fast instead of waiting for the test timeout.
+        endFailed(e);
+        throw e;
+      }
+      ended();
+      await released;
+    });
+    tx.catch(() => undefined);
+    try {
+      await endedFirst;
+      // The late report waits on the row, then sees it ended and changes nothing.
+      // postgres.js sends a query only once it is awaited or .then'd, so start it now.
+      const late = track(b, true).then(
+        () => null,
+        (e: Error) => e,
+      );
+      await waitingForLock(secondPid);
+      release();
+      await tx;
+      expect(await late).toBeNull();
+    } finally {
+      // Never leave the first transaction open (it would hold the hooks too).
+      release();
+    }
+    const rows =
+      await a`select active from cpo_active_sessions where transaction_id = 9201`;
+    expect(rows).toEqual([{ active: false }]);
+  }, 15_000);
+
+  it("keeps the narrower bounds when two loads save a seed's progress at once", async () => {
+    await a`delete from cpo_active_marks where station_id = 9102`;
+    const [r1, r2] = await Promise.all([
+      a`select cpo_save_active_seed(9102, 64000, 128000)`.then(
+        () => null,
+        (e: Error) => e,
+      ),
+      b`select cpo_save_active_seed(9102, 96000, 256000)`.then(
+        () => null,
+        (e: Error) => e,
+      ),
+    ]);
+    expect([r1, r2]).toEqual([null, null]);
+    const rows =
+      await a`select seed_lo::int as lo, seed_hi::int as hi, last_transaction_id::int as mark from cpo_active_marks where station_id = 9102`;
+    expect(rows).toEqual([{ lo: 96000, hi: 128000, mark: 0 }]);
+  });
 });

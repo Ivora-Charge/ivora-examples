@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-const SECTIONS = ["Reports"];
+const SECTIONS = ["Reports", "Cards"];
 
 // Runs on the desktop and mobile projects (see playwright.config.ts).
 test("demo: overview shows labelled sample data", async ({ page }) => {
@@ -22,7 +22,7 @@ test("demo: overview shows labelled sample data", async ({ page }) => {
     await page.screenshot({ path: "docs/screenshot.png", fullPage: false });
 });
 
-test("demo: every unbuilt section is reachable from the menu and marked coming soon", async ({
+test("demo: the last section built is reachable from the menu, and none is marked coming soon", async ({
   page,
   isMobile,
 }) => {
@@ -40,7 +40,7 @@ test("demo: every unbuilt section is reachable from the menu and marked coming s
     }
     await nav.getByRole("link", { name: new RegExp(`^${name}`) }).click();
     await expect(page.getByRole("heading", { level: 1, name })).toBeVisible();
-    await expect(page.getByText("Coming soon", { exact: true })).toBeVisible();
+    await expect(page.getByText("Coming soon", { exact: true })).toHaveCount(0);
     await expect(page).toHaveTitle(new RegExp(`^${name} · `));
     if (!isMobile)
       await expect(
@@ -64,4 +64,31 @@ test("skip link moves focus to the main content", async ({
   await expect(skip).toBeFocused();
   await skip.press("Enter");
   await expect(page.locator("main")).toBeFocused();
+});
+
+test("demo: screenshots of the Overview for the README (SCREENSHOT=1, desktop)", async ({
+  browser,
+  isMobile,
+}) => {
+  test.skip(!process.env.SCREENSHOT || isMobile, "only when asked, on desktop");
+  for (const [device, viewport, scale, fullPage] of [
+    ["desktop", { width: 1440, height: 953 }, 1, false],
+    ["phone", { width: 390, height: 844 }, 2, true],
+  ] as const)
+    for (const colorScheme of ["light", "dark"] as const) {
+      const context = await browser.newContext({
+        viewport,
+        deviceScaleFactor: scale,
+        colorScheme,
+        baseURL: test.info().project.use.baseURL,
+      });
+      const page = await context.newPage();
+      await page.goto("/");
+      await expect(page.getByText("Chargers online")).toBeVisible();
+      await page.screenshot({
+        path: `docs/screens/overview-${device}-${colorScheme}.png`,
+        fullPage,
+      });
+      await context.close();
+    }
 });

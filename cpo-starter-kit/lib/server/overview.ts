@@ -1,6 +1,7 @@
 import "server-only";
 import { describeError, getIvora, IvoraError } from "./ivora";
-import { getLive, isStaffSession } from "./live";
+import { getLive, isFreeSession, isStaffSession, running } from "./live";
+import { asTransaction, syncActiveSessions } from "./live/active";
 import { whToKwh } from "../units";
 
 export interface Overview {
@@ -10,10 +11,14 @@ export interface Overview {
   online: number;
   connectors: number;
   activeSessions: number;
-  /** Energy of the most recent sessions (up to 50), kWh. */
-  recentEnergyKwh: number;
+  /** Energy delivered so far by the sessions charging now, kWh. */
+  activeEnergyKwh: number;
   /** Of those sessions, how many were started with the staff token (remote start, charger test). */
   staffSessions: number;
+  /** Of those, how many were free driver sessions (the free charging token). */
+  freeSessions: number;
+  /** False when the session tracking left work for later (as on Live): the counts may lag. */
+  sessionsComplete: boolean;
   stations: { id: number; name: string; online: boolean; connectors: number }[];
   /** More sites or chargers than the client pages through: counts are a lower bound. */
   truncated: boolean;
@@ -29,14 +34,28 @@ export async function loadOverview(
 ): Promise<OverviewResult> {
   const ivora = getIvora();
   try {
-    const [sites, chargers, transactions] = await Promise.all([
+    const [sites, chargers] = await Promise.all([
       ivora.listAllLocations(),
       ivora.listAllStations(),
-      ivora.listTransactions({ limit: 50 }),
     ]);
-    const staffToken = operatorId
-      ? ((await getLive().store.getStaffToken(operatorId))?.idToken ?? null)
-      : null;
+    const live = getLive();
+    const store = live.store;
+    // Ivora lists transactions oldest first, so the newest page is not "now": the
+    // running sessions come from Live's tracker (see lib/server/live/active.ts), which
+    // shares its throttle and budget with the Live page.
+    const sync = await syncActiveSessions(
+      live,
+      chargers.data.map((s) => s.id),
+    );
+    const transactions = sync.sessions.map(asTransaction).filter(running);
+    const [staff, free] = operatorId
+      ? await Promise.all([
+          store.getStaffToken(operatorId),
+          store.getFreeToken(operatorId),
+        ])
+      : [null, null];
+    const staffToken = staff?.idToken ?? null;
+    const freeToken = free?.idToken ?? null;
     const locations = sites.data;
     const stations = chargers.data;
     const energyWh = transactions.reduce((n, t) => n + (t.energy_wh ?? 0), 0);
@@ -48,9 +67,11 @@ export async function loadOverview(
         chargers: stations.length,
         online: stations.filter((s) => s.online).length,
         connectors: stations.reduce((n, s) => n + s.connectors.length, 0),
-        activeSessions: transactions.filter((t) => t.active).length,
-        recentEnergyKwh: whToKwh(energyWh),
+        activeSessions: transactions.length,
+        activeEnergyKwh: whToKwh(energyWh),
         staffSessions: transactions.filter((t) => isStaffSession(t, staffToken))
+          .length,
+        freeSessions: transactions.filter((t) => isFreeSession(t, freeToken))
           .length,
         stations: stations.map((s) => ({
           id: s.id,
@@ -59,6 +80,7 @@ export async function loadOverview(
           connectors: s.connectors.length,
         })),
         truncated: sites.truncated || chargers.truncated,
+        sessionsComplete: sync.complete,
       },
     };
   } catch (e) {

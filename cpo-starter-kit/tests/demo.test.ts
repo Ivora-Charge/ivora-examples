@@ -8,6 +8,16 @@ import { createLiveClient } from "@/lib/server/ivora/live";
 import { isDemo } from "@/lib/server/env";
 import { loadOverview } from "@/lib/server/overview";
 import { getLive } from "@/lib/server/live";
+import {
+  addCard,
+  applyImport,
+  checkImport,
+  getFleet,
+  loadCard,
+  loadCards,
+  refreshCardSessions,
+  updateCard,
+} from "@/lib/server/fleet";
 import { resetDemoLiveForTests } from "@/lib/server/live/demo-cookie";
 import { loadLive, loadStation, sendCommand } from "@/lib/server/live/service";
 import type { Staff } from "@/lib/server/team/types";
@@ -34,6 +44,7 @@ import {
 } from "@/lib/server/onboarding/service";
 
 const VARS = [
+  "FLEET_MODULE",
   "IVORA_API_KEY",
   "IVORA_TENANT_ID",
   "DEMO_MODE",
@@ -84,6 +95,26 @@ describe("demo mode", () => {
     expect(isDemo()).toBe(true);
   });
 
+  it("treats `demo` in a credential as unset, for the Deploy to Vercel form", () => {
+    process.env.IVORA_API_KEY = "test-key";
+    process.env.IVORA_TENANT_ID = "42";
+    Object.assign(process.env, SUPABASE);
+    expect(isDemo()).toBe(false);
+    for (const k of [
+      "IVORA_API_KEY",
+      "IVORA_TENANT_ID",
+      "SUPABASE_URL",
+      "SUPABASE_ANON_KEY",
+      "SUPABASE_SERVICE_ROLE_KEY",
+    ]) {
+      const real = process.env[k];
+      process.env[k] = " Demo ";
+      expect(isDemo(), k).toBe(true);
+      process.env[k] = real;
+    }
+    expect(isDemo()).toBe(false);
+  });
+
   it("runs every client method on labelled sample data without any network call", async () => {
     const ivora = getIvora();
     expect(ivora.mode).toBe("demo");
@@ -107,6 +138,25 @@ describe("demo mode", () => {
     expect(await ivora.listLocations()).toHaveLength(locations.length + 1);
 
     expect((await ivora.listTransactions()).length).toBeGreaterThan(0);
+    // Shaped like the API's list: oldest first after the cursor, no token or connector.
+    const station = (await ivora.listTransactions())[0].station_id!;
+    const page = await ivora.listTransactionsAfter({
+      station_id: station,
+      after: 0,
+    });
+    expect(page.data.length).toBeGreaterThan(0);
+    const ids = page.data.map((t) => t.id);
+    expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    expect(page.data[0]).not.toHaveProperty("id_token");
+    expect(page.data[0]).not.toHaveProperty("connector_id");
+    expect(
+      (
+        await ivora.listTransactionsAfter({
+          station_id: station,
+          after: ids[ids.length - 1],
+        })
+      ).data,
+    ).toHaveLength(0);
     expect((await ivora.listAllStations()).data).toHaveLength(stations.length);
     expect((await ivora.listAllLocations()).truncated).toBe(false);
 
@@ -365,6 +415,86 @@ describe("demo mode", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("runs Cards end to end (list, usage, add, import, block, expiry) without any network call", async () => {
+    process.env.FLEET_MODULE = "1";
+    const d = getFleet();
+    expect(d.ivora.mode).toBe("demo");
+    expect(d.ledger.mode).toBe("demo");
+    const owner = {
+      userId: "demo-owner",
+      email: "demo-owner@example.com",
+      role: "owner" as const,
+      operatorId: "demo-operator",
+      operatorName: "Sample Operator",
+      demo: true,
+    };
+    // The demo ledger is the sample history: nothing to scan.
+    expect(
+      await refreshCardSessions(d, { deadline: Date.now() + 1000 }),
+    ).toMatchObject({ reads: 0 });
+
+    const v = await loadCards(d, owner, { days: "365" });
+    expect(v.demo).toBe(true);
+    expect(v.cards.map((c) => c.masked)).toEqual([
+      "****0001",
+      "****0002",
+      "****0005",
+      "****0003",
+      "****0004",
+    ]);
+    // The sample RFID sessions are the sample cards' (as Reports counts them).
+    const ada = v.cards.find((c) => c.masked === "****0001")!;
+    expect(ada.usage!.sessions).toBeGreaterThan(0);
+    expect(ada.usage!.energyWh).toBeGreaterThan(0);
+    expect(v.cards.find((c) => c.masked === "****0005")!.state).toBe("blocked");
+    const detail = await loadCard(d, owner, ada.id, "365");
+    expect(detail.sessions.length).toBe(ada.usage!.sessions);
+    expect(detail.sessions[0].stationName).toMatch(/^DEMO-/);
+
+    const added = await addCard(d, owner, {
+      value: "DEMO-NEW-0101",
+      kind: "vehicle",
+      name: "Sample Van 9",
+      requestId: "demo-request-000001",
+    });
+    expect(added.card.holder).toEqual({
+      kind: "vehicle",
+      name: "Sample Van 9",
+    });
+    await expect(
+      addCard(d, owner, {
+        value: "demo-new-0101",
+        kind: "driver",
+        name: "Again",
+        requestId: "demo-request-000002",
+      }),
+    ).rejects.toMatchObject({ code: "exists" });
+
+    const csv =
+      "card,holder,name\nDEMO-NEW-0102,driver,Sample Driver Eve\nDEMO-RFID-0002,driver,Sample Driver Ben B";
+    const check = await checkImport(d, owner, csv);
+    expect(check.counts).toMatchObject({ create: 1, update: 1, error: 0 });
+    expect((await loadCards(d, owner)).total).toBe(6);
+    const done = await applyImport(d, owner, csv, "demo-request-000003");
+    expect(done.counts).toMatchObject({ create: 1, update: 1 });
+    expect((await loadCards(d, owner)).total).toBe(7);
+
+    const blocked = await updateCard(d, owner, added.card.id, {
+      intent: "block",
+      revision: added.card.revision,
+      requestId: "demo-request-000004",
+    });
+    expect(blocked.card.state).toBe("blocked");
+    const until = await updateCard(d, owner, added.card.id, {
+      intent: "expiry",
+      revision: blocked.card.revision,
+      requestId: "demo-request-000005",
+      date: "2099-12-31",
+    });
+    expect(until.card.expiresAt).toBe("2100-01-01T00:00:00.000Z");
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
   it("serves demo even with credentials when DEMO_MODE is forced", async () => {
     process.env.IVORA_API_KEY = "test-key";
     process.env.IVORA_TENANT_ID = "42";
@@ -426,6 +556,35 @@ describe("demo mode", () => {
           idempotencyKey("charger", "x", "test-1-stop"),
         ),
       () => live.deleteStation(1, idempotencyKey("charger", "x", "delete")),
+      // Driver checkout: no bill, payment or start ever leaves demo mode.
+      () =>
+        live.createBill(
+          { station_id: 1, connector_id: 1, tariff_id: 1 },
+          idempotencyKey("checkout", "x", "bill"),
+        ),
+      () =>
+        live.createPayment(
+          {
+            bill_id: `bill_${"a".repeat(32)}`,
+            return_surface: "driver",
+            return_reference: "x",
+          },
+          idempotencyKey("checkout", "x", "payment"),
+        ),
+      () => live.getBill(`bill_${"a".repeat(32)}`),
+      () =>
+        live.startBill(
+          `bill_${"a".repeat(32)}`,
+          idempotencyKey("checkout", "x", "start"),
+        ),
+      () =>
+        live.quoteTariff(1, {
+          start_at: "2026-01-01T00:00:00Z",
+          time_zone: "UTC",
+          duration_minutes: 60,
+          energy_kwh: 20,
+          idle_minutes: 0,
+        }),
     ])
       await expect(call()).rejects.toThrow(/Demo mode/);
     expect(liveFetch).not.toHaveBeenCalled();

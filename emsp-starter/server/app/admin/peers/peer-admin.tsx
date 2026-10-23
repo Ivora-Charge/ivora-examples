@@ -1,7 +1,8 @@
 "use client";
 
 import type { ComponentProps } from "react";
-import { ActionCard } from "../action-card";
+import { TableWrap } from "../table-wrap";
+import { ActionCard, ErrorHelp } from "../action-card";
 import {
   connectPeerAction,
   invitePeerAction,
@@ -9,8 +10,56 @@ import {
   managePeerAction,
   syncPeerAction,
   type ActionState,
+  type ModuleSync,
   type PeerSummary,
 } from "./actions";
+
+function SyncTable({ peer, sync }: { peer: string; sync: ModuleSync[] }) {
+  return (
+    <TableWrap label={`Module sync for ${peer}`}>
+      <table>
+        <caption className="muted">Last pull per module: {peer}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Module</th>
+            <th scope="col">Last pull</th>
+            <th scope="col">Result</th>
+            <th scope="col" className="num">
+              Stored
+            </th>
+            <th scope="col" className="num">
+              Invalid
+            </th>
+            <th scope="col">Last full pull</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sync.map((m) => (
+            <tr key={m.module}>
+              <th scope="row">{m.module}</th>
+              <td>{m.lastPullAt ?? "never"}</td>
+              <td className={m.ok === false ? "flag ids" : undefined}>
+                {m.ok === null ? "-" : m.ok ? "ok" : `failed: ${m.error}`}
+                {m.running && " (part way: the next pull resumes it)"}
+              </td>
+              <td className="num">{m.items}</td>
+              <td className="num">{m.invalid}</td>
+              <td>{m.lastFullSyncAt ?? "never"}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {sync
+        .filter((m) => m.ok === false)
+        .map((m) => (
+          <div key={m.module}>
+            <p className="muted">{m.module}:</p>
+            <ErrorHelp code={m.code} nextStep={m.nextStep} />
+          </div>
+        ))}
+    </TableWrap>
+  );
+}
 
 function PeerFacts({ peer }: { peer: PeerSummary }) {
   return (
@@ -49,6 +98,12 @@ function PeerFacts({ peer }: { peer: PeerSummary }) {
           <dd>{peer.modules.join(", ")}</dd>
         </>
       )}
+      {peer.registeredAt && (
+        <>
+          <dt>Registered</dt>
+          <dd>{peer.registeredAt}</dd>
+        </>
+      )}
     </dl>
   );
 }
@@ -78,6 +133,12 @@ function Details({ state }: { state: ActionState }) {
       {state.peers?.map((p) => (
         <div key={p.id} className="peer">
           <PeerFacts peer={p} />
+          {p.demo && (
+            <p className="muted">
+              Built in: its sample data is never pulled over the network.
+            </p>
+          )}
+          {p.sync && <SyncTable peer={p.label} sync={p.sync} />}
         </div>
       ))}
     </>
@@ -98,6 +159,18 @@ function PeerCard(
 export function PeerAdmin() {
   return (
     <>
+      <PeerCard
+        id="list"
+        title="Peers and their status"
+        action={listPeersAction}
+        submit={<button type="submit">Show peers</button>}
+      >
+        <p className="muted">
+          Each peer&apos;s status, and the last pull of its locations, tariffs,
+          sessions and CDRs, with the error of a failed one.
+        </p>
+      </PeerCard>
+
       <PeerCard
         id="connect"
         title="Connect to a CPO"
@@ -200,13 +273,6 @@ export function PeerAdmin() {
           <input name="peerId" required autoComplete="off" />
         </label>
       </PeerCard>
-
-      <PeerCard
-        id="list"
-        title="Peers"
-        action={listPeersAction}
-        submit={<button type="submit">Show peers</button>}
-      />
     </>
   );
 }

@@ -7,6 +7,7 @@ import type { LiveDeps } from "./service";
 import { createSupabaseLiveStore } from "./supabase";
 
 export * from "./service";
+export * from "./transactions";
 export { LiveError } from "./types";
 export type * from "./types";
 
