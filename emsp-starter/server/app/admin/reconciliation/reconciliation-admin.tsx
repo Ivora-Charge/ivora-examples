@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { TableWrap } from "../table-wrap";
 import { ActionCard } from "../action-card";
 import {
   reconcileAction,
@@ -25,7 +26,7 @@ const REVIEW_TEXT: Record<string, string> = {
 function Lines({ lines, caption }: { lines: ReconLine[]; caption: string }) {
   if (!lines.length) return null;
   return (
-    <div className="table-wrap">
+    <TableWrap label={caption}>
       <table>
         <caption className="muted">{caption}</caption>
         <thead>
@@ -103,7 +104,7 @@ function Lines({ lines, caption }: { lines: ReconLine[]; caption: string }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 
@@ -154,7 +155,7 @@ function Flagged({ items }: { items: FlaggedPayment[] }) {
   return (
     <section aria-label="Flagged payments">
       <h3>Payments flagged for review</h3>
-      <div className="table-wrap">
+      <TableWrap label="Flagged payments table">
         <table>
           <thead>
             <tr>
@@ -185,7 +186,7 @@ function Flagged({ items }: { items: FlaggedPayment[] }) {
             ))}
           </tbody>
         </table>
-      </div>
+      </TableWrap>
     </section>
   );
 }

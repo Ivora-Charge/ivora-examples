@@ -10,3 +10,4 @@ playwright-report
 supabase/.temp
 .env.e2e.local
 !.env.e2e.example
+.vercel

@@ -1,6 +1,7 @@
 "use client";
 
 import type { ComponentProps } from "react";
+import { TableWrap } from "../table-wrap";
 import { ActionCard, ErrorHelp } from "../action-card";
 import {
   connectPeerAction,
@@ -15,7 +16,7 @@ import {
 
 function SyncTable({ peer, sync }: { peer: string; sync: ModuleSync[] }) {
   return (
-    <div className="table-wrap">
+    <TableWrap label={`Module sync for ${peer}`}>
       <table>
         <caption className="muted">Last pull per module: {peer}</caption>
         <thead>
@@ -56,7 +57,7 @@ function SyncTable({ peer, sync }: { peer: string; sync: ModuleSync[] }) {
             <ErrorHelp code={m.code} nextStep={m.nextStep} />
           </div>
         ))}
-    </div>
+    </TableWrap>
   );
 }
 

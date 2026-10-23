@@ -115,3 +115,25 @@ test("demo: refunds need a reason and have an audit log; drivers can be looked u
   await expect(driver.getByRole("status")).toContainText("Driver found.");
   await expect(driver).toContainText("active (may charge)");
 });
+
+test("demo: a wide table says when it scrolls, and then takes focus", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto("/admin/sessions");
+  const list = page.getByRole("region", { name: "Live and recent sessions" });
+  await list.getByLabel("Status").selectOption("all");
+  await list.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
+  await list.getByRole("button", { name: "Show sessions" }).click();
+  const table = list.getByRole("region", { name: "Sessions table" });
+  await expect(table.getByRole("table")).toBeVisible();
+  const hint = list.getByText("Scroll sideways for more columns");
+  if (isMobile) {
+    await expect(hint).toBeVisible();
+    await expect(table).toHaveAttribute("tabindex", "0");
+  }
+  // The hint and the tab stop show exactly when the table is wider than its card.
+  const scrolls = await table.evaluate((el) => el.scrollWidth > el.clientWidth);
+  await expect(hint).toHaveCount(scrolls ? 1 : 0);
+  if (!scrolls) await expect(table).not.toHaveAttribute("tabindex");
+});

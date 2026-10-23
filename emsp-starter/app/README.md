@@ -1,6 +1,6 @@
 # eMSP Starter: driver app (Kilolane)
 
-> **In progress** (part 11 of 13). See the [template README](../README.md) for what the eMSP Starter is and how the server and the app fit together.
+See the [template README](../README.md) for what the eMSP Starter is, who it is for, and how the server and the app fit together.
 
 The driver app of the eMSP Starter, built with Expo and expo-router: iOS, Android and a web build from one codebase. It talks only to your eMSP Starter server's API; it holds no keys and never reads the database. Its brand, **Kilolane**, comes from the [design brief](../docs/brief/BRIEF.md) and lives in `brand/tokens.json`.
 
@@ -18,7 +18,7 @@ Charging (offline demo):
 | ![A charge in progress on a phone, light mode](docs/charging-phone-light.png)   | ![A charge in progress on a phone, dark mode](docs/charging-phone-dark.png)   |
 | ![A charge in progress on desktop, light mode](docs/charging-desktop-light.png) | ![A charge in progress on desktop, dark mode](docs/charging-desktop-dark.png) |
 
-## What it does today
+## What it does
 
 - **Shell:** four tabs (Map, Charging, Wallet, Account), at the bottom on phones and in a rail on wide screens.
 - **Map first:** a map of chargers with clusters, and the same places in a list. On phones the list, search and filters sit in a bottom sheet in thumb reach (drag the handle, or tap it); on wide screens they sit in a panel beside the map.
@@ -26,7 +26,7 @@ Charging (offline demo):
 - **Charger page:** connectors with their EVSE IDs and status, the price from the CPO's tariff, rounded to the currency's minor unit (€0.71; with VAT when the CPO gives the rate, and every other component and condition), opening hours with "open now", directions in the device's maps app, **Charge here** (sign in first), a **favourite** star and **Report a problem**.
 - **Passwordless sign-in** with the server's email code ([server README](../server/README.md#driver-accounts-and-sign-in)): the same answer for every address, so the app never tells who has an account; rate limits are the server's, and a `429` shows how long to wait. Sessions are kept in the keychain or keystore on phones and in `sessionStorage` on the web (see "Sessions on the web" below). The app refreshes the session shortly before its access token expires; being offline or a server error keeps the driver signed in and tries again later, and only a refresh token the server turns down (`400` or `401`) signs the driver out.
 - **Start charging** (Charging tab, "Scan or enter a charger"): scan the charger's QR code with the camera (phones; a bare EVSE ID, a link with one, or a charger reference) or type the charger or EVSE ID. The confirm screen picks the scanned EVSE's connector (or the first free one), and shows its price, **the hold the server will place** on the card (from `GET /api/v1/charges/quote`) and the card that pays. **Start charging** sends one request with its own request ID: the server places the hold, then sends START_SESSION. A refused card, a charger that refuses app starts, one in use or out of order, and no answer each have their own words; a refused card is never told as a charger fault.
-- **Live session** (Charging tab): starting, charging, stopping, finished; kWh, time, the cost so far as the CPO reports it, and the battery and power when the CPO's live-data adapter gives them (part 9). **Stop charging** sends STOP_SESSION through the server. The tab asks the server every 3 seconds and finds the charge again after a restart (`GET /api/v1/charges/active`).
+- **Live session** (Charging tab): starting, charging, stopping, finished; kWh, time, the cost so far as the CPO reports it, and the battery and power when the CPO's live-data adapter gives them. **Stop charging** sends STOP_SESSION through the server. The tab asks the server every 3 seconds and finds the charge again after a restart (`GET /api/v1/charges/active`).
 - **Declined higher hold:** when the server reports `hold_increment_declined`, the live screen, the history entry and the receipt say "Your card didn't approve more charging; session stopped at €25.00." (the amount in the device's locale and the payment's currency), never as a charger fault, and the phone gets the same push notification.
 - **Push notifications** (iOS and Android, Expo notifications): charging finished, a start or stop that failed, a declined higher hold. The app asks for permission when the driver starts a charge (or from Account), saves the device's Expo push token on the server with the device's language, and forgets it at sign-out. While the app is open it shows the news itself. The web build has no push; the offline demo saves nothing.
 - **Wallet:** saved cards (brand, last 4, expiry) as Stripe holds them, choose the card that pays, remove one, and **Add a card** with Stripe's PaymentSheet (phones; the web build says to add cards in the phone app). Receipts of past charges.
@@ -105,9 +105,27 @@ On the web, MapLibre runs its tile work in a Web Worker from its own file; `npm 
 
 ## Deploy
 
-- **Web:** `npm run build` writes a static single-page site to `dist/`. Host it anywhere that serves static files, with a rewrite of unknown paths to `/index.html` so links such as `/account` open the app.
-- **Content-Security-Policy (web):** the build puts a strict policy in `dist/index.html` as a `<meta>` tag and writes the same one to `dist/_headers` (read by hosts that support that file). Where your host lets you set headers, send it as a `Content-Security-Policy` header too, with `frame-ancestors 'none'` (a `<meta>` policy cannot set that). Scripts come only from the site (no inline script, no `eval`); styles allow inline ones, which React Native Web writes at run time; `connect-src` allows only the site, `EXPO_PUBLIC_API_URL` and the map (OpenFreeMap by default, or the origins of `EXPO_PUBLIC_MAP_STYLE_URL` and `_DARK`). If your map style loads tiles, glyphs or sprites from other hosts, list their origins in `MAP_CONNECT_SRC` (build time only, space-separated). `scripts/csp.mjs` makes the policy, `tests/csp.test.ts` checks it, and the e2e tests run the app under it.
-- **iOS and Android:** build with [EAS Build](https://docs.expo.dev/build/introduction/) from your own Expo account. CI makes no native store builds.
+### Web, on Vercel
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fapp&project-name=emsp-starter-app&repository-name=emsp-starter-app)
+
+The button deploys the web build as a static site (`vercel.json`: `npm run build`, `dist/`, every path opening the app). With no variables it is the offline demo. To connect it to your server, set `EXPO_PUBLIC_API_URL` (and the map variables, if any) in the project's environment settings and redeploy: `EXPO_PUBLIC_` values are built in, so a change needs a new build. Add the site's origin to the server's `APP_ORIGINS`.
+
+Any other static host works too: `npm run build` writes a single-page site to `dist/`; serve it with a rewrite of unknown paths to `/index.html` so links such as `/account` open the app.
+
+**Content-Security-Policy.** The build puts a strict policy in `dist/index.html` as a `<meta>` tag and writes the same one to `dist/_headers` (read by hosts that support that file). Where your host lets you set headers, send it as a `Content-Security-Policy` header too, with `frame-ancestors 'none'` (a `<meta>` policy cannot set that). Scripts come only from the site (no inline script, no `eval`); styles allow inline ones, which React Native Web writes at run time; `connect-src` allows only the site, `EXPO_PUBLIC_API_URL` and the map (OpenFreeMap by default, or the origins of `EXPO_PUBLIC_MAP_STYLE_URL` and `_DARK`). If your map style loads tiles, glyphs or sprites from other hosts, list their origins in `MAP_CONNECT_SRC` (build time only, space-separated). `scripts/csp.mjs` makes the policy, `tests/csp.test.ts` checks it, and the e2e tests run the app under it. On Vercel, `vercel.json` sends `frame-ancestors 'none'`, `nosniff` and a referrer policy as headers; the rest of the policy stays in the `<meta>` tag, because it depends on the build's `EXPO_PUBLIC_` values.
+
+### iOS and Android, with Expo EAS
+
+The native apps are built with [EAS Build](https://docs.expo.dev/build/introduction/) and submitted with [EAS Submit](https://docs.expo.dev/submit/introduction/), from your own Expo account. CI makes no native store builds.
+
+1. Make it yours first: `expo.name`, `slug` and `scheme` in `app.json`, an `ios.bundleIdentifier` and an `android.package` under your own domain (for example `com.yournetwork.app`), icons and a splash screen (see [Make it yours](../README.md#make-it-yours-in-5-minutes)).
+2. `npx eas-cli login`, then `npx eas init`: it links the app to an EAS project and writes `extra.eas.projectId` into `app.json` (push notifications need it).
+3. Set `EXPO_PUBLIC_API_URL` (and the map variables) for the build, as [EAS environment variables](https://docs.expo.dev/eas/environment-variables/) or in `eas.json`. Never put a secret there.
+4. `npx eas build --profile preview` makes builds to install on test phones; `npx eas build --profile production` makes store builds (`eas.json`; build numbers are kept by EAS).
+5. `npx eas submit --profile production` sends them to App Store Connect and Google Play.
+
+**Store submission needs your own developer accounts:** an [Apple Developer Program](https://developer.apple.com/programs/) membership for the App Store and TestFlight, and a [Google Play Console](https://play.google.com/console/) account for Google Play, in your network's name. EAS can make and keep the signing credentials (`eas credentials`), including the APNs key and FCM credentials push needs. The stores also ask for your own listing, screenshots, privacy policy and data-safety answers: the app collects an email address, saved cards (held by Stripe), a push token and, when the driver allows it, location while the app is in use and photos for problem reports.
 
 ## Sessions on the web
 
@@ -127,7 +145,7 @@ The stronger model is an `httpOnly`, `Secure`, `SameSite` cookie that page scrip
 ```sh
 npm run format:check && npm run typecheck && npm test && npm run build
 npx playwright install chromium && npm run test:e2e        # serves dist/ offline, desktop 1440 px and phone 390 px
-SCREENSHOT=1 npm run test:e2e -- screenshots              # redraws docs/*.png (needs the network for map tiles)
+SCREENSHOT=1 npm run test:e2e -- screenshots              # redraws docs/*.png (after npm run build; needs the network for map tiles)
 ```
 
 Tests never need credentials. The e2e tests block the map tiles, so they need no network either.

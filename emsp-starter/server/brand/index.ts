@@ -23,12 +23,20 @@ const colors = (palette: Record<string, string>) =>
 /**
  * The tokens as CSS custom properties (`--color-primary`, `--space-md`, ...), set on
  * `:root` by the root layout. Stylesheets use only these variables. `colorDark`
- * replaces the colours when the device is in dark mode.
+ * replaces the colours when the device is in dark mode. `loaded` puts the
+ * self-hosted fonts (brand/fonts.ts) first in each `--font-*` stack.
  */
-export function cssVariables(b: Brand = brand): string {
+export function cssVariables(
+  b: Brand = brand,
+  loaded: Partial<Record<string, string>> = {},
+): string {
   const lines: string[] = [colors(b.color)];
-  for (const [k, v] of Object.entries(b.font))
-    lines.push(`--font-${kebab(k)}: ${fontStack(v)};`);
+  for (const [k, v] of Object.entries(b.font)) {
+    const stack = fontStack(v);
+    lines.push(
+      `--font-${kebab(k)}: ${loaded[k] ? `${loaded[k]}, ${stack}` : stack};`,
+    );
+  }
   for (const [k, v] of Object.entries(b.fontSize))
     lines.push(`--font-size-${k}: ${v / 16}rem;`);
   for (const [k, v] of Object.entries(b.fontWeight))

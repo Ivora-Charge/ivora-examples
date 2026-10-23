@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ComponentProps } from "react";
+import { TableWrap } from "../table-wrap";
 import { ActionCard } from "../action-card";
 import {
   decideAction,
@@ -82,7 +83,7 @@ function PaymentFacts({ p }: { p: PaymentSummary }) {
 function AuditLog({ lines }: { lines: AuditLine[] }) {
   if (!lines.length) return null;
   return (
-    <div className="table-wrap">
+    <TableWrap label="Audit log table">
       <table>
         <caption className="muted">Audit log, newest first</caption>
         <thead>
@@ -104,7 +105,7 @@ function AuditLog({ lines }: { lines: AuditLine[] }) {
           ))}
         </tbody>
       </table>
-    </div>
+    </TableWrap>
   );
 }
 

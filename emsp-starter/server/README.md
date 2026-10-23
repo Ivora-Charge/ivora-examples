@@ -1,12 +1,14 @@
 # eMSP Starter: server
 
-> **In progress** (part 11 of 13). See the [template README](../README.md) for what the eMSP Starter is and how the server and the app fit together.
+See the [template README](../README.md) for what the eMSP Starter is, who it is for, and how the server and the app fit together.
 
 The Next.js server of the eMSP Starter: OCPI 2.2.1 eMSP endpoints, the REST API for the driver app, the admin web, and the Supabase migrations.
 
-![Demo: admin overview with the demo banner and the OCPI identity](docs/screenshot.png)
+| Desktop, light                                                                                            | Desktop, dark                                                            |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| ![Demo: admin overview with the demo banner and the OCPI identity](docs/admin-overview-desktop-light.png) | ![Demo: admin overview, dark mode](docs/admin-overview-desktop-dark.png) |
 
-## What it does today
+## What it does
 
 - **Admin web shell:** an Overview with the eMSP's OCPI identity (version, country code, party ID) and, in demo mode, the names of the variables live mode still needs.
 - **API:** `GET /api/v1/status` returns the mode, the network name and the OCPI identity. It holds no secrets, so any origin may read it. `GET /api/v1/locations` searches charging locations; see [Locations and tariffs](#locations-and-tariffs). The driver API (sign-in, cards, charges, payments) needs the driver's token; see [Driver API](#driver-api).
@@ -21,7 +23,7 @@ The Next.js server of the eMSP Starter: OCPI 2.2.1 eMSP endpoints, the REST API 
 - **Payments:** saved cards on the network's own Stripe account, a card hold before every app start, capture from the session's CDR, release, refunds, admin review, optional incremental authorization, email receipts and a signed webhook. See [Payments](#payments). **The owner merges changes here.**
 - **Live data:** an optional, read-only live-data adapter per CPO peer for what OCPI lacks, such as state of charge. The null adapter is the default; an Ivora API adapter is included. See [Live data](#live-data-state-of-charge).
 - **Admin sign-in** (`/admin/sign-in`): the same passwordless sign-in for users in the admin role table (`emsp_admins`). `ADMIN_SECRET` still works while it is set.
-- **Driver app API** (part 11): the hold before a start, the charge in progress with its session and live data, history, receipts from the CDR (emailed again on request), push notifications, favourites and problem reports. See [Driver API](#driver-api). Demo mode plays the mock CPO's side of a charge ([Demo charging](#demo-charging)).
+- **Driver app API:** the hold before a start, the charge in progress with its session and live data, history, receipts from the CDR (emailed again on request), push notifications, favourites and problem reports. See [Driver API](#driver-api). Demo mode plays the mock CPO's side of a charge ([Demo charging](#demo-charging)).
 - **Admin web**, for admins only (see [Admin web](#admin-web)): CPO peers with their status and the last pull and error of each module; live and recent sessions; payments, refunds and their audit log; CDR reconciliation per peer with a CSV; drivers and tokens, with block and unblock; each peer's live-data adapter; problems drivers report from the app. Every error shows its code (the CPO's OCPI status code when it gave one) and a next step.
 - **OCPI e2e suite** (`npm run test:ocpi-e2e`): the whole path from handshake to refund, run against the mock CPO in CI and against any CPO's sandbox when you configure one. See [End-to-end tests against a CPO](#end-to-end-tests-against-a-cpo).
 
@@ -262,18 +264,18 @@ Admin pages read and change data only through server actions behind the admin ga
 | **CPO peers** (`/admin/peers`)                   | Every peer with its status, parties, modules, and the last pull of its locations, tariffs, sessions and CDRs: when, how many stored and invalid, the last full pull, and a failed pull's error with its code and next step. Connect to a CPO, create a Token A, rotate tokens, unregister, pull locations and tariffs.                                                                                                                                                              |
 | **Sessions** (`/admin/sessions`)                 | Live (active, pending, reserved) and recent sessions, newest start first, 100 at a time; filter by status, peer ID, driver reference and "started before" (a UTC day or timestamp). The form keeps the filters of the last list, and **Show older sessions** pages back by start time (a page may repeat the last session of the one before, never skip one). Each shows the CPO's session ID, kWh, the CPO's cost, location, driver and charge (command) ID.                       |
 | **Payments and refunds** (`/admin/payments`)     | Payments to review, look up a payment, **refund** part of a payment or everything left, always **with a reason**, capped at what was captured and idempotent by the form's request ID (kept while the outcome is unknown, so sending the form again retries the same refund, with the same amount even for "everything left"; a new one once it is known); the **audit log** of a payment (every hold, capture and refund, who did it and why); decide a held payment under review. |
-| **CDR reconciliation** (`/admin/reconciliation`) | Per peer and UTC day (at most 92 days): sessions vs CDRs vs captured amounts. Totals per peer, then each mismatch with its IDs (completed sessions without a CDR, CDRs without a session, of a token we did not issue or in another currency, CDRs of our drivers with no payment, payments whose capture is not the CDR total), the payments flagged for review (part 7), and a **CSV export** (one row per peer, day and currency).                                               |
+| **CDR reconciliation** (`/admin/reconciliation`) | Per peer and UTC day (at most 92 days): sessions vs CDRs vs captured amounts. Totals per peer, then each mismatch with its IDs (completed sessions without a CDR, CDRs without a session, of a token we did not issue or in another currency, CDRs of our drivers with no payment, payments whose capture is not the CDR total), the payments flagged for review, and a **CSV export** (one row per peer, day and currency).                                                        |
 | **Drivers and tokens** (`/admin/tokens`)         | **Block or unblock a driver** (their account: real-time authorization answers `NOT_ALLOWED` and the app refuses to start), look up a driver's tokens, create an app token, add an RFID card, block or unblock a token, change its whitelist, retry missed pushes.                                                                                                                                                                                                                   |
 | **Reported problems** (`/admin/problems`)        | Problems drivers report from the app (category, words, charger, optional photo), open or resolved, newest first; look one up with its photo; **mark it resolved** (who did it goes to the report and the audit log, never the driver's words).                                                                                                                                                                                                                                      |
 | **Live data** (`/admin/live-data`)               | Set, list and remove a peer's live-data adapter (see [Live data](#live-data-state-of-charge)).                                                                                                                                                                                                                                                                                                                                                                                      |
 
-Demo-mode screenshots (the admin web has one, light, theme; see [Make it yours](../README.md#make-it-yours-in-5-minutes)):
+Demo-mode screenshots. The admin web follows the device's light or dark mode, with the brand's `color` and `colorDark` tokens (see [Make it yours](../README.md#make-it-yours-in-5-minutes)), and works on a phone.
 
-| CPO peers                                                            | Sessions                                                      |
-| -------------------------------------------------------------------- | ------------------------------------------------------------- |
-| ![CPO peers and their status](docs/admin-peers.png)                  | ![Live and recent sessions](docs/admin-sessions.png)          |
-| **Refund** (an error, with its code and next step)                   | **CDR reconciliation**                                        |
-| ![A refund error with its code and next step](docs/admin-refund.png) | ![CDR reconciliation per peer](docs/admin-reconciliation.png) |
+| Page                   | Desktop, light                                                                     | Desktop, dark                                                                    | Phone, light                                                                   | Phone, dark                                                                  |
+| ---------------------- | ---------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| **CPO peers**          | ![CPO peers and their status, light](docs/admin-peers-desktop-light.png)           | ![CPO peers and their status, dark](docs/admin-peers-desktop-dark.png)           | ![CPO peers on a phone, light](docs/admin-peers-phone-light.png)               | ![CPO peers on a phone, dark](docs/admin-peers-phone-dark.png)               |
+| **Sessions**           | ![Live and recent sessions, light](docs/admin-sessions-desktop-light.png)          | ![Live and recent sessions, dark](docs/admin-sessions-desktop-dark.png)          | ![Sessions on a phone, light](docs/admin-sessions-phone-light.png)             | ![Sessions on a phone, dark](docs/admin-sessions-phone-dark.png)             |
+| **CDR reconciliation** | ![CDR reconciliation per peer, light](docs/admin-reconciliation-desktop-light.png) | ![CDR reconciliation per peer, dark](docs/admin-reconciliation-desktop-dark.png) | ![Reconciliation on a phone, light](docs/admin-reconciliation-phone-light.png) | ![Reconciliation on a phone, dark](docs/admin-reconciliation-phone-dark.png) |
 
 **Errors.** Every failed admin action shows its message, a **code** and a **next step** (`lib/admin/errors.ts`). The code is the CPO's OCPI status code when it answered with one (`OCPI 2001`: invalid or missing parameters; `OCPI 3003`: no matching endpoints, and so on), else the HTTP status it answered with (`HTTP 401`: it refused our token), else our own (`demo_mode`, `invalid_input`, `not_found`, `no_ocpi_response`, `wrong_secret`, `stripe_no_answer`, `above_captured`, ...). A failed pull keeps its OCPI status code with its result, so the peer list shows it later too.
 
@@ -323,7 +325,7 @@ All need the driver's Bearer token; answers are JSON, `no-store`.
 | `GET /api/v1/payments`                                                    | The driver's payments, newest first, with the stop reason when we stopped a session.                                                                                                              |
 | `GET /api/v1/charges/quote`                                               | `?locationId&evseUid&connectorId`: the hold a start there would place (currency, amount), before the driver confirms.                                                                             |
 | `GET /api/v1/charges/active`                                              | The charge in progress (a start still open, or one whose session runs), or `null`.                                                                                                                |
-| `GET /api/v1/charges/{id}/session`                                        | The start's session: status, kWh, start and end, the CPO's running cost (minor units), live data (part 9), the payment.                                                                           |
+| `GET /api/v1/charges/{id}/session`                                        | The start's session: status, kWh, start and end, the CPO's running cost (minor units), live data, the payment.                                                                                    |
 | `GET /api/v1/charges/{id}/receipt`                                        | The receipt from the start's CDR and the payment's own figures (held, charged, refunded, why we stopped it). `409` until the CDR came.                                                            |
 | `POST /api/v1/charges/{id}/receipt/email`                                 | Emails the receipt again (3 per driver per hour). `503` without email receipts.                                                                                                                   |
 | `GET /api/v1/history`                                                     | The driver's charges with a payment, newest first: place, session, payment, whether a receipt is ready, the stop code.                                                                            |
@@ -376,11 +378,11 @@ In demo mode the server plays the mock CPO's side of a charge (`lib/driver-app/d
 
 **Webhook** (`POST /api/webhooks/stripe`): every request is checked against `STRIPE_WEBHOOK_SECRET` (the `Stripe-Signature` HMAC, at most 5 minutes old), and each event is handled once by its ID (`emsp_stripe_events`). Subscribe to `payment_intent.amount_capturable_updated`, `payment_intent.canceled`, `payment_intent.succeeded`, `payment_intent.payment_failed`, `charge.refunded`, `charge.expired`, `charge.dispute.created`, `refund.created`, `refund.updated`, `refund.failed` and `setup_intent.succeeded`. On an older API version without the `refund.*` events, `charge.refund.updated` does the same.
 
-**Events** (`events.ts`), for the app (part 11): `payment.captured`, `payment.released`, `payment.review` and `hold_increment_declined`.
+**Events** (`events.ts`), for the app: `payment.captured`, `payment.released`, `payment.review` and `hold_increment_declined`.
 
 ### Incremental authorization
 
-**Off by default** (`STRIPE_INCREMENTAL_AUTH`). When on, the hold asks for incremental authorization (`payment_method_options[card][request_incremental_authorization]=if_available`), and Stripe says per payment whether the card allows it (`incremental_authorization.status` on the charge). For such a payment, when a running session's cost (the CPO's `total_cost` on the session) reaches `HOLD_INCREMENT_AT_PERCENT` of the hold, the hold is raised by another `HOLD_AMOUNTS` step (`increment_authorization`, key `emsp:<command>:increment:<n>`). If a raise is **declined**, or Stripe's limit of 10 attempts per PaymentIntent is reached, we send STOP_SESSION (part 5), store the reason on the session and the payment (shown in the history and the receipt), flag the payment (`increment_declined`) and emit `hold_increment_declined` with the amount still authorised. Nothing is ever charged beyond what was authorised.
+**Off by default** (`STRIPE_INCREMENTAL_AUTH`). When on, the hold asks for incremental authorization (`payment_method_options[card][request_incremental_authorization]=if_available`), and Stripe says per payment whether the card allows it (`incremental_authorization.status` on the charge). For such a payment, when a running session's cost (the CPO's `total_cost` on the session) reaches `HOLD_INCREMENT_AT_PERCENT` of the hold, the hold is raised by another `HOLD_AMOUNTS` step (`increment_authorization`, key `emsp:<command>:increment:<n>`). If a raise is **declined**, or Stripe's limit of 10 attempts per PaymentIntent is reached, we send STOP_SESSION, store the reason on the session and the payment (shown in the history and the receipt), flag the payment (`increment_declined`) and emit `hold_increment_declined` with the amount still authorised. Nothing is ever charged beyond what was authorised.
 
 Where it works, per [Stripe's documentation](https://docs.stripe.com/payments/incremental-authorization) (check it before you switch this on):
 
@@ -414,7 +416,7 @@ Test-mode keys only ever reach test-mode data. Switch to live keys only after yo
 3. Apply the migration `202610220007_accounts_payments.sql`.
 4. Set `CRON_SECRET` and a cron for `/api/cron/ocpi-sync`, so missed CDRs settle and uncertain holds are released.
 5. For receipts, verify your sending domain at Resend and set `RESEND_API_KEY` and `RECEIPT_FROM`.
-6. For the driver app (part 11), apply `202610220009_driver_app.sql`, and for push notifications set `EXPO_ACCESS_TOKEN` (see [Push notifications](#push-notifications)).
+6. For the driver app, apply `202610220009_driver_app.sql`, and for push notifications set `EXPO_ACCESS_TOKEN` (see [Push notifications](#push-notifications)).
 
 ## Live data (state of charge)
 
@@ -529,9 +531,17 @@ npm run test:ocpi-e2e   # loads .env.e2e.local; prints the lane, never a value
 
 ## Deploy
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter)
+The server and the admin web deploy together as one Vercel project:
 
-The button deploys the server in demo mode. To go live, apply the migrations, add the variables above in the project's environment settings and redeploy. For the scheduled pull and the payment sweep, set `CRON_SECRET` and add a cron for `/api/cron/ocpi-sync`. For payments, see [Go live with payments](#go-live-with-payments).
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter&env=EMSP_COUNTRY_CODE,EMSP_PARTY_ID,PUBLIC_BASE_URL,SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,OCPI_TOKEN_ENCRYPTION_KEY&envDescription=Live-mode%20settings.%20Type%20demo%20in%20any%20you%20don%27t%20have%20yet%3A%20the%20server%20stays%20in%20demo%20mode%20until%20all%20of%20them%20are%20real.&envLink=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples%2Ftree%2Fmain%2Femsp-starter%2Fserver%23deploy)
+
+1. The button copies this folder into a new repository of yours and asks for the live-mode settings: `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID`, `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `OCPI_TOKEN_ENCRYPTION_KEY` (see [Connect real services](#connect-real-services)). Vercel takes no empty field, so type `demo` in any you don't have yet: `demo` counts as unset, and the server stays in demo mode until every one is real. `PUBLIC_BASE_URL` is the deployment's own `https://` address, so it is often `demo` the first time.
+2. To go live, apply the migrations (`npm run db:migrate` from your machine, see [Database](#database)), replace each `demo` in the project's environment settings, and redeploy. Add your first admin (see [Admin sign-in](#admin-sign-in)).
+3. For the scheduled pulls, token push retries and the payment sweep, set `CRON_SECRET` and add a cron for `/api/cron/ocpi-sync` in a `vercel.json` (Vercel Cron sends the header itself). The template ships none, because Vercel's free plan runs crons at most once a day.
+4. For payments, add the Stripe variables and the webhook; see [Go live with payments](#go-live-with-payments). For receipts and push, add `RESEND_API_KEY`, `RECEIPT_FROM` and `EXPO_ACCESS_TOKEN`. For the app's web build, add its origin to `APP_ORIGINS`.
+5. Give your CPOs the versions URL from **CPO peers**, or connect to theirs.
+
+For a public demo, set `DEMO_MODE=true` and nothing else. The driver app deploys separately: see the [app README](../app/README.md#deploy).
 
 ## What it uses
 
@@ -577,6 +587,7 @@ Ask the CPO for a key with `billing:read` and no other scope. The adapter sends 
 npm run format:check && npm run typecheck && npm run check:migrations && npm test && npm run build
 npm run test:ocpi-e2e                                 # the OCPI e2e suite, against the mock CPO
 npx playwright install chromium && npm run test:e2e   # offline demo run, desktop and mobile
+SCREENSHOT=1 npm run test:e2e -- screenshots          # redraws docs/admin-*.png (after npm run build)
 ```
 
 Tests never need credentials or network access. The OCPI e2e suite talks to a real CPO only when you configure one; see [End-to-end tests against a CPO](#end-to-end-tests-against-a-cpo).
