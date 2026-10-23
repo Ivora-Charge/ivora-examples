@@ -7,9 +7,11 @@ import { authCookieOptions } from "@/lib/server/supabase";
  * Pages anyone may open: everything else needs a signed-in staff member. /c/ is where
  * QR stickers lead drivers; /api/webhooks/ is where Ivora delivers signed events (the
  * route verifies each signature itself); /api/cron/ is the settlement sweep (the route
- * checks its bearer secret itself).
+ * checks its bearer secret itself). An entry ending in / covers everything under it;
+ * the others match only that exact page.
  */
 const PUBLIC = [
+  "/welcome",
   "/login",
   "/setup",
   "/invite",
@@ -47,8 +49,14 @@ export async function proxy(request: NextRequest) {
   );
   const { data } = await supabase.auth.getClaims();
   const path = request.nextUrl.pathname;
-  if (!data?.claims?.sub && !PUBLIC.some((p) => path.startsWith(p))) {
-    const login = NextResponse.redirect(new URL("/login", request.url));
+  if (
+    !data?.claims?.sub &&
+    !PUBLIC.some((p) => (p.endsWith("/") ? path.startsWith(p) : path === p))
+  ) {
+    // Signed-out visitors to the root see the landing page; deeper links ask for sign-in.
+    const login = NextResponse.redirect(
+      new URL(path === "/" ? "/welcome" : "/login", request.url),
+    );
     for (const c of response.cookies.getAll()) login.cookies.set(c);
     response = login;
   }

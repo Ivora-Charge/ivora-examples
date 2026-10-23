@@ -84,6 +84,8 @@
   --content-max: 1180px;
   --form-max: 28rem;
   --transition: 120ms ease-out;
+  --pulse: 1.4s;
+  --underline-hover: 2px;
 }
 :root[data-theme="light"] {
   color-scheme: light;

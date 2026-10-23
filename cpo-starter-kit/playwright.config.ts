@@ -34,7 +34,7 @@ export default defineConfig({
     },
     {
       name: "desktop-fleet-off",
-      testMatch: ["journey.spec.ts", "fleet-off.spec.ts"],
+      testMatch: ["journey.spec.ts", "fleet-off.spec.ts", "a11y.spec.ts"],
       use: {
         ...devices["Desktop Chrome"],
         baseURL: `http://localhost:${PORT_FLEET_OFF}`,
@@ -43,7 +43,7 @@ export default defineConfig({
     },
     {
       name: "mobile-fleet-off",
-      testMatch: ["journey.spec.ts", "fleet-off.spec.ts"],
+      testMatch: ["journey.spec.ts", "fleet-off.spec.ts", "a11y.spec.ts"],
       use: {
         ...devices["Pixel 7"],
         baseURL: `http://localhost:${PORT_FLEET_OFF}`,

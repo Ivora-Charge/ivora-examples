@@ -12,7 +12,7 @@ vi.mock("@/lib/server/auth", async (importOriginal) => {
   return { ...real, currentStaff: async () => who.staff };
 });
 
-const { GET } = await import("@/app/reports/export/route");
+const { GET } = await import("@/app/(staff)/reports/export/route");
 
 const staff = (role: Staff["role"]): Staff => ({
   userId: "00000000-0000-4000-8000-0000000000a1",
