@@ -69,7 +69,8 @@ const charger: Charger = {
     readAt: "2026-10-19T12:02:00Z",
     values: { HeartbeatInterval: "300", MeterValueSampleInterval: "60" },
   },
-  tariffCentsPerKwh: 35,
+  tariffMinorPerKwh: 35,
+  tariffCurrency: "CAD",
   seq: { credentials: 1, test: 1, config: 1 },
 };
 

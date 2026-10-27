@@ -6,7 +6,7 @@ import {
   type PDFFont,
 } from "pdf-lib";
 import { qrPng } from "./qr";
-import { formatCents } from "./tariff";
+import { currencyOr, formatMinor } from "./money";
 import { TEST_SESSION_LABEL, type Charger, type Site } from "./types";
 import { formatKwh } from "./units";
 
@@ -176,9 +176,9 @@ export async function reportPdf(opts: {
   heading("Price");
   line(
     "Tariff",
-    c.tariffCentsPerKwh === undefined
+    c.tariffMinorPerKwh === undefined
       ? "Not set"
-      : `${formatCents(c.tariffCentsPerKwh)} per kWh`,
+      : `${formatMinor(c.tariffMinorPerKwh, currencyOr(c.tariffCurrency))} per kWh`,
   );
 
   y -= 20;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, type ComponentProps } from "react";
+import { formatMinorAmount } from "@/lib/money-text";
 import { TableWrap } from "../table-wrap";
 import { ActionCard } from "../action-card";
 import {
@@ -38,17 +39,21 @@ function PaymentFacts({ p }: { p: PaymentSummary }) {
     ["Charge", p.commandId],
     ["Driver", p.driverRef],
     ["Status", p.status],
-    ["Hold", `${p.holdAmount} ${p.currency}`],
-    ["Authorised", `${p.authorizedAmount} ${p.currency}`],
-    ["Captured", `${p.capturedAmount} ${p.currency}`],
-    ["Refunded", `${p.refundedAmount} ${p.currency}`],
+    ["Hold", formatMinorAmount(p.holdAmount, p.currency)],
+    ["Authorised", formatMinorAmount(p.authorizedAmount, p.currency)],
+    ["Captured", formatMinorAmount(p.capturedAmount, p.currency)],
+    ["Refunded", formatMinorAmount(p.refundedAmount, p.currency)],
     [
       "CDR total",
-      p.cdrAmount === null ? null : `${p.cdrAmount} ${p.cdrCurrency}`,
+      p.cdrAmount === null
+        ? null
+        : formatMinorAmount(p.cdrAmount, p.cdrCurrency ?? p.currency),
     ],
     [
       "Not charged",
-      p.shortfallAmount ? `${p.shortfallAmount} ${p.currency}` : null,
+      p.shortfallAmount
+        ? formatMinorAmount(p.shortfallAmount, p.currency)
+        : null,
     ],
     ["Review", p.review ? (REVIEW_TEXT[p.review] ?? p.review) : null],
     ["Reviewed", p.reviewedAt],
@@ -72,7 +77,7 @@ function PaymentFacts({ p }: { p: PaymentSummary }) {
       </dl>
       {p.refunds?.map((r) => (
         <p key={r.id} className="muted">
-          Refund {r.amount} {p.currency}: {r.status}
+          Refund {formatMinorAmount(r.amount, p.currency)}: {r.status}
           {r.reason ? ` (${r.reason})` : ""}, by {r.actor} at {r.createdAt}
         </p>
       ))}
@@ -139,7 +144,8 @@ function PaymentField() {
 function AmountField({ required = true }: { required?: boolean }) {
   return (
     <label>
-      Amount in minor units (cents)
+      Amount in the payment&apos;s minor units (cents for USD, CAD and EUR;
+      whole yen for JPY; 3 decimals for KWD)
       <input
         name="amount"
         inputMode="numeric"

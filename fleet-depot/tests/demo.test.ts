@@ -101,6 +101,32 @@ describe("demo end to end", () => {
     expect(demoState(d)!.samples).toHaveLength(0);
   });
 
+  it("reports demo cost in USD and in CAD, never added together", async () => {
+    const d = await getDepot();
+    const month = d.clock!.toISOString().slice(0, 7);
+    const prev = new Date(d.clock!);
+    prev.setUTCMonth(prev.getUTCMonth() - 1, 1);
+    const rows = await report(d, prev.toISOString().slice(0, 7), "vehicle");
+    const cad = rows.filter((r) => r.currency === "CAD");
+    const usd = rows.filter((r) => r.currency === "USD");
+    expect(cad.length).toBe(3);
+    expect(usd.length).toBe(9);
+    // Each session is priced at its own flat rate (22 CAD cents, 18 USD cents per kWh)
+    // and rounded once, so a row is within half a cent per session of the total.
+    for (const r of cad)
+      expect(Math.abs(r.costMinor - r.kwh * 22)).toBeLessThanOrEqual(
+        r.sessions / 2,
+      );
+    for (const r of usd)
+      expect(Math.abs(r.costMinor - r.kwh * 18)).toBeLessThanOrEqual(
+        r.sessions / 2,
+      );
+    // Totals shown are per currency, so no row carries a currency it was not priced in.
+    expect(new Set(rows.map((r) => r.currency))).toEqual(
+      new Set(["USD", "CAD"]),
+    );
+  });
+
   it("imports and blocks cards locally without calling any service", async () => {
     const d = await getDepot();
     const r = await importDrivers(

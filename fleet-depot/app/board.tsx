@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
+import { formatMinor, formatPerKwh, mixedCurrenciesNote } from "@/lib/money";
 import type { Report, State } from "./types";
 import Timeline from "./timeline";
 import { StatusChip } from "./timeline";
@@ -668,14 +669,19 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
               </a>
             </div>
             <p className="note">
-              <small className="num">
-                Tariff {(s.settings.centsPerKwh / 100).toFixed(2)}{" "}
-                {s.settings.currency}/kWh; months are UTC.
+              <small>
+                Tariff:{" "}
+                {tariffs(s.settings).map((t) => (
+                  <span key={t} className="num" style={{ display: "block" }}>
+                    {t}
+                  </span>
+                ))}
+                Months are UTC.
               </small>
             </p>
             {!report ? (
               <div className="skel" style={{ height: 160 }} />
-            ) : report.rows.length === 0 ? (
+            ) : report.groups.length === 0 ? (
               <p className="empty">
                 No sessions in this month. Cost appears here once a charge
                 finishes.
@@ -695,9 +701,12 @@ export default function Board({ signedIn }: { signedIn: boolean }) {
               </div>
               <div>
                 <dt>Tariff</dt>
-                <dd className="num">
-                  {(s.settings.centsPerKwh / 100).toFixed(2)}{" "}
-                  {s.settings.currency}/kWh
+                <dd>
+                  {tariffs(s.settings).map((t) => (
+                    <span key={t} className="num" style={{ display: "block" }}>
+                      {t}
+                    </span>
+                  ))}
                 </dd>
               </div>
               <div>
@@ -742,28 +751,64 @@ function LoadFailed({ e, retry }: { e: LoadError; retry: () => void }) {
   );
 }
 
+/** "$0.18/kWh", plus "Toronto annex CA$0.22/kWh" for each other site tariff. */
+function tariffs(st: State["settings"]) {
+  return [
+    formatPerKwh(st.centsPerKwh, st.currency),
+    ...(st.tariffs ?? []).map(
+      (t) => `${t.name} ${formatPerKwh(t.minorPerKwh, t.currency)}`,
+    ),
+  ];
+}
+
 function CostRows({ report }: { report: Report }) {
-  const max = Math.max(1, ...report.rows.map((r) => r.costCents));
+  const note = mixedCurrenciesNote(report.groups.map((g) => g.currency));
   return (
-    <ul className="cost">
-      {report.rows.map((r) => (
-        <li key={r.key}>
-          <span className="lab">{r.label}</span>
-          <span className="num amt">
-            {(r.costCents / 100).toFixed(2)} {report.currency}
-          </span>
-          <span
-            className="costbar"
-            role="img"
-            aria-label={`${r.label}: ${(r.costCents / 100).toFixed(2)} ${report.currency}, ${r.kwh.toFixed(1)} kWh, ${r.sessions} sessions`}
-          >
-            <i style={{ width: `${(r.costCents / max) * 100}%` }} />
-          </span>
-          <small className="num">
-            {r.kwh.toFixed(1)} kWh · {r.sessions} sessions
-          </small>
-        </li>
+    <>
+      {note && (
+        <p className="note" role="note">
+          <small>{note}</small>
+        </p>
+      )}
+      {report.groups.map((g) => (
+        <CostGroup key={g.currency} group={g} labelled={!!note} />
       ))}
-    </ul>
+    </>
+  );
+}
+
+function CostGroup({
+  group,
+  labelled,
+}: {
+  group: Report["groups"][number];
+  labelled: boolean;
+}) {
+  const { currency, rows } = group;
+  const max = Math.max(1, ...rows.map((r) => r.costMinor));
+  return (
+    <>
+      {labelled && <h3 className="num">{currency}</h3>}
+      <ul className="cost" aria-label={labelled ? currency : undefined}>
+        {rows.map((r) => (
+          <li key={r.key}>
+            <span className="lab">{r.label}</span>
+            <span className="num amt">
+              {formatMinor(r.costMinor, currency)}
+            </span>
+            <span
+              className="costbar"
+              role="img"
+              aria-label={`${r.label}: ${formatMinor(r.costMinor, currency)}, ${r.kwh.toFixed(1)} kWh, ${r.sessions} sessions`}
+            >
+              <i style={{ width: `${(r.costMinor / max) * 100}%` }} />
+            </span>
+            <small className="num">
+              {r.kwh.toFixed(1)} kWh · {r.sessions} sessions
+            </small>
+          </li>
+        ))}
+      </ul>
+    </>
   );
 }

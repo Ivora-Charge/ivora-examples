@@ -5,7 +5,8 @@ import {
   mapEvent,
   stationState,
 } from "@/lib/status";
-import { formatCents, quoteCents } from "@/lib/tariff";
+import { formatMinor } from "@/lib/money";
+import { quoteMinor } from "@/lib/tariff";
 import { formatKwh, kwhTextToWh, whToKwh } from "@/lib/units";
 
 describe("status mapping", () => {
@@ -54,10 +55,10 @@ describe("units and money", () => {
   });
 
   it("quotes in integer cents, rounding once", () => {
-    expect(quoteCents(20_000, 35)).toBe(700);
-    expect(quoteCents(425, 35)).toBe(15); // 14.875 -> 15
-    expect(Number.isInteger(quoteCents(333, 7))).toBe(true);
-    expect(() => quoteCents(1000, 3.5)).toThrow();
-    expect(formatCents(700)).toBe("$7.00");
+    expect(quoteMinor(20_000, 35)).toBe(700);
+    expect(quoteMinor(425, 35)).toBe(15); // 14.875 -> 15
+    expect(Number.isInteger(quoteMinor(333, 7))).toBe(true);
+    expect(() => quoteMinor(1000, 3.5)).toThrow();
+    expect(formatMinor(700, "USD")).toBe("$7.00");
   });
 });

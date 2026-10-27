@@ -1,3 +1,4 @@
+import { currencyOr } from "./money";
 import "server-only";
 
 /** An empty value counts as unset, so `FOO=` in .env behaves like a missing variable. */
@@ -56,7 +57,7 @@ export const config = {
     return Math.round(num("TARIFF_CENTS_PER_KWH", 28));
   },
   get currency() {
-    return env("TARIFF_CURRENCY") ?? "EUR";
+    return currencyOr(env("TARIFF_CURRENCY"));
   },
 };
 

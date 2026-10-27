@@ -65,6 +65,17 @@ describe("strings", () => {
 
 describe("formats by locale", () => {
   const plain = (s: string) => s.replace(/\s/g, " ");
+  it("formats CAD, USD and a 3-decimal currency with the currency's own digits", () => {
+    expect(createI18n("en-CA").money(3500, "CAD")).toBe("$0.35");
+    expect(createI18n("en-US").money(3500, "CAD")).toBe("CA$0.35");
+    expect(createI18n("fr-CA").minor(2500, "CAD").replace(/\s/g, " ")).toBe(
+      "25,00 $",
+    );
+    expect(createI18n("en-US").minor(2500, "USD")).toBe("$25.00");
+    expect(createI18n("en-US").minor(2500, "KWD").replace(/\s/g, " ")).toBe(
+      "KWD 2.500",
+    );
+  });
   it("formats money from ten-thousandths, rounded to the currency's minor unit", () => {
     expect(createI18n("en-GB").money(7139, "EUR")).toBe("€0.71");
     expect(createI18n("en-GB").money(6050, "EUR")).toBe("€0.61");
