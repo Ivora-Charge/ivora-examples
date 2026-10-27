@@ -38,6 +38,8 @@ export function buildReport(
   labels: Record<string, string>,
 ): ReportRow[] {
   const acc = new Map<string, ReportRow>();
+  // Energy per rate inside each row, so the cost is rounded once per row, not per session.
+  const kwhByRate = new Map<string, Map<number, number>>();
   for (const t of txs) {
     if (monthOf(t.startedAt) !== month) continue;
     const key = by === "vehicle" ? t.vehicleId : t.driverId;
@@ -55,12 +57,24 @@ export function buildReport(
     const kwh = sessionKwhFromRegisters(t.meterStartWh, t.meterStopWh);
     row.sessions += 1;
     row.kwh += kwh;
-    // Price each session, then sum: a driver's sessions may use different rates.
-    row.costMinor += costMinor(kwh, rate.minorPerKwh);
+    // A driver's sessions may use different rates: keep the energy per rate.
+    const byRate = kwhByRate.get(id) ?? new Map<number, number>();
+    byRate.set(rate.minorPerKwh, (byRate.get(rate.minorPerKwh) ?? 0) + kwh);
+    kwhByRate.set(id, byRate);
     acc.set(id, row);
   }
-  return [...acc.values()]
-    .map((r) => ({ ...r, kwh: Math.round(r.kwh * 1000) / 1000 }))
+  return [...acc.entries()]
+    .map(([id, r]) => {
+      let exact = 0;
+      for (const [minorPerKwh, kwh] of kwhByRate.get(id) ?? [])
+        exact += kwh * minorPerKwh;
+      // With one rate this is costMinor(sum of kWh, rate), as before.
+      return {
+        ...r,
+        kwh: Math.round(r.kwh * 1000) / 1000,
+        costMinor: costMinor(exact, 1),
+      };
+    })
     .sort(
       (a, b) =>
         a.label.localeCompare(b.label) || a.currency.localeCompare(b.currency),

@@ -51,6 +51,7 @@ export function formatMinor(
   minor: number,
   currency: string,
   locale: string = DISPLAY_LOCALE,
+  currencyDisplay: "symbol" | "code" = "symbol",
 ): string {
   const major = minorToMajorString(minor, currency);
   try {
@@ -58,6 +59,7 @@ export function formatMinor(
     return new Intl.NumberFormat(locale, {
       style: "currency",
       currency,
+      currencyDisplay,
     }).format(major as unknown as number);
   } catch {
     return `${major} ${currency}`;

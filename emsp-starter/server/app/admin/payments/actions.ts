@@ -9,7 +9,7 @@ import {
   releaseForReview,
 } from "@/lib/payments/settle";
 import type { Payment, Refund } from "@/lib/payments/store";
-import { formatMinorAmount } from "@/lib/money-text";
+import { formatMinorAmount } from "@/lib/locations/pricing";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
 /** A payment as the admin web shows it. Amounts in minor units; never card data. */

@@ -111,15 +111,16 @@ describe("demo end to end", () => {
     const usd = rows.filter((r) => r.currency === "USD");
     expect(cad.length).toBe(3);
     expect(usd.length).toBe(9);
-    // Each session is priced at its own flat rate (22 CAD cents, 18 USD cents per kWh)
-    // and rounded once, so a row is within half a cent per session of the total.
+    // Each row has one flat rate (22 CAD cents, 18 USD cents per kWh) and its cost is
+    // rounded once, so it is within half a cent of kWh × rate (plus the 0.0005 kWh the
+    // shown kWh is rounded by).
     for (const r of cad)
       expect(Math.abs(r.costMinor - r.kwh * 22)).toBeLessThanOrEqual(
-        r.sessions / 2,
+        0.5 + 0.0005 * 22,
       );
     for (const r of usd)
       expect(Math.abs(r.costMinor - r.kwh * 18)).toBeLessThanOrEqual(
-        r.sessions / 2,
+        0.5 + 0.0005 * 18,
       );
     // Totals shown are per currency, so no row carries a currency it was not priced in.
     expect(new Set(rows.map((r) => r.currency))).toEqual(

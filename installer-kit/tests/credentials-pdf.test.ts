@@ -8,7 +8,7 @@ import {
   generatePassword,
   maskSecret,
 } from "@/lib/credentials";
-import { pdfText, reportPdf, stickerPdf } from "@/lib/pdf";
+import { pdfMoney, pdfText, reportPdf, stickerPdf } from "@/lib/pdf";
 import { TEST_SESSION_LABEL, type Charger, type Site } from "@/lib/types";
 
 describe("credentials", () => {
@@ -75,6 +75,27 @@ const charger: Charger = {
 };
 
 describe("PDFs", () => {
+  const text = async (c: Charger) => {
+    const bytes = await reportPdf({ charger: c, site, stickerBase: null });
+    const doc = await PDFDocument.load(bytes);
+    const out: string[] = [];
+    for (const ref of doc.context.enumerateIndirectObjects()) {
+      const [, obj] = ref;
+      const contents = (obj as { contents?: Uint8Array }).contents;
+      if (!contents) continue;
+      try {
+        out.push(Buffer.from(inflateSync(contents)).toString("latin1"));
+      } catch {
+        // Not a compressed stream (fonts, metadata).
+      }
+    }
+    return out.join("\n");
+  };
+  // The standard fonts write Latin-1 strings as hex.
+  const hex = (v: string) =>
+    Buffer.from(v, "latin1").toString("hex").toUpperCase();
+  const shown = (t: string, v: string) => expect(t).toContain(`<${hex(v)}> Tj`);
+
   it("renders a one-page sticker per connector", async () => {
     const bytes = await stickerPdf({
       url: "https://charge.example.com/s/ABCD2345",
@@ -125,27 +146,6 @@ describe("PDFs", () => {
   });
 
   it("labels the test session and shows the in-service time", async () => {
-    const text = async (c: Charger) => {
-      const bytes = await reportPdf({ charger: c, site, stickerBase: null });
-      const doc = await PDFDocument.load(bytes);
-      const out: string[] = [];
-      for (const ref of doc.context.enumerateIndirectObjects()) {
-        const [, obj] = ref;
-        const contents = (obj as { contents?: Uint8Array }).contents;
-        if (!contents) continue;
-        try {
-          out.push(Buffer.from(inflateSync(contents)).toString("latin1"));
-        } catch {
-          // Not a compressed stream (fonts, metadata).
-        }
-      }
-      return out.join("\n");
-    };
-    // The standard fonts write strings as hex.
-    const shown = (t: string, v: string) =>
-      expect(t).toContain(
-        `<${Buffer.from(v).toString("hex").toUpperCase()}> Tj`,
-      );
     const before = await text(charger);
     shown(before, TEST_SESSION_LABEL);
     shown(before, "Not yet");
@@ -154,6 +154,16 @@ describe("PDFs", () => {
       inServiceAt: "2026-10-19T13:00:00.000Z",
     });
     shown(after, "2026-10-19T13:00:00.000Z");
+  });
+
+  it("prints the tariff in its own currency", async () => {
+    shown(await text(charger), "CA$0.35 per kWh");
+    const eur = await text({ ...charger, tariffCurrency: "EUR" });
+    shown(eur, "EUR\u00a00.35 per kWh");
+    expect(eur).not.toContain(hex("?0.35"));
+    expect(pdfMoney(35, "EUR")).not.toContain("?");
+    expect(pdfMoney(35, "GBP")).toBe("£0.35");
+    expect(pdfMoney(35, "JPY")).toBe("¥35");
   });
 
   it("replaces characters the standard fonts cannot encode", () => {

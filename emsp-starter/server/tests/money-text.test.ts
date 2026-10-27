@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { currencyDigits, formatMinorAmount, minorText } from "@/lib/money-text";
 import { formatMinor, minorDigits, toMinor } from "@/lib/payments/money";
-import { formatMoney } from "@/lib/locations/pricing";
+import {
+  formatMinorAmount,
+  formatMoney,
+  fractionDigits,
+} from "@/lib/locations/pricing";
 import { minorToDecimal } from "@/lib/admin/reconciliation";
 
 const nbsp = (s: string) => s.replace(/ /g, " ");
@@ -14,9 +17,8 @@ describe("minor units follow the currency's exponent", () => {
     ["JPY", 0, 1350, "1350", "¥1,350"],
     ["KWD", 3, 1350, "1.350", "KWD 1.350"],
   ])("%s", (currency, digits, minor, major, shown) => {
-    expect(currencyDigits(currency)).toBe(digits);
+    expect(fractionDigits(currency)).toBe(digits);
     expect(minorDigits(currency)).toBe(digits);
-    expect(minorText(minor, currency)).toBe(major);
     expect(minorToDecimal(minor, currency)).toBe(major);
     expect(nbsp(formatMinorAmount(minor, currency))).toBe(shown);
     expect(nbsp(formatMinor(minor, currency))).toBe(shown);
@@ -25,9 +27,9 @@ describe("minor units follow the currency's exponent", () => {
   });
 
   it("pads small and negative amounts exactly", () => {
-    expect(minorText(5, "CAD")).toBe("0.05");
-    expect(minorText(5, "KWD")).toBe("0.005");
-    expect(minorText(-250, "CAD")).toBe("-2.50");
+    expect(formatMinorAmount(5, "CAD")).toBe("CA$0.05");
+    expect(nbsp(formatMinorAmount(5, "KWD"))).toBe("KWD 0.005");
+    expect(formatMinorAmount(-250, "CAD")).toBe("-CA$2.50");
   });
 
   it("formats an OCPI price (a decimal of the major unit) in its currency", () => {

@@ -6,7 +6,7 @@ import {
   type PDFFont,
 } from "pdf-lib";
 import { qrPng } from "./qr";
-import { currencyOr, formatMinor } from "./money";
+import { currencyOr, DISPLAY_LOCALE, formatMinor } from "./money";
 import { TEST_SESSION_LABEL, type Charger, type Site } from "./types";
 import { formatKwh } from "./units";
 
@@ -19,6 +19,14 @@ const RED = rgb(0.8, 0.15, 0.1);
 /** Standard PDF fonts cover Latin-1 only; replace anything else. */
 export function pdfText(value: string): string {
   return value.replace(/[^\x20-\x7E\xA0-\xFF]/g, "?");
+}
+
+/** An amount the standard fonts can print: the symbol, or the ISO code when the symbol is outside Latin-1 (e.g. "EUR 0.35"). */
+export function pdfMoney(minor: number, currency: string): string {
+  const symbol = formatMinor(minor, currency);
+  return pdfText(symbol) === symbol
+    ? symbol
+    : formatMinor(minor, currency, DISPLAY_LOCALE, "code");
 }
 
 function centered(
@@ -178,7 +186,7 @@ export async function reportPdf(opts: {
     "Tariff",
     c.tariffMinorPerKwh === undefined
       ? "Not set"
-      : `${formatMinor(c.tariffMinorPerKwh, currencyOr(c.tariffCurrency))} per kWh`,
+      : `${pdfMoney(c.tariffMinorPerKwh, currencyOr(c.tariffCurrency))} per kWh`,
   );
 
   y -= 20;

@@ -47,6 +47,27 @@ describe("reports", () => {
       },
     ]);
   });
+  it("rounds the cost once per row, not once per session", () => {
+    const half = (id: string, i: number): TxRecord => ({
+      id,
+      vehicleId: "v1",
+      driverId: "d1",
+      startedAt: `2026-03-0${i}T10:00:00Z`,
+      meterStartWh: 0,
+      meterStopWh: 500,
+    });
+    const rows = buildReport(
+      [half("h1", 1), half("h2", 2), half("h3", 3)],
+      "2026-03",
+      () => ({ currency: "USD", minorPerKwh: 1 }),
+      "vehicle",
+      labels,
+    );
+    // 3 × 0.5 kWh × 1 = 1.5, rounded once to 2 (per session it would be 3 × 1 = 3).
+    expect(rows).toHaveLength(1);
+    expect(rows[0].kwh).toBe(1.5);
+    expect(rows[0].costMinor).toBe(2);
+  });
   it("aggregates per driver", () => {
     const rows = buildReport(txs, "2026-03", usd, "driver", labels);
     expect(rows.find((r) => r.key === "d2")?.kwh).toBe(15.5);
