@@ -1,4 +1,4 @@
-import { currencyOr } from "@/lib/money";
+import { DEFAULT_CURRENCY } from "@/lib/money";
 import { CURRENCIES, TIME_ZONES } from "@/lib/locale-options";
 import { config } from "@/lib/server/env";
 import { DEMO_STRIPE_STATES } from "@/lib/server/ivora/demo";
@@ -58,7 +58,7 @@ export function CompanySection({ o }: { o: Onboarding }) {
           supportUrl: p.supportUrl ?? "",
           website: p.website ?? "",
           timeZone: p.timeZone ?? "",
-          currency: currencyOr(p.currency),
+          currency: p.currency || DEFAULT_CURRENCY,
         }}
         timeZones={TIME_ZONES}
         currencies={CURRENCIES}

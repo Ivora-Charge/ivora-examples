@@ -10,7 +10,7 @@ import {
   idleGraceDefault,
   loadTariff,
 } from "@/lib/server/pricing";
-import { holdMinor } from "@/lib/server/pricing/tariff";
+import { holdMinor, paidCurrencyNote } from "@/lib/server/pricing/tariff";
 import { FinishTariff, TariffEditor } from "../forms";
 
 export const metadata = { title: "Tariff" };
@@ -115,6 +115,7 @@ export default async function Page({
           timeZones={TIME_ZONES}
           simulation={defaultSimulation(def.timeZone)}
           locked={Boolean(t.pending)}
+          paidNote={paidCurrencyNote(def.currency, me.demo)}
         />
       </section>
       <section className="card" aria-labelledby="versions-heading">

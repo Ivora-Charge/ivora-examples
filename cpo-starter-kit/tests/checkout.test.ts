@@ -77,6 +77,8 @@ import { createMemoryLimiter } from "@/lib/server/rate-limit";
 
 const OP = "10000000-0000-4000-8000-0000000000aa";
 const CODE = "ABCD2345";
+/** A sticker on the demo's CAD sample charger (demo-mode tests only). */
+const CAD_CODE = "CADS2345";
 const BILL = `bill_${"c".repeat(32)}`;
 const CHECKOUT_URL = "https://checkout.stripe.com/c/pay/cs_test_sample";
 const OPERATOR = "Sample Charging Co";
@@ -1984,14 +1986,23 @@ describe("demo checkout", () => {
       ),
       chargers: {
         resolveCode: async (c) =>
-          c === CODE
+          c === CODE || c === CAD_CODE
             ? {
                 code: c,
                 operatorId: "demo-operator",
-                stationId: 9101,
-                connectorId: 91011,
+                ...(c === CODE
+                  ? {
+                      stationId: 9101,
+                      connectorId: 91011,
+                      chargerName: "DEMO-HARBOUR-01",
+                    }
+                  : {
+                      // The CAD sample site's charger, on "Sample: Standard (CAD)".
+                      stationId: 9104,
+                      connectorId: 91041,
+                      chargerName: "DEMO-WATERFRONT-01",
+                    }),
                 connectorNumber: 1,
-                chargerName: "DEMO-HARBOUR-01",
                 inService: true,
                 operatorName: null,
               }
@@ -2055,6 +2066,37 @@ describe("demo checkout", () => {
     expect((await driverSessions(d, CODE, [mine]))[0]).toMatchObject({
       label: "Finished",
       receipt: { charged: "$2.30", released: "$22.70", hold: "$25.00" },
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("shows a CAD session's hold, cost so far and receipt in CA$", async () => {
+    let t = Date.parse("2026-10-20T10:00:00Z");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t);
+    const { d, cookie } = demoDeps();
+    const page = await loadChargePage(d, CAD_CODE, "Sample Co");
+    expect(page).toMatchObject({ closed: null, hold: "CA$25.00" });
+    expect(page.example?.total).toMatch(/^CA\$\d+\.\d\d$/);
+    const mine = req();
+    const { url } = await pay(d, mine, CAD_CODE);
+    expect(only(cookie)).toMatchObject({ currency: "CAD", holdMinor: 2500 });
+    const payment = decodeURIComponent(url.split("/").pop()!);
+    await authorizeDemoPayment(cookieDemoFleet(), payment);
+    t += DEMO_PLUG_IN_MS + 30 * 60_000;
+    vi.setSystemTime(t);
+    // 3.7 kWh at CA$0.40 plus the CA$1.50 session fee: usage.estimated_minor 298.
+    const charging = (await driverSessions(d, CAD_CODE, [mine]))[0];
+    expect(charging).toMatchObject({ label: "Charging", estimate: "CA$2.98" });
+    expect(charging.note).toMatch(/card hold of CA\$25\.00 covers/);
+    await stopDriverSession(d, {
+      code: CAD_CODE,
+      requestId: mine,
+      requestIds: [mine],
+    });
+    expect((await driverSessions(d, CAD_CODE, [mine]))[0]).toMatchObject({
+      label: "Finished",
+      receipt: { charged: "CA$2.98", released: "CA$22.02", hold: "CA$25.00" },
     });
     expect(fetchSpy).not.toHaveBeenCalled();
   });

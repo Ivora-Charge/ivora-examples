@@ -41,6 +41,11 @@ import {
 import { resetDemoCheckoutForTests } from "@/lib/server/checkout/demo-cookie";
 import { createDemoReportsStore } from "@/lib/server/reports/demo";
 import {
+  billedFigure,
+  revenueText,
+  totalsFigures,
+} from "@/lib/server/reports/figures";
+import {
   bucketFloor,
   bucketNext,
   countBuckets,
@@ -48,6 +53,7 @@ import {
   MAX_BUCKETS,
 } from "@/lib/server/reports/time";
 import { resetDemoLiveForTests } from "@/lib/server/live/demo-cookie";
+import type { ReportTotals } from "@/lib/server/reports/types";
 import type { Staff } from "@/lib/server/team/types";
 import { whToKwhText } from "@/lib/units";
 
@@ -404,6 +410,76 @@ function memoryStore(rows: ReportCheckout[]): ReportsStore & {
     },
   };
 }
+
+describe("report money figures: one amount per currency, never added together", () => {
+  const totals = (currencies: ReportTotals["currencies"]): ReportTotals => ({
+    checkouts: 3,
+    paid: 3,
+    free: 0,
+    withSession: 3,
+    byStatus: { in_progress: 0, charged: 3, no_charge: 0, attention: 0 },
+    energyWh: 0,
+    detailsPending: 0,
+    refundsUnchecked: 0,
+    currencies,
+  });
+  const usd = {
+    currency: "USD",
+    charged: 2,
+    billedMinor: 2740,
+    capturedMinor: 2500,
+    refundedMinor: 500,
+  };
+  const cad = {
+    currency: "CAD",
+    charged: 1,
+    billedMinor: 1350,
+    capturedMinor: 1350,
+    refundedMinor: 0,
+  };
+  const mixed = /^Mixed currencies \(CAD, USD\)/;
+
+  it("shows Ivora's billed USD and CAD side by side, with the mixed note", () => {
+    const f = billedFigure({
+      currencies: [
+        { currency: "USD", billed_minor: 2740, bills: 2 },
+        { currency: "CAD", billed_minor: 1350, bills: 1 },
+      ],
+    });
+    expect(f.value).toBe("$27.40 · CA$13.50");
+    expect(f.note).toMatch(/^3 final bills\. Mixed currencies \(CAD, USD\)/);
+  });
+
+  it("has no note for one currency, and says when billing:read is missing", () => {
+    const f = billedFigure({
+      currencies: [{ currency: "CAD", billed_minor: 1350, bills: 1 }],
+    });
+    expect(f).toEqual({ value: "CA$13.50", note: "1 final bills" });
+    expect(billedFigure(null)).toEqual({
+      value: "Needs billing:read",
+      note: undefined,
+    });
+    expect(revenueText([])).toBe("None");
+  });
+
+  it("gives the kit's collected, refunded and billed per currency, each with the note", () => {
+    const f = totalsFigures(totals([usd, cad]));
+    expect(f.collected.value).toBe("$20.00 · CA$13.50");
+    expect(f.refunded.value).toBe("$5.00 · CA$0.00");
+    expect(f.billed.value).toBe("$27.40 · CA$13.50");
+    expect(f.collected.note).toMatch(/^3 charged\. Mixed currencies/);
+    expect(f.refunded.note).toMatch(mixed);
+    expect(f.billed.note).toMatch(mixed);
+  });
+
+  it("adds no note to a single-currency result", () => {
+    const f = totalsFigures(totals([cad]));
+    expect(f.collected).toEqual({ value: "CA$13.50", note: "3 charged" });
+    expect(f.refunded).toEqual({ value: "CA$0.00", note: undefined });
+    expect(f.billed).toEqual({ value: "CA$13.50", note: undefined });
+    expect(totalsFigures(totals([])).billed.value).toBe("None");
+  });
+});
 
 describe("driver revenue: captured minus refunded, never the bill", () => {
   it("counts a $0.30 bill released under Stripe's minimum as nothing collected", () => {

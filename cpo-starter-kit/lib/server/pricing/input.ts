@@ -14,6 +14,7 @@ import {
   overlappingPeriods,
   PAID_CURRENCY,
   PAID_HOLD_MINOR,
+  paidCurrencyNote,
   WEEK,
 } from "./tariff";
 import type { TariffDefinition } from "./types";
@@ -84,9 +85,19 @@ function money(
 /**
  * The editor's form to a tariff definition in `currency` (the company's currency for
  * a new tariff, the tariff's own for a new version). Money is parsed from the text as
- * integer minor units; nothing is rounded.
+ * integer minor units; nothing is rounded. Saving keeps paid tariffs in PAID_CURRENCY;
+ * the preview prices a paid tariff in any currency (it charges nothing).
  */
-export function tariffFormSchema(currency: string) {
+export function tariffFormSchema(
+  currency: string,
+  opts: {
+    purpose: "preview" | "save";
+    /** A new version of an existing tariff, which keeps its own currency. */
+    existing?: boolean;
+    /** Demo mode: the note's wording for the seeded sample. */
+    sample?: boolean;
+  } = { purpose: "save" },
+) {
   return z
     .object({
       name: z
@@ -145,11 +156,16 @@ export function tariffFormSchema(currency: string) {
             driverText,
           },
         };
-      if (currency !== PAID_CURRENCY)
+      // The preview only prices a simulated session, so it reads any currency.
+      if (opts.purpose === "save" && currency !== PAID_CURRENCY) {
+        const why = `Ivora Checkout settles card payments in US dollars, and the card hold before charging is ${formatMinor(PAID_HOLD_MINOR, PAID_CURRENCY)}.`;
         ctx.addIssue({
           code: "custom",
-          message: `Paid tariffs are in ${PAID_CURRENCY} for now: Ivora Checkout settles card payments in US dollars, and the card hold before charging is ${formatMinor(PAID_HOLD_MINOR, PAID_CURRENCY)}. Set the company currency to ${PAID_CURRENCY} in Settings, or make this tariff free.`,
+          message: opts.existing
+            ? `${paidCurrencyNote(currency, Boolean(opts.sample))} ${why}`
+            : `Paid tariffs are in ${PAID_CURRENCY} for now, and your company currency is ${currency}: ${why} Set the company currency to ${PAID_CURRENCY} in Settings, or make this tariff free.`,
         });
+      }
       const energyMinorPerKwh = money(
         ctx,
         f.energy,

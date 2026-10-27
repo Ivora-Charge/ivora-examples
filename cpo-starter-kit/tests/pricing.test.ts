@@ -57,6 +57,7 @@ import {
   generatedDriverText,
   overlappingPeriods,
   PAID_HOLD_MINOR,
+  paidCurrencyNote,
   pricedElements,
   samePrices,
   tariffInput,
@@ -464,6 +465,34 @@ describe("tariff form", () => {
     );
     // Free tariffs hold and charge nothing, in any currency.
     expect(parse({ ...FORM, kind: "free" }, "EUR").success).toBe(true);
+  });
+
+  it("previews a paid tariff in any currency, and names its currency when saving", () => {
+    const preview = tariffFormSchema("CAD", { purpose: "preview" }).safeParse(
+      FORM,
+    );
+    expect(preview.success && preview.data.definition).toMatchObject({
+      kind: "paid",
+      currency: "CAD",
+      energyMinorPerKwh: PAID.energyMinorPerKwh,
+    });
+    const message = (opts: Parameters<typeof tariffFormSchema>[1]) => {
+      const r = tariffFormSchema("CAD", opts).safeParse(FORM);
+      return r.success ? "" : r.error.issues[0].message;
+    };
+    // An existing tariff keeps its own currency: no advice to change the company's.
+    const sample = message({ purpose: "save", existing: true, sample: true });
+    expect(sample).toMatch(
+      /^Paid tariffs can be saved in USD only for now; this CAD sample shows how other currencies read\. /,
+    );
+    expect(sample).not.toMatch(/Settings/);
+    expect(message({ purpose: "save", existing: true })).toMatch(
+      /this tariff is in CAD, so make it free/,
+    );
+    expect(message({ purpose: "save" })).toMatch(
+      /your company currency is CAD: .*Set the company currency to USD in Settings/,
+    );
+    expect(paidCurrencyNote("USD", true)).toBeUndefined();
   });
 
   it("makes a free tariff zero whatever the price fields say", () => {
