@@ -19,6 +19,7 @@ const SCREENS = {
   live: "/live",
   pricing: "/pricing",
   tariff: "/pricing/demo-standard",
+  "tariff-cad": "/pricing/demo-standard-cad",
   reports: "/reports",
   cards: "/cards",
   team: "/team",

@@ -118,6 +118,16 @@ const STANDARD: TariffDefinition = {
   ],
   driverText: null,
 };
+/** The CAD sample site's tariff: the same shape as Standard, priced in Canadian dollars. */
+const STANDARD_CAD: TariffDefinition = {
+  ...STANDARD,
+  currency: "CAD",
+  timeZone: "America/Toronto",
+  energyMinorPerKwh: 40,
+  sessionFeeMinor: 150,
+  idleMinorPerMinute: 50,
+  periods: [{ ...STANDARD.periods[0], energyMinorPerKwh: 55 }],
+};
 const FREE: TariffDefinition = {
   ...STANDARD,
   kind: "free",
@@ -128,7 +138,7 @@ const FREE: TariffDefinition = {
   periods: [],
 };
 
-/** Two sample tariffs on the sample chargers; DEMO-MARKET-01 is private and free. */
+/** Three sample tariffs (one in CAD) on the sample chargers; DEMO-MARKET-01 is private and free. */
 export function demoPricingSeed(): DemoPricingState {
   return {
     v: 1,
@@ -163,6 +173,21 @@ export function demoPricingSeed(): DemoPricingState {
           },
         ],
       },
+      {
+        id: "demo-standard-cad",
+        name: "Sample: Standard (CAD)",
+        revision: 1,
+        versions: [
+          {
+            version: 1,
+            ivoraTariffId: SAMPLE_TARIFF_IDS[2],
+            attempt: 1,
+            definition: STANDARD_CAD,
+            createdAt: SEEDED_AT,
+            archivedAt: null,
+          },
+        ],
+      },
     ],
     stations: [
       {
@@ -183,6 +208,13 @@ export function demoPricingSeed(): DemoPricingState {
         stationId: 9103,
         tariffId: "demo-free",
         private: true,
+        connectors: {},
+        revision: 1,
+      },
+      {
+        stationId: 9104,
+        tariffId: "demo-standard-cad",
+        private: false,
         connectors: {},
         revision: 1,
       },

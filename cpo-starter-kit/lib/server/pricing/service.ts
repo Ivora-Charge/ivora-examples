@@ -2,6 +2,8 @@ import "server-only";
 import type { z } from "zod";
 import type { QuotePreview } from "@/lib/action-state";
 import {
+  currencyOr,
+  DEFAULT_CURRENCY,
   formatMinor,
   formatMinorDecimal,
   minorToMajorString,
@@ -32,6 +34,7 @@ import {
   driverText,
   graceMinutes,
   holdMinor,
+  PAID_CURRENCY,
   pricedElements,
   samePrices,
   summary,
@@ -363,7 +366,11 @@ function tariffView(t: KitTariff, uses: number): TariffView {
 /** The company's currency and time zone, the defaults of a new tariff. */
 async function defaults(d: PricingDeps, operatorId: string) {
   const p = await d.company.load(operatorId);
-  return { currency: p.currency ?? "USD", timeZone: p.timeZone ?? "UTC" };
+  // A company that has not picked a currency yet is normal: no warning for that.
+  return {
+    currency: p.currency || DEFAULT_CURRENCY,
+    timeZone: p.timeZone ?? "UTC",
+  };
 }
 
 /** Every tariff, and every station with which tariff each connector uses. */
@@ -469,7 +476,7 @@ export async function idleGraceDefault(
   requireManager(staff);
   const probe: TariffDefinition = {
     kind: "paid",
-    currency: "USD",
+    currency: PAID_CURRENCY,
     timeZone: base.timeZone,
     energyMinorPerKwh: 1,
     sessionFeeMinor: 0,
@@ -687,7 +694,7 @@ async function formCurrency(
   );
   if (!t) throw notFound();
   const def = pendingVersion(t)?.definition ?? currentVersion(t)?.definition;
-  return { currency: def?.currency ?? "USD", tariff: t };
+  return { currency: currencyOr(def?.currency), tariff: t };
 }
 
 /**
@@ -704,7 +711,10 @@ export async function previewTariff(
 ): Promise<QuoteView> {
   requireManager(actor);
   const { currency } = await formCurrency(d, actor, tariffId);
-  const { definition } = parse(tariffFormSchema(currency), form);
+  const { definition } = parse(
+    tariffFormSchema(currency, { purpose: "preview" }),
+    form,
+  );
   const s = parse(simulationSchema, sim);
   const q = await simulate(d, definition, sessionProfile(definition, s));
   return quoteView(q, definition, s, d.ivora.mode === "demo");
@@ -949,7 +959,14 @@ export async function saveTariff(
 ): Promise<{ id: string; result: PublishResult }> {
   requireManager(actor);
   const { currency, tariff } = await formCurrency(d, actor, tariffId);
-  const { name, definition } = parse(tariffFormSchema(currency), form);
+  const { name, definition } = parse(
+    tariffFormSchema(currency, {
+      purpose: "save",
+      existing: Boolean(tariff),
+      sample: actor.demo,
+    }),
+    form,
+  );
   let expected: number | null = null;
   if (tariff) {
     expected = revisionOf(form.revision);

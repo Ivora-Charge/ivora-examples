@@ -979,6 +979,7 @@ describe("chargers in demo mode", () => {
     const list = await loadChargers(d, owner);
     expect(list.ok && list.chargers.map((c) => c.name)).toEqual([
       "DEMO-HARBOUR-02",
+      "DEMO-WATERFRONT-01",
     ]);
   });
 

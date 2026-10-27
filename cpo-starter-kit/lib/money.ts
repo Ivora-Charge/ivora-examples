@@ -2,6 +2,41 @@
 // what staff type and format amounts for display; they never do price arithmetic
 // (Ivora prices sessions, see lib/server/pricing).
 
+/** Locale of every amount the kit shows (the app is English only): "CA$13.50" for CAD. */
+export const DISPLAY_LOCALE = "en-US";
+
+/** Used only when an API response or a stored record carries no currency. */
+export const DEFAULT_CURRENCY = "USD";
+
+let warnedDefault = false;
+/**
+ * The currency of an API response or record, or the documented default (USD) when it
+ * carries none. The fallback is logged once per process, never per amount.
+ */
+export function currencyOr(currency: string | null | undefined): string {
+  if (currency) return currency;
+  if (!warnedDefault) {
+    warnedDefault = true;
+    console.warn(
+      `cpo-starter-kit: no currency in the response, assuming ${DEFAULT_CURRENCY}`,
+    );
+  }
+  return DEFAULT_CURRENCY;
+}
+
+/**
+ * A note for a figure that is shown per currency, or undefined when there is one
+ * currency at most: amounts in different currencies are never added together.
+ */
+export function mixedCurrenciesNote(
+  currencies: readonly string[],
+): string | undefined {
+  const codes = [...new Set(currencies)].sort();
+  return codes.length > 1
+    ? `Mixed currencies (${codes.join(", ")}): one amount per currency, never added together`
+    : undefined;
+}
+
 /** Decimal places of a currency's minor unit: 2 for USD, 0 for JPY, 3 for KWD. */
 export function currencyExponent(currency: string): number {
   try {
@@ -44,16 +79,28 @@ export function minorToMajorString(minor: number, currency: string): string {
     : `${sign}${digits.slice(0, -exp)}.${digits.slice(-exp)}`;
 }
 
-/** Integer minor units for display, for example "$13.50". */
-export function formatMinor(minor: number, currency: string): string {
-  return formatMajorString(minorToMajorString(minor, currency), currency);
+/** Integer minor units for display, for example "$13.50" (or "CA$13.50" for CAD). */
+export function formatMinor(
+  minor: number,
+  currency: string,
+  locale: string = DISPLAY_LOCALE,
+): string {
+  return formatMajorString(
+    minorToMajorString(minor, currency),
+    currency,
+    locale,
+  );
 }
 
 /**
  * A decimal string of minor units, as the API returns unit prices ("35", "0.6667"),
  * for display in major units with up to 4 extra decimals: "$0.35", "$0.006667".
  */
-export function formatMinorDecimal(decimal: string, currency: string): string {
+export function formatMinorDecimal(
+  decimal: string,
+  currency: string,
+  locale: string = DISPLAY_LOCALE,
+): string {
   const m = /^(-?)(\d+)(?:\.(\d+))?$/.exec(decimal.trim());
   if (!m) return `${decimal} ${currency}`;
   const exp = currencyExponent(currency);
@@ -63,15 +110,19 @@ export function formatMinorDecimal(decimal: string, currency: string): string {
     exp === 0
       ? `${whole}${frac ? `.${frac}` : ""}`
       : `${whole.slice(0, -exp)}.${whole.slice(-exp)}${frac}`;
-  return formatMajorString(`${m[1]}${major}`, currency);
+  return formatMajorString(`${m[1]}${major}`, currency, locale);
 }
 
-function formatMajorString(major: string, currency: string): string {
+function formatMajorString(
+  major: string,
+  currency: string,
+  locale: string,
+): string {
   const decimals = major.split(".")[1]?.length ?? 0;
   const exp = currencyExponent(currency);
   try {
     // Intl takes the decimal string as is (no float rounding for these sizes).
-    return new Intl.NumberFormat("en-US", {
+    return new Intl.NumberFormat(locale, {
       style: "currency",
       currency,
       minimumFractionDigits: exp,
