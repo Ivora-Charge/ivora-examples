@@ -1,13 +1,19 @@
 import "server-only";
 import { z } from "zod";
 import { TIME_ZONES } from "@/lib/locale-options";
-import { currencyExponent, minorToMajorString, parseMajor } from "@/lib/money";
+import {
+  currencyExponent,
+  formatMinor,
+  minorToMajorString,
+  parseMajor,
+} from "@/lib/money";
 import type { DayOfWeek } from "../ivora/types";
 import {
   DEFAULT_IDLE_GRACE_MINUTES,
   MAX_PERIODS,
   overlappingPeriods,
   PAID_CURRENCY,
+  PAID_HOLD_MINOR,
   WEEK,
 } from "./tariff";
 import type { TariffDefinition } from "./types";
@@ -142,7 +148,7 @@ export function tariffFormSchema(currency: string) {
       if (currency !== PAID_CURRENCY)
         ctx.addIssue({
           code: "custom",
-          message: `Paid tariffs are in ${PAID_CURRENCY} for now: Ivora Checkout settles card payments in US dollars, and the card hold before charging is $25.00. Set the company currency to ${PAID_CURRENCY} in Settings, or make this tariff free.`,
+          message: `Paid tariffs are in ${PAID_CURRENCY} for now: Ivora Checkout settles card payments in US dollars, and the card hold before charging is ${formatMinor(PAID_HOLD_MINOR, PAID_CURRENCY)}. Set the company currency to ${PAID_CURRENCY} in Settings, or make this tariff free.`,
         });
       const energyMinorPerKwh = money(
         ctx,

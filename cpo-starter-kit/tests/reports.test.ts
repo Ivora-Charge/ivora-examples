@@ -1149,7 +1149,7 @@ describe("reports in demo mode", () => {
     expect(checkouts.some((c) => (c.refundedMinor ?? 0) > 0)).toBe(true);
     // Every sample is made up: sample chargers, made-up references.
     expect(
-      checkouts.every((c) => [9101, 9102, 9103].includes(c.stationId)),
+      checkouts.every((c) => [9101, 9102, 9103, 9104].includes(c.stationId)),
     ).toBe(true);
   });
 

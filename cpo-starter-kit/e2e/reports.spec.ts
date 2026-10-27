@@ -118,7 +118,7 @@ test("demo: refunded sessions, pages, and the same sessions as CSV", async ({
     const refunded = Number(f[col("refunded_minor")]);
     expect(refunded).toBeGreaterThan(0);
     expect(Number(f[col("net_minor")])).toBe(captured - refunded);
-    expect(f[col("currency")]).toBe("USD");
+    expect(["USD", "CAD"]).toContain(f[col("currency")]);
   }
 });
 

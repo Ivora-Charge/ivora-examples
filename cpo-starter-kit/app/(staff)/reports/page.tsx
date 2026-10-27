@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { formatMinor } from "@/lib/money";
+import { formatMinor, mixedCurrenciesNote } from "@/lib/money";
 import { requireRole } from "@/lib/server/auth";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getOnboarding, loadStripe } from "@/lib/server/onboarding";
@@ -312,7 +312,14 @@ function StatsSection({ result }: { result: StatsResult }) {
           value={revenueText(s.revenue?.currencies ?? null)}
           note={
             s.revenue
-              ? `${s.revenue.currencies.reduce((n, l) => n + l.bills, 0)} final bills`
+              ? [
+                  `${s.revenue.currencies.reduce((n, l) => n + l.bills, 0)} final bills`,
+                  mixedCurrenciesNote(
+                    s.revenue.currencies.map((l) => l.currency),
+                  ),
+                ]
+                  .filter(Boolean)
+                  .join(". ")
               : undefined
           }
         />
@@ -521,7 +528,12 @@ function Totals({ t }: { t: ReportTotals }) {
             t.currencies,
             (l) => l.capturedMinor - l.refundedMinor,
           )}
-          note={`${t.byStatus.charged} charged`}
+          note={[
+            `${t.byStatus.charged} charged`,
+            mixedCurrenciesNote(t.currencies.map((l) => l.currency)),
+          ]
+            .filter(Boolean)
+            .join(". ")}
         />
         <Stat
           label="Refunded"

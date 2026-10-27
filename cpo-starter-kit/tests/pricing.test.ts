@@ -1754,6 +1754,7 @@ describe("demo pricing", () => {
     expect(before.tariffs.map((t) => t.name)).toEqual([
       "Sample: Free staff charging",
       "Sample: Standard",
+      "Sample: Standard (CAD)",
     ]);
     const market = before.stations.find((s) => s.name === "DEMO-MARKET-01");
     expect(market).toMatchObject({ private: true });

@@ -2,6 +2,7 @@ import "server-only";
 import type { z } from "zod";
 import type { QuotePreview } from "@/lib/action-state";
 import {
+  currencyOr,
   formatMinor,
   formatMinorDecimal,
   minorToMajorString,
@@ -32,6 +33,7 @@ import {
   driverText,
   graceMinutes,
   holdMinor,
+  PAID_CURRENCY,
   pricedElements,
   samePrices,
   summary,
@@ -363,7 +365,7 @@ function tariffView(t: KitTariff, uses: number): TariffView {
 /** The company's currency and time zone, the defaults of a new tariff. */
 async function defaults(d: PricingDeps, operatorId: string) {
   const p = await d.company.load(operatorId);
-  return { currency: p.currency ?? "USD", timeZone: p.timeZone ?? "UTC" };
+  return { currency: currencyOr(p.currency), timeZone: p.timeZone ?? "UTC" };
 }
 
 /** Every tariff, and every station with which tariff each connector uses. */
@@ -469,7 +471,7 @@ export async function idleGraceDefault(
   requireManager(staff);
   const probe: TariffDefinition = {
     kind: "paid",
-    currency: "USD",
+    currency: PAID_CURRENCY,
     timeZone: base.timeZone,
     energyMinorPerKwh: 1,
     sessionFeeMinor: 0,

@@ -227,7 +227,7 @@ test("demo: a stale tariff editor or charger form is refused instead of undoing 
 }) => {
   await openPricing(page, isMobile);
   const tariffUrl = await page
-    .getByRole("link", { name: "Sample: Standard" })
+    .getByRole("link", { name: "Sample: Standard", exact: true })
     .getAttribute("href");
   // Two tabs on the same tariff (the demo keeps prices in this browser's cookie).
   const other = await context.newPage();
