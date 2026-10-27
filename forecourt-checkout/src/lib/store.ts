@@ -6,7 +6,12 @@
 // Everything here is pure (no network, no clock, no crypto) so the live flow
 // (src/lib/server/store.ts) and the demo (src/lib/demo-store.ts) share it.
 
-import { assertCents, idleGraceCreditCents } from "./money";
+import {
+  assertCents,
+  DEFAULT_CURRENCY,
+  formatMoney,
+  idleGraceCreditCents,
+} from "./money";
 import { parkingLines, quoteRows, type Quote, type QuoteRow } from "./tariff";
 
 export const STORE_PREFIX = "forecourt:store:";
@@ -51,7 +56,11 @@ export type SaleTerms = {
 const SALE_ID = /^(?:pre-(\d{1,5})-(\d{1,6})|post)-([a-z0-9]{12})$/;
 const NONCE = /^[a-z0-9]{12}$/;
 
-export function validateTerms(terms: SaleTerms): string | null {
+/** `currency` only words the message: the tile's or sale's, when known. */
+export function validateTerms(
+  terms: SaleTerms,
+  currency: string = DEFAULT_CURRENCY,
+): string | null {
   if (terms.mode === "postpay")
     return terms.prepaidCents === null && terms.limitWh === null
       ? null
@@ -60,7 +69,7 @@ export function validateTerms(terms: SaleTerms): string | null {
   if (p === null || !Number.isSafeInteger(p))
     return "Enter the prepaid amount.";
   if (p < MIN_PREPAID_CENTS || p > MAX_PREPAID_CENTS)
-    return `The prepaid amount must be between $${MIN_PREPAID_CENTS / 100} and $${MAX_PREPAID_CENTS / 100}.`;
+    return `The prepaid amount must be between ${formatMoney(MIN_PREPAID_CENTS, currency)} and ${formatMoney(MAX_PREPAID_CENTS, currency)}.`;
   const w = terms.limitWh;
   if (w !== null && (!Number.isSafeInteger(w) || w < 1000 || w > MAX_LIMIT_WH))
     return `The energy limit must be between 1 and ${MAX_LIMIT_WH / 1000} kWh.`;
@@ -441,6 +450,7 @@ export function paidReport(
     method: PaymentMethod;
     posReference: string | null;
   },
+  currency: string = DEFAULT_CURRENCY,
 ): RuleResult {
   if (input.posReference !== null && !isPosReference(input.posReference))
     return {
@@ -473,7 +483,7 @@ export function paidReport(
     return {
       ok: false,
       code: "amount_mismatch",
-      message: `The amount due on the final bill is ${amounts.outstandingCents} cents.`,
+      message: `The amount due on the final bill is ${formatMoney(amounts.outstandingCents, currency)}.`,
     };
   return {
     ok: true,

@@ -1,6 +1,6 @@
 import { ErrorBox } from "@/components/error-box";
 import { OperatorNav } from "@/components/operator-nav";
-import { formatMoney, minorUnitHint } from "@/lib/money";
+import { DEFAULT_CURRENCY, formatMoney, minorUnitHint } from "@/lib/money";
 import { errorInfo } from "@/lib/server/http";
 import { pricesPage, type PricesPage } from "@/lib/server/operator";
 import { requireOperator } from "@/lib/server/operator-page";
@@ -131,6 +131,10 @@ export default async function Prices({
                       defaultValue={form.holdCents || s.defaultHoldCents}
                       required
                     />
+                    <span className="muted small">
+                      Hold limits are the card-checkout rules, tested in{" "}
+                      {DEFAULT_CURRENCY} only for now.
+                    </span>
                   </label>
                 </div>
                 {usedBy.length > 1 ? (

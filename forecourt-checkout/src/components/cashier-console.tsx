@@ -278,7 +278,8 @@ function SimulatedPosPanel({
   );
 }
 
-function headline(t: Tile) {
+/** The one-line status on a charger tile. */
+export function headline(t: Tile) {
   const v = t.sale;
   const money = (c: number | null) =>
     c === null ? "—" : formatMoney(c, v?.currency ?? DEFAULT_CURRENCY);
@@ -454,7 +455,7 @@ function Postpay({
   );
 }
 
-function Prepay({
+export function Prepay({
   tile,
   refresh,
 }: {
@@ -505,6 +506,7 @@ function Prepay({
         mode: "prepay",
         prepaidCents: cents,
         limitWh,
+        currency,
         requestId: ids.get(`${tile.key}|prepay|${cents}|${limitWh ?? 0}`),
       })) as SaleView;
       ids.done();

@@ -638,6 +638,8 @@ export type AuthorizeInput = {
   terms: SaleTerms;
   /** One per tap on the console; a retry after a timeout reuses it. */
   requestId: string;
+  /** The tile's currency, only to word a validation message. */
+  currency?: string;
 };
 
 /**
@@ -650,7 +652,7 @@ export async function authorizeSale(
   deps: StoreDeps,
 ): Promise<SaleView> {
   const { ivora } = deps;
-  const problem = validateTerms(input.terms);
+  const problem = validateTerms(input.terms, input.currency);
   if (problem) throw new UserError(400, "invalid_sale", problem);
   const sale = saleIdFor(input.terms, input.requestId);
   const station = await ivora.findStationByCode(input.code);
@@ -745,7 +747,13 @@ export async function markSalePaid(
       "bill_not_final",
       "The bill isn't final yet. Mark it paid when the charging session has ended.",
     );
-  const rule = paidReport(input.sale, terms, view.amounts, input);
+  const rule = paidReport(
+    input.sale,
+    terms,
+    view.amounts,
+    input,
+    view.currency,
+  );
   if (!rule.ok) throw new UserError(409, rule.code, rule.message);
   if (!rule.report) return view;
   await send(deps, session, input.sale, rule.report);

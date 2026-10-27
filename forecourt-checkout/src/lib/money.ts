@@ -193,10 +193,14 @@ export function currencyExponent(currency: string): number {
   }).resolvedOptions().maximumFractionDigits!;
 }
 
-/** Minor units as a plain decimal string in major units: (1234, USD) -> "12.34". */
+/**
+ * Minor units as a plain decimal string in major units: (1234, USD) -> "12.34".
+ * Every caller passes whole minor units; a fraction is rounded half up (away
+ * from zero), never dropped.
+ */
 export function minorToMajorString(minor: number, currency: string): string {
   const exponent = currencyExponent(currency);
-  const digits = String(Math.abs(Math.trunc(minor))).padStart(
+  const digits = String(Math.round(Math.abs(minor))).padStart(
     exponent + 1,
     "0",
   );
@@ -228,7 +232,12 @@ export function formatMoney(
   return format.format(Number(minorToMajorString(minor, code)));
 }
 
-/** A rate in minor units that may carry fractions, e.g. "45" or "35.49". */
+/**
+ * A rate in minor units that may carry fractions, e.g. "45" or "35.49". Shown
+ * to at most 4 decimals of the major unit: for a 3-decimal currency such as
+ * KWD, whose rates come from priceLines with 2 decimals of a minor unit, that
+ * cuts the last digit.
+ */
 export function formatMinorRate(
   minor: string,
   currency: string,

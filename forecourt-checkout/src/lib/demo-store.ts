@@ -547,11 +547,12 @@ export function demoAuthorize(
     connector: number;
     terms: SaleTerms;
     requestId: string;
+    currency?: string;
   },
   now: number,
   settings: Pick<Settings, "idleGraceMinutes">,
 ): { store: DemoStore; view: SaleView } {
-  const problem = validateTerms(input.terms);
+  const problem = validateTerms(input.terms, input.currency);
   if (problem) throw new SaleError(400, "invalid_sale", problem);
   const sale = encodeSaleId(input.terms, nonce(`sale:${input.requestId}`));
   const existing = store.sales.find((s) => s.sale === sale);
@@ -654,7 +655,13 @@ export function demoMarkPaid(
         "bill_not_final",
         "The bill isn't final yet. Mark it paid when the charging session has ended.",
       );
-    const rule = paidReport(s.sale, view.terms, view.amounts, input);
+    const rule = paidReport(
+      s.sale,
+      view.terms,
+      view.amounts,
+      input,
+      view.currency,
+    );
     if (!rule.ok) throw new SaleError(409, rule.code, rule.message);
     return rule.report
       ? { ...s, reports: [...s.reports, asReport(rule.report, at(now))] }

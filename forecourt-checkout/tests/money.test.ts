@@ -295,6 +295,13 @@ describe("currency helpers", () => {
     expect(majorToMinor("-3", "USD")).toBeNull();
   });
 
+  it("rounds a fractional minor amount half up instead of dropping it", () => {
+    expect(minorToMajorString(1234.5, "USD")).toBe("12.35");
+    expect(minorToMajorString(1234.49, "USD")).toBe("12.34");
+    expect(minorToMajorString(-1234.5, "CAD")).toBe("-12.35");
+    expect(formatMoney(99.5, "CAD")).toBe("CA$1.00");
+  });
+
   it("formats in another locale", () => {
     expect(formatMoney(123456, "CAD", "en-CA")).toBe("$1,234.56");
     expect(formatMoney(123456, "CAD", "fr-CA")).toMatch(/1\s234,56\s\$/);

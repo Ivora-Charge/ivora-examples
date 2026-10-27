@@ -188,6 +188,7 @@ export async function authorize(
     connector: number;
     terms: SaleTerms;
     requestId: string;
+    currency?: string;
   },
   settings: Settings,
   now = Date.now(),

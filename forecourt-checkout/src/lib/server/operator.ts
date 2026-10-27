@@ -145,7 +145,7 @@ function demoOverview(settings: Settings, from: string): Overview {
   ];
   const rows = sample.map((s, i): SessionRow => ({
     reference: `demo-session-${i + 1}`,
-    currency: ("currency" in s && s.currency) || "USD",
+    currency: ("currency" in s && s.currency) || DEFAULT_CURRENCY,
     createdAt: new Date(base + s.h * 3_600_000).toISOString(),
     station: s.station,
     status: "completed",
