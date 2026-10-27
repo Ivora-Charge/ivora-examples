@@ -33,6 +33,7 @@ import {
   type StopProblem,
   type Tile,
 } from "../store";
+import { resolveCurrency } from "../money";
 import { priceBreakdown, type Tariff } from "../tariff";
 import type { Connector, ExternalSession, IvoraClient, Station } from "./ivora";
 import { IvoraError, isRetryLater, type Operation } from "./ivora";
@@ -141,7 +142,12 @@ export function saleIdFor(terms: SaleTerms, requestId: string) {
   return encodeSaleId(terms, nonce);
 }
 
-function baseView(sale: string, terms: SaleTerms, c: ChargerRef): SaleView {
+function baseView(
+  sale: string,
+  terms: SaleTerms,
+  c: ChargerRef,
+  currency: string,
+): SaleView {
   return {
     sale,
     demo: false,
@@ -153,7 +159,7 @@ function baseView(sale: string, terms: SaleTerms, c: ChargerRef): SaleView {
       connector: c.connector,
     },
     phase: "starting",
-    currency: "USD",
+    currency: resolveCurrency(currency),
     energyWh: 0,
     powerW: null,
     runningCents: null,
@@ -236,6 +242,7 @@ async function send(
       kind: report.kind,
       operation_reference: report.operation_reference,
       amount_minor: report.amount_minor,
+      currency: session.bill.currency,
     },
     saleKey(sale, `report:${report.step}`),
   );
@@ -376,7 +383,7 @@ export async function progressSale(
   const terms = sale && decodeSaleId(sale);
   if (!sale || !terms) throw notFound();
   const { ivora, settings } = deps;
-  const view = baseView(sale, terms, charger);
+  const view = baseView(sale, terms, charger, session.bill.currency);
 
   if (session.status === "reconciliation_required")
     return review(
@@ -705,7 +712,7 @@ export async function stopSale(sale: string, deps: StoreDeps) {
   const charger = await chargerOf(session, deps);
   if (!session.usage && !CLOSED.has(session.status)) {
     const view = await cancel(
-      baseView(sale, decodeSaleId(sale)!, charger),
+      baseView(sale, decodeSaleId(sale)!, charger, session.bill.currency),
       session,
       deps,
       "Canceled before charging.",
@@ -890,6 +897,23 @@ export async function consoleState(
             if (settled && now - ended > PAID_DISPLAY_MS) sale = null;
             if (sale) shown.add(latest.id);
           }
+          const state = tileState({
+            online: charger.online,
+            status: charger.status,
+            sale,
+            cardOpen: open.some(isCard),
+            foreignOpen: open.some(
+              (s) => !s.application_reference.startsWith(APPLICATION_PREFIX),
+            ),
+          });
+          // The currency the cashier types a prepaid amount in: the tariff's.
+          const tariffCurrency =
+            sale?.currency ??
+            (state.canPrepay && charger.tariffId
+              ? await tariff(deps, charger.tariffId)
+                  .then((t) => t.currency)
+                  .catch(() => undefined)
+              : undefined);
           return {
             key: `${charger.code}/${charger.connector}`,
             code: charger.code,
@@ -900,15 +924,8 @@ export async function consoleState(
             status: charger.status,
             online: charger.online,
             sale,
-            ...tileState({
-              online: charger.online,
-              status: charger.status,
-              sale,
-              cardOpen: open.some(isCard),
-              foreignOpen: open.some(
-                (s) => !s.application_reference.startsWith(APPLICATION_PREFIX),
-              ),
-            }),
+            currency: tariffCurrency,
+            ...state,
           };
         }),
     ),

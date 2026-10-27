@@ -1,6 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   applicationFeeCents,
+  currencyExponent,
+  formatMinorRate,
+  formatMoney,
+  majorToMinor,
+  minorToMajorString,
+  minorUnitHint,
+  resetCurrencyWarning,
   idleGraceCreditCents,
   MINIMUM_CHARGE_CENTS,
   parseBasisPoints,
@@ -228,5 +235,89 @@ describe("settle: hold, capture and release in integer cents", () => {
     expect(() =>
       settle({ ...base, holdCents: 49.99, billTotalCents: 1 }),
     ).toThrow();
+  });
+});
+
+describe("currency helpers", () => {
+  const cases = [
+    {
+      currency: "USD",
+      exponent: 2,
+      minor: 123456,
+      major: "1234.56",
+      shown: "$1,234.56",
+    },
+    {
+      currency: "CAD",
+      exponent: 2,
+      minor: 123456,
+      major: "1234.56",
+      shown: "CA$1,234.56",
+    },
+    {
+      currency: "EUR",
+      exponent: 2,
+      minor: 123456,
+      major: "1234.56",
+      shown: "€1,234.56",
+    },
+    {
+      currency: "JPY",
+      exponent: 0,
+      minor: 1234,
+      major: "1234",
+      shown: "¥1,234",
+    },
+    {
+      currency: "KWD",
+      exponent: 3,
+      minor: 1234567,
+      major: "1234.567",
+      shown: "KWD\u00a01,234.567",
+    },
+  ];
+  for (const c of cases)
+    it(`${c.currency}: exponent ${c.exponent}, convert and format`, () => {
+      expect(currencyExponent(c.currency)).toBe(c.exponent);
+      expect(minorToMajorString(c.minor, c.currency)).toBe(c.major);
+      expect(majorToMinor(c.major, c.currency)).toBe(c.minor);
+      expect(formatMoney(c.minor, c.currency)).toBe(c.shown);
+    });
+
+  it("pads small amounts and rejects too many decimals", () => {
+    expect(minorToMajorString(7, "USD")).toBe("0.07");
+    expect(minorToMajorString(7, "KWD")).toBe("0.007");
+    expect(minorToMajorString(7, "JPY")).toBe("7");
+    expect(majorToMinor("$20.5", "USD")).toBe(2050);
+    expect(majorToMinor("0.07", "CAD")).toBe(7);
+    expect(majorToMinor("20.555", "USD")).toBeNull();
+    expect(majorToMinor("1.5", "JPY")).toBeNull();
+    expect(majorToMinor("-3", "USD")).toBeNull();
+  });
+
+  it("formats in another locale", () => {
+    expect(formatMoney(123456, "CAD", "en-CA")).toBe("$1,234.56");
+    expect(formatMoney(123456, "CAD", "fr-CA")).toMatch(/1\s234,56\s\$/);
+  });
+
+  it("formats rates with the currency's digits, up to four", () => {
+    expect(formatMinorRate("45", "USD")).toBe("$0.45");
+    expect(formatMinorRate("35.49", "CAD")).toBe("CA$0.3549");
+    expect(formatMinorRate("45", "JPY")).toBe("¥45");
+    expect(formatMinorRate("1234.5", "KWD")).toBe("KWD\u00a01.2345");
+  });
+
+  it("falls back to USD and logs once when there is no currency", () => {
+    resetCurrencyWarning();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(formatMoney(150, "")).toBe("$1.50");
+    expect(formatMoney(250, undefined as unknown as string)).toBe("$2.50");
+    expect(warn).toHaveBeenCalledTimes(1);
+    warn.mockRestore();
+  });
+
+  it("labels operator fields with the currency", () => {
+    expect(minorUnitHint("CAD")).toBe("CAD, 1 = CA$0.01");
+    expect(minorUnitHint("JPY")).toBe("JPY, 1 = ¥1");
   });
 });

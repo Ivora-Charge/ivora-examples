@@ -705,6 +705,8 @@ export type Tile = {
   warning: string | null;
   canPrepay: boolean;
   canPostpay: boolean;
+  /** Currency of the connector's tariff, when known; amounts typed here are in it. */
+  currency?: string;
 };
 
 export const READY_STATUSES = new Set(["Available", "Preparing"]);
@@ -768,13 +770,6 @@ export function tileState(input: {
     canPrepay: free && READY_STATUSES.has(input.status),
     canPostpay: free && PLUGGED_STATUSES.has(input.status),
   };
-}
-
-/** "20", "20.5" or "$20.55" typed by the cashier -> cents, without floats. */
-export function parseDollars(text: string): number | null {
-  const m = /^\$?\s*(\d{1,5})(?:\.(\d{1,2}))?$/.exec(text.trim());
-  if (!m) return null;
-  return Number(m[1]) * 100 + Number((m[2] ?? "").padEnd(2, "0"));
 }
 
 /** "12" or "12.5" kWh typed by the cashier -> Wh, without floats. */

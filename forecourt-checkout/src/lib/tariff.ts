@@ -1,4 +1,9 @@
-import { formatCents, formatMinorRate, roundHalfUp } from "./money";
+import {
+  currencyExponent,
+  formatMinorRate,
+  formatMoney,
+  roundHalfUp,
+} from "./money";
 
 // Shapes follow the published OpenAPI (TariffRecord, TariffElement, QuoteRecord).
 
@@ -6,7 +11,7 @@ export type DimensionType = "ENERGY" | "TIME" | "PARKING_TIME" | "FLAT";
 
 export type PriceComponent = {
   type: DimensionType;
-  /** Major units excluding tax, at most 4 decimals: 0.35 is $0.35 per kWh. */
+  /** Major units of the tariff's currency excluding tax, at most 4 decimals: 0.35 is 35 cents per kWh in USD. */
   price: number;
   /** ENERGY in Wh, TIME and PARKING_TIME in seconds. */
   step_size?: number;
@@ -57,7 +62,7 @@ export type Quote = {
   activity?: { idle_seconds: number; charging_seconds: number } | null;
 };
 
-/** Prices in hundredths of a cent, so 4-decimal major prices stay integers. */
+/** Prices in hundredths of a minor unit, so 4-decimal major prices stay integers. */
 export type PriceBreakdown = {
   currency: string;
   energyPerKwh: number;
@@ -70,9 +75,9 @@ export type PriceBreakdown = {
   conditional: boolean;
 };
 
-/** Major units (<= 4 decimals) to hundredths of a cent. */
-export function majorToHundredths(price: number): number {
-  return Math.round(price * 10_000);
+/** Major units (<= 4 decimals) to hundredths of the currency's minor unit. */
+export function majorToHundredths(price: number, currency: string): number {
+  return Math.round(price * 10 ** (currencyExponent(currency) + 2));
 }
 
 function unrestricted(element: TariffElement) {
@@ -86,7 +91,11 @@ function elementsOf(tariff: Tariff): TariffElement[] {
   return [
     {
       price_components: [
-        { type: "ENERGY", price: tariff.rate_minor_per_kwh / 100 },
+        {
+          type: "ENERGY",
+          price:
+            tariff.rate_minor_per_kwh / 10 ** currencyExponent(tariff.currency),
+        },
       ],
     },
   ];
@@ -106,7 +115,7 @@ export function priceBreakdown(tariff: Tariff): PriceBreakdown {
   const elements = elementsOf(tariff);
   const prices = firstPrices(elements);
   const at = (type: DimensionType) =>
-    majorToHundredths(prices.get(type)?.price ?? 0);
+    majorToHundredths(prices.get(type)?.price ?? 0, tariff.currency);
   return {
     currency: tariff.currency,
     energyPerKwh: at("ENERGY"),
@@ -139,7 +148,7 @@ export function priceLines(b: PriceBreakdown) {
   return lines;
 }
 
-/** Operator price form, in whole cents. */
+/** Operator price form, in whole minor units of the tariff's currency (cents for USD, yen for JPY). */
 export type PriceForm = {
   energyCentsPerKwh: number;
   timeCentsPerMinute: number;
@@ -151,27 +160,33 @@ export type PriceForm = {
 const MAX_MAJOR_PRICE = 10_000;
 
 /** One unrestricted element; time and idle bill per started minute. */
-export function elementsFromPrices(form: PriceForm): TariffElement[] {
+export function elementsFromPrices(
+  form: PriceForm,
+  currency: string,
+): TariffElement[] {
+  const unit = 10 ** currencyExponent(currency);
   for (const [name, value] of Object.entries(form))
     if (!Number.isSafeInteger(value) || value < 0)
-      throw new Error(`${name} must be a non-negative whole number of cents.`);
+      throw new Error(
+        `${name} must be a non-negative whole number of minor units.`,
+      );
   const components: PriceComponent[] = [
-    { type: "ENERGY", price: form.energyCentsPerKwh / 100, step_size: 1 },
+    { type: "ENERGY", price: form.energyCentsPerKwh / unit, step_size: 1 },
   ];
   if (form.timeCentsPerMinute)
     components.push({
       type: "TIME",
-      price: (form.timeCentsPerMinute * 60) / 100,
+      price: (form.timeCentsPerMinute * 60) / unit,
       step_size: 60,
     });
   if (form.idleCentsPerMinute)
     components.push({
       type: "PARKING_TIME",
-      price: (form.idleCentsPerMinute * 60) / 100,
+      price: (form.idleCentsPerMinute * 60) / unit,
       step_size: 60,
     });
   if (form.sessionFeeCents)
-    components.push({ type: "FLAT", price: form.sessionFeeCents / 100 });
+    components.push({ type: "FLAT", price: form.sessionFeeCents / unit });
   if (components.some((c) => c.price > MAX_MAJOR_PRICE))
     throw new Error("A price is above the API's maximum of 10000.00.");
   return [{ price_components: components }];
@@ -233,7 +248,7 @@ export function localQuote(tariff: Tariff, profile: SessionProfile): Quote {
       reservation: false,
       quantity,
       unit,
-      price_minor: (majorToHundredths(price) / 100).toFixed(2),
+      price_minor: (majorToHundredths(price, tariff.currency) / 100).toFixed(2),
       exact_minor: `${micro / 1_000_000n}.${String(micro % 1_000_000n).padStart(6, "0")}`,
       amount_minor: Number(roundHalfUp(numerator, D)),
     });
@@ -243,7 +258,9 @@ export function localQuote(tariff: Tariff, profile: SessionProfile): Quote {
     const wh = stepUp(profile.energyWh, energy.step_size ?? 1);
     push(
       "ENERGY",
-      BigInt(majorToHundredths(energy.price)) * BigInt(wh) * 3600n,
+      BigInt(majorToHundredths(energy.price, tariff.currency)) *
+        BigInt(wh) *
+        3600n,
       (wh / 1000).toFixed(3),
       "kWh",
       energy.price,
@@ -258,7 +275,9 @@ export function localQuote(tariff: Tariff, profile: SessionProfile): Quote {
     const billed = stepUp(seconds, c.step_size ?? 1);
     push(
       type,
-      BigInt(majorToHundredths(c.price)) * BigInt(billed) * 1000n,
+      BigInt(majorToHundredths(c.price, tariff.currency)) *
+        BigInt(billed) *
+        1000n,
       (billed / 3600).toFixed(6),
       "h",
       c.price,
@@ -268,7 +287,7 @@ export function localQuote(tariff: Tariff, profile: SessionProfile): Quote {
   if (flat)
     push(
       "FLAT",
-      BigInt(majorToHundredths(flat.price)) * 1000n * 3600n,
+      BigInt(majorToHundredths(flat.price, tariff.currency)) * 1000n * 3600n,
       "1",
       "session",
       flat.price,
@@ -337,5 +356,5 @@ export function parkingLines(quote: Quote | null | undefined) {
 }
 
 export function formatQuoteTotal(quote: Quote) {
-  return formatCents(quote.total_minor, quote.currency);
+  return formatMoney(quote.total_minor, quote.currency);
 }

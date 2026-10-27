@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { formatCents } from "@/lib/money";
+import { DEFAULT_CURRENCY, formatMoney } from "@/lib/money";
 import type { DriverCounter } from "@/lib/server/cashier";
 import { whToKwhText, wToKwText } from "@/lib/units";
 import { ErrorBox, type ErrorInfo } from "./error-box";
@@ -45,7 +45,7 @@ export function CounterScreen(props: {
 
   const v = state?.sale ?? null;
   const money = (c: number | null) =>
-    c === null ? "—" : formatCents(c, v?.currency ?? "USD");
+    c === null ? "—" : formatMoney(c, v?.currency ?? DEFAULT_CURRENCY);
   const a = v?.amounts ?? null;
   const prepaid = v?.prepaidCents ?? null;
 

@@ -1,5 +1,6 @@
 import "server-only";
 import { z } from "zod";
+import { resolveCurrency } from "../money";
 import type { Quote, Tariff, TariffElement } from "../tariff";
 
 // Routes and fields follow the published OpenAPI at
@@ -481,6 +482,8 @@ export class IvoraClient {
       kind: "authorization" | "capture" | "release";
       operation_reference: string;
       amount_minor: number;
+      /** ISO 4217 code of the session's bill. */
+      currency: string;
     },
     idempotencyKey = `${id}:report:${report.kind}`,
   ) {
@@ -489,7 +492,11 @@ export class IvoraClient {
       `charging-sessions/${encodeURIComponent(id)}/settlement-reports`,
       z.unknown(),
       {
-        body: { ...report, outcome: "succeeded", currency: "USD" },
+        body: {
+          ...report,
+          outcome: "succeeded",
+          currency: resolveCurrency(report.currency),
+        },
         idempotencyKey,
       },
     );

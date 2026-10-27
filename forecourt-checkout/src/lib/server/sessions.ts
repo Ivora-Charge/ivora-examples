@@ -1,3 +1,4 @@
+import { resolveCurrency } from "../money";
 import type { Hold, PaymentGateway } from "../payments";
 import { MAX_HOLD_CENTS, MIN_HOLD_CENTS, type Settings } from "../settings";
 import {
@@ -295,7 +296,11 @@ function holdMatches(hold: Hold, meta: Meta) {
   );
 }
 
-function baseView(id: string, meta: Meta): SessionView {
+function baseView(
+  id: string,
+  meta: Meta,
+  currency: string | undefined,
+): SessionView {
   return {
     id,
     demo: false,
@@ -305,7 +310,7 @@ function baseView(id: string, meta: Meta): SessionView {
       name: meta.name,
       connector: meta.connectorNumber,
     },
-    currency: "USD",
+    currency: resolveCurrency(currency),
     holdCents: meta.hold,
     checkoutUrl: null,
     energyWh: 0,
@@ -335,6 +340,7 @@ async function report(
       kind,
       operation_reference: reference,
       amount_minor: amount,
+      currency: session.bill.currency,
     });
   } catch (error) {
     deps.log?.("settlement report failed", {
@@ -400,7 +406,7 @@ export async function reconcile(id: string, deps: Deps): Promise<SessionView> {
       "session_not_found",
       "Charging session not found.",
     );
-  const view = baseView(id, meta);
+  const view = baseView(id, meta, checkout.hold?.currency);
 
   if (checkout.status === "open")
     return { ...view, phase: "payment", checkoutUrl: checkout.url };

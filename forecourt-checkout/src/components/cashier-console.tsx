@@ -2,10 +2,15 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatCents } from "@/lib/money";
+import {
+  DEFAULT_CURRENCY,
+  formatMoney,
+  majorToMinor,
+  minorToMajorString,
+  resolveCurrency,
+} from "@/lib/money";
 import type { ConsoleState, SimulatedPos } from "@/lib/server/store";
 import {
-  parseDollars,
   parseKwh,
   TILE_LABELS,
   type PaymentMethod,
@@ -15,7 +20,8 @@ import {
 import { whToKwhText, wToKwText } from "@/lib/units";
 import { ErrorBox, type ErrorInfo } from "./error-box";
 
-const QUICK_AMOUNTS = [1000, 2000, 3000, 5000];
+/** Quick prepay buttons, in major units of the tile's currency. */
+const QUICK_AMOUNTS = [10, 20, 30, 50];
 
 async function call(url: string, body?: unknown) {
   const response = await fetch(url, {
@@ -228,7 +234,7 @@ function SimulatedPosPanel({
         <p className="muted">No sales due at the counter.</p>
       ) : null}
       {pos.deliveries.map((d) => {
-        const money = (c: number) => formatCents(c, d.currency);
+        const money = (c: number) => formatMoney(c, d.currency);
         return (
           <div key={d.eventId} className="pos-event" data-testid="pos-event">
             <div>
@@ -275,7 +281,7 @@ function SimulatedPosPanel({
 function headline(t: Tile) {
   const v = t.sale;
   const money = (c: number | null) =>
-    c === null ? "—" : formatCents(c, v?.currency ?? "USD");
+    c === null ? "—" : formatMoney(c, v?.currency ?? DEFAULT_CURRENCY);
   if (t.state === "charging" && v)
     return `${whToKwhText(v.energyWh)} kWh · ${money(v.runningCents)}`;
   if (t.state === "done_unpaid" && v?.amounts) {
@@ -320,7 +326,7 @@ function TileButton({
         <span className="pump-line">{headline(tile)}</span>
         {v && v.terms.mode === "prepay" && tile.state === "charging" ? (
           <span className="pump-line small">
-            prepaid {formatCents(v.terms.prepaidCents ?? 0, v.currency)}
+            prepaid {formatMoney(v.terms.prepaidCents ?? 0, v.currency)}
           </span>
         ) : null}
         {tile.warning ? (
@@ -462,7 +468,8 @@ function Prepay({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorInfo | null>(null);
   const ids = useRequestId();
-  const cents = parseDollars(amount);
+  const currency = resolveCurrency(tile.currency);
+  const cents = majorToMinor(amount, currency);
 
   async function priceKwh() {
     const wh = parseKwh(kwh);
@@ -478,7 +485,7 @@ function Prepay({
         connector: tile.connector,
         energyWh: wh,
       });
-      setAmount((q.totalCents / 100).toFixed(2));
+      setAmount(minorToMajorString(q.totalCents, q.currency ?? currency));
       setLimitWh(wh);
     } catch (e) {
       setError(asError(e));
@@ -515,13 +522,16 @@ function Prepay({
       <div className="stack action-block notice">
         <h3>Confirm the prepayment</h3>
         <p style={{ margin: 0 }}>
-          Take <strong>{formatCents(cents)}</strong> on the POS for {tile.label}
+          Take <strong>{formatMoney(cents, currency)}</strong> on the POS for{" "}
+          {tile.label}
           {limitWh ? ` (${whToKwhText(limitWh)} kWh)` : ""}, then confirm.
           Charging stops before the prepaid amount runs out; any change shows
           here when it ends.
         </p>
         <button className="block" disabled={busy} onClick={start}>
-          {busy ? "Starting…" : `Confirm ${formatCents(cents)} paid and start`}
+          {busy
+            ? "Starting…"
+            : `Confirm ${formatMoney(cents, currency)} paid and start`}
         </button>
         <button
           className="secondary block"
@@ -538,21 +548,21 @@ function Prepay({
     <div className="stack action-block">
       <h3>Prepay</h3>
       <div className="quick">
-        {QUICK_AMOUNTS.map((c) => (
+        {QUICK_AMOUNTS.map((major) => (
           <button
-            key={c}
+            key={major}
             className="secondary"
             onClick={() => {
-              setAmount((c / 100).toFixed(2));
+              setAmount(String(major));
               setLimitWh(null);
             }}
           >
-            {formatCents(c)}
+            {formatMoney(majorToMinor(String(major), currency) ?? 0, currency)}
           </button>
         ))}
       </div>
       <label>
-        Prepaid amount ($)
+        Prepaid amount ({currency})
         <input
           inputMode="decimal"
           value={amount}
@@ -589,7 +599,9 @@ function Prepay({
         disabled={!cents || busy}
         onClick={() => setConfirming(true)}
       >
-        {cents ? `Start prepaid ${formatCents(cents)}` : "Enter an amount"}
+        {cents
+          ? `Start prepaid ${formatMoney(cents, currency)}`
+          : "Enter an amount"}
       </button>
       {error ? <ErrorBox info={error} /> : null}
     </div>
@@ -608,7 +620,7 @@ function SalePanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorInfo | null>(null);
   const money = (c: number | null) =>
-    c === null ? "—" : formatCents(c, view.currency);
+    c === null ? "—" : formatMoney(c, view.currency);
   const prepaid = view.terms.prepaidCents;
   const over =
     prepaid !== null && view.runningCents !== null
@@ -718,7 +730,7 @@ function SalePanel({
 export function SaleSummary({ view }: { view: SaleView }) {
   const a = view.amounts;
   if (!a) return null;
-  const money = (c: number) => formatCents(c, view.currency);
+  const money = (c: number) => formatMoney(c, view.currency);
   return (
     <div data-testid="sale-summary">
       <table>
@@ -807,7 +819,7 @@ function PaymentActions({
   const [pos, setPos] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ErrorInfo | null>(null);
-  const money = (c: number) => formatCents(c, view.currency);
+  const money = (c: number) => formatMoney(c, view.currency);
 
   async function run(action: "paid" | "change") {
     setBusy(true);

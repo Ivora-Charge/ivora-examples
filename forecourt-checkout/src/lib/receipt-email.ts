@@ -1,7 +1,7 @@
 // The emailed store receipt: the same lines as the printed one, as plain text
 // and simple HTML. Pure, so the demo can show exactly what would be sent.
 
-import { formatCents } from "./money";
+import { formatMoney } from "./money";
 import type { SaleView } from "./store";
 import { formatLocalDateTime } from "./time";
 import { whToKwhText } from "./units";
@@ -30,7 +30,7 @@ const escape = (v: string) =>
     .replaceAll("'", "&#39;");
 
 export function receiptLines(view: SaleView, timeZone: string) {
-  const money = (c: number) => formatCents(c, view.currency);
+  const money = (c: number) => formatMoney(c, view.currency);
   const a = view.amounts;
   const bill = view.bill;
   const lines: [string, string][] = [

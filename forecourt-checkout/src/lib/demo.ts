@@ -35,6 +35,29 @@ export const DEMO_TARIFF: Tariff = {
   ],
 };
 
+/** The CAD sample: a Canadian site priced in CA$, shown next to the USD one. */
+export const DEMO_TARIFF_CAD: Tariff = {
+  id: 9002,
+  currency: "CAD",
+  rate_minor_per_kwh: 52,
+  authorization_minor: 5000,
+  is_complex: true,
+  pricing_summary:
+    "Demo prices: CA$0.52/kWh, CA$0.07/min charging, CA$0.50/min idle, CA$1.50 per session",
+  elements: [
+    {
+      price_components: [
+        { type: "ENERGY", price: 0.52, step_size: 1 },
+        { type: "TIME", price: 4.2, step_size: 60 },
+        { type: "PARKING_TIME", price: 30, step_size: 60 },
+        { type: "FLAT", price: 1.5 },
+      ],
+    },
+  ],
+};
+
+export const DEMO_TARIFFS: Tariff[] = [DEMO_TARIFF, DEMO_TARIFF_CAD];
+
 export type DemoConnector = {
   number: number;
   label: string;
@@ -49,6 +72,8 @@ export type DemoCharger = {
   name: string;
   online: boolean;
   connectors: DemoConnector[];
+  /** Defaults to the USD sample tariff. */
+  tariff?: Tariff;
 };
 
 export const DEMO_SITE_NAME = "Sample Forecourt (demo data)";
@@ -142,7 +167,20 @@ export const DEMO_CHARGERS: DemoCharger[] = [
       },
     ],
   },
+  // The CAD sample: pay at the charger only, like chargers 1 and 2.
+  {
+    code: "DEMO-11",
+    name: "Demo charger 11 (Toronto, CAD)",
+    online: true,
+    connectors: ccs("Available"),
+    tariff: DEMO_TARIFF_CAD,
+  },
 ];
+
+/** The sample tariff a demo charger is priced on. */
+export function demoTariff(charger: Pick<DemoCharger, "tariff">): Tariff {
+  return charger.tariff ?? DEMO_TARIFF;
+}
 
 /** Connector states a driver can start from: free, or plugged in and waiting. */
 export const DEMO_READY = new Set(["Available", "Preparing"]);
@@ -252,7 +290,7 @@ export function demoView(
   const charger = d && demoCharger(d.code);
   const connector = charger?.connectors.find((c) => c.number === d?.connector);
   if (!d || !charger || !connector) return null;
-  const tariff = DEMO_TARIFF;
+  const tariff = demoTariff(charger);
   const prices = priceBreakdown(tariff);
   const chargingStart = d.start + DEMO_START_DELAY_MS;
   const ended = d.stop ?? d.unplug;

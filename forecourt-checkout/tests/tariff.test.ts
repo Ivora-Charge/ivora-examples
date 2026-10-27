@@ -160,7 +160,7 @@ describe("operator price form", () => {
   };
 
   it("builds one unrestricted element priced per minute for time and idle", () => {
-    expect(elementsFromPrices(form)).toEqual([
+    expect(elementsFromPrices(form, "USD")).toEqual([
       {
         price_components: [
           { type: "ENERGY", price: 0.45, step_size: 1 },
@@ -175,25 +175,28 @@ describe("operator price form", () => {
   it("round-trips through the tariff", () => {
     const tariff: Tariff = {
       ...DEMO_TARIFF,
-      elements: elementsFromPrices(form),
+      elements: elementsFromPrices(form, "USD"),
     };
     expect(formFromTariff(tariff)).toEqual(form);
   });
 
   it("omits zero-priced dimensions and rejects bad input", () => {
     expect(
-      elementsFromPrices({
-        ...form,
-        timeCentsPerMinute: 0,
-        idleCentsPerMinute: 0,
-        sessionFeeCents: 0,
-      })[0].price_components,
+      elementsFromPrices(
+        {
+          ...form,
+          timeCentsPerMinute: 0,
+          idleCentsPerMinute: 0,
+          sessionFeeCents: 0,
+        },
+        "USD",
+      )[0].price_components,
     ).toHaveLength(1);
     expect(() =>
-      elementsFromPrices({ ...form, energyCentsPerKwh: 4.5 }),
+      elementsFromPrices({ ...form, energyCentsPerKwh: 4.5 }, "USD"),
     ).toThrow();
     expect(() =>
-      elementsFromPrices({ ...form, sessionFeeCents: -1 }),
+      elementsFromPrices({ ...form, sessionFeeCents: -1 }, "USD"),
     ).toThrow();
   });
 });
