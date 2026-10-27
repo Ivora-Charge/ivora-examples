@@ -147,7 +147,9 @@ Every write uses an idempotency key derived from the session ID and the action (
 
 ### Money rules
 
-All amounts are integer cents. Every rounding is half up, once, at a documented point. The code is in `src/lib/money.ts`, with tests in `tests/money.test.ts`.
+**Currency:** the app reads the ISO 4217 currency from the tariff, bill, session, quote and payment, and formats every amount with `Intl.NumberFormat(locale, { style: "currency", currency })` (locale `en-US`, so CAD shows as `CA$`). Minor units are converted with the currency's own exponent in one helper (`src/lib/money.ts`), so JPY has 0 decimals and KWD 3; nothing is hard-coded to 2. USD is the documented default only when a response carries no currency, and that is logged once. Operator price fields name the tariff's currency and take minor units of it, and reports are totalled per currency, never across them. The demo has a USD site and a CAD one (Demo charger 11, Toronto). The fee, hold, capture and refund rules below are unchanged and still described in cents.
+
+All amounts are integer minor units (cents for USD and CAD). Every rounding is half up, once, at a documented point. The code is in `src/lib/money.ts`, with tests in `tests/money.test.ts`.
 
 - **Hold:** the tariff's `authorization_minor`, or `DEFAULT_HOLD_CENTS` when that is not between 50 and 50,000 cents.
 - **Bill:** Ivora's final bill, `total_minor`, from the same calculation as the tariff quote.
@@ -171,7 +173,7 @@ The console polls every 4 seconds. Ivora webhooks move in-store sales forward on
 
 ### Prepay
 
-1. The store takes cash or card on its POS. The cashier enters the prepaid amount (quick buttons for $10 to $50), or a kWh amount that the console prices with the tariff quote, and confirms.
+1. The store takes cash or card on its POS. The cashier enters the prepaid amount (quick buttons for 10 to 50 in the tile's currency), or a kWh amount that the console prices with the tariff quote, and confirms.
 2. The console creates an Ivora externally funded session (processor `in-store`, `payment_reference` = the sale ID, `application_reference` = `forecourt:store:<sale ID>`), records an `authorization` settlement report for the prepaid amount, then starts it with `funding_confirmed: true`. If the report can't be recorded, the charger is not started.
 3. **Ivora does not stop at an external amount, so the app does** (see [Stopping at the prepaid limit](#stopping-at-the-prepaid-limit)). A dollar sale stops when the running cost reaches the prepaid amount less a headroom: the cost of the next minute at the recent power (energy at the session's tariff snapshot per-kWh price, plus the higher of its time and idle rates), but at least 50 cents or 5% of the prepaid amount. A kWh sale stops on energy, half a minute of energy at the recent power (at least 1% of the limit) before it; its prepaid amount (the quote for that energy) is only a safety cap, keeping back just the next minute's cost. Either way the unused amount is handed back as change.
 4. When the transaction ends the app finalizes the bill and records a `capture` report for the part the prepaid amount covered, `min(cost, prepaid)`, under its own operation reference `<sale>:capture`.
@@ -330,7 +332,7 @@ Payment terminals are out of scope for now. `src/lib/terminal.ts` defines the `C
 
 ## Limits and next steps
 
-- **USD only**, like Ivora bills today.
+- **Live checkout is USD-tested.** Amounts are read and shown in the tariff's currency, but the card-hold checks (`holdMatches` in `src/lib/server/sessions.ts`), the 50-cent minimum and the hold limits are still USD rules until the money path is reviewed for other currencies. The cashier console and the demo store stay on the USD sample.
 - **No database.** Session state lives in Stripe and Ivora; in-store sales live in Ivora only (see [What is stored](#what-is-stored)). The webhook de-duplicates per server instance (reconciling is idempotent, so a duplicate on another instance is harmless).
 - **10,000-session ceiling.** A full read of the session list stops at 100 pages of 100 sessions. The session index, the operator "today" view and the daily sweep use full reads, so in a project with more sessions an open sale can be missed by them: the console shows a red banner when that happens, and the cron response says `"truncated": true`. Sales the app looks up by reference (console sales it has shown, cashier and POS actions, receipts) are unaffected. Use one Ivora project per deployment as the conventions ask, and start a new project before you reach the ceiling.
 - **Webhooks to the POS are per instance.** Each server instance remembers which `session_due` events it delivered, in memory, so a cold start or another instance may send one again, and a restart can drop a pending retry. POS systems must de-duplicate by event ID and poll `GET /api/pos/sessions?status=due` as a backstop.

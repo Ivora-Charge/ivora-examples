@@ -1,10 +1,10 @@
-import { formatCents } from "@/lib/money";
+import { formatMoney } from "@/lib/money";
 import type { Receipt } from "@/lib/view";
 
 /** Final breakdown from Ivora's bill, then what happened on the card. */
 export function ReceiptTable({ receipt }: { receipt: Receipt }) {
   const s = receipt.settlement;
-  const money = (cents: number) => formatCents(cents, receipt.currency);
+  const money = (cents: number) => formatMoney(cents, receipt.currency);
   return (
     <table>
       <tbody>

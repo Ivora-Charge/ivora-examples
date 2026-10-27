@@ -160,21 +160,102 @@ export function settle(input: {
   };
 }
 
-export function formatCents(cents: number, currency = "USD"): string {
-  return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency,
-  }).format(cents / 100);
+/** What display code falls back to when an API response carries no currency. */
+export const DEFAULT_CURRENCY = "USD";
+/** Locale for amounts; override per call. CAD renders as "CA$" here, so mixed demos stay unambiguous. */
+export const DEFAULT_LOCALE = "en-US";
+
+let warnedMissingCurrency = false;
+
+/** The response's ISO 4217 code, or USD (logged once) when it carries none. */
+export function resolveCurrency(currency: string | null | undefined): string {
+  const code = currency?.trim().toUpperCase();
+  if (code) return code;
+  if (!warnedMissingCurrency) {
+    warnedMissingCurrency = true;
+    console.warn(
+      `A response carried no currency; assuming ${DEFAULT_CURRENCY}.`,
+    );
+  }
+  return DEFAULT_CURRENCY;
 }
 
-/** A price in cents that may carry fractions of a cent, e.g. "45" or "35.49". */
-export function formatMinorRate(minor: string, currency = "USD"): string {
-  const hundredths = parseDecimal(minor, 2);
-  const dollars = Number(hundredths) / 10_000;
-  return new Intl.NumberFormat("en-US", {
+/** Test hook: lets the once-only warning fire again. */
+export function resetCurrencyWarning(): void {
+  warnedMissingCurrency = false;
+}
+
+/** Minor-unit digits of a currency: 2 for USD, 0 for JPY, 3 for KWD. */
+export function currencyExponent(currency: string): number {
+  return new Intl.NumberFormat(DEFAULT_LOCALE, {
     style: "currency",
-    currency,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 4,
-  }).format(dollars);
+    currency: resolveCurrency(currency),
+  }).resolvedOptions().maximumFractionDigits!;
+}
+
+/**
+ * Minor units as a plain decimal string in major units: (1234, USD) -> "12.34".
+ * Every caller passes whole minor units; a fraction is rounded half up (away
+ * from zero), never dropped.
+ */
+export function minorToMajorString(minor: number, currency: string): string {
+  const exponent = currencyExponent(currency);
+  const digits = String(Math.round(Math.abs(minor))).padStart(
+    exponent + 1,
+    "0",
+  );
+  const whole = digits.slice(0, digits.length - exponent);
+  const fraction = digits.slice(digits.length - exponent);
+  return `${minor < 0 ? "-" : ""}${whole}${exponent ? `.${fraction}` : ""}`;
+}
+
+/** "12", "12.5" or "$12.55" typed in major units -> minor units, without floats. Null when invalid. */
+export function majorToMinor(text: string, currency: string): number | null {
+  const exponent = currencyExponent(currency);
+  const m = /^[^\d\s+.,-]{0,3}\s*(\d{1,7})(?:\.(\d+))?$/.exec(text.trim());
+  if (!m) return null;
+  const fraction = m[2] ?? "";
+  if (fraction.length > exponent) return null;
+  return Number(m[1] + fraction.padEnd(exponent, "0"));
+}
+
+export function formatMoney(
+  minor: number,
+  currency: string,
+  locale = DEFAULT_LOCALE,
+): string {
+  const code = resolveCurrency(currency);
+  const format = new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: code,
+  });
+  return format.format(Number(minorToMajorString(minor, code)));
+}
+
+/**
+ * A rate in minor units that may carry fractions, e.g. "45" or "35.49". Shown
+ * to at most 4 decimals of the major unit: for a 3-decimal currency such as
+ * KWD, whose rates come from priceLines with 2 decimals of a minor unit, that
+ * cuts the last digit.
+ */
+export function formatMinorRate(
+  minor: string,
+  currency: string,
+  locale = DEFAULT_LOCALE,
+): string {
+  const code = resolveCurrency(currency);
+  const exponent = currencyExponent(code);
+  const scaled = parseDecimal(minor, 4);
+  return new Intl.NumberFormat(locale, {
+    style: "currency",
+    currency: code,
+    minimumFractionDigits: exponent,
+    maximumFractionDigits: Math.max(exponent, 4),
+  }).format(Number(scaled) / 10 ** (4 + exponent));
+}
+
+/** Label for operator price fields: the currency and what one minor unit is, e.g. "CAD, 1 = CA$0.01". */
+export function minorUnitHint(currency: string): string {
+  const code = resolveCurrency(currency);
+  return `${code}, 1 = ${formatMoney(1, code)}`;
 }
