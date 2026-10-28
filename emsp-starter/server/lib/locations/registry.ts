@@ -9,6 +9,20 @@ import { SupabaseLocationStore } from "./store-supabase";
 /** The peer demo mode shows: the built-in mock CPO, never contacted over the network. */
 export const DEMO_PEER_ID = "demo-mock-cpo";
 export const DEMO_PARTY = { countryCode: "ZZ", partyId: "MCK" } as const;
+/** A second sample operator, in Toronto and priced in CAD, so the demo shows both currencies. */
+export const DEMO_PARTY_CAD = { countryCode: "ZZ", partyId: "MCC" } as const;
+/** Names of the CAD sites, so a search finds each place once. */
+const DEMO_CAD_SITES = [
+  { name: "Harbourfront Garage", address: "1 Lakeshore Example Blvd" },
+  { name: "Maple Court Charging", address: "20 Placeholder Ave" },
+];
+export const DEMO_CAD_OPTIONS = {
+  center: { lat: 43.6532, lng: -79.3832 },
+  city: "Toronto",
+  country: "CAN",
+  timeZone: "America/Toronto",
+  currency: "CAD",
+} as const;
 
 const holder = globalThis as unknown as {
   __emspDemoLocations?: MemoryLocationStore;
@@ -26,6 +40,20 @@ export function demoLocationStore(): MemoryLocationStore {
     seenAt,
   );
   void store.saveTariffs(DEMO_PEER_ID, sampleTariffs(DEMO_PARTY), seenAt);
+  void store.saveLocations(
+    DEMO_PEER_ID,
+    sampleLocations(
+      DEMO_PARTY_CAD,
+      DEMO_CAD_SITES.length,
+      DEMO_CAD_OPTIONS,
+    ).map((l, i) => ({ ...l, ...DEMO_CAD_SITES[i] })),
+    seenAt,
+  );
+  void store.saveTariffs(
+    DEMO_PEER_ID,
+    sampleTariffs(DEMO_PARTY_CAD, DEMO_CAD_OPTIONS),
+    seenAt,
+  );
   return store;
 }
 

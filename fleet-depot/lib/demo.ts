@@ -1,14 +1,25 @@
 import type { Depot } from "./depot";
 import { endSession, logEvent, replan, startSession } from "./depot";
-import type { Driver, Vehicle } from "./types";
+import type { Driver, SiteTariff, Vehicle } from "./types";
 import { energyNeededKwh, whToKwh } from "./units";
 
 /** Demo site limit, kW. Live mode keeps SITE_CAP_KW. */
 export const DEMO_CAP_KW = 150;
 
-/** Demo tariff: a flat depot rate in US dollars. Live mode keeps TARIFF_*. */
+/**
+ * Demo tariffs: a flat depot rate in US dollars (the default) and a Canadian-dollar
+ * rate for the last vehicles, so the demo shows both. Live mode keeps TARIFF_*.
+ */
 export const DEMO_CURRENCY = "USD";
 export const DEMO_CENTS_PER_KWH = 18;
+export const DEMO_CAD_TARIFF: SiteTariff = {
+  id: "toronto",
+  name: "Toronto annex",
+  currency: "CAD",
+  minorPerKwh: 22,
+};
+/** The last this many vehicles charge at the CAD annex. */
+const CAD_VEHICLES = 3;
 
 /** A charge point. A dual-outlet AC unit has two outlets, each at the rated power. */
 interface Charger {
@@ -324,6 +335,7 @@ export async function seedDemo(depot: Depot, base = dayStart(Date.now())) {
   depot.settings.siteCapKw = DEMO_CAP_KW;
   depot.settings.currency = DEMO_CURRENCY;
   depot.settings.centsPerKwh = DEMO_CENTS_PER_KWH;
+  depot.settings.tariffs = [DEMO_CAD_TARIFF];
   depot.clock = new Date(atHour(base, 16.5));
   const state: DemoState = {
     base,
@@ -352,6 +364,7 @@ export async function seedDemo(depot: Depot, base = dayStart(Date.now())) {
       departure: new Date(atHour(base, 24 + p.depart)).toISOString(),
       need: { kind: "battery", targetPercent: p.targetPercent },
       socPercent: p.socPercent,
+      ...(i >= PLANS.length - CAD_VEHICLES && { tariffId: DEMO_CAD_TARIFF.id }),
     };
     await depot.store.put("vehicles", v.id, v);
     state.arrivals[v.id] = atHour(base, p.arrive);

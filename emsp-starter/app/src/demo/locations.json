@@ -180,6 +180,185 @@
       ]
     },
     {
+      "id": "WyJkZW1vLW1vY2stY3BvIiwiWloiLCJNQ0MiLCJMT0MxIl0",
+      "name": "Harbourfront Garage",
+      "address": "1 Lakeshore Example Blvd",
+      "city": "Toronto",
+      "country": "CAN",
+      "coordinates": {
+        "lat": 43.6552,
+        "lng": -79.3792
+      },
+      "facilities": [
+        "TRAIN_STATION",
+        "CAFE"
+      ],
+      "time_zone": "America/Toronto",
+      "evse_count": 2,
+      "available_count": 1,
+      "status_counts": {
+        "AVAILABLE": 1,
+        "CHARGING": 1
+      },
+      "matching_evse_count": 2,
+      "max_power_kw": 150,
+      "connector_standards": [
+        "IEC_62196_T2_COMBO",
+        "CHADEMO"
+      ],
+      "price": {
+        "free": false,
+        "summary": "CA$0.7139 per kWh + CA$7.26 per hour (after 45 min)",
+        "currency": "CAD",
+        "lead": {
+          "type": "ENERGY",
+          "unit": "kWh",
+          "priceE4": 7139,
+          "vatIncluded": true
+        }
+      },
+      "last_updated": "2026-10-01T00:00:00Z",
+      "postal_code": "1000 AA",
+      "operator": "Sample Charging Operator",
+      "parking_type": "PARKING_LOT",
+      "opening_times": {
+        "twentyfourseven": true
+      },
+      "evses": [
+        {
+          "uid": "LOC1-1",
+          "status": "AVAILABLE",
+          "capabilities": [
+            "RFID_READER",
+            "REMOTE_START_STOP_CAPABLE"
+          ],
+          "parking_restrictions": [],
+          "connectors": [
+            {
+              "id": "1",
+              "standard": "IEC_62196_T2_COMBO",
+              "format": "CABLE",
+              "power_type": "DC",
+              "max_power_kw": 150,
+              "price": {
+                "tariffId": "DC_FAST",
+                "currency": "CAD",
+                "free": false,
+                "components": [
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 7139,
+                    "vatIncluded": true,
+                    "text": "CA$0.7139 per kWh",
+                    "conditions": []
+                  },
+                  {
+                    "type": "TIME",
+                    "unit": "hour",
+                    "priceE4": 72600,
+                    "vatIncluded": true,
+                    "text": "CA$7.26 per hour",
+                    "conditions": [
+                      "after 45 min"
+                    ]
+                  }
+                ],
+                "summary": "CA$0.7139 per kWh + CA$7.26 per hour (after 45 min)",
+                "type": "REGULAR",
+                "altText": "0.59 per kWh. After 45 minutes, 6.00 per hour."
+              }
+            },
+            {
+              "id": "2",
+              "standard": "CHADEMO",
+              "format": "CABLE",
+              "power_type": "DC",
+              "max_power_kw": 50,
+              "price": {
+                "tariffId": "DC_FAST",
+                "currency": "CAD",
+                "free": false,
+                "components": [
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 7139,
+                    "vatIncluded": true,
+                    "text": "CA$0.7139 per kWh",
+                    "conditions": []
+                  },
+                  {
+                    "type": "TIME",
+                    "unit": "hour",
+                    "priceE4": 72600,
+                    "vatIncluded": true,
+                    "text": "CA$7.26 per hour",
+                    "conditions": [
+                      "after 45 min"
+                    ]
+                  }
+                ],
+                "summary": "CA$0.7139 per kWh + CA$7.26 per hour (after 45 min)",
+                "type": "REGULAR",
+                "altText": "0.59 per kWh. After 45 minutes, 6.00 per hour."
+              }
+            }
+          ],
+          "evse_id": "ZZ*MCC*E11",
+          "physical_reference": "A1"
+        },
+        {
+          "uid": "LOC1-2",
+          "status": "CHARGING",
+          "capabilities": [
+            "RFID_READER",
+            "REMOTE_START_STOP_CAPABLE"
+          ],
+          "parking_restrictions": [],
+          "connectors": [
+            {
+              "id": "1",
+              "standard": "IEC_62196_T2_COMBO",
+              "format": "CABLE",
+              "power_type": "DC",
+              "max_power_kw": 150,
+              "price": {
+                "tariffId": "DC_FAST",
+                "currency": "CAD",
+                "free": false,
+                "components": [
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 7139,
+                    "vatIncluded": true,
+                    "text": "CA$0.7139 per kWh",
+                    "conditions": []
+                  },
+                  {
+                    "type": "TIME",
+                    "unit": "hour",
+                    "priceE4": 72600,
+                    "vatIncluded": true,
+                    "text": "CA$7.26 per hour",
+                    "conditions": [
+                      "after 45 min"
+                    ]
+                  }
+                ],
+                "summary": "CA$0.7139 per kWh + CA$7.26 per hour (after 45 min)",
+                "type": "REGULAR",
+                "altText": "0.59 per kWh. After 45 minutes, 6.00 per hour."
+              }
+            }
+          ],
+          "evse_id": "ZZ*MCC*E12",
+          "physical_reference": "A2"
+        }
+      ]
+    },
+    {
       "id": "WyJkZW1vLW1vY2stY3BvIiwiWloiLCJNQ0siLCJMT0M5Il0",
       "name": "Hospital Car Park",
       "address": "20 Care Avenue",
@@ -566,6 +745,226 @@
           ],
           "evse_id": "ZZ*MCK*E83",
           "physical_reference": "H3"
+        }
+      ]
+    },
+    {
+      "id": "WyJkZW1vLW1vY2stY3BvIiwiWloiLCJNQ0MiLCJMT0MyIl0",
+      "name": "Maple Court Charging",
+      "address": "20 Placeholder Ave",
+      "city": "Toronto",
+      "country": "CAN",
+      "coordinates": {
+        "lat": 43.6472,
+        "lng": -79.3732
+      },
+      "facilities": [
+        "SUPERMARKET",
+        "WIFI"
+      ],
+      "time_zone": "America/Toronto",
+      "evse_count": 3,
+      "available_count": 2,
+      "status_counts": {
+        "AVAILABLE": 2,
+        "OUTOFORDER": 1
+      },
+      "matching_evse_count": 3,
+      "max_power_kw": 22,
+      "connector_standards": [
+        "IEC_62196_T2"
+      ],
+      "price": {
+        "free": false,
+        "summary": "CA$0.605 per session + CA$0.4719 per kWh (Mon–Fri, 07:00–21:00); varies at other times",
+        "currency": "CAD",
+        "lead": {
+          "type": "ENERGY",
+          "unit": "kWh",
+          "priceE4": 4719,
+          "vatIncluded": true
+        }
+      },
+      "last_updated": "2026-10-01T00:00:00Z",
+      "postal_code": "1000 AB",
+      "operator": "Sample Charging Operator",
+      "parking_type": "PARKING_LOT",
+      "opening_times": {
+        "twentyfourseven": true
+      },
+      "evses": [
+        {
+          "uid": "LOC2-1",
+          "status": "AVAILABLE",
+          "capabilities": [
+            "RFID_READER",
+            "REMOTE_START_STOP_CAPABLE"
+          ],
+          "parking_restrictions": [],
+          "connectors": [
+            {
+              "id": "1",
+              "standard": "IEC_62196_T2",
+              "format": "SOCKET",
+              "power_type": "AC_3_PHASE",
+              "max_power_kw": 22,
+              "price": {
+                "tariffId": "AC_DAY_NIGHT",
+                "currency": "CAD",
+                "free": false,
+                "components": [
+                  {
+                    "type": "FLAT",
+                    "unit": "session",
+                    "priceE4": 6050,
+                    "vatIncluded": true,
+                    "text": "CA$0.605 per session",
+                    "conditions": []
+                  },
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 4719,
+                    "vatIncluded": true,
+                    "text": "CA$0.4719 per kWh",
+                    "conditions": [
+                      "Mon–Fri",
+                      "07:00–21:00"
+                    ]
+                  },
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 3509,
+                    "vatIncluded": true,
+                    "text": "CA$0.3509 per kWh",
+                    "conditions": [
+                      "otherwise"
+                    ]
+                  }
+                ],
+                "summary": "CA$0.605 per session + CA$0.4719 per kWh (Mon–Fri, 07:00–21:00); varies at other times"
+              }
+            }
+          ],
+          "evse_id": "ZZ*MCC*E21",
+          "physical_reference": "B1"
+        },
+        {
+          "uid": "LOC2-2",
+          "status": "AVAILABLE",
+          "capabilities": [
+            "RFID_READER",
+            "REMOTE_START_STOP_CAPABLE"
+          ],
+          "parking_restrictions": [
+            "CUSTOMERS"
+          ],
+          "connectors": [
+            {
+              "id": "1",
+              "standard": "IEC_62196_T2",
+              "format": "SOCKET",
+              "power_type": "AC_3_PHASE",
+              "max_power_kw": 22,
+              "price": {
+                "tariffId": "AC_DAY_NIGHT",
+                "currency": "CAD",
+                "free": false,
+                "components": [
+                  {
+                    "type": "FLAT",
+                    "unit": "session",
+                    "priceE4": 6050,
+                    "vatIncluded": true,
+                    "text": "CA$0.605 per session",
+                    "conditions": []
+                  },
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 4719,
+                    "vatIncluded": true,
+                    "text": "CA$0.4719 per kWh",
+                    "conditions": [
+                      "Mon–Fri",
+                      "07:00–21:00"
+                    ]
+                  },
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 3509,
+                    "vatIncluded": true,
+                    "text": "CA$0.3509 per kWh",
+                    "conditions": [
+                      "otherwise"
+                    ]
+                  }
+                ],
+                "summary": "CA$0.605 per session + CA$0.4719 per kWh (Mon–Fri, 07:00–21:00); varies at other times"
+              }
+            }
+          ],
+          "evse_id": "ZZ*MCC*E22",
+          "physical_reference": "B2"
+        },
+        {
+          "uid": "LOC2-3",
+          "status": "OUTOFORDER",
+          "capabilities": [
+            "RFID_READER",
+            "REMOTE_START_STOP_CAPABLE"
+          ],
+          "parking_restrictions": [],
+          "connectors": [
+            {
+              "id": "1",
+              "standard": "IEC_62196_T2",
+              "format": "SOCKET",
+              "power_type": "AC_3_PHASE",
+              "max_power_kw": 22,
+              "price": {
+                "tariffId": "AC_DAY_NIGHT",
+                "currency": "CAD",
+                "free": false,
+                "components": [
+                  {
+                    "type": "FLAT",
+                    "unit": "session",
+                    "priceE4": 6050,
+                    "vatIncluded": true,
+                    "text": "CA$0.605 per session",
+                    "conditions": []
+                  },
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 4719,
+                    "vatIncluded": true,
+                    "text": "CA$0.4719 per kWh",
+                    "conditions": [
+                      "Mon–Fri",
+                      "07:00–21:00"
+                    ]
+                  },
+                  {
+                    "type": "ENERGY",
+                    "unit": "kWh",
+                    "priceE4": 3509,
+                    "vatIncluded": true,
+                    "text": "CA$0.3509 per kWh",
+                    "conditions": [
+                      "otherwise"
+                    ]
+                  }
+                ],
+                "summary": "CA$0.605 per session + CA$0.4719 per kWh (Mon–Fri, 07:00–21:00); varies at other times"
+              }
+            }
+          ],
+          "evse_id": "ZZ*MCC*E23",
+          "physical_reference": "B3"
         }
       ]
     },

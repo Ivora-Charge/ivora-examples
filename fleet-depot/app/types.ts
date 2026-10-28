@@ -51,7 +51,17 @@ export interface State {
   now: string;
   /** Demo only: the depot's time zone ("UTC"); every demo time is shown in it. */
   tz?: string;
-  settings: { siteCapKw: number; currency: string; centsPerKwh: number };
+  settings: {
+    siteCapKw: number;
+    currency: string;
+    centsPerKwh: number;
+    tariffs?: {
+      id: string;
+      name: string;
+      currency: string;
+      minorPerKwh: number;
+    }[];
+  };
   totalKw: number;
   rows: Row[];
   unmatched: PublicSession[];
@@ -80,12 +90,15 @@ export interface State {
   };
 }
 export interface Report {
-  currency: string;
-  rows: {
-    key: string;
-    label: string;
-    sessions: number;
-    kwh: number;
-    costCents: number;
+  /** One list per currency: amounts in different currencies are never added together. */
+  groups: {
+    currency: string;
+    rows: {
+      key: string;
+      label: string;
+      sessions: number;
+      kwh: number;
+      costMinor: number;
+    }[];
   }[];
 }
