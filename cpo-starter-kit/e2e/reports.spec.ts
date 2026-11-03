@@ -79,15 +79,15 @@ test("demo: Ivora's figures for every session, then your sessions with what was 
   });
   await expect(all.getByRole("table")).toBeVisible();
   await expect(all.getByText(/^\*\*\*\*[A-Z0-9]{4}$/).first()).toBeVisible();
+  await expect(all.getByRole("alert")).toHaveCount(0);
   const bills = page.getByRole("region", {
     name: "Bills created in the period",
   });
-  await expect(bills).toContainText(
-    "not what was collected".replace(
-      "not what was collected",
-      "what was collected",
-    ),
-  );
+  await expect(bills.getByRole("table")).toBeVisible();
+  await expect(
+    bills.getByRole("cell", { name: /^bill_[0-9a-f]{32}$/ }).first(),
+  ).toBeVisible();
+  await expect(bills.getByRole("alert")).toHaveCount(0);
 
   const payouts = page.getByRole("region", { name: "Payouts" });
   await expect(payouts).toContainText("The kit holds no Stripe keys");
@@ -136,6 +136,38 @@ test("demo: refunded sessions, pages, and the same sessions as CSV", async ({
     expect(Number(f[col("net_minor")])).toBe(captured - refunded);
     expect(["USD", "CAD"]).toContain(f[col("currency")]);
   }
+});
+
+test("demo: Ivora's session list pages with Older and returns with Newest", async ({
+  page,
+  isMobile,
+}) => {
+  await openReports(page, isMobile);
+  await page.getByLabel("Period", { exact: true }).selectOption("90d");
+  await page.getByRole("button", { name: "Show report" }).click();
+  const all = page.getByRole("region", {
+    name: "Sessions started in the period",
+  });
+  const rows = () => all.getByRole("row").allInnerTexts();
+  await expect(all.getByRole("table")).toBeVisible();
+  const first = await rows();
+  expect(first.length).toBeGreaterThan(2);
+
+  const pager = all.getByRole("navigation", { name: "Started sessions pages" });
+  await expect(pager.getByRole("link", { name: "Newest" })).toHaveCount(0);
+  await pager.getByRole("link", { name: "Older" }).click();
+  await expect(page).toHaveURL(/scursor=/);
+  await expect(pager.getByRole("link", { name: "Newest" })).toBeVisible();
+  const second = await rows();
+  // Same header, none of the first page's sessions.
+  expect(second[0]).toBe(first[0]);
+  expect(second.slice(1).filter((r) => first.includes(r))).toEqual([]);
+  await expect(all.getByRole("alert")).toHaveCount(0);
+
+  await pager.getByRole("link", { name: "Newest" }).click();
+  await expect(page).not.toHaveURL(/scursor=/);
+  await expect(pager.getByRole("link", { name: "Newest" })).toHaveCount(0);
+  expect(await rows()).toEqual(first);
 });
 
 test("demo: a period too long for its buckets shows stats_range_too_large; by month it works", async ({

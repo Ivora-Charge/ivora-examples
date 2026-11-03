@@ -232,8 +232,9 @@ export interface TransactionBill {
 
 /**
  * `GET /transactions/{id}` (needs billing:read): the session with its stop reason,
- * duration and bill. The list (`GET /transactions`) carries none of these, has no date
- * filter and lists oldest first, so reports never scan it for a period.
+ * duration and bill in full. The filtered list (`listSessions`) carries the station
+ * name, stop reason and bill ID per item, so Reports and Live page it rather than
+ * reading each session; this read is for one session a webhook or command names.
  */
 export interface TransactionDetail extends Transaction {
   /** The station's OCPP connection name. */
@@ -341,7 +342,8 @@ export interface ReadLimits {
 }
 
 /**
- * One item of `GET /transactions` on a deployment with the filtered list (IVP-436): the
+ * One item of `GET /transactions` on an Ivora API version with the filtered
+ * transaction list (`active`, `started_from`/`started_to`, `order`, `cursor`): the
  * masked ID token, connector, station name and bill ID are in the list itself.
  */
 export interface SessionListItem extends Transaction {
@@ -837,14 +839,17 @@ export interface IvoraClient {
     limits?: ReadLimits,
   ): Promise<Page<TransactionListItem>>;
   /**
-   * One page of the filtered session list, newest first (`order=desc`; needs the
-   * deployment's transaction filters, IVP-436). Pass `next_cursor` back as `cursor`.
+   * One page of the filtered session list, newest first (`order=desc`; needs the API
+   * version with the filtered transaction list). Pass `next_cursor` back as `cursor`.
    */
   listSessions(
     q: SessionQuery,
     limits?: ReadLimits,
   ): Promise<CursorPage<SessionListItem>>;
-  /** One page of bills created in a period, newest first (IVP-437). Needs billing:read. */
+  /**
+   * One page of bills created in a period, newest first (needs the API version with
+   * the filtered bill list, `created_from`/`created_to`, `order`). Needs billing:read.
+   */
   listBills(q: BillQuery, limits?: ReadLimits): Promise<CursorPage<Bill>>;
   getTransaction(
     transactionId: number,

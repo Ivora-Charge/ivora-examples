@@ -867,7 +867,7 @@ function IvoraBills({
                 {result.bills.map((b) => (
                   <tr key={b.id}>
                     <td>
-                      <When iso={b.created_at} zone="UTC" />
+                      <When iso={b.created_at} zone={q.timeZone} />
                     </td>
                     <td className="mono">{b.id}</td>
                     <td>{b.status === "final" ? "Final" : "Open"}</td>

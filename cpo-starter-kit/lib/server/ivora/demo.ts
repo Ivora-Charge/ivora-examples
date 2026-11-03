@@ -41,6 +41,25 @@ import type {
   Transaction,
 } from "./types";
 
+// The demo's list cursors, shaped like Ivora's: the session list's is base64url JSON
+// of {"order":"desc","id":N}; the bill list's is `bcur_` and base64url of its key. An
+// unreadable cursor reads as "from the start".
+const b64 = (v: string) => Buffer.from(v, "utf8").toString("base64url");
+const unb64 = (v: string) => Buffer.from(v, "base64url").toString("utf8");
+const demoSessionCursor = (id: number) =>
+  b64(JSON.stringify({ order: "desc", id }));
+function demoCursorId(cursor: string): number {
+  try {
+    const id = (JSON.parse(unb64(cursor)) as { id?: unknown }).id;
+    return typeof id === "number" && Number.isFinite(id) ? id : Infinity;
+  } catch {
+    return Infinity;
+  }
+}
+const demoBillCursor = (key: string) => `bcur_${b64(key)}`;
+const demoBillCursorKey = (cursor: string) =>
+  cursor.startsWith("bcur_") ? unb64(cursor.slice(5)) : null;
+
 // Sample data for demo mode. Every name says "Sample" or starts with DEMO- so it cannot
 // be mistaken for a real site, charger or person.
 
@@ -1127,15 +1146,14 @@ export function createDemoClient(
         next_cursor: rows.length > limit ? data[data.length - 1].id : null,
       };
     },
-    // Like the API: newest first by start, filtered, with the fuller list items; the
-    // cursor is the last item's "started_at|id".
+    // Like the API: newest first by transaction ID, filtered, with the fuller list
+    // items; the cursor has Ivora's shape (base64url of {"order":"desc","id":N}).
     async listSessions(q) {
       const limit = q.limit ?? 100;
       const from = q.started_from ? Date.parse(q.started_from) : -Infinity;
       const to = q.started_to ? Date.parse(q.started_to) : Infinity;
+      const before = q.cursor ? demoCursorId(q.cursor) : Infinity;
       const names = new Map((await stations()).map((s) => [s.id, s.name]));
-      const key = (t: Transaction) =>
-        `${t.started_at ?? ""}|${String(t.id).padStart(12, "0")}`;
       const rows = (await reportData()).transactions
         .filter((t) => {
           const at = t.started_at ? Date.parse(t.started_at) : NaN;
@@ -1144,24 +1162,29 @@ export function createDemoClient(
             at < to &&
             (q.active === undefined || (t.active === true) === q.active) &&
             (q.station_id === undefined || t.station_id === q.station_id) &&
-            (!q.cursor || key(t) < q.cursor)
+            t.id < before
           );
         })
-        .sort((a, b) => (key(a) < key(b) ? 1 : -1));
+        .sort((a, b) => b.id - a.id);
       const page = rows.slice(0, limit);
       return {
         data: page.map((t) => ({
           ...t,
           station_name: names.get(t.station_id ?? 0) ?? null,
         })),
-        next_cursor: rows.length > limit ? key(page[page.length - 1]) : null,
+        next_cursor:
+          rows.length > limit
+            ? demoSessionCursor(page[page.length - 1].id)
+            : null,
       };
     },
+    // Like the API: newest first by (created_at, id); the cursor is a `bcur_` token.
     async listBills(q) {
       const limit = q.limit ?? 100;
       const from = q.created_from ? Date.parse(q.created_from) : -Infinity;
       const to = q.created_to ? Date.parse(q.created_to) : Infinity;
       const key = (b: Bill) => `${b.created_at}|${b.id}`;
+      const before = q.cursor ? demoBillCursorKey(q.cursor) : null;
       const rows = (await reportData()).bills
         .filter((b) => {
           const at = Date.parse(b.created_at);
@@ -1169,14 +1192,17 @@ export function createDemoClient(
             at >= from &&
             at < to &&
             (q.station_id === undefined || b.station_id === q.station_id) &&
-            (!q.cursor || key(b) < q.cursor)
+            (before === null || key(b) < before)
           );
         })
         .sort((a, b) => (key(a) < key(b) ? 1 : -1));
       const page = rows.slice(0, limit);
       return {
         data: page,
-        next_cursor: rows.length > limit ? key(page[page.length - 1]) : null,
+        next_cursor:
+          rows.length > limit
+            ? demoBillCursor(key(page[page.length - 1]))
+            : null,
       };
     },
     async findToken(externalReference) {

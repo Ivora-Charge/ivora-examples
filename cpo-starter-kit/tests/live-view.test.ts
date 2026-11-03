@@ -160,7 +160,7 @@ function fakeIvora() {
       return { body: { data: locations, next_cursor: null } };
     if (c.method === "GET" && p === "stations")
       return { body: { data: stations, next_cursor: null } };
-    // Like Ivora (IVP-436): `active` and `order=desc` filters, an opaque cursor
+    // Like Ivora's filtered list: `active` and `order=desc` filters, an opaque cursor
     // (returned also on the last page), and the masked ID token and connector in
     // each item. Without `order=desc` the old oldest-first list is refused here.
     if (c.method === "GET" && p === "transactions") {
@@ -168,7 +168,14 @@ function fakeIvora() {
         throw new Error("Live must read the filtered, newest-first list");
       const st = q.get("station_id");
       const active = q.get("active");
-      const below = q.get("cursor") ? Number(q.get("cursor")) : Infinity;
+      const cursor = q.get("cursor");
+      const below = cursor
+        ? (
+            JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+              id: number;
+            }
+          ).id
+        : Infinity;
       const limit = Number(q.get("limit") ?? 50);
       const data = transactions
         .filter(
@@ -183,9 +190,14 @@ function fakeIvora() {
         body: {
           data,
           next_cursor: null,
-          next_page_cursor: data.length
-            ? String(data[data.length - 1].id)
-            : "0",
+          // Ivora's shape: base64url JSON of {"order":"desc","id":N}.
+          next_page_cursor: Buffer.from(
+            JSON.stringify({
+              order: "desc",
+              id: data.length ? data[data.length - 1].id : 0,
+            }),
+            "utf8",
+          ).toString("base64url"),
         },
       };
     }

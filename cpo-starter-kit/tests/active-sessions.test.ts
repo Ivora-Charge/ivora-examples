@@ -48,6 +48,15 @@ import type { Staff } from "@/lib/server/team/types";
 // cursor (also returned on the last page); GET /transactions/{id} reads one. The old
 // oldest-first list (`after`) remains for the checkout finder.
 
+// Ivora's transaction cursor: base64url JSON of {"order":"desc","id":N}.
+const txCursor = (id: number) =>
+  Buffer.from(JSON.stringify({ order: "desc", id }), "utf8").toString(
+    "base64url",
+  );
+const cursorId = (c: string) =>
+  (JSON.parse(Buffer.from(c, "base64url").toString("utf8")) as { id: number })
+    .id;
+
 const NOW = Date.parse("2026-10-22T10:00:00Z");
 const OLD = "2025-01-01T00:00:00Z";
 const STATION = 70;
@@ -121,7 +130,7 @@ function api(rows: Transaction[], stations = [station(STATION, "DEPOT-01")]) {
       },
       _limits?: unknown,
     ) => {
-      const below = q.cursor ? Number(q.cursor) : Infinity;
+      const below = q.cursor ? cursorId(q.cursor) : Infinity;
       const all = rows
         .filter(
           (t) =>
@@ -133,7 +142,7 @@ function api(rows: Transaction[], stations = [station(STATION, "DEPOT-01")]) {
       const data = all.slice(0, q.limit ?? 100).map((t) => structuredClone(t));
       return {
         data,
-        next_cursor: data.length ? String(data[data.length - 1].id) : null,
+        next_cursor: data.length ? txCursor(data[data.length - 1].id) : null,
       };
     },
   );
@@ -342,7 +351,7 @@ describe("running sessions with a long history", () => {
     expect(s.complete).toBe(true);
     expect(a.sessions).toHaveBeenCalledTimes(2);
     expect(a.sessions.mock.calls[1][0].cursor).toBe(
-      String(1000 + rows.length - LIST_PAGE_SIZE),
+      txCursor(1000 + rows.length - LIST_PAGE_SIZE),
     );
   });
 

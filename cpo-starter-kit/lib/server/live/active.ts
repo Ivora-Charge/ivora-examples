@@ -12,8 +12,8 @@ import type { LiveStore, TrackedSession } from "./types";
 
 /**
  * The sessions that are running now. Ivora's `GET /transactions` filters by `active`
- * and lists newest first (IVP-436), with the masked ID token, connector, station name
- * and bill ID in each item, so "the running sessions" are one list read. The kit keeps
+ * and lists newest first (the filtered transaction list, on Ivora since 2026-10-29),
+ * with the masked ID token, connector, station name and bill ID in each item, so "the running sessions" are one list read. The kit keeps
  * them in a small table (cpo_active_sessions) all the same, as the cache every Live
  * view reads, and fills it from:
  *
@@ -32,8 +32,8 @@ import type { LiveStore, TrackedSession } from "./types";
  */
 
 /**
- * A station is scanned at most this often (its mark's scanned_at, so across server
- * instances).
+ * The running-session list is read at most this often per charger (its mark's
+ * scanned_at, so across server instances).
  */
 export const SYNC_INTERVAL_MS = 30_000;
 /** Items per page of the running-session list, and pages read per load. */
@@ -59,8 +59,8 @@ export const STALL_AFTER_MS = 12 * 60 * 60_000;
 export const STALLED_REFRESH_AFTER_MS = 30 * 60_000;
 /**
  * Work left for a later load only makes the list "may be incomplete" past these: a
- * station not scanned for SCAN_LATE_MS (or never), a session not read for
- * REFRESH_LATE_MS (stalled ones: twice their own interval).
+ * charger whose sessions were not listed for SCAN_LATE_MS (or never), a session not
+ * read for REFRESH_LATE_MS (stalled ones: twice their own interval).
  */
 export const SCAN_LATE_MS = 5 * 60_000;
 export const REFRESH_LATE_MS = 10 * 60_000;
@@ -175,9 +175,9 @@ export interface ActiveSync {
   /** The running sessions of the stations asked for, newest first. */
   sessions: TrackedSession[];
   /**
-   * False when work that matters was cut or failed: a read failed, or a station not
-   * scanned for SCAN_LATE_MS or a session not read for REFRESH_LATE_MS was left for
-   * later. The list may lag.
+   * False when work that matters was cut or failed: a read failed, the running-session
+   * list of a charger not listed for SCAN_LATE_MS could not be read to its end, or a
+   * session not read for REFRESH_LATE_MS was left for later. The list may lag.
    */
   complete: boolean;
   /** Ivora rate-limited the sync: seconds to wait before reading again. */
@@ -192,11 +192,15 @@ export const waitAfter429 = (e: IvoraError) =>
 const SPENT = Symbol("budget spent");
 
 /**
- * Brings the tracked sessions of these stations up to date and returns them. Scans
- * the stations due (oldest scan first, at most SYNC_MAX_STATIONS, seeding at most
- * SEEDS_PER_SYNC) and re-reads tracked sessions that have had no news (at most
- * REFRESH_MAX), all within one budget: SYNC_BUDGET_MS and SYNC_MAX_CALLS. The first
- * 429 stops the sync and its Retry-After goes back to the page. With `fresh`, every
+ * Brings the tracked sessions of these stations up to date and returns them. When any
+ * of them is due (not listed for SYNC_INTERVAL_MS), reads the running-session list
+ * (`active=true`, newest first, at most LIST_MAX_PAGES pages of LIST_PAGE_SIZE) and
+ * records its items. Then re-reads the tracked sessions the list did not show (at most
+ * REFRESH_MAX, oldest news first): after a list read to its end, those of the charger
+ * listed (they have ended); otherwise those with no news for REFRESH_AFTER_MS. All of
+ * it runs within one budget:
+ * SYNC_BUDGET_MS and SYNC_MAX_CALLS. The first 429 stops the sync and its Retry-After
+ * goes back to the page. With `fresh`, every
  * tracked session of these stations is re-read and the throttle ignored: commands that
  * act on a session or connector decide on that, and refuse when `complete` is false.
  * A failed Ivora call degrades to the tracked state; it does not fail the page.
