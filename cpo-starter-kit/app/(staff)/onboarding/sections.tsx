@@ -13,7 +13,16 @@ import {
   resetDemoOnboardingAction,
   simulateStripeAction,
 } from "./actions";
-import { BrandForm, CompanyForm, PushBranding } from "./forms";
+import type {
+  ReturnDomainResult,
+  ReturnDomainState,
+} from "@/lib/server/onboarding/return-domain";
+import {
+  BrandForm,
+  CompanyForm,
+  PushBranding,
+  ReturnDomainButton,
+} from "./forms";
 
 // The onboarding steps, shared by the setup wizard (/onboarding) and Settings.
 
@@ -244,6 +253,84 @@ export function DemoReset() {
           Reset the demo company
         </button>
       </form>
+    </section>
+  );
+}
+
+const DOMAIN_PILL: Record<ReturnDomainState, [string, string]> = {
+  demo: ["pill off", "Sample"],
+  no_origin: ["pill off", "Not set"],
+  not_registered: ["pill off", "Not registered"],
+  pending: ["pill warn", "Waiting for the TXT record"],
+  ready: ["pill ok", "Verified"],
+};
+
+/**
+ * The return domain: the hostname drivers come back to after Ivora's hosted checkout,
+ * to the kit's own session page (/s/<id>). Optional: without it they return to Ivora's
+ * driver page.
+ */
+export function ReturnDomainSection({
+  result,
+}: {
+  result: ReturnDomainResult;
+}) {
+  const v = result.ok ? result.view : null;
+  return (
+    <section className="card" aria-labelledby="return-domain-heading">
+      <h2 id="return-domain-heading">
+        Return domain
+        {v && (
+          <span className={DOMAIN_PILL[v.state][0]}>
+            {DOMAIN_PILL[v.state][1]}
+          </span>
+        )}
+      </h2>
+      <p className="muted">
+        After paying, drivers come back to your own page (<code>/s/…</code> on
+        your domain) to follow their session, stop it and see the receipt. Ivora
+        only sends them to a hostname you proved you own. Optional: until it is
+        verified they return to Ivora&apos;s driver page.
+      </p>
+      {result.ok ? (
+        <>
+          <p>{result.view.detail}</p>
+          {result.view.hostname && (
+            <dl className="facts">
+              <div>
+                <dt>Hostname</dt>
+                <dd>
+                  <code>{result.view.hostname}</code>
+                </dd>
+              </div>
+              {result.view.txt && (
+                <>
+                  <div>
+                    <dt>TXT record name</dt>
+                    <dd>
+                      <code>{result.view.txt.name}</code>
+                    </dd>
+                  </div>
+                  <div>
+                    <dt>TXT record value</dt>
+                    <dd>
+                      <code>{result.view.txt.value}</code>
+                    </dd>
+                  </div>
+                </>
+              )}
+            </dl>
+          )}
+          {result.view.state === "not_registered" && (
+            <ReturnDomainButton verify={false} />
+          )}
+          {result.view.state === "pending" && <ReturnDomainButton verify />}
+        </>
+      ) : (
+        <p className="error" role="alert">
+          {result.error}
+        </p>
+      )}
     </section>
   );
 }

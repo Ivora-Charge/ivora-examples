@@ -125,6 +125,10 @@ export function createSupabaseCheckoutStore(): CheckoutStore {
         await select().eq("operator_id", operatorId).eq("id", id).maybeSingle(),
       );
     },
+    async getById(id) {
+      if (!UUID.test(id)) return null;
+      return one(await select().eq("id", id.toLowerCase()).maybeSingle());
+    },
     async getByRequest(operatorId, requestId) {
       if (!UUID.test(requestId)) return null;
       return one(

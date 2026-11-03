@@ -9,6 +9,7 @@ import {
 } from "@/lib/brand-colors";
 import { actionError } from "@/lib/server/action-errors";
 import { requireRole } from "@/lib/server/auth";
+import { publicBase } from "@/lib/server/checkout";
 import { isDemo } from "@/lib/server/env";
 import {
   DEMO_STRIPE_STATES,
@@ -22,6 +23,10 @@ import {
   syncBranding,
   type SyncResult,
 } from "@/lib/server/onboarding";
+import {
+  registerReturnDomain,
+  verifyReturnDomain,
+} from "@/lib/server/onboarding/return-domain";
 import { resetDemoOnboarding } from "@/lib/server/onboarding/demo-cookie";
 import { LOGO_MAX_BYTES } from "@/lib/server/onboarding/image";
 
@@ -163,4 +168,43 @@ export async function resetDemoOnboardingAction(): Promise<void> {
   await requireRole("manager");
   await resetDemoOnboarding();
   revalidatePath("/", "layout");
+}
+
+/** Registers the kit's hostname as a return domain, and shows the TXT record. */
+export async function registerReturnDomainAction(
+  _prev: ActionState,
+  _form: FormData,
+): Promise<ActionState> {
+  try {
+    const actor = await requireRole("manager");
+    if (isDemo()) return { ok: `Demo: nothing was sent to Ivora.` };
+    const r = await registerReturnDomain(getOnboarding(), actor, publicBase());
+    revalidatePath("/", "layout");
+    return r.ok
+      ? { ok: "Registered. Publish the TXT record below, then choose Verify." }
+      : { error: r.error };
+  } catch (e) {
+    return actionError(e, "return domain register");
+  }
+}
+
+/** Asks Ivora to check the TXT record now. */
+export async function verifyReturnDomainAction(
+  _prev: ActionState,
+  _form: FormData,
+): Promise<ActionState> {
+  try {
+    const actor = await requireRole("manager");
+    if (isDemo()) return { ok: `Demo: nothing was sent to Ivora.` };
+    const r = await verifyReturnDomain(getOnboarding(), actor, publicBase());
+    revalidatePath("/", "layout");
+    if (!r.ok) return { error: r.error };
+    return r.view.state === "ready"
+      ? { ok: `${r.view.hostname} is verified.` }
+      : {
+          warning: `Not verified yet: Ivora doesn't see the TXT record at _ivora-return.${r.view.hostname}. DNS changes can take a few minutes; check the record and try again.`,
+        };
+  } catch (e) {
+    return actionError(e, "return domain verify");
+  }
 }

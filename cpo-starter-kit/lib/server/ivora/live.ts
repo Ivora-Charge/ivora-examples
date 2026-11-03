@@ -18,6 +18,7 @@ import type {
   PaymentAccount,
   Quote,
   ReadLimits,
+  ReturnDomain,
   Station,
   StationInput,
   Stats,
@@ -531,6 +532,22 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         key,
         root: "stripe",
       });
+    },
+    async listReturnDomains() {
+      return (await request<Page<ReturnDomain>>("GET", "return-domains")).data;
+    },
+    createReturnDomain(hostname, key) {
+      return request<ReturnDomain>("POST", "return-domains", {
+        body: { hostname },
+        key,
+      });
+    },
+    verifyReturnDomain(id, key) {
+      return request<ReturnDomain>(
+        "POST",
+        `return-domains/${encodeURIComponent(String(id))}/verify`,
+        { key },
+      );
     },
     getTariff(tariffId) {
       return request<Tariff>("GET", `tariffs/${tariffId}`);

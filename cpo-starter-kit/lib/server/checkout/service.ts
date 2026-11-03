@@ -10,6 +10,7 @@ import {
   type IvoraClient,
   type Operation,
   type Payment,
+  type PaymentInput,
   type Quote,
   type Station,
   type Transaction,
@@ -28,6 +29,7 @@ import { effectiveTariff } from "../pricing/service";
 import { driverText } from "../pricing/tariff";
 import type { PricingStore, TariffDefinition } from "../pricing/types";
 import { digest, type RateLimiter } from "../rate-limit";
+import { RETURN_FALLBACK_MESSAGE, sessionReturnUrl } from "./return-url";
 import {
   CheckoutError,
   HOLDS_CONNECTOR,
@@ -65,6 +67,12 @@ export interface CheckoutDeps {
     | "trackSession"
   >;
   limiter: RateLimiter;
+  /**
+   * The kit's own public https origin (PUBLIC_BASE_URL), where drivers come back after
+   * Ivora's hosted checkout when it is a verified return domain. Null or absent: the
+   * payment returns to Ivora's driver page, as before.
+   */
+  publicOrigin?: string | null;
   /** Keys the rate-limit digests, so sources and connectors are never stored plain. */
   secret: string;
   /** Short-lived reads shared by page views (see `cached`). */
@@ -634,6 +642,7 @@ const unconfirmed = (e: IvoraError, again: string) =>
 type KeyAction =
   | "bill"
   | "payment"
+  | "payment-fallback"
   | "start"
   | "stop"
   | "hold-stop"
@@ -728,6 +737,36 @@ async function claimConnector(
   throw heldByOther();
 }
 
+const RETURN_DOMAINS_KEY = "return-domains";
+
+/**
+ * The payment's return_url, `<origin>/s/<checkout id>`, when the kit's public origin
+ * is a verified return domain; null otherwise (the payment then returns to Ivora's
+ * driver page). The domain list is read once a minute; a failed read (for example a
+ * key without the domain scopes) also means "not verified".
+ */
+async function returnUrlFor(
+  d: CheckoutDeps,
+  checkoutId: string,
+): Promise<string | null> {
+  if (d.ivora.mode === "demo") return null;
+  const url = sessionReturnUrl(d.publicOrigin, checkoutId);
+  if (!url) return null;
+  const host = new URL(url).hostname.toLowerCase();
+  try {
+    const domains = await cached(d, RETURN_DOMAINS_KEY, minutes(1), () =>
+      d.ivora.listReturnDomains(),
+    );
+    return domains.some((x) => x.ready && x.hostname.toLowerCase() === host)
+      ? url
+      : null;
+  } catch (e) {
+    if (!(e instanceof IvoraError)) throw e;
+    log("return domains", e);
+    return null;
+  }
+}
+
 const closedMessage = (rec: CheckoutRecord) =>
   `${rec.error ?? "This session did not go through."} Reload the page to start again.`;
 
@@ -735,8 +774,8 @@ const closedMessage = (rec: CheckoutRecord) =>
  * "Pay and charge": checks the connector and the Stripe account, claims the connector
  * (one waiting or running checkout per connector, before any hold), then creates a bill
  * (`POST /bills`, key cpo-checkout-<id>-bill) and a hosted payment with
- * `return_surface: driver` and `return_reference: <reference>` (key
- * cpo-checkout-<id>-payment), and returns the URL to send the driver to. A double tap
+ * `return_reference: <reference>` and either `return_url: <origin>/s/<id>` (a verified
+ * return domain) or `return_surface: driver` (key cpo-checkout-<id>-payment), and returns the URL to send the driver to. A double tap
  * or a retry after an uncertain answer continues the same checkout with the same keys:
  * one bill, one payment. Only a definite refusal fails it.
  */
@@ -744,7 +783,7 @@ export async function payAndCharge(
   d: CheckoutDeps,
   input: { code: string; requestId: string; source: string | null },
   defaultOperatorName: string,
-): Promise<{ requestId: string; url: string }> {
+): Promise<{ requestId: string; url: string; notice?: string }> {
   if (!UUID.test(input.requestId))
     throw new CheckoutError("invalid", "Reload the page and try again.");
   const requestId = input.requestId.toLowerCase();
@@ -866,15 +905,48 @@ export async function payAndCharge(
   }
 
   let payment: Payment;
+  let notice: string | undefined;
+  const makePayment = (input: PaymentInput, action: KeyAction) =>
+    d.ivora.createPayment(input, keyFor(id, action));
   try {
-    payment = await d.ivora.createPayment(
-      {
-        bill_id: rec.billId!,
-        return_surface: "driver",
-        return_reference: rec.reference,
-      },
-      keyFor(id, "payment"),
-    );
+    const returnUrl = await returnUrlFor(d, id);
+    try {
+      payment = await makePayment(
+        returnUrl
+          ? {
+              bill_id: rec.billId!,
+              return_url: returnUrl,
+              return_reference: rec.reference,
+            }
+          : {
+              bill_id: rec.billId!,
+              return_surface: "driver",
+              return_reference: rec.reference,
+            },
+        "payment",
+      );
+    } catch (e) {
+      // The hostname is not (or no longer) verified: nothing was created, so the old
+      // flow takes over with its own key. The operator is told how to fix it.
+      if (
+        !returnUrl ||
+        !(e instanceof IvoraError) ||
+        e.code !== "return_url_not_verified"
+      )
+        throw e;
+      log("payment return url", e, id);
+      d.cache.delete(RETURN_DOMAINS_KEY);
+      notice = RETURN_FALLBACK_MESSAGE;
+      console.error(`cpo-starter-kit: checkout ${RETURN_FALLBACK_MESSAGE}`);
+      payment = await makePayment(
+        {
+          bill_id: rec.billId!,
+          return_surface: "driver",
+          return_reference: rec.reference,
+        },
+        "payment-fallback",
+      );
+    }
   } catch (e) {
     if (!(e instanceof IvoraError)) throw e;
     log("payment", e, id);
@@ -904,7 +976,7 @@ export async function payAndCharge(
     phase: "open",
     error: null,
   });
-  return { requestId, url };
+  return { requestId, url, notice };
 }
 
 // ---- Free sessions ----
@@ -2039,14 +2111,25 @@ export async function startPaidSession(
   defaultOperatorName: string,
 ): Promise<void> {
   const { found, rec } = await ownCheckout(d, input);
+  await beginPaid(d, rec, found.operatorName ?? defaultOperatorName);
+}
+
+/**
+ * The start itself, for whoever may ask (the cookie's owner, or the driver session
+ * page by its ID). Only a paid, open checkout with a bill.
+ */
+async function beginPaid(
+  d: CheckoutDeps,
+  rec: CheckoutRecord,
+  operator: string,
+): Promise<void> {
   if (rec.kind !== "paid" || !rec.billId || rec.phase !== "open")
     throw new CheckoutError("not_found", "Reload the page and try again.");
-  const operator = found.operatorName ?? defaultOperatorName;
   const releaseNow = async (why: string, e?: IvoraError) => {
     await release(d, rec, "The charger did not start.");
     // Ivora may still hold the release back (start_reserved): then say it is pending.
     const done =
-      (await d.store.get(found.operatorId, rec.id))?.phase === "released";
+      (await d.store.get(rec.operatorId, rec.id))?.phase === "released";
     return new CheckoutError(
       "refused",
       `${why} Your card hold ${done ? "was released" : "is being released"}, so nothing is charged. Reload the page to start again, or contact ${operator}.`,
@@ -2091,7 +2174,7 @@ export async function startPaidSession(
       e.requestId,
     );
   }
-  await d.store.record(found.operatorId, rec.id, { startRequested: true });
+  await d.store.record(rec.operatorId, rec.id, { startRequested: true });
 }
 
 /**
@@ -2103,6 +2186,14 @@ export async function stopDriverSession(
   input: { code: string; requestId: string; requestIds: string[] },
 ): Promise<void> {
   const { rec } = await ownCheckout(d, input);
+  await stopCheckout(d, rec);
+}
+
+/**
+ * The stop and the settlement behind both Stop buttons (the sticker page's and the
+ * driver session page's): the one stop key, then finalize and capture as usual.
+ */
+async function stopCheckout(d: CheckoutDeps, rec: CheckoutRecord) {
   if (rec.phase !== "open")
     throw new CheckoutError("invalid", "This session is not running.");
   let tx: number | null = null;
@@ -2135,4 +2226,213 @@ export async function stopDriverSession(
       "The charger didn't confirm the stop yet. Wait a moment and reload the page; you can also unplug your car.",
     );
   await settleCheckout(d, (await d.store.get(rec.operatorId, rec.id)) ?? rec);
+}
+
+// ---- The driver session page on the operator's own domain (return_url) ----
+
+export type SessionStage =
+  "starting" | "charging" | "stopping" | "finished" | "not_charged";
+
+/** What the driver session page (`/s/<id>`) shows. */
+export interface ReturnedSession {
+  id: string;
+  stage: SessionStage;
+  label: string;
+  detail: string;
+  /** Where: the charger's name and connector, when the sticker still resolves. */
+  place: string | null;
+  energyKwh: string | null;
+  /** The cost so far (or the final amount once known). */
+  cost: string | null;
+  /** Something the driver should read: the kit's own note, or why a step failed. */
+  notice: string | null;
+  canStart: boolean;
+  canStop: boolean;
+  /** Refresh the page: the session is not over. */
+  live: boolean;
+  /** From the final bill. */
+  receipt: {
+    energyKwh: string | null;
+    total: string;
+    charged: string;
+    released: string;
+    hold: string;
+  } | null;
+}
+
+/** Payment statuses where the hold is not (yet) in place but may still arrive. */
+const PAYING = new Set(["preparing", "pending"]);
+
+/**
+ * The driver came back from Ivora's hosted checkout. The return is not proof of
+ * payment (anyone can open this address, with or without `canceled=1`), so the
+ * payment is read from Ivora, and only what it says counts:
+ * - `canceled=1`, or a payment that ended without a hold: the payment is released, but
+ *   only while nothing was started.
+ * - `authorized`: the bill is started, once (a recorded start, the bill's own progress
+ *   and the start's fixed Idempotency-Key each stop a refresh or a second tab from
+ *   starting twice). A bill read never starts the charger for return_url payments.
+ * - still pending: nothing happens; the page waits.
+ * Returns a notice for the driver when a step could not be done.
+ */
+async function processReturn(
+  d: CheckoutDeps,
+  rec: CheckoutRecord,
+  canceled: boolean,
+  operator: string,
+): Promise<string | null> {
+  const payment = await d.ivora.getPayment(rec.paymentId!);
+  if (payment.status === "captured" || payment.status.startsWith("refund"))
+    return null;
+  const bill = await d.ivora.getBill(rec.billId!);
+  const notStarted =
+    !rec.startRequestedAt &&
+    (bill.progress === "awaiting_payment" || bill.progress === "authorized");
+  const authorized = payment.status === "authorized";
+  if (canceled || (!authorized && !PAYING.has(payment.status))) {
+    if (!notStarted) return null;
+    await release(
+      d,
+      rec,
+      canceled
+        ? "You canceled the payment."
+        : "The payment was not authorized.",
+    );
+    return null;
+  }
+  if (!authorized) return null;
+  if (!notStarted || bill.progress !== "authorized") return null;
+  try {
+    await beginPaid(d, rec, operator);
+  } catch (e) {
+    if (e instanceof CheckoutError) return e.message;
+    throw e;
+  }
+  return null;
+}
+
+function stageOf(
+  rec: CheckoutRecord,
+  v: DriverSession,
+  stopping: boolean,
+): SessionStage {
+  switch (rec.phase) {
+    case "settled":
+      return v.receipt ? "finished" : "not_charged";
+    case "attention":
+      return "finished";
+    case "settling":
+      return "stopping";
+    case "open":
+      if (v.progress === "charging")
+        return stopping || rec.stopRequestedAt ? "stopping" : "charging";
+      if (v.progress === "ended") return "stopping";
+      if (v.progress === "canceled" || v.progress === "start_failed")
+        return "not_charged";
+      return "starting";
+    default:
+      return "not_charged";
+  }
+}
+
+/**
+ * The session page for a checkout ID: returns null for an unknown ID (and for a free
+ * session, which has no payment to return from). Loading it is what handles the return
+ * (see processReturn), then settles the checkout like every other view of it.
+ */
+export async function loadReturnedSession(
+  d: CheckoutDeps,
+  id: string,
+  o: { canceled: boolean; stopping: boolean },
+  defaultOperatorName: string,
+): Promise<ReturnedSession | null> {
+  if (!UUID.test(id)) return null;
+  let rec = await d.store.getById(id.toLowerCase());
+  if (!rec || rec.kind !== "paid") return null;
+  const found = await d.chargers.resolveCode(rec.stickerCode);
+  let notice: string | null = null;
+  if (UNSETTLED.has(rec.phase) && rec.billId && rec.paymentId) {
+    try {
+      notice = await processReturn(
+        d,
+        rec,
+        o.canceled,
+        found?.operatorName ?? defaultOperatorName,
+      );
+    } catch (e) {
+      if (!(e instanceof IvoraError)) throw e;
+      log("return", e, rec.id);
+      notice =
+        "The payment service can't be reached right now. This page tries again in a few seconds; nothing is started or charged twice.";
+    }
+    rec = (await d.store.get(rec.operatorId, rec.id)) ?? rec;
+  }
+  const { bill, tx } = await settleCheckout(d, rec);
+  rec = (await d.store.get(rec.operatorId, rec.id)) ?? rec;
+  const v = sessionView(rec, bill, tx);
+  const stage = stageOf(rec, v, o.stopping);
+  const money = (m: number) => formatMinor(m, rec.currency);
+  let receipt: ReturnedSession["receipt"] = null;
+  if (v.receipt) {
+    // The final bill is the receipt: its energy and total, and what was captured.
+    let final: Bill | null = null;
+    try {
+      final = await d.ivora.getBill(rec.billId!);
+    } catch (e) {
+      if (!(e instanceof IvoraError)) throw e;
+      log("receipt", e, rec.id);
+    }
+    const wh = final?.usage?.energy_wh;
+    const total =
+      final?.total_minor ?? rec.finalMinor ?? rec.capturedMinor ?? 0;
+    receipt = {
+      energyKwh: typeof wh === "number" ? kwh(wh) : null,
+      total: money(total),
+      ...v.receipt,
+    };
+  }
+  return {
+    id: rec.id,
+    stage,
+    label:
+      stage === "stopping" && v.progress === "charging" ? "Stopping" : v.label,
+    detail:
+      stage === "stopping" && v.progress === "charging"
+        ? "The stop was sent to the charger. Your final bill is settled when it confirms."
+        : v.detail,
+    place: found
+      ? `${found.chargerName}, connector ${found.connectorNumber}`
+      : null,
+    energyKwh: v.energyKwh,
+    cost: v.estimate,
+    notice: notice ?? v.note,
+    canStart: v.canStart && stage === "starting",
+    canStop: v.canStop && stage === "charging",
+    live: v.live && stage !== "finished" && stage !== "not_charged",
+    receipt,
+  };
+}
+
+/** Starts a paid session from its page (the ID is the capability). */
+export async function startSessionById(
+  d: CheckoutDeps,
+  id: string,
+  defaultOperatorName: string,
+): Promise<void> {
+  const rec = UUID.test(id) ? await d.store.getById(id.toLowerCase()) : null;
+  if (!rec || rec.kind !== "paid")
+    throw new CheckoutError("not_found", "Reload the page and try again.");
+  const found = await d.chargers.resolveCode(rec.stickerCode);
+  await beginPaid(d, rec, found?.operatorName ?? defaultOperatorName);
+}
+
+/** Stops a paid session from its page, through the same stop and capture as SQD-22. */
+export async function stopSessionById(
+  d: CheckoutDeps,
+  id: string,
+): Promise<void> {
+  const rec = UUID.test(id) ? await d.store.getById(id.toLowerCase()) : null;
+  if (!rec || rec.kind !== "paid")
+    throw new CheckoutError("not_found", "Reload the page and try again.");
+  await stopCheckout(d, rec);
 }

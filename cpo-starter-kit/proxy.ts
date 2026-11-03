@@ -5,7 +5,7 @@ import { authCookieOptions } from "@/lib/server/supabase";
 
 /**
  * Pages anyone may open: everything else needs a signed-in staff member. /c/ is where
- * QR stickers lead drivers; /api/webhooks/ is where Ivora delivers signed events (the
+ * QR stickers lead drivers and /s/ is where Ivora's checkout returns them; /api/webhooks/ is where Ivora delivers signed events (the
  * route verifies each signature itself); /api/cron/ is the settlement sweep (the route
  * checks its bearer secret itself). An entry ending in / covers everything under it;
  * the others match only that exact page.
@@ -17,6 +17,7 @@ const PUBLIC = [
   "/invite",
   "/auth/",
   "/c/",
+  "/s/",
   "/api/webhooks/",
   "/api/cron/",
 ];

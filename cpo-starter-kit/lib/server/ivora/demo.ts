@@ -1423,6 +1423,24 @@ export function createDemoClient(
       });
       return paymentView(p);
     },
+    // Demo payments return to the demo's own pages: there are no return domains.
+    async listReturnDomains() {
+      return [];
+    },
+    async createReturnDomain() {
+      throw new IvoraError(
+        409,
+        "demo_mode",
+        "Demo mode has no return domains: the demo uses its own pages.",
+      );
+    },
+    async verifyReturnDomain() {
+      throw new IvoraError(
+        409,
+        "demo_mode",
+        "Demo mode has no return domains: the demo uses its own pages.",
+      );
+    },
     async getTariff(tariffId) {
       const def = await tariffs(tariffId);
       if (!def)

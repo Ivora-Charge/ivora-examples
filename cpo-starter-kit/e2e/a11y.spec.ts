@@ -108,6 +108,10 @@ test("driver pages send their title in the first HTML response", async ({
   expect(headTitle(await checkout.text()), "demo checkout").toMatch(
     /^Demo checkout · .+/,
   );
+  const session = await page.request.get("/s/demo-charging", { headers });
+  expect(headTitle(await session.text()), "session page").toMatch(
+    /^Your charging session · .+/,
+  );
 });
 
 test("driver pages pass axe in light and dark and do not scroll sideways on a phone", async ({
@@ -123,6 +127,14 @@ test("driver pages pass axe in light and dark and do not scroll sideways on a ph
   await page.getByRole("button", { name: /^Pay and charge/ }).click();
   await expect(page).toHaveURL(/\/demo\/checkout\//);
   await checkPage(page, "demo checkout");
+  // The driver session page on the operator's own domain, in each state.
+  for (const scheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme: scheme });
+    for (const id of ["starting", "charging", "stopping", "finished"]) {
+      await page.goto(`/s/demo-${id}`);
+      await checkPage(page, `session page ${id} (${scheme})`);
+    }
+  }
 });
 
 test("missing pages answer 404, outside and inside the staff app", async ({
@@ -139,6 +151,9 @@ test("missing pages answer 404, outside and inside the staff app", async ({
     "/live/stations/99999",
     "/cards/99999",
     "/demo/checkout/nope",
+    // The driver session page: unknown and malformed ids.
+    "/s/nope",
+    "/s/30000000-0000-4000-8000-0000000000ff",
   ]) {
     const res = await page.goto(path);
     expect(res?.status(), path).toBe(404);

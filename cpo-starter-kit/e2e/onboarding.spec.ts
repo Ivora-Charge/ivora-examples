@@ -134,6 +134,14 @@ test("demo: the setup wizard takes company, brand and Stripe end to end", async 
   await payments.getByRole("button", { name: "Check status again" }).click();
   await expect(payments).toContainText("Card payments are on");
 
+  // 4. Return domain: a sample record in demo mode, nothing is sent to Ivora.
+  await page.getByRole("link", { name: "Next: Return domain" }).click();
+  const domain = page.getByRole("region", { name: /Return domain/ });
+  await expect(domain).toContainText("Sample");
+  await expect(domain).toContainText("_ivora-return.charge.example.com");
+  await expect(domain).toContainText("ivora-return-verification=");
+  await expect(domain.getByRole("button")).toHaveCount(0);
+
   // The checklist follows.
   await page.getByRole("link", { name: "Back to Overview" }).click();
   await expect(checklist(page)).toBeVisible();

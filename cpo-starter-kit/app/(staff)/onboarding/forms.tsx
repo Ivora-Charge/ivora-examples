@@ -13,6 +13,8 @@ import { LOGO_MAX_BYTES, logoFileProblem } from "@/lib/logo-limits";
 import { Result } from "../result";
 import {
   pushBrandingAction,
+  registerReturnDomainAction,
+  verifyReturnDomainAction,
   saveBrandAction,
   saveCompanyAction,
 } from "./actions";
@@ -251,6 +253,30 @@ export function PushBranding() {
       <form action={action}>
         <button type="submit" className="button secondary" disabled={pending}>
           {pending ? "Pushing…" : "Push to Ivora again"}
+        </button>
+      </form>
+    </>
+  );
+}
+
+/** Registers the hostname, or checks its TXT record: one button per state. */
+export function ReturnDomainButton(p: { verify: boolean }) {
+  const [state, action, pending] = useActionState(
+    p.verify ? verifyReturnDomainAction : registerReturnDomainAction,
+    EMPTY,
+  );
+  return (
+    <>
+      <Result state={state} />
+      <form action={action}>
+        <button type="submit" className="button secondary" disabled={pending}>
+          {p.verify
+            ? pending
+              ? "Verifying…"
+              : "Verify"
+            : pending
+              ? "Registering…"
+              : "Register hostname"}
         </button>
       </form>
     </>

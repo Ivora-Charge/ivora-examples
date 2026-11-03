@@ -58,7 +58,10 @@ export type CheckoutAlert = "stalled" | "hold_stop_ignored";
 
 /** The kit's own record of one "Pay and charge" or "Start free session". */
 export interface CheckoutRecord {
-  /** The source of every Idempotency-Key. Never sent to a browser or in a URL. */
+  /**
+   * The source of every Idempotency-Key, and the driver session page's address
+   * (`/s/<id>`): a random UUID, the only thing that page needs.
+   */
   id: string;
   operatorId: string;
   /** The tap's random ID; also the driver's capability (their HTTP-only cookie). */
@@ -157,6 +160,11 @@ export interface CheckoutStore {
    */
   claim(n: NewCheckout): Promise<ClaimResult>;
   get(operatorId: string, id: string): Promise<CheckoutRecord | null>;
+  /**
+   * By the record's ID alone: the driver session page's address (`/s/<id>`, the
+   * payment's return_url). The random ID is that page's capability.
+   */
+  getById(id: string): Promise<CheckoutRecord | null>;
   /** The checkout a tap made, by its request ID (the driver's cookie). */
   getByRequest(
     operatorId: string,
