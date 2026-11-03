@@ -1,27 +1,34 @@
 import "server-only";
 import { IvoraError } from "../ivora/errors";
-import type { IvoraClient, ReadLimits, Transaction } from "../ivora/types";
-import { scanNewTransactions, SEED_THRESHOLD } from "./transactions";
+import type {
+  CursorPage,
+  IvoraClient,
+  ReadLimits,
+  SessionListItem,
+  SessionQuery,
+  Transaction,
+} from "../ivora/types";
 import type { LiveStore, TrackedSession } from "./types";
 
 /**
- * The sessions that are running now. Ivora's `GET /transactions` lists sessions oldest
- * first with no date or active filter, and its items carry no ID token or connector, so
- * "the first 100" are the oldest, not the current ones. The kit keeps its own small
- * table of sessions (cpo_active_sessions) instead and fills it from:
+ * The sessions that are running now. Ivora's `GET /transactions` filters by `active`
+ * and lists newest first (IVP-436), with the masked ID token, connector, station name
+ * and bill ID in each item, so "the running sessions" are one list read. The kit keeps
+ * them in a small table (cpo_active_sessions) all the same, as the cache every Live
+ * view reads, and fills it from:
  *
- *  1. webhooks (charging_session.status_changed, meter.sampled, connector events):
- *     the event names a transaction, which is read with `GET /transactions/{id}`;
- *  2. its own stop commands and free checkouts, which read the session they act on;
- *  3. a scan of each station's list from a stored high-water mark (cpo_active_marks):
- *     the fallback when webhooks are off, late or lost, and the cold-start rebuild.
- *     It reads only items not known to have ended, never pages from 0 twice, and
- *     seeds the mark on a long history (see transactions.ts).
+ *  1. the list `active=true`, newest first, read at most every SYNC_INTERVAL_MS per
+ *     charger (cpo_active_marks keeps when): the way new sessions are found, with no
+ *     webhooks needed;
+ *  2. webhooks (charging_session.status_changed, meter.sampled, connector events): the
+ *     event names a transaction, which is read with `GET /transactions/{id}`, so a
+ *     change shows before the next list read;
+ *  3. its own stop commands and free checkouts, which read the session they act on.
  *
- * A tracked session is re-read once it has gone REFRESH_AFTER_MS without news, so a
- * missed "ended" webhook is repaired. An ended session is final in the table. All of
- * it runs within one budget per page load (SYNC_BUDGET_MS, SYNC_MAX_CALLS), and the
- * first 429 stops it: what is left carries on with the next load.
+ * After a complete list read, a tracked session the list does not show has ended and
+ * is read once to record it. An ended session is final in the table. All of it runs
+ * within one budget per page load (SYNC_BUDGET_MS, SYNC_MAX_CALLS), and the first 429
+ * stops it: what is left carries on with the next load.
  */
 
 /**
@@ -29,8 +36,9 @@ import type { LiveStore, TrackedSession } from "./types";
  * instances).
  */
 export const SYNC_INTERVAL_MS = 30_000;
-/** Stations scanned per Live load; the rest follow on the next loads. */
-export const SYNC_MAX_STATIONS = 10;
+/** Items per page of the running-session list, and pages read per load. */
+export const LIST_PAGE_SIZE = 100;
+export const LIST_MAX_PAGES = 5;
 /** A tracked session with no news for this long is read again. */
 export const REFRESH_AFTER_MS = 2 * 60_000;
 /** Tracked sessions read again per load. */
@@ -42,8 +50,6 @@ export const REFRESH_MAX = 10;
 export const SYNC_BUDGET_MS = 8_000;
 /** Ivora requests per sync (the key's default budget is 180 a minute). */
 export const SYNC_MAX_CALLS = 50;
-/** Long-history stations seeded per sync (about 20 to 40 requests each). */
-export const SEEDS_PER_SYNC = 2;
 /**
  * A running session whose energy has not grown for this long, still running when read
  * again, is stalled (as for driver checkouts): shown as such and read less often.
@@ -73,7 +79,7 @@ export interface ActiveDeps {
   >;
   ivora: Pick<
     IvoraClient,
-    "getTransaction" | "listTransactionsAfter" | "listTransactions"
+    "getTransaction" | "listSessions" | "listTransactions"
   > &
     Partial<Pick<IvoraClient, "mode">>;
   now?: () => number;
@@ -221,7 +227,6 @@ export async function syncActiveSessions(
   const deadline = now + SYNC_BUDGET_MS;
   const wallDeadline = Date.now() + SYNC_BUDGET_MS;
   let calls = 0;
-  let seeds = 0;
   let retryAfter: number | null = null;
   const call = async <T>(f: (l: ReadLimits) => Promise<T>): Promise<T> => {
     // The client starts no try with less than a second left; neither does the budget.
@@ -241,9 +246,7 @@ export async function syncActiveSessions(
     }
   };
   const ivora = {
-    listTransactionsAfter: (
-      q: Parameters<IvoraClient["listTransactionsAfter"]>[0],
-    ) => call((l) => d.ivora.listTransactionsAfter(q, l)),
+    listSessions: (q: SessionQuery) => call((l) => d.ivora.listSessions(q, l)),
     getTransaction: (id: number) => call((l) => d.ivora.getTransaction(id, l)),
   };
   let complete = true;
@@ -270,79 +273,63 @@ export async function syncActiveSessions(
     d.store.listActiveSessions(one),
   ]);
   const mine = tracked.filter((t) => wanted.has(t.stationId));
-  const knownIds = new Set(mine.map((t) => t.transactionId));
-  const newest = (stationId: number) =>
-    Math.max(
-      0,
-      ...mine
-        .filter((t) => t.stationId === stationId)
-        .map((t) => t.transactionId),
-    );
 
-  // 1. Scan for sessions the kit has not seen.
+  // 1. List the running sessions (`active=true`, newest first): one request per page of
+  // 100 for the whole project, whatever the history. Each item carries the masked ID
+  // token and the connector, so it is recorded as it is, with no read per session. The
+  // throttle is per charger (its mark's scanned_at, so across server instances).
   const lastScan = (id: number) => {
     const at = marks.get(id)?.scannedAt;
     return at ? Date.parse(at) : 0;
   };
-  const due = stationIds
-    .filter((id) => o.fresh || now - lastScan(id) >= SYNC_INTERVAL_MS)
-    .sort((a, b) => lastScan(a) - lastScan(b));
-  // Sessions read in full during this call; the refresh below skips them.
+  const due = stationIds.filter(
+    (id) => o.fresh || now - lastScan(id) >= SYNC_INTERVAL_MS,
+  );
+  // Sessions recorded from the list during this call; the refresh below skips them.
   const readNow = new Set<number>();
-  for (const [i, id] of due.entries()) {
-    const late = now - lastScan(id) > SCAN_LATE_MS;
-    if (!o.fresh && i >= SYNC_MAX_STATIONS) {
-      if (late) complete = false;
-      continue;
-    }
+  // The list was read to its end: a tracked session missing from it has ended.
+  let listed = false;
+  if (due.length > 0) {
+    const late = due.some((id) => now - lastScan(id) > SCAN_LATE_MS);
     await attempt(async () => {
-      const r = await scanNewTransactions(
-        {
-          ivora,
-          marks: {
-            getTransactionMark: (s) => d.store.getTrackerMark(s),
-            advanceTransactionMark: (s, t) => d.store.advanceTrackerMark(s, t),
-          },
-          // A seed cut short by the budget resumes on the next load. A first seed
-          // starts from the station's newest tracked session (a webhook may have
-          // named one), which skips most of the search.
-          progress: {
-            getSeed: async (s) =>
-              (await d.store.getTrackerSeed(s)) ??
-              (newest(s) > SEED_THRESHOLD
-                ? { lo: newest(s) - 1, hi: null }
-                : null),
-            saveSeed: (s, p) => d.store.saveTrackerSeed(s, p),
-          },
-          now: d.now,
-        },
-        id,
-        {
-          // Not known to have ended, and not already tracked: a tracked session is
-          // kept current by the refresh below.
-          include: (item) =>
-            item.active !== false && !item.ended_at && !knownIds.has(item.id),
-          offer: async (tx) => {
-            readNow.add(tx.id);
-            await trackTransaction(d, tx);
-          },
-          seed: () => Boolean(o.fresh) || seeds++ < SEEDS_PER_SYNC,
-          deadline,
-        },
-      );
-      if (r.complete)
+      let cursor: string | null = null;
+      for (let page = 0; page < LIST_MAX_PAGES; page++) {
+        const res: CursorPage<SessionListItem> = await ivora.listSessions({
+          active: true,
+          cursor,
+          limit: LIST_PAGE_SIZE,
+        });
+        for (const item of res.data) {
+          readNow.add(item.id);
+          if (item.station_id != null && wanted.has(item.station_id))
+            await trackTransaction(d, item);
+        }
+        if (!res.next_cursor || res.data.length < LIST_PAGE_SIZE) {
+          listed = true;
+          break;
+        }
+        cursor = res.next_cursor;
+      }
+      if (!listed) {
+        // More running sessions than a load reads: the rest follow with the webhooks
+        // and the age-based re-reads below.
+        if (late || o.fresh) complete = false;
+        return;
+      }
+      for (const id of due)
         await d.store.advanceTrackerMark(id, 0, { scanned: true });
-      else if (late || o.fresh) complete = false;
     }, late);
   }
 
-  // 2. Re-read tracked sessions with no news (stalled ones less often).
+  // 2. Re-read tracked sessions the list did not show. After a complete list those
+  // have ended; otherwise those with no news for a while (stalled ones less often).
   const age = (t: TrackedSession) => now - Date.parse(t.checkedAt);
   const quiet = mine
     .filter(
       (t) =>
         !readNow.has(t.transactionId) &&
         (o.fresh ||
+          (listed && due.includes(t.stationId)) ||
           age(t) >= (stalled(t) ? STALLED_REFRESH_AFTER_MS : REFRESH_AFTER_MS)),
     )
     .sort((a, b) => age(b) - age(a));

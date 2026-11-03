@@ -1127,6 +1127,58 @@ export function createDemoClient(
         next_cursor: rows.length > limit ? data[data.length - 1].id : null,
       };
     },
+    // Like the API: newest first by start, filtered, with the fuller list items; the
+    // cursor is the last item's "started_at|id".
+    async listSessions(q) {
+      const limit = q.limit ?? 100;
+      const from = q.started_from ? Date.parse(q.started_from) : -Infinity;
+      const to = q.started_to ? Date.parse(q.started_to) : Infinity;
+      const names = new Map((await stations()).map((s) => [s.id, s.name]));
+      const key = (t: Transaction) =>
+        `${t.started_at ?? ""}|${String(t.id).padStart(12, "0")}`;
+      const rows = (await reportData()).transactions
+        .filter((t) => {
+          const at = t.started_at ? Date.parse(t.started_at) : NaN;
+          return (
+            at >= from &&
+            at < to &&
+            (q.active === undefined || (t.active === true) === q.active) &&
+            (q.station_id === undefined || t.station_id === q.station_id) &&
+            (!q.cursor || key(t) < q.cursor)
+          );
+        })
+        .sort((a, b) => (key(a) < key(b) ? 1 : -1));
+      const page = rows.slice(0, limit);
+      return {
+        data: page.map((t) => ({
+          ...t,
+          station_name: names.get(t.station_id ?? 0) ?? null,
+        })),
+        next_cursor: rows.length > limit ? key(page[page.length - 1]) : null,
+      };
+    },
+    async listBills(q) {
+      const limit = q.limit ?? 100;
+      const from = q.created_from ? Date.parse(q.created_from) : -Infinity;
+      const to = q.created_to ? Date.parse(q.created_to) : Infinity;
+      const key = (b: Bill) => `${b.created_at}|${b.id}`;
+      const rows = (await reportData()).bills
+        .filter((b) => {
+          const at = Date.parse(b.created_at);
+          return (
+            at >= from &&
+            at < to &&
+            (q.station_id === undefined || b.station_id === q.station_id) &&
+            (!q.cursor || key(b) < q.cursor)
+          );
+        })
+        .sort((a, b) => (key(a) < key(b) ? 1 : -1));
+      const page = rows.slice(0, limit);
+      return {
+        data: page,
+        next_cursor: rows.length > limit ? key(page[page.length - 1]) : null,
+      };
+    },
     async findToken(externalReference) {
       const t = (await fleet.load()).tokens?.find(
         (x) => x.external_reference === externalReference,

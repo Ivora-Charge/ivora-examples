@@ -6,7 +6,12 @@ import { getOnboarding, loadStripe } from "@/lib/server/onboarding";
 import {
   getReports,
   loadReportsContext,
+  loadIvoraBills,
+  loadIvoraSessions,
   loadSessions,
+  cleanCursor,
+  type IvoraBillsResult,
+  type IvoraSessionsResult,
   loadStats,
   PAGE_ROWS,
   payoutsUrl,
@@ -66,11 +71,18 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
     );
   const c = r.context;
   const q = c.query;
-  const [stats, sessions, stripe] = await Promise.all([
-    loadStats(d.ivora, q),
-    loadSessions(d, reportFilter(me, q), q.page, c.places),
-    loadStripe(getOnboarding()),
-  ]);
+  const cursors = {
+    s: cleanCursor(params.get("scursor")),
+    b: cleanCursor(params.get("bcursor")),
+  };
+  const [stats, sessions, ivoraSessions, ivoraBills, stripe] =
+    await Promise.all([
+      loadStats(d.ivora, q),
+      loadSessions(d, reportFilter(me, q), q.page, c.places),
+      loadIvoraSessions(d, q, c.places, cursors.s),
+      loadIvoraBills(d, q, cursors.b),
+      loadStripe(getOnboarding()),
+    ]);
   return (
     <>
       <h1>Reports</h1>
@@ -107,6 +119,8 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
       )}
       <StatsSection result={stats} />
       <Sessions result={sessions} q={q} />
+      <IvoraSessions result={ivoraSessions} q={q} cursors={cursors} />
+      <IvoraBills result={ivoraBills} q={q} cursors={cursors} />
       <Payouts stripe={stripe} />
     </>
   );
@@ -518,9 +532,9 @@ function Totals({ t }: { t: ReportTotals }) {
         refunds, before Stripe&apos;s and Ivora&apos;s fees: a bill under
         Stripe&apos;s 50-cent minimum captures nothing, and a bill above the
         card hold is not captured by the kit (it needs you). Free sessions never
-        carry money, and staff/test sessions and sessions started outside this
-        kit (RFID cards, roaming) are not listed here: they are in Ivora&apos;s
-        figures above.
+        carry money. Staff/test sessions and sessions started outside this kit
+        (RFID cards, roaming) are not in this table or its totals: they are in
+        Ivora&apos;s figures above and listed below.
         {t.detailsPending > 0 &&
           " Energy and times of sessions that ended in the last few minutes are copied from Ivora by the settlement sweep."}
         {t.refundsUnchecked > 0 &&
@@ -660,6 +674,217 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
             </div>
           )}
           <Pager q={q} page={result.page} pages={result.pages} />
+        </>
+      )}
+    </section>
+  );
+}
+
+// ---- Ivora's lists: every session and bill of the period ----
+
+type Cursors = { s: string | null; b: string | null };
+
+/** The page's link to the next page of one list, keeping the other list where it is. */
+function listLink(q: ReportQuery, c: Cursors, which: "s" | "b", next: string) {
+  const p = new URLSearchParams(reportSearch(q, q.page));
+  const own = { s: "scursor", b: "bcursor" } as const;
+  const other = which === "s" ? "b" : "s";
+  if (c[other]) p.set(own[other], c[other]!);
+  p.set(own[which], next);
+  return `/reports?${p.toString()}`;
+}
+
+function ListPager({
+  q,
+  cursors,
+  which,
+  next,
+  label,
+}: {
+  q: ReportQuery;
+  cursors: Cursors;
+  which: "s" | "b";
+  next: string | null;
+  label: string;
+}) {
+  if (!next && !cursors[which]) return null;
+  const first = new URLSearchParams(reportSearch(q, q.page));
+  const other = which === "s" ? "b" : "s";
+  if (cursors[other])
+    first.set(other === "s" ? "scursor" : "bcursor", cursors[other]!);
+  return (
+    <nav className="pager" aria-label={label}>
+      {cursors[which] ? (
+        <Link href={`/reports?${first.toString()}`}>Newest</Link>
+      ) : (
+        <span />
+      )}
+      {next ? (
+        <Link href={listLink(q, cursors, which, next)}>Older</Link>
+      ) : (
+        <span />
+      )}
+    </nav>
+  );
+}
+
+function IvoraSessions({
+  result,
+  q,
+  cursors,
+}: {
+  result: IvoraSessionsResult;
+  q: ReportQuery;
+  cursors: Cursors;
+}) {
+  return (
+    <section className="card" aria-labelledby="ivora-sessions-heading">
+      <h2 id="ivora-sessions-heading">Sessions started in the period</h2>
+      <p className="muted">
+        Every session that started in the period, whoever started it (your QR
+        stickers, RFID cards, roaming, staff), newest first, from Ivora. Card
+        numbers are masked by Ivora. Money is in the table above and the bills
+        below, not here.
+      </p>
+      {!result.ok ? (
+        <p className="error" role="alert">
+          {result.error}
+        </p>
+      ) : result.rows.length === 0 ? (
+        <p className="muted">No sessions started in this period.</p>
+      ) : (
+        <>
+          <div
+            className="table-scroll"
+            tabIndex={0}
+            role="group"
+            aria-label="Started sessions, scrolls sideways"
+          >
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Started</th>
+                  <th scope="col">Ended</th>
+                  <th scope="col">Charger</th>
+                  <th scope="col">ID token</th>
+                  <th scope="col" className="num">
+                    Energy
+                  </th>
+                  <th scope="col">Bill</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.rows.map((r) => (
+                  <tr key={r.id}>
+                    <td>
+                      <When iso={r.startedAt} zone={r.timeZone} />
+                    </td>
+                    <td>
+                      {r.active ? (
+                        <span className="muted">Charging</span>
+                      ) : (
+                        <When iso={r.endedAt} zone={r.timeZone} />
+                      )}
+                    </td>
+                    <td>
+                      {r.stationName}
+                      <br />
+                      <span className="muted">
+                        {r.connectorNumber
+                          ? `Connector ${r.connectorNumber}`
+                          : "Connector unknown"}
+                        {r.siteName ? ` · ${r.siteName}` : ""}
+                      </span>
+                    </td>
+                    <td className="mono">{r.idToken ?? "–"}</td>
+                    <td className="num">
+                      {r.energyWh === null ? "–" : kwh(r.energyWh)}
+                    </td>
+                    <td className="mono">{r.billId ?? "–"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ListPager
+            q={q}
+            cursors={cursors}
+            which="s"
+            next={result.next}
+            label="Started sessions pages"
+          />
+        </>
+      )}
+    </section>
+  );
+}
+
+function IvoraBills({
+  result,
+  q,
+  cursors,
+}: {
+  result: IvoraBillsResult;
+  q: ReportQuery;
+  cursors: Cursors;
+}) {
+  return (
+    <section className="card" aria-labelledby="ivora-bills-heading">
+      <h2 id="ivora-bills-heading">Bills created in the period</h2>
+      <p className="muted">
+        Ivora&apos;s bills by when they were created, newest first. A final
+        bill&apos;s total is what the driver owes; what was collected, after
+        refunds, is in the table above. Reading bills needs the API key&apos;s
+        billing:read permission.
+      </p>
+      {!result.ok ? (
+        <p className="error" role="alert">
+          {result.error}
+        </p>
+      ) : result.bills.length === 0 ? (
+        <p className="muted">No bills were created in this period.</p>
+      ) : (
+        <>
+          <div
+            className="table-scroll"
+            tabIndex={0}
+            role="group"
+            aria-label="Bills, scrolls sideways"
+          >
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Created</th>
+                  <th scope="col">Bill</th>
+                  <th scope="col">Status</th>
+                  <th scope="col" className="num">
+                    Total
+                  </th>
+                  <th scope="col">Session</th>
+                </tr>
+              </thead>
+              <tbody>
+                {result.bills.map((b) => (
+                  <tr key={b.id}>
+                    <td>
+                      <When iso={b.created_at} zone="UTC" />
+                    </td>
+                    <td className="mono">{b.id}</td>
+                    <td>{b.status === "final" ? "Final" : "Open"}</td>
+                    <td className="num">{money(b.total_minor, b.currency)}</td>
+                    <td>{b.transaction_id ?? "–"}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <ListPager
+            q={q}
+            cursors={cursors}
+            which="b"
+            next={result.next}
+            label="Bills pages"
+          />
         </>
       )}
     </section>

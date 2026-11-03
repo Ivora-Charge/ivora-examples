@@ -64,7 +64,7 @@ test("demo: Ivora's figures for every session, then your sessions with what was 
   ])
     await expect(totals.getByText(label, { exact: false })).toBeVisible();
   await expect(sessions).toContainText(
-    "staff/test sessions and sessions started outside this kit",
+    "Staff/test sessions and sessions started outside this kit",
   );
   const table = sessions.getByRole("table");
   await expect(table.getByText("Free", { exact: true }).first()).toBeVisible();
@@ -72,6 +72,22 @@ test("demo: Ivora's figures for every session, then your sessions with what was 
   await expect(table.getByText("Staff/test")).toHaveCount(0);
   await expect(table.getByText(/UTC$/).first()).toBeVisible();
   await expect(table.getByText(/^ck_[0-9a-f]{32}$/).first()).toBeVisible();
+
+  // Ivora's own lists: every session of the period, and its bills.
+  const all = page.getByRole("region", {
+    name: "Sessions started in the period",
+  });
+  await expect(all.getByRole("table")).toBeVisible();
+  await expect(all.getByText(/^\*\*\*\*[A-Z0-9]{4}$/).first()).toBeVisible();
+  const bills = page.getByRole("region", {
+    name: "Bills created in the period",
+  });
+  await expect(bills).toContainText(
+    "not what was collected".replace(
+      "not what was collected",
+      "what was collected",
+    ),
+  );
 
   const payouts = page.getByRole("region", { name: "Payouts" });
   await expect(payouts).toContainText("The kit holds no Stripe keys");

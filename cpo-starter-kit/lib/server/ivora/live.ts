@@ -27,6 +27,7 @@ import type {
   TokenRecord,
   Transaction,
   TransactionDetail,
+  SessionListItem,
   TransactionListItem,
 } from "./types";
 
@@ -450,6 +451,50 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
         `transactions${query({ station_id: o.station_id, after: o.after || undefined, limit: o.limit ?? 100 })}`,
         { deadline: limits.deadline, failOn429: limits.failOn429 },
       );
+    },
+    async listSessions(q, limits = {}) {
+      const res = await request<{
+        data: SessionListItem[];
+        next_page_cursor?: string | null;
+      }>(
+        "GET",
+        `transactions${query({
+          order: "desc",
+          started_from: q.started_from,
+          started_to: q.started_to,
+          active: q.active === undefined ? undefined : q.active,
+          station_id: q.station_id,
+          cursor: q.cursor || undefined,
+          limit: q.limit ?? 100,
+        })}`,
+        { deadline: limits.deadline, failOn429: limits.failOn429 },
+      );
+      // Ivora returns a cursor even on the last page (so a client can poll): a short
+      // page is the last.
+      const more = res.data.length >= (q.limit ?? 100);
+      return {
+        data: res.data,
+        next_cursor: more ? (res.next_page_cursor ?? null) : null,
+      };
+    },
+    async listBills(q, limits = {}) {
+      const res = await request<{ data: Bill[]; next_cursor?: string | null }>(
+        "GET",
+        `bills${query({
+          order: "desc",
+          created_from: q.created_from,
+          created_to: q.created_to,
+          station_id: q.station_id,
+          after: q.cursor || undefined,
+          limit: q.limit ?? 100,
+        })}`,
+        { deadline: limits.deadline, failOn429: limits.failOn429 },
+      );
+      const more = res.data.length >= (q.limit ?? 100);
+      return {
+        data: res.data,
+        next_cursor: more ? res.next_cursor || null : null,
+      };
     },
     // A PUT replaces the whole record, so repeating it is harmless; the key still
     // makes a retried request count once.

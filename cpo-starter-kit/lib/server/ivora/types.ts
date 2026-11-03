@@ -340,6 +340,47 @@ export interface ReadLimits {
   failOn429?: boolean;
 }
 
+/**
+ * One item of `GET /transactions` on a deployment with the filtered list (IVP-436): the
+ * masked ID token, connector, station name and bill ID are in the list itself.
+ */
+export interface SessionListItem extends Transaction {
+  station_name?: string | null;
+  evse_number?: number | null;
+  stop_reason?: string | null;
+  /** The bill this session settles; null when none. */
+  bill_id?: string | null;
+}
+
+/** A page of the filtered lists: `next_cursor` is opaque, null on the last page. */
+export interface CursorPage<T> {
+  data: T[];
+  next_cursor: string | null;
+}
+
+/** Query of the filtered session list (`GET /transactions`). Dates are ISO 8601. */
+export interface SessionQuery {
+  /** Started at or after (inclusive). */
+  started_from?: string;
+  /** Started before (exclusive). */
+  started_to?: string;
+  /** true: in progress; false: ended; unset: both. */
+  active?: boolean;
+  station_id?: number;
+  /** Always newest first: the kit never needs oldest first from this list. */
+  cursor?: string | null;
+  limit?: number;
+}
+
+/** Query of the filtered bill list (`GET /bills`), newest first by (created_at, id). */
+export interface BillQuery {
+  created_from?: string;
+  created_to?: string;
+  station_id?: number;
+  cursor?: string | null;
+  limit?: number;
+}
+
 export type TransactionListItem = Pick<Transaction, "id"> &
   Partial<
     Pick<Transaction, "station_id" | "active" | "started_at" | "ended_at">
@@ -795,6 +836,16 @@ export interface IvoraClient {
     },
     limits?: ReadLimits,
   ): Promise<Page<TransactionListItem>>;
+  /**
+   * One page of the filtered session list, newest first (`order=desc`; needs the
+   * deployment's transaction filters, IVP-436). Pass `next_cursor` back as `cursor`.
+   */
+  listSessions(
+    q: SessionQuery,
+    limits?: ReadLimits,
+  ): Promise<CursorPage<SessionListItem>>;
+  /** One page of bills created in a period, newest first (IVP-437). Needs billing:read. */
+  listBills(q: BillQuery, limits?: ReadLimits): Promise<CursorPage<Bill>>;
   getTransaction(
     transactionId: number,
     limits?: ReadLimits,
