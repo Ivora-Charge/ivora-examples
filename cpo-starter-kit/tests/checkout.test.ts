@@ -256,10 +256,23 @@ function fakeIvora() {
     transactions: [] as Transaction[],
     /** Older sessions at the stations (other drivers, other tokens). */
     history: [] as Transaction[],
-    /** The tenant's return domains. */
+    /** The tenant's return domains, as Ivora returns them. */
     domains: [
-      { id: 1, hostname: "charge.example.com", ready: true },
+      {
+        id: "rd_1",
+        hostname: "charge.example.com",
+        status: "dns_verified",
+        dns_records: [],
+        return_url_prefix: "https://charge.example.com/",
+        ready: true,
+        checked_at: null,
+        verified_at: null,
+      },
     ] as ReturnDomain[],
+    /** The payment was created with a return_url. */
+    returnUrl: false,
+    /** Someone read the authorized payment since. */
+    paymentRead: false,
   };
   const bill = (): Bill => ({
     id: BILL,
@@ -282,7 +295,16 @@ function fakeIvora() {
           created_at: state.startCreatedAt,
         }
       : null,
-    progress: state.final === null ? state.progress : "ended",
+    // Like Ivora: a return_url payment's bill shows awaiting_payment until someone
+    // reads the authorized payment (a bill read alone never moves it on).
+    progress:
+      state.final !== null
+        ? "ended"
+        : state.returnUrl &&
+            !state.paymentRead &&
+            state.progress === "authorized"
+          ? "awaiting_payment"
+          : state.progress,
   });
   const payment = (): Payment => ({
     id: "pay_sample_1",
@@ -315,8 +337,17 @@ function fakeIvora() {
     listReturnDomains: vi.fn(async () => structuredClone(state.domains)),
     createBill: vi.fn(async (_input: BillInput, _key: string) => bill()),
     // One payment per bill (key): a new checkout's payment starts pending.
-    createPayment: vi.fn(async (_input: PaymentInput, key: string) => {
+    createPayment: vi.fn(async (input: PaymentInput, key: string) => {
+      // Like Ivora: return_url takes nothing of the driver surface beside it.
+      if (
+        input.return_url !== undefined &&
+        (input.return_surface !== undefined ||
+          input.return_reference !== undefined)
+      )
+        throw new IvoraError(422, "invalid_request", "return_url with others");
       if (key !== state.paymentKey) {
+        state.returnUrl = input.return_url !== undefined;
+        state.paymentRead = false;
         state.paymentKey = key;
         state.payment = "pending";
         state.captured = 0;
@@ -333,7 +364,10 @@ function fakeIvora() {
       state.final ??= state.usage?.estimated_minor ?? 0;
       return bill();
     }),
-    getPayment: vi.fn(async (_id: string) => payment()),
+    getPayment: vi.fn(async (_id: string) => {
+      if (state.payment === "authorized") state.paymentRead = true;
+      return payment();
+    }),
     capturePayment: vi.fn(async (_id: string, _key: string) => {
       if (state.final === null)
         throw new IvoraError(409, "bill_not_final", "Not final");
@@ -2176,18 +2210,32 @@ describe("payment return_url", () => {
     const { d, api, cookie } = own();
     await pay(d);
     const rec = only(cookie);
-    expect(api.createPayment).toHaveBeenCalledWith(
-      {
-        bill_id: BILL,
-        return_url: `${ORIGIN}/s/${rec.id}`,
-        return_reference: rec.reference,
-      },
+    // Exactly the bill and the return_url: Ivora answers 422 to return_surface or
+    // return_reference beside it (the fake does too).
+    expect(api.createPayment).toHaveBeenCalledTimes(1);
+    expect(api.createPayment.mock.calls[0]).toStrictEqual([
+      { bill_id: BILL, return_url: `${ORIGIN}/s/${rec.id}` },
       `cpo-checkout-${rec.id}-payment`,
-    );
-    // Never both: Ivora answers 422 when return_surface and return_url are set.
-    expect(api.createPayment.mock.calls[0][0]).not.toHaveProperty(
-      "return_surface",
-    );
+    ]);
+    expect(rec.phase).toBe("open");
+  });
+
+  it("is refused by the fake like Ivora when return_url comes with return_surface or return_reference", async () => {
+    const { api } = own();
+    for (const extra of [
+      { return_surface: "driver" },
+      { return_reference: "ck_x" },
+    ])
+      await expect(
+        api.createPayment(
+          {
+            bill_id: BILL,
+            return_url: `${ORIGIN}/s/x`,
+            ...extra,
+          } as unknown as PaymentInput,
+          "k-payment",
+        ),
+      ).rejects.toMatchObject({ status: 422, code: "invalid_request" });
   });
 
   it("keeps Ivora's driver page without a public origin, an unverified hostname, a short-listed one or a failed read", async () => {
@@ -2198,6 +2246,10 @@ describe("payment return_url", () => {
       (x: ReturnType<typeof own>) =>
         (x.d.publicOrigin = "http://charge.example.com"),
       (x: ReturnType<typeof own>) => (x.d.publicOrigin = "https://203.0.113.7"),
+      // A verified host on another port: Ivora would refuse it with a 422.
+      (x: ReturnType<typeof own>) =>
+        (x.d.publicOrigin = "https://charge.example.com:8443"),
+      (x: ReturnType<typeof own>) => (x.state.domains[0].status = "disabled"),
       (x: ReturnType<typeof own>) =>
         x.api.listReturnDomains.mockRejectedValue(ivoraError(403, "forbidden")),
     ]) {
@@ -2226,13 +2278,14 @@ describe("payment return_url", () => {
     expect(rec.phase).toBe("open");
     expect(api.createPayment).toHaveBeenCalledTimes(2);
     expect(api.createPayment.mock.calls[0][0]).toHaveProperty("return_url");
+    // The same key: Ivora recorded nothing for the 409.
     expect(api.createPayment.mock.calls[1]).toEqual([
       {
         bill_id: BILL,
         return_surface: "driver",
         return_reference: rec.reference,
       },
-      `cpo-checkout-${rec.id}-payment-fallback`,
+      `cpo-checkout-${rec.id}-payment`,
     ]);
     expect(console.error).toHaveBeenCalledWith(
       expect.stringMatching(/not verified as a return domain/),
@@ -2436,6 +2489,70 @@ describe("the driver session page", () => {
     ).toBeNull();
   });
 
+  it("reads only the bill on a charging session's page loads: no payment read", async () => {
+    const { d, api, state, cookie, paid } = own();
+    await pay(d);
+    paid();
+    await page(d, cookie);
+    paid("charging");
+    state.usage = usage();
+    api.getPayment.mockClear();
+    for (let i = 0; i < 3; i++)
+      expect(await page(d, cookie)).toMatchObject({ stage: "charging" });
+    expect(api.getPayment).not.toHaveBeenCalled();
+    // Not even with canceled=1: nothing could be released once it started.
+    await page(d, cookie, { canceled: true });
+    expect(api.getPayment).not.toHaveBeenCalled();
+  });
+
+  it("starts an authorized payment even when the address says canceled=1", async () => {
+    const { d, api, cookie, paid } = own();
+    await pay(d);
+    paid();
+    expect(await page(d, cookie, { canceled: true })).toMatchObject({
+      stage: "starting",
+    });
+    expect(api.startBill).toHaveBeenCalledTimes(1);
+    expect(api.releasePayment).not.toHaveBeenCalled();
+    expect(only(cookie).phase).toBe("open");
+  });
+
+  it("shows the second tab of a race the start, without an error", async () => {
+    const { d, api, state, cookie, paid } = own();
+    await pay(d);
+    paid();
+    // This tab read an authorized bill, but the other tab's start landed before its
+    // own check (the third bill read).
+    const real = api.getBill.getMockImplementation()!;
+    let reads = 0;
+    api.getBill.mockImplementation(async (id: string) => {
+      if (++reads === 3) state.progress = "starting";
+      return real(id);
+    });
+    const s = await page(d, cookie);
+    expect(api.startBill).not.toHaveBeenCalled();
+    expect(s).toMatchObject({ stage: "starting" });
+    expect(s?.notice ?? "").not.toMatch(/already started/);
+  });
+
+  it("rate-limits Start and Stop per session", async () => {
+    const { d, station, cookie, paid } = own();
+    await pay(d);
+    paid();
+    station.connectors[0].status = "Preparing";
+    const id = only(cookie).id;
+    for (let i = 0; i < CHECKOUT_LIMITS.session.quota; i++)
+      await expect(startSessionById(d, id, OPERATOR)).rejects.toMatchObject({
+        code: "in_use",
+      });
+    await expect(startSessionById(d, id, OPERATOR)).rejects.toMatchObject({
+      code: "rate_limited",
+    });
+    await expect(stopSessionById(d, id)).rejects.toMatchObject({
+      code: "rate_limited",
+    });
+  });
+
   it("tells the driver when the payment service can't be reached, and starts nothing", async () => {
     const { d, api, cookie, paid } = own();
     await pay(d);
@@ -2444,5 +2561,73 @@ describe("the driver session page", () => {
     const s = await page(d, cookie);
     expect(s?.notice).toMatch(/can't be reached/);
     expect(api.startBill).not.toHaveBeenCalled();
+  });
+});
+
+describe("a return_url checkout without the session page", () => {
+  const setup = () => {
+    const c = clock();
+    return { c, ...deps({ publicOrigin: ORIGIN, now: c.now }) };
+  };
+
+  it("lets the sticker page start it once the payment is authorized, and links the session page", async () => {
+    const { d, api, cookie, paid } = setup();
+    await pay(d);
+    paid();
+    const rec = only(cookie);
+    const [s] = await driverSessions(d, CODE, [rec.requestId]);
+    // Settlement read the payment, so the bill moved on to authorized.
+    expect(s).toMatchObject({
+      progress: "authorized",
+      canStart: true,
+      sessionPath: `/s/${rec.id}`,
+    });
+    expect(api.startBill).not.toHaveBeenCalled();
+    await startPaidSession(
+      d,
+      { code: CODE, requestId: rec.requestId, requestIds: [rec.requestId] },
+      OPERATOR,
+    );
+    expect(api.startBill).toHaveBeenCalledTimes(1);
+    expect(api.startBill.mock.calls[0][1]).toBe(`cpo-checkout-${rec.id}-start`);
+  });
+
+  it("starts from the sticker page even when nothing read the payment yet", async () => {
+    const { d, api, cookie, paid } = setup();
+    await pay(d);
+    paid();
+    const rec = only(cookie);
+    await startPaidSession(
+      d,
+      { code: CODE, requestId: rec.requestId, requestIds: [rec.requestId] },
+      OPERATOR,
+    );
+    expect(api.startBill).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not released by the sweep at the payment window once the payment is authorized", async () => {
+    const { c, d, cookie, paid } = setup();
+    await pay(d);
+    paid();
+    c.add(PAYMENT_WINDOW_MINUTES + 1);
+    expect(await settle(d, cookie)).toMatchObject({ phase: "open" });
+    // An unpaid one still is.
+    const unpaid = setup();
+    await pay(unpaid.d);
+    unpaid.c.add(PAYMENT_WINDOW_MINUTES + 1);
+    expect(await settle(unpaid.d, unpaid.cookie)).toMatchObject({
+      phase: "released",
+    });
+  });
+
+  it("reads the payment at most every 10 seconds while the bill awaits payment", async () => {
+    const { c, d, api, cookie } = setup();
+    await pay(d);
+    await settle(d, cookie);
+    await settle(d, cookie);
+    expect(api.getPayment).toHaveBeenCalledTimes(1);
+    c.t += 10_001;
+    await settle(d, cookie);
+    expect(api.getPayment).toHaveBeenCalledTimes(2);
   });
 });

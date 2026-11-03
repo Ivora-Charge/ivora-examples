@@ -545,7 +545,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     verifyReturnDomain(id, key) {
       return request<ReturnDomain>(
         "POST",
-        `return-domains/${encodeURIComponent(String(id))}/verify`,
+        `return-domains/${encodeURIComponent(id)}/verify`,
         { key },
       );
     },

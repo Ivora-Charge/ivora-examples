@@ -144,6 +144,11 @@ async function Content({ params }: { params: Promise<{ code: string }> }) {
                 {s.canStop && (
                   <StopForm code={page.code} requestId={s.requestId} />
                 )}
+                {s.sessionPath && s.live && (
+                  <p>
+                    <Link href={s.sessionPath}>Open your session page</Link>
+                  </p>
+                )}
               </li>
             ))}
           </ul>

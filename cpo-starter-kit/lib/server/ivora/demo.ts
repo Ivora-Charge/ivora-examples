@@ -1409,6 +1409,13 @@ export function createDemoClient(
     },
     // One payment per bill: the same key (or a later one) answers with the same payment.
     async createPayment(input, key) {
+      // Demo payments return to the demo's own pages: there are no return domains.
+      if (input.return_url !== undefined)
+        throw new IvoraError(
+          409,
+          "return_url_not_verified",
+          "Demo mode has no return domains.",
+        );
       const p = await update((f) => {
         const b = f.bills?.find((x) => x.id === input.bill_id);
         if (!b)

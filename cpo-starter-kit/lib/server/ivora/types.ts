@@ -702,28 +702,45 @@ export interface Bill {
  *   proof of payment and a bill read never starts the charger: read the payment, and
  *   start the bill yourself once it is `authorized`.
  */
-export type PaymentInput = {
-  bill_id: string;
-  /** ^[A-Za-z0-9_-]{1,128}$: our own session record, never a URL. */
-  return_reference: string;
-} & (
-  | { return_surface: "driver"; return_url?: undefined }
-  | { return_url: string; return_surface?: undefined }
-);
+export type PaymentInput =
+  | {
+      bill_id: string;
+      return_surface: "driver";
+      /** ^[A-Za-z0-9_-]{1,128}$: our own session record, never a URL. */
+      return_reference: string;
+      return_url?: undefined;
+    }
+  | {
+      bill_id: string;
+      /** Only bill_id with it: Ivora answers 422 to return_surface or return_reference. */
+      return_url: string;
+      return_surface?: undefined;
+      return_reference?: undefined;
+    };
+
+/** One DNS record Ivora asks the tenant to publish for a return domain. */
+export interface ReturnDomainDnsRecord {
+  type: string;
+  name: string;
+  value: string;
+  ttl?: number | null;
+}
 
 /**
- * A hostname the tenant may send drivers back to (`/return-domains`). `ready` is true
- * once the TXT record `_ivora-return.<hostname>` = `ivora-return-verification=<token>`
- * was found. Fields beyond these are not relied on.
+ * A hostname the tenant may send drivers back to (`/return-domains`), as Ivora returns
+ * it. `ready` is true once the TXT record in `dns_records`
+ * (`_ivora-return.<hostname>`) was found. A `disabled` domain counts as not
+ * registered: registering it again issues a new challenge, and verifying it is a 409.
  */
 export interface ReturnDomain {
-  id: string | number;
+  id: string;
   hostname: string;
+  status: "pending_dns" | "dns_verified" | "disabled";
+  dns_records: ReturnDomainDnsRecord[];
+  return_url_prefix: string | null;
   ready: boolean;
-  status?: string;
-  /** The token to publish, when Ivora lists it separately from the whole record. */
-  verification_token?: string;
-  verification?: { name?: string; value?: string; token?: string } | null;
+  checked_at: string | null;
+  verified_at: string | null;
 }
 
 export interface Payment {
@@ -907,12 +924,12 @@ export interface IvoraClient {
   startBill(billId: string, key: string): Promise<Operation>;
   /** One payment per bill: a retry with the same key answers with the same payment. */
   createPayment(input: PaymentInput, key: string): Promise<Payment>;
-  /** The tenant's return domains (needs the key's domain scopes; see the README). */
+  /** The tenant's return domains (`stations:read`). */
   listReturnDomains(): Promise<ReturnDomain[]>;
-  /** Registers a hostname; the same hostname answers with the same record. */
+  /** Registers a hostname (`stations:write`); the same hostname answers with the same record. */
   createReturnDomain(hostname: string, key: string): Promise<ReturnDomain>;
-  /** Checks the TXT record now. Repeat until `ready` is true. */
-  verifyReturnDomain(id: string | number, key: string): Promise<ReturnDomain>;
+  /** Checks the TXT record now (`stations:write`). Repeat until `ready` is true. */
+  verifyReturnDomain(id: string, key: string): Promise<ReturnDomain>;
   /** One tariff by its Ivora ID (its authorization_minor is the card hold). */
   getTariff(tariffId: number): Promise<Tariff>;
   /**

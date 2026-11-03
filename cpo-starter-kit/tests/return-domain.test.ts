@@ -28,6 +28,10 @@ describe("the session return URL", () => {
     expect(sessionReturnUrl("https://charge.example.com", ID)).toBe(
       `https://charge.example.com/s/${ID}`,
     );
+    // An explicit default port is the default port.
+    expect(sessionReturnUrl("https://charge.example.com:443", ID)).toBe(
+      `https://charge.example.com/s/${ID}`,
+    );
   });
 
   it("refuses http, credentials, fragments, IP addresses, bare hosts and anything over 512 characters", () => {
@@ -39,6 +43,8 @@ describe("the session return URL", () => {
       "https://[2001:db8::1]",
       "https://2130706433",
       "https://localhost",
+      // Ivora's canonical form has the default port only.
+      "https://charge.example.com:8443",
       "not a url",
       "",
       null,
@@ -56,24 +62,46 @@ describe("the session return URL", () => {
   });
 });
 
+const TXT = {
+  type: "TXT",
+  name: "_ivora-return.charge.example.com",
+  value: "ivora-return-verification=tok123",
+  ttl: 300,
+};
+
+/** A return domain as Ivora returns it. */
+function domain(o: Partial<ReturnDomain> = {}): ReturnDomain {
+  return {
+    id: "rd_7",
+    hostname: "charge.example.com",
+    status: "pending_dns",
+    dns_records: [TXT],
+    return_url_prefix: "https://charge.example.com/",
+    ready: false,
+    checked_at: null,
+    verified_at: null,
+    ...o,
+  };
+}
+
 function fake(domains: ReturnDomain[]) {
   const api = {
     listReturnDomains: vi.fn(async () => structuredClone(domains)),
-    createReturnDomain: vi.fn(
-      async (hostname: string): Promise<ReturnDomain> => ({
-        id: 7,
-        hostname,
-        ready: false,
-        verification_token: "tok123",
-      }),
+    createReturnDomain: vi.fn(async (hostname: string): Promise<ReturnDomain> =>
+      domain({ hostname }),
     ),
-    verifyReturnDomain: vi.fn(
-      async (id: string | number): Promise<ReturnDomain> => ({
+    verifyReturnDomain: vi.fn(async (id: string): Promise<ReturnDomain> => {
+      const found = domains.find((x) => x.id === id);
+      if (found?.status === "disabled")
+        throw new IvoraError(409, "return_domain_disabled", "Disabled");
+      return domain({
         id,
-        hostname: "charge.example.com",
+        status: "dns_verified",
         ready: true,
-      }),
-    ),
+        checked_at: "2026-11-03T06:00:00Z",
+        verified_at: "2026-11-03T06:00:00Z",
+      });
+    }),
   };
   return { api, d: { ivora: api as unknown as IvoraClient } };
 }
@@ -81,7 +109,7 @@ function fake(domains: ReturnDomain[]) {
 describe("onboarding: return domain", () => {
   beforeEachSilence();
 
-  it("registers the hostname once, shows the TXT record, and verifies until ready", async () => {
+  it("registers the hostname once, shows the TXT record from dns_records, and verifies until ready", async () => {
     const { api, d } = fake([]);
     expect((await loadReturnDomain(d, base, false)).ok).toBe(true);
     expect(await loadReturnDomain(d, base, false)).toMatchObject({
@@ -92,6 +120,7 @@ describe("onboarding: return domain", () => {
       ok: true,
       view: {
         state: "pending",
+        id: "rd_7",
         txt: {
           name: "_ivora-return.charge.example.com",
           value: "ivora-return-verification=tok123",
@@ -103,26 +132,51 @@ describe("onboarding: return domain", () => {
       "cpo-return-domain-charge.example.com-create",
     );
 
-    const pending = fake([
-      { id: 7, hostname: "Charge.Example.com", ready: false },
-    ]);
+    const pending = fake([domain({ hostname: "Charge.Example.com" })]);
+    expect(await loadReturnDomain(pending.d, base, false)).toMatchObject({
+      view: { state: "pending", txt: { value: TXT.value } },
+    });
+    // Already registered: shown as it is, nothing sent.
+    await registerReturnDomain(pending.d, manager, base);
+    expect(pending.api.createReturnDomain).not.toHaveBeenCalled();
     const ready = await verifyReturnDomain(pending.d, manager, base, () => 5);
     expect(ready).toMatchObject({ ok: true, view: { state: "ready" } });
     expect(pending.api.verifyReturnDomain).toHaveBeenCalledWith(
-      7,
-      "cpo-return-domain-7-5-verify",
+      "rd_7",
+      "cpo-return-domain-rd_7-5-verify",
+    );
+  });
+
+  it("shows no TXT record when dns_records has none", async () => {
+    const { d } = fake([domain({ dns_records: [] })]);
+    expect(await loadReturnDomain(d, base, false)).toMatchObject({
+      view: { state: "pending", txt: null },
+    });
+  });
+
+  it("treats a disabled domain as not registered: registering again gets a new challenge, verify is not sent", async () => {
+    const { api, d } = fake([domain({ status: "disabled" })]);
+    expect(await loadReturnDomain(d, base, false)).toMatchObject({
+      view: { state: "not_registered", id: null, txt: null },
+    });
+    expect(await verifyReturnDomain(d, manager, base)).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/not registered yet/),
+    });
+    expect(api.verifyReturnDomain).not.toHaveBeenCalled();
+    // A new key: the first registration's key would only replay the old answer.
+    await registerReturnDomain(d, manager, base, () => 9);
+    expect(api.createReturnDomain).toHaveBeenCalledWith(
+      "charge.example.com",
+      "cpo-return-domain-charge.example.com-9-create",
     );
   });
 
   it("keeps a failed verification pending, and needs a manager", async () => {
-    const { api, d } = fake([
-      { id: 7, hostname: "charge.example.com", ready: false },
-    ]);
-    api.verifyReturnDomain.mockResolvedValue({
-      id: 7,
-      hostname: "charge.example.com",
-      ready: false,
-    });
+    const { api, d } = fake([domain()]);
+    api.verifyReturnDomain.mockResolvedValue(
+      domain({ checked_at: "2026-11-03T06:00:00Z" }),
+    );
     expect(await verifyReturnDomain(d, manager, base)).toMatchObject({
       ok: true,
       view: { state: "pending" },
@@ -135,15 +189,17 @@ describe("onboarding: return domain", () => {
     });
   });
 
-  it("asks for the key's domain scopes on a 403, and has no origin without a stable domain", async () => {
+  it("names stations:read and stations:write on a 403, and has no origin without a stable domain", async () => {
     const { api, d } = fake([]);
     api.listReturnDomains.mockRejectedValue(
       new IvoraError(403, "forbidden", "Missing scope", "req_1"),
     );
-    expect(await loadReturnDomain(d, base, false)).toMatchObject({
+    const r = await loadReturnDomain(d, base, false);
+    expect(r).toMatchObject({
       ok: false,
-      error: expect.stringMatching(/scopes/),
+      error: expect.stringMatching(/stations:read.*stations:write/),
     });
+    expect(JSON.stringify(r)).not.toMatch(/domains:|\(domains\)/);
     const none = { ok: false as const, reason: "Set PUBLIC_BASE_URL." };
     expect(await loadReturnDomain(fake([]).d, none, false)).toMatchObject({
       view: { state: "no_origin" },
@@ -195,12 +251,8 @@ describe("live client return domains", () => {
         return new Response(
           JSON.stringify(
             init?.method === "POST"
-              ? { id: 7, hostname: "charge.example.com", ready: true }
-              : {
-                  data: [
-                    { id: 7, hostname: "charge.example.com", ready: true },
-                  ],
-                },
+              ? domain({ id: "rd_7" })
+              : { data: [domain({ id: "rd_7" })] },
           ),
           { status: 200 },
         );
@@ -217,7 +269,7 @@ describe("live client return domains", () => {
       "charge.example.com",
       "cpo-return-domain-x-create",
     );
-    await c.verifyReturnDomain(7, "cpo-return-domain-7-1-verify");
+    await c.verifyReturnDomain("rd_7", "cpo-return-domain-rd_7-1-verify");
     expect(calls.map((x) => [x.method, x.url, x.key])).toEqual([
       ["GET", "https://api.example.test/v1/tenants/12/return-domains", null],
       [
@@ -227,8 +279,8 @@ describe("live client return domains", () => {
       ],
       [
         "POST",
-        "https://api.example.test/v1/tenants/12/return-domains/7/verify",
-        "cpo-return-domain-7-1-verify",
+        "https://api.example.test/v1/tenants/12/return-domains/rd_7/verify",
+        "cpo-return-domain-rd_7-1-verify",
       ],
     ]);
     expect(calls[1].body).toEqual({ hostname: "charge.example.com" });

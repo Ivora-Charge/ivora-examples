@@ -25,7 +25,7 @@ const STEPS = [
   { key: "company", label: "Company" },
   { key: "brand", label: "Brand" },
   { key: "payments", label: "Payments" },
-  { key: "domain", label: "Return domain" },
+  { key: "domain", label: "Return domain (optional)" },
 ] as const;
 type Step = (typeof STEPS)[number]["key"];
 
@@ -64,9 +64,9 @@ async function Content({
     <>
       <h1>Onboarding</h1>
       <p className="muted">
-        Four steps to put your name on the driver payment pages and take card
-        payments. You can change everything later in{" "}
-        <Link href="/settings">Settings</Link>.
+        Three steps, plus an optional return domain, to put your name on the
+        driver payment pages and take card payments. You can change everything
+        later in <Link href="/settings">Settings</Link>.
       </p>
       <nav aria-label="Setup steps">
         <ol className="steps">

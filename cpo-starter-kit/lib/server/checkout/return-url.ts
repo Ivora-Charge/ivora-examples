@@ -8,8 +8,9 @@ export const SESSION_PATH = "/s/";
 
 /**
  * The payment's return_url for a checkout: `<origin>/s/<checkout id>`, or null when the
- * origin can't be a return domain: it must be https, a hostname (no IP address), carry
- * no credentials or fragment, and the whole URL must fit Ivora's 512 characters.
+ * origin can't be a return domain: it must be https on the default port, a hostname (no
+ * IP address), carry no credentials or fragment, and the whole URL must fit Ivora's
+ * 512 characters.
  */
 export function sessionReturnUrl(
   origin: string | null | undefined,
@@ -22,7 +23,9 @@ export function sessionReturnUrl(
   } catch {
     return null;
   }
-  if (u.protocol !== "https:" || u.username || u.password || u.hash)
+  // Ivora's canonical form has the default port only (`new URL` drops :443 itself):
+  // any other port is refused with a 422, which no fallback catches.
+  if (u.protocol !== "https:" || u.username || u.password || u.hash || u.port)
     return null;
   // new URL keeps IPv6 brackets in `hostname`; isIP wants them off.
   const host = u.hostname.replace(/^\[|\]$/g, "");

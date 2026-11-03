@@ -10,7 +10,8 @@ import { notAllowed } from "./types";
 // Onboarding's "Return domain" step: registers the kit's public hostname with Ivora
 // (`POST /return-domains`), shows the TXT record to publish, and checks it
 // (`POST /return-domains/{id}/verify`). Until it is verified, drivers come back to
-// Ivora's driver page as before. Needs the key's return-domain scopes (see the README).
+// Ivora's driver page as before. Listing needs `stations:read`, registering and
+// verifying `stations:write`: scopes the kit's key already has for Onboarding.
 
 export type ReturnDomainState =
   /** Demo mode: a sample, nothing is sent. */
@@ -41,28 +42,33 @@ function fail(e: unknown, what: string): { ok: false; error: string } {
   );
   const scopes =
     e.status === 401 || e.status === 403
-      ? " The API key needs the return-domain (domains) scopes: see the README."
+      ? " The API key needs stations:read (list) and stations:write (register, verify): see the README."
       : "";
   return { ok: false, error: `${describeError(e)}${scopes}` };
 }
 
-/** The TXT record of a domain, from whatever shape Ivora lists it in. */
+/** The TXT record Ivora asks for, from the domain's `dns_records`. */
 export function txtOf(domain: ReturnDomain) {
-  const v = domain.verification;
-  const token = domain.verification_token ?? v?.token;
-  if (v?.value)
-    return {
-      name: v.name ?? `_ivora-return.${domain.hostname}`,
-      value: v.value,
-    };
-  return token ? returnTxtRecord(domain.hostname, token) : null;
+  const r = (domain.dns_records ?? []).find(
+    (x) => x.type.toUpperCase() === "TXT",
+  );
+  return r ? { name: r.name, value: r.value } : null;
+}
+
+/** This deployment's hostname among the domains; a disabled one is not registered. */
+function findDomain(list: ReturnDomain[], host: string) {
+  return (
+    list.find(
+      (x) => x.hostname.toLowerCase() === host && x.status !== "disabled",
+    ) ?? null
+  );
 }
 
 export function domainView(
   hostname: string,
   domain: ReturnDomain | null,
 ): ReturnDomainView {
-  if (!domain)
+  if (!domain || domain.status === "disabled")
     return {
       state: "not_registered",
       hostname,
@@ -74,14 +80,14 @@ export function domainView(
     return {
       state: "ready",
       hostname,
-      id: String(domain.id),
+      id: domain.id,
       txt: null,
       detail: `${hostname} is verified. Drivers come back to your own session page after paying.`,
     };
   return {
     state: "pending",
     hostname,
-    id: String(domain.id),
+    id: domain.id,
     txt: txtOf(domain),
     detail: `Publish the TXT record below at your DNS provider, then choose Verify. DNS can take a few minutes. Until ${hostname} is verified, drivers come back to Ivora's driver page.`,
   };
@@ -126,21 +132,23 @@ export async function loadReturnDomain(
     const list = await d.ivora.listReturnDomains();
     return {
       ok: true,
-      view: domainView(
-        host,
-        list.find((x) => x.hostname.toLowerCase() === host) ?? null,
-      ),
+      view: domainView(host, findDomain(list, host)),
     };
   } catch (e) {
     return fail(e, "return domains read");
   }
 }
 
-/** Registers the hostname (the same hostname answers with the same record). */
+/**
+ * Registers the hostname. One already registered (and not disabled) is shown as it is,
+ * with nothing sent. A disabled one is registered again under a new key, which makes
+ * Ivora issue a new challenge (the first key would only replay the old answer).
+ */
 export async function registerReturnDomain(
   d: { ivora: IvoraClient },
   actor: Staff,
   base: QrBase,
+  now: () => number = Date.now,
 ): Promise<ReturnDomainResult> {
   if (!atLeast(actor.role, "manager")) throw notAllowed();
   const host = hostOf(base);
@@ -151,9 +159,17 @@ export async function registerReturnDomain(
         "Set PUBLIC_BASE_URL (or APP_URL) to your own stable https domain first.",
     };
   try {
+    const list = await d.ivora.listReturnDomains();
+    const active = findDomain(list, host);
+    if (active) return { ok: true, view: domainView(host, active) };
+    const disabled = list.some((x) => x.hostname.toLowerCase() === host);
     const dom = await d.ivora.createReturnDomain(
       host,
-      idempotencyKey("return-domain", host, "create"),
+      idempotencyKey(
+        "return-domain",
+        disabled ? `${host}-${now()}` : host,
+        "create",
+      ),
     );
     return { ok: true, view: domainView(host, dom) };
   } catch (e) {
@@ -180,9 +196,8 @@ export async function verifyReturnDomain(
         "Set PUBLIC_BASE_URL (or APP_URL) to your own stable https domain first.",
     };
   try {
-    const found = (await d.ivora.listReturnDomains()).find(
-      (x) => x.hostname.toLowerCase() === host,
-    );
+    // Verifying a disabled domain is a 409: it must be registered again first.
+    const found = findDomain(await d.ivora.listReturnDomains(), host);
     if (!found)
       return {
         ok: false,
