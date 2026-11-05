@@ -120,7 +120,8 @@ function nonce(input: string) {
 const at = (ms: number) => new Date(ms).toISOString();
 
 function place(code: string, connector: number) {
-  const charger = DEMO_CHARGERS.find((c) => c.code === code);
+  // Chargers with their own tariff (the CAD sample) are driver-page only.
+  const charger = DEMO_CHARGERS.find((c) => c.code === code && !c.tariff);
   const c = charger?.connectors.find((x) => x.number === connector);
   return charger && c ? { charger, connector: c } : null;
 }
@@ -130,8 +131,10 @@ export function seedDemoStore(now: number): DemoStore {
   const charging = (start: number) => start + DEMO_START_DELAY_MS;
   const full150 = demoCurve(150_000, 0).fullAtSim;
   const sim = (seconds: number) => (seconds * 1000) / DEMO_SPEED;
+  // Stable per charger: a console that reseeds (two first polls in a row) still
+  // finds the sale the POS panel names.
   const sale = (terms: SaleTerms, code: string) =>
-    encodeSaleId(terms, nonce(`seed:${code}:${now}`));
+    encodeSaleId(terms, nonce(`seed:${code}`));
   const s6 = now - 180_000;
   const s8 = now - 300_000;
   const store: DemoStore = {
@@ -448,6 +451,7 @@ function demoTile(
     status,
     online: charger.online,
     sale,
+    currency: DEMO_TARIFF.currency,
     ...tileState({
       online: charger.online,
       status,
@@ -464,14 +468,17 @@ export function demoConsole(
   now: number,
   settings: Pick<Settings, "idleGraceMinutes">,
 ) {
-  const tiles = DEMO_CHARGERS.flatMap((charger) =>
-    charger.connectors.map((c) => demoTile(store, charger, c, now, settings)),
-  ).map((t) =>
-    // Chargers with two connectors are numbered per connector, like pumps.
-    t.code === "DEMO-1" || t.code === "DEMO-2"
-      ? { ...t, label: chargerLabel(t.code, t.connector, 2) }
-      : t,
-  );
+  // The cashier console is the USD sample; the CAD charger is driver-page only.
+  const tiles = DEMO_CHARGERS.filter((c) => !c.tariff)
+    .flatMap((charger) =>
+      charger.connectors.map((c) => demoTile(store, charger, c, now, settings)),
+    )
+    .map((t) =>
+      // Chargers with two connectors are numbered per connector, like pumps.
+      t.code === "DEMO-1" || t.code === "DEMO-2"
+        ? { ...t, label: chargerLabel(t.code, t.connector, 2) }
+        : t,
+    );
   const onTiles = new Set(tiles.map((t) => t.sale?.sale));
   const unpaid = store.sales
     .filter((s) => !onTiles.has(s.sale))
@@ -540,11 +547,12 @@ export function demoAuthorize(
     connector: number;
     terms: SaleTerms;
     requestId: string;
+    currency?: string;
   },
   now: number,
   settings: Pick<Settings, "idleGraceMinutes">,
 ): { store: DemoStore; view: SaleView } {
-  const problem = validateTerms(input.terms);
+  const problem = validateTerms(input.terms, input.currency);
   if (problem) throw new SaleError(400, "invalid_sale", problem);
   const sale = encodeSaleId(input.terms, nonce(`sale:${input.requestId}`));
   const existing = store.sales.find((s) => s.sale === sale);
@@ -647,7 +655,13 @@ export function demoMarkPaid(
         "bill_not_final",
         "The bill isn't final yet. Mark it paid when the charging session has ended.",
       );
-    const rule = paidReport(s.sale, view.terms, view.amounts, input);
+    const rule = paidReport(
+      s.sale,
+      view.terms,
+      view.amounts,
+      input,
+      view.currency,
+    );
     if (!rule.ok) throw new SaleError(409, rule.code, rule.message);
     return rule.report
       ? { ...s, reports: [...s.reports, asReport(rule.report, at(now))] }

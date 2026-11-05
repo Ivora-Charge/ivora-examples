@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { computeSchedule, toProfileInput } from "@/lib/schedule";
 import {
-  costCents,
+  costMinor,
   energyNeededKwh,
   sessionKwhFromRegisters,
 } from "@/lib/units";
@@ -37,7 +37,7 @@ describe("Wh registers", () => {
     expect(sessionKwhFromRegisters(1_000_000, 1_042_500)).toBe(42.5));
   it("ignores a register that went backwards", () =>
     expect(sessionKwhFromRegisters(500, 100)).toBe(0));
-  it("prices in integer cents", () => expect(costCents(42.5, 28)).toBe(1190));
+  it("prices in integer cents", () => expect(costMinor(42.5, 28)).toBe(1190));
 });
 
 describe("computeSchedule", () => {

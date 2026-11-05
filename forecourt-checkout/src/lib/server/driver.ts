@@ -1,7 +1,7 @@
 import "server-only";
 import {
   DEMO_READY,
-  DEMO_TARIFF,
+  demoTariff,
   demoCharger,
   demoView,
   isDemoId,
@@ -57,13 +57,14 @@ export async function chargerFor(
       status: charger.online ? c.status : "Offline",
       available: charger.online && DEMO_READY.has(c.status),
     },
-    tariff: DEMO_TARIFF,
-    quote: localQuote(DEMO_TARIFF, {
+    tariff: demoTariff(charger),
+    quote: localQuote(demoTariff(charger), {
       energyWh: settings.typicalSessionKwh * 1000,
       chargingSeconds: settings.typicalSessionMinutes * 60,
       idleSeconds: 0,
     }),
-    settings,
+    // The CAD sample has no cashier console, so no pay-at-the-counter option.
+    settings: charger.tariff ? { ...settings, payInStore: false } : settings,
   });
 }
 

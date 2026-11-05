@@ -1,4 +1,4 @@
-import { formatCents } from "@/lib/money";
+import { formatMoney } from "@/lib/money";
 import type { SaleView } from "@/lib/store";
 import { formatLocalDateTime } from "@/lib/time";
 import { formatDuration, whToKwhText } from "@/lib/units";
@@ -15,7 +15,7 @@ export function StoreReceipt({
 }) {
   const bill = view.bill;
   const a = view.amounts;
-  const money = (cents: number) => formatCents(cents, view.currency);
+  const money = (cents: number) => formatMoney(cents, view.currency);
   const seconds =
     view.startedAt && view.endedAt
       ? (Date.parse(view.endedAt) - Date.parse(view.startedAt)) / 1000

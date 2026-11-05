@@ -53,6 +53,10 @@ test("screenshot set", async ({ page }) => {
   await expect(page.getByRole("heading", { name: /today/ })).toBeVisible();
   await capture(page, "operator");
   await page.goto("/operator/prices");
+  // Both tariff cards, not the loading skeleton.
+  await expect(page.getByRole("heading", { name: /Tariff 9002/ })).toBeVisible({
+    timeout: 15_000,
+  });
   await capture(page, "prices");
   await page.goto("/operator/faults");
   await capture(page, "faults");

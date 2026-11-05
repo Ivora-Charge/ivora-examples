@@ -28,6 +28,9 @@ const PAGES = [
 
 async function checkPage(page: Page, label: string) {
   await page.waitForLoadState("networkidle");
+  // The title must be there before axe looks (document-title), as it is for a screen
+  // reader or a browser tab.
+  await expect(page, `${label} has a title`).toHaveTitle(/.+/);
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
     .analyze();
@@ -71,14 +74,47 @@ test("main screens do not scroll sideways on a tablet or a desktop", async ({
   }
 });
 
+async function createSticker(page: Page) {
+  await page.goto("/chargers/station-9101");
+  await page.getByRole("button", { name: "Create sticker codes" }).click();
+  const url = await page.locator(".sticker-url").first().textContent();
+  return new URL(url!).pathname;
+}
+
+/** The <title> of a response, only if it sits in the first HTML, inside <head>. */
+function headTitle(html: string) {
+  return /<head[\s>][\s\S]*<title>([^<]+)<\/title>[\s\S]*<\/head>/.exec(
+    html,
+  )?.[1];
+}
+
+test("driver pages send their title in the first HTML response", async ({
+  page,
+}) => {
+  const sticker = await createSticker(page);
+  // A browser's user agent, so Next does not treat the request as a bot.
+  const headers = {
+    "user-agent": "Mozilla/5.0 (X11; Linux x86_64) Chrome/120",
+  };
+  const res = await page.request.get(sticker, { headers });
+  expect(headTitle(await res.text()), sticker).toMatch(/^Charge here · .+/);
+  const unknown = await page.request.get("/c/no-such-code", { headers });
+  expect(headTitle(await unknown.text()), "unknown code").toMatch(/.+ · .+/);
+
+  await page.goto(sticker);
+  await page.getByRole("button", { name: /^Pay and charge/ }).click();
+  await expect(page).toHaveURL(/\/demo\/checkout\//);
+  const checkout = await page.request.get(page.url(), { headers });
+  expect(headTitle(await checkout.text()), "demo checkout").toMatch(
+    /^Demo checkout · .+/,
+  );
+});
+
 test("driver pages pass axe in light and dark and do not scroll sideways on a phone", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto("/chargers/station-9101");
-  await page.getByRole("button", { name: "Create sticker codes" }).click();
-  const url = await page.locator(".sticker-url").first().textContent();
-  const sticker = new URL(url!).pathname;
+  const sticker = await createSticker(page);
   for (const scheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme: scheme });
     await page.goto(sticker);

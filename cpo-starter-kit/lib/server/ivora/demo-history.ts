@@ -9,6 +9,7 @@ import {
   MAX_BUCKETS,
   MAX_STATS_SESSIONS,
 } from "../reports/time";
+import { DEFAULT_CURRENCY } from "../../money";
 import { whToKwhText } from "../../units";
 import type { ReportCheckout } from "../reports/types";
 import { SAMPLE_SESSION_CARDS } from "./demo-cards";
@@ -43,6 +44,16 @@ const CONNECTORS = [
   { station: 9102, name: "DEMO-HARBOUR-02", id: 91022, number: 2, w: 11_000 },
   { station: 9103, name: "DEMO-MARKET-01", id: 91031, number: 1, w: 50_000 },
 ];
+/** The CAD sample site's connector: some days add one more session here, billed in CAD. */
+const CAD_CONNECTOR = {
+  station: 9104,
+  name: "DEMO-WATERFRONT-01",
+  id: 91041,
+  number: 1,
+  w: 7_400,
+};
+const CAD_RATE_MINOR_PER_KWH = 40;
+const CAD_SESSION_FEE_MINOR = 150;
 const RATE_MINOR_PER_KWH = 35;
 const SESSION_FEE_MINOR = 100;
 const HOLD_MINOR = 2500;
@@ -98,9 +109,12 @@ export function demoHistory(now: number): DemoHistory {
   for (let d = 0; d < DEMO_HISTORY_DAYS; d++) {
     const day = today - d;
     const count = 3 + (bytes(`demo-day-${day}`)[0] % 5);
-    for (let i = 0; i < count; i++) {
+    // Every other day, one more session at the CAD site (the others are unchanged).
+    const cadToday = bytes(`demo-cad-${day}`)[0] % 2 === 0;
+    for (let i = 0; i < count + (cadToday ? 1 : 0); i++) {
+      const cad = i === count;
       const b = bytes(`demo-session-${day}-${i}`);
-      const c = CONNECTORS[b[0] % CONNECTORS.length];
+      const c = cad ? CAD_CONNECTOR : CONNECTORS[b[0] % CONNECTORS.length];
       const start =
         day * DAY_MS + (6 + (b[1] % 16)) * 3_600_000 + (b[2] % 60) * MINUTE_MS;
       const minutes = 15 + ((b[3] * 256 + b[4]) % 210);
@@ -111,8 +125,15 @@ export function demoHistory(now: number): DemoHistory {
         ? 0
         : Math.min(75_000, Math.round((c.w * minutes) / 60));
       const roll = b[7] % 100;
-      const kind =
-        roll < 60 ? "paid" : roll < 70 ? "free" : roll < 80 ? "staff" : "rfid";
+      const kind = cad
+        ? "paid"
+        : roll < 60
+          ? "paid"
+          : roll < 70
+            ? "free"
+            : roll < 80
+              ? "staff"
+              : "rfid";
       const id = day * 10 + i;
       const billId = `bill_${b.subarray(8, 24).toString("hex")}`;
       const tapped = start - 90_000;
@@ -131,7 +152,7 @@ export function demoHistory(now: number): DemoHistory {
         transactionId: id,
         billId: null,
         holdMinor: kind === "free" ? 0 : HOLD_MINOR,
-        currency: "USD",
+        currency: cad ? "CAD" : DEFAULT_CURRENCY,
         finalMinor: null,
         capturedMinor: null,
         refundedMinor: null,
@@ -180,15 +201,18 @@ export function demoHistory(now: number): DemoHistory {
       });
       if (kind === "free") checkouts.push(base);
       if (kind !== "paid") continue;
-      const total =
-        SESSION_FEE_MINOR + Math.round((RATE_MINOR_PER_KWH * energyWh) / 1000);
+      const total = cad
+        ? CAD_SESSION_FEE_MINOR +
+          Math.round((CAD_RATE_MINOR_PER_KWH * energyWh) / 1000)
+        : SESSION_FEE_MINOR +
+          Math.round((RATE_MINOR_PER_KWH * energyWh) / 1000);
       bills.push({
         id: billId,
         station_id: c.station,
         connector_id: c.id,
-        tariff_id: 9401,
+        tariff_id: cad ? 9403 : 9401,
         hold_minor: HOLD_MINOR,
-        currency: "USD",
+        currency: base.currency,
         status: "final",
         total_minor: total,
         transaction_id: id,

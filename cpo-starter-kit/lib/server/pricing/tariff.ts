@@ -44,6 +44,21 @@ export const PAID_CURRENCY = "USD";
  * nothing.
  */
 export const PAID_HOLD_MINOR = 2500;
+
+/**
+ * The editor's note for a paid tariff in another currency than PAID_CURRENCY, or
+ * undefined in that currency. It shows next to the Paid/Free choice and starts the save
+ * refusal. `sample` is the demo's wording (its CAD tariff is seeded, not saved).
+ */
+export function paidCurrencyNote(
+  currency: string,
+  sample: boolean,
+): string | undefined {
+  if (currency === PAID_CURRENCY) return undefined;
+  return sample
+    ? `Paid tariffs can be saved in ${PAID_CURRENCY} only for now; this ${currency} sample shows how other currencies read.`
+    : `Paid tariffs can be saved in ${PAID_CURRENCY} only for now; this tariff is in ${currency}, so make it free to save a new version.`;
+}
 /** Default free idle minutes per session. */
 export const DEFAULT_IDLE_GRACE_MINUTES = 10;
 export const MAX_PERIODS = 4;

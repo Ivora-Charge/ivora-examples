@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { ErrorBox } from "@/components/error-box";
 import { PayButton } from "@/components/pay-button";
-import { formatCents } from "@/lib/money";
+import { formatMoney } from "@/lib/money";
 import { chargerFor } from "@/lib/server/driver";
 import { errorInfo } from "@/lib/server/http";
 import { settings } from "@/lib/server/services";
@@ -104,14 +104,14 @@ export default async function Charger({
                   <div className="muted">{r.detail}</div>
                 </td>
                 <td className="num">
-                  {formatCents(r.amountCents, page.currency)}
+                  {formatMoney(r.amountCents, page.currency)}
                 </td>
               </tr>
             ))}
             <tr className="total">
               <td>Estimated total</td>
               <td className="num">
-                {formatCents(page.estimate.totalCents, page.currency)}
+                {formatMoney(page.estimate.totalCents, page.currency)}
               </td>
             </tr>
           </tbody>
@@ -128,7 +128,7 @@ export default async function Charger({
         ) : null}
         <p style={{ margin: 0 }}>
           We place a{" "}
-          <strong>{formatCents(page.holdCents, page.currency)}</strong> hold on
+          <strong>{formatMoney(page.holdCents, page.currency)}</strong> hold on
           your card. When you finish, you pay only for your session and the rest
           is released. Charging stops automatically before it reaches the hold.
         </p>
@@ -137,7 +137,7 @@ export default async function Charger({
           connector={c.number}
           disabled={!c.available}
           demo={page.demo}
-          holdLabel={formatCents(page.holdCents, page.currency)}
+          holdLabel={formatMoney(page.holdCents, page.currency)}
         />
         <p className="muted" style={{ margin: 0 }}>
           {page.demo

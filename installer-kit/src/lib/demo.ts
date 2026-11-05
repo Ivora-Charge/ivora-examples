@@ -19,11 +19,19 @@ export const DEMO_LOCATIONS = [
     locationId: "demo-loc-1",
     name: "Sample Depot (demo)",
     address: "1 Example Way, Springfield",
+    currency: "USD",
   },
   {
     locationId: "demo-loc-2",
     name: "Sample Garage (demo)",
     address: "20 Placeholder Rd, Springfield",
+    currency: "USD",
+  },
+  {
+    locationId: "demo-loc-3",
+    name: "Sample Annex Toronto (demo)",
+    address: "5 Example St, Toronto",
+    currency: "CAD",
   },
 ];
 

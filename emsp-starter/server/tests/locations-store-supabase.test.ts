@@ -245,7 +245,7 @@ describe("location store selection", () => {
     expect(demo).toBeInstanceOf(MemoryLocationStore);
     expect(locationStore()).toBe(demo);
     expect(await visiblePeerIds()).toEqual([DEMO_PEER_ID]);
-    expect((demo as MemoryLocationStore).locations.size).toBe(12);
+    expect((demo as MemoryLocationStore).locations.size).toBe(14);
     Object.assign(process.env, LIVE_ENV);
     delete process.env.DEMO_MODE;
     expect(locationStore()).toBeInstanceOf(SupabaseLocationStore);

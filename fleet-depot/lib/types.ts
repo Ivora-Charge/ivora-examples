@@ -31,6 +31,8 @@ export interface Vehicle {
     { kind: "kwh"; kwh: number } | { kind: "battery"; targetPercent: number };
   /** State of charge at plug-in, as last known. */
   socPercent?: number;
+  /** Which site tariff prices this vehicle's energy; unset is the default tariff. */
+  tariffId?: string;
 }
 
 /** What the board shows about the latest profile change of a session. */
@@ -155,10 +157,21 @@ export interface DepotEvent {
   detail: string;
 }
 
+export interface SiteTariff {
+  id: string;
+  name: string;
+  currency: string;
+  /** Minor units of `currency` per kWh. */
+  minorPerKwh: number;
+}
+
 export interface Settings {
   siteCapKw: number;
+  /** The default tariff: minor units per kWh (cents for USD) in `currency`. */
   centsPerKwh: number;
   currency: string;
+  /** Other site tariffs (demo: a CAD annex). A vehicle without `tariffId` uses the default. */
+  tariffs?: SiteTariff[];
   /** Live mode: keep a per-charger baseline profile (BASELINE_PROFILE). */
   baselineProfile?: boolean;
 }

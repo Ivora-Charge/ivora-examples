@@ -1,6 +1,7 @@
 "use server";
 
 import { DEMO_PEER_ID } from "@/lib/locations/registry";
+import { formatMoney } from "@/lib/locations/pricing";
 import { peerStore } from "@/lib/ocpi/registry";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 import { sessionStore } from "@/lib/sessions/registry";
@@ -66,7 +67,7 @@ function startedBefore(v: string): string | null {
 
 const costOf = (s: StoredSession["session"]) =>
   s.total_cost
-    ? `${s.total_cost.excl_vat} ${s.currency} excl. VAT${s.total_cost.incl_vat === undefined ? "" : `, ${s.total_cost.incl_vat} incl.`}`
+    ? `${formatMoney(s.total_cost.excl_vat, s.currency)} excl. VAT${s.total_cost.incl_vat === undefined ? "" : `, ${formatMoney(s.total_cost.incl_vat, s.currency)} incl.`}`
     : null;
 
 function row(s: StoredSession, labels: Map<string, string>): SessionRow {

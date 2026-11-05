@@ -35,6 +35,8 @@ const locationSchema = z.object({
   name: z.string(),
   address: nullableString,
   city: nullableString,
+  // Read when the API carries a currency; ignored otherwise.
+  currency: z.string().nullish(),
 });
 
 const operationSchema = z.object({
@@ -282,6 +284,7 @@ export function liveBackend(client: IvoraClient): Backend {
         locationId: String(l.id),
         name: l.name,
         address: [l.address, l.city].filter(Boolean).join(", "),
+        ...(l.currency && { currency: l.currency.toUpperCase() }),
       }));
     },
 

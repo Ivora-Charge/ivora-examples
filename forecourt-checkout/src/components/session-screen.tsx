@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { formatCents } from "@/lib/money";
+import { formatMoney } from "@/lib/money";
 import { formatDuration, whToKwhText, wToKwText } from "@/lib/units";
 import type { SessionView } from "@/lib/view";
 import { ErrorBox, type ErrorInfo } from "./error-box";
@@ -94,7 +94,7 @@ export function SessionScreen({
     );
 
   const money = (cents: number | null) =>
-    cents === null ? "—" : formatCents(cents, view.currency);
+    cents === null ? "—" : formatMoney(cents, view.currency);
   const elapsed = view.startedAt
     ? (now - Date.parse(view.startedAt)) / 1000
     : 0;
@@ -314,7 +314,7 @@ function Finished(props: {
           left > 0 ? (
             <>
               <div className="muted">
-                Idle fee of {formatCents(perMinute, view.currency)}/min starts
+                Idle fee of {formatMoney(perMinute, view.currency)}/min starts
                 in
               </div>
               <div className="countdown" data-testid="idle-countdown">
@@ -324,11 +324,11 @@ function Finished(props: {
           ) : (
             <>
               <div className="muted">
-                Idle fee is now {formatCents(perMinute, view.currency)}/min
+                Idle fee is now {formatMoney(perMinute, view.currency)}/min
                 until you unplug.
               </div>
               <div className="countdown">
-                {formatCents(idle.accruedCents, view.currency)} so far
+                {formatMoney(idle.accruedCents, view.currency)} so far
               </div>
             </>
           )
@@ -339,7 +339,7 @@ function Finished(props: {
       <div className="card stack">
         <p style={{ margin: 0 }}>
           Running total{" "}
-          <strong>{formatCents(view.runningCents ?? 0, view.currency)}</strong>
+          <strong>{formatMoney(view.runningCents ?? 0, view.currency)}</strong>
         </p>
         {view.demo ? (
           <button

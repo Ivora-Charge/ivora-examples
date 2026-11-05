@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { DEFAULT_CURRENCY } from "../../money";
 import {
   demoOcpiEvseIds,
   demoOcpiRecord,
@@ -69,6 +70,18 @@ const SAMPLE_LOCATIONS: Location[] = [
     time_zone: "America/New_York",
     external_reference: "cpo-demo-site-2",
   },
+  {
+    id: 9003,
+    name: "Sample Site: Waterfront (CAD)",
+    address: "3 Example Wharf",
+    city: "Sampleton",
+    postal_code: "A0A 0A0",
+    country: "CAN",
+    latitude: 0.018,
+    longitude: 0.012,
+    time_zone: "America/Toronto",
+    external_reference: "cpo-demo-site-3",
+  },
 ];
 
 /** Clearly not a real OCPP endpoint: demo chargers never connect anywhere. */
@@ -131,6 +144,21 @@ const SAMPLE_STATIONS: Station[] = [
   },
 ];
 
+/** Clearly a sample too: a second, Canadian site whose prices are in CAD. */
+SAMPLE_STATIONS.push({
+  id: 9104,
+  name: "DEMO-WATERFRONT-01",
+  connection_url: demoConnectionUrl("DEMO-WATERFRONT-01"),
+  username: "DEMO-WATERFRONT-01",
+  online: true,
+  location_id: 9003,
+  protocol: "ocpp1.6",
+  vendor: "Sample Vendor",
+  model: "Sample AC 22",
+  last_seen: "2026-01-01T00:00:00Z",
+  connectors: connectors(9104, 2, 22_000),
+});
+
 /** Sample faults: one open on DEMO-HARBOUR-02 connector 2, one cleared at the market. */
 const SAMPLE_FAULTS: Fault[] = [
   {
@@ -163,7 +191,9 @@ const SAMPLE_FAULTS: Fault[] = [
  * Ivora tariff IDs of the demo's sample tariffs (lib/server/pricing/demo.ts). Tariffs a
  * visitor saves get IDs from 9411 up, kept in their cookie.
  */
-export const SAMPLE_TARIFF_IDS = [9401, 9402] as const;
+export const SAMPLE_TARIFF_IDS = [9401, 9402, 9403] as const;
+/** Sample tariffs that are not in USD (the CAD sample site's). */
+const SAMPLE_TARIFF_CURRENCY: Record<number, string> = { 9403: "CAD" };
 const MAX_TARIFFS = 12;
 
 const SAMPLE_TRANSACTIONS: Transaction[] = [
@@ -1275,7 +1305,7 @@ export function createDemoClient(
           tariffs.push({
             id: tariffId,
             external_reference: null,
-            currency: "USD",
+            currency: SAMPLE_TARIFF_CURRENCY[tariffId] ?? DEFAULT_CURRENCY,
             archived: true,
           });
         while (tariffs.length > MAX_TARIFFS)

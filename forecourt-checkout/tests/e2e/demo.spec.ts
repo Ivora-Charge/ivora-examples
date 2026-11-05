@@ -75,6 +75,29 @@ test("driver: stop early, then the receipt asks to move the car", async ({
   await expect(page.getByText(/Please move your car/)).toBeVisible();
 });
 
+test("driver: the CAD demo charger shows CA$ end to end", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: /Demo charger 11/ }).click();
+  await expect(page.getByText("CA$0.52 per kWh")).toBeVisible();
+  await expect(page.getByText("CA$0.50 per minute")).toBeVisible();
+  await expect(
+    page.getByRole("row", { name: /Estimated total CA\$\d+\.\d\d/ }),
+  ).toBeVisible();
+  await expect(page.getByText(/US\$|(^|[^A])\$\d/)).toHaveCount(0);
+  await shot(page, "charger-cad");
+  await page
+    .getByRole("button", { name: /Pay with demo card \(CA\$50\.00 hold\)/ })
+    .click();
+  await expect(page.getByRole("heading", { name: "Charging" })).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "Stop charging" }).click();
+  await expect(page.getByRole("heading", { name: "Receipt" })).toBeVisible();
+  await expect(
+    page.getByRole("row", { name: /Charged to your card CA\$/ }),
+  ).toBeVisible();
+});
+
 test("driver: a busy connector can't be paid for", async ({ page }) => {
   await page.goto("/c/DEMO-2/1");
   await expect(
@@ -92,12 +115,25 @@ test("operator: password, today, prices and faults", async ({ page }) => {
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await expect(page.getByRole("heading", { name: /today/ })).toBeVisible();
-  await expect(page.getByText("1000 bps")).toBeVisible();
+  await expect(page.getByText("1000 bps").first()).toBeVisible();
+  // USD and CAD are reported apart, never added together.
+  await expect(page.getByText(/Mixed currencies/)).toBeVisible();
+  await expect(page.getByLabel("Totals in CAD")).toContainText("CA$34.92");
+  await expect(page.getByLabel("Totals in USD")).toContainText("$");
   await shot(page, "operator");
 
   await page.getByRole("link", { name: "Prices" }).click();
-  await expect(page.getByLabel("Energy, cents per kWh")).toHaveValue("45");
-  await page.getByRole("button", { name: "Save prices" }).click();
+  await expect(page.getByLabel("Energy per kWh (USD, 1 = $0.01)")).toHaveValue(
+    "45",
+  );
+  // The CAD tariff shows its own currency next to every field.
+  await expect(
+    page.getByRole("heading", { name: /Tariff 9002/ }),
+  ).toContainText("CAD");
+  await expect(
+    page.getByLabel("Energy per kWh (CAD, 1 = CA$0.01)"),
+  ).toHaveValue("52");
+  await page.getByRole("button", { name: "Save prices" }).first().click();
   await expect(
     page.getByText("Demo mode: prices are not saved."),
   ).toBeVisible();

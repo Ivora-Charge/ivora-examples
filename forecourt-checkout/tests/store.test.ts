@@ -8,7 +8,6 @@ import {
   encodeSaleId,
   endReports,
   paidReport,
-  parseDollars,
   parseKwh,
   prepayStop,
   saleAmounts,
@@ -98,12 +97,7 @@ describe("sale IDs carry their terms", () => {
     expect(chargerLabel("NORTH", 1)).toBe("Charger NORTH");
   });
 
-  it("parses the cashier's typed amounts without floats", () => {
-    expect(parseDollars("20")).toBe(2000);
-    expect(parseDollars("$20.5")).toBe(2050);
-    expect(parseDollars("0.07")).toBe(7);
-    expect(parseDollars("20.555")).toBeNull();
-    expect(parseDollars("-3")).toBeNull();
+  it("parses the cashier's typed kWh without floats", () => {
     expect(parseKwh("12.5")).toBe(12_500);
     expect(parseKwh("abc")).toBeNull();
   });
@@ -764,6 +758,7 @@ describe("prepay: from the POS to change", () => {
         operation_reference: `${sale}:capture`,
         amount_minor: 2000,
         outcome: "succeeded",
+        currency: "USD",
       },
     ]);
     expect(events).toMatchObject([
@@ -1420,6 +1415,7 @@ describe("POS mark-paid", () => {
         operation_reference: `${sale}:paid:card:R-77`,
         amount_minor: 1940,
         outcome: "succeeded",
+        currency: "USD",
       },
     ]);
     expect(ivora.keys("report:capture")).toEqual([

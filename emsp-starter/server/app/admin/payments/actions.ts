@@ -9,6 +9,7 @@ import {
   releaseForReview,
 } from "@/lib/payments/settle";
 import type { Payment, Refund } from "@/lib/payments/store";
+import { formatMinorAmount } from "@/lib/locations/pricing";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
 /** A payment as the admin web shows it. Amounts in minor units; never card data. */
@@ -192,7 +193,7 @@ export async function refundAction(
       ok: refund.status === "succeeded",
       message:
         refund.status === "succeeded"
-          ? `Refunded ${refund.amount} (minor units).`
+          ? `Refunded ${formatMinorAmount(refund.amount, p.currency)} (${refund.amount} minor units).`
           : refund.status === "failed"
             ? "The refund failed."
             : refund.status === "requires_action"
@@ -275,7 +276,7 @@ export async function decideAction(
       ok: true,
       message:
         intent === "capture"
-          ? `Captured ${p.capturedAmount} (minor units).`
+          ? `Captured ${formatMinorAmount(p.capturedAmount, p.currency)} (${p.capturedAmount} minor units).`
           : intent === "release"
             ? "Hold released."
             : "Marked as reviewed.",

@@ -34,6 +34,29 @@ test("demo: the app's location search, detail and price preview", async ({
   expect(bad.status()).toBe(400);
 });
 
+test("demo: a CAD location shows CA$ and a CA$ price preview next to the EUR ones", async ({
+  request,
+}) => {
+  const search = await (
+    await request.get("/api/v1/locations?q=harbourfront")
+  ).json();
+  expect(search.items.map((i: { name: string }) => i.name)).toEqual([
+    "Harbourfront Garage",
+  ]);
+  const id = search.items[0].id;
+  const detail = await (await request.get(`/api/v1/locations/${id}`)).json();
+  const [evse] = detail.location.evses;
+  expect(evse.connectors[0].price.currency).toBe("CAD");
+  expect(evse.connectors[0].price.summary).toContain("CA$");
+  expect(evse.connectors[0].price.summary).not.toContain("€");
+  const preview = await (
+    await request.get(
+      `/api/v1/locations/${id}/price-preview?evse_uid=${evse.uid}&connector_id=1&kwh=30&minutes=60&start=2026-10-21T10:00:00Z`,
+    )
+  ).json();
+  expect(preview.preview.text).toMatch(/^CA\$\d+\.\d{2}$/);
+});
+
 test("demo: pulling locations from a CPO is refused, nothing sent", async ({
   page,
 }) => {

@@ -12,6 +12,7 @@ import { POST as configRoute } from "@/app/api/chargers/[id]/config/route";
 import { GET as stickerRoute } from "@/app/api/chargers/[id]/sticker/route";
 import { GET as reportRoute } from "@/app/api/chargers/[id]/report/route";
 import { POST as sitesRoute } from "@/app/api/sites/route";
+import { POST as tariffRoute } from "@/app/api/chargers/[id]/tariff/route";
 import { resolveStickerCode } from "@/lib/server/service";
 
 const ORIGIN = "http://localhost:3000";
@@ -54,6 +55,39 @@ describe("demo mode end to end", () => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
     process.env = { ...saved };
+  });
+
+  it("prices in the picked location's currency: a CAD demo site next to the USD ones", async () => {
+    const site = await (
+      await sitesRoute(
+        post("/api/sites", { locationId: "demo-loc-3" }),
+        undefined as never,
+      )
+    ).json();
+    expect(site.currency).toBe("CAD");
+    const created = await (
+      await addChargerRoute(
+        post("/api/chargers", { siteId: site.id, name: "ik-cad-1" }),
+        undefined as never,
+      )
+    ).json();
+    const id: string = created.charger.id;
+    const bad = await tariffRoute(
+      post(`/api/chargers/${id}/tariff`, { minorPerKwh: 40, currency: "ZZZ1" }),
+      ctx(id),
+    );
+    expect(bad.status).toBeGreaterThanOrEqual(400);
+    const charger = await (
+      await tariffRoute(
+        post(`/api/chargers/${id}/tariff`, {
+          minorPerKwh: 40,
+          currency: "cad",
+        }),
+        ctx(id),
+      )
+    ).json();
+    expect(charger.tariffMinorPerKwh).toBe(40);
+    expect(charger.tariffCurrency).toBe("CAD");
   });
 
   it("connects, tests, reads config and hands over without any network call", async () => {

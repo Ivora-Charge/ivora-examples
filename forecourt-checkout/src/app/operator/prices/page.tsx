@@ -1,6 +1,6 @@
 import { ErrorBox } from "@/components/error-box";
 import { OperatorNav } from "@/components/operator-nav";
-import { formatCents } from "@/lib/money";
+import { DEFAULT_CURRENCY, formatMoney, minorUnitHint } from "@/lib/money";
 import { errorInfo } from "@/lib/server/http";
 import { pricesPage, type PricesPage } from "@/lib/server/operator";
 import { requireOperator } from "@/lib/server/operator-page";
@@ -48,98 +48,112 @@ export default async function Prices({
           }}
         />
       ) : null}
-      {data.tariffs.map(({ tariff, lines, form, usedBy }) => (
-        <section className="card" key={tariff.id}>
-          <h2>Tariff {tariff.id}</h2>
-          <p className="muted">Used by {usedBy.join(", ") || "no connector"}</p>
-          <ul>
-            {lines.map((l) => (
-              <li key={l.label}>
-                {l.label}: {l.value}
-              </li>
-            ))}
-            <li>
-              Card hold:{" "}
-              {formatCents(tariff.authorization_minor || s.defaultHoldCents)}
-            </li>
-          </ul>
-          {form ? (
-            <form action="/api/operator/prices" method="post">
-              <input type="hidden" name="tariffId" value={tariff.id} />
-              <div className="form-grid">
-                <label>
-                  Energy, cents per kWh
-                  <input
-                    name="energyCentsPerKwh"
-                    type="number"
-                    min={0}
-                    step={1}
-                    defaultValue={form.energyCentsPerKwh}
-                    required
-                  />
-                </label>
-                <label>
-                  Charging time, cents per minute
-                  <input
-                    name="timeCentsPerMinute"
-                    type="number"
-                    min={0}
-                    step={1}
-                    defaultValue={form.timeCentsPerMinute}
-                    required
-                  />
-                </label>
-                <label>
-                  Idle fee, cents per minute
-                  <input
-                    name="idleCentsPerMinute"
-                    type="number"
-                    min={0}
-                    step={1}
-                    defaultValue={form.idleCentsPerMinute}
-                    required
-                  />
-                </label>
-                <label>
-                  Session fee, cents
-                  <input
-                    name="sessionFeeCents"
-                    type="number"
-                    min={0}
-                    step={1}
-                    defaultValue={form.sessionFeeCents}
-                    required
-                  />
-                </label>
-                <label>
-                  Card hold, cents
-                  <input
-                    name="holdCents"
-                    type="number"
-                    min={50}
-                    max={50000}
-                    step={1}
-                    defaultValue={form.holdCents || s.defaultHoldCents}
-                    required
-                  />
-                </label>
-              </div>
-              {usedBy.length > 1 ? (
-                <p className="muted">
-                  This tariff is shared: saving changes the price on every
-                  connector listed above.
-                </p>
-              ) : null}
-              <button type="submit">Save prices</button>
-            </form>
-          ) : (
+      {data.tariffs.map(({ tariff, lines, form, usedBy }) => {
+        const unit = minorUnitHint(tariff.currency);
+        return (
+          <section className="card" key={tariff.id}>
+            <h2>
+              Tariff {tariff.id} <span className="pill">{tariff.currency}</span>
+            </h2>
             <p className="muted">
-              This tariff has time-of-day or other conditional prices. Edit it
-              through the Ivora API.
+              Used by {usedBy.join(", ") || "no connector"}
             </p>
-          )}
-        </section>
-      ))}
+            <ul>
+              {lines.map((l) => (
+                <li key={l.label}>
+                  {l.label}: {l.value}
+                </li>
+              ))}
+              <li>
+                Card hold:{" "}
+                {formatMoney(
+                  tariff.authorization_minor || s.defaultHoldCents,
+                  tariff.currency,
+                )}
+              </li>
+            </ul>
+            {form ? (
+              <form action="/api/operator/prices" method="post">
+                <input type="hidden" name="tariffId" value={tariff.id} />
+                <div className="form-grid">
+                  <label>
+                    Energy per kWh ({unit})
+                    <input
+                      name="energyCentsPerKwh"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={form.energyCentsPerKwh}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Charging time per minute ({unit})
+                    <input
+                      name="timeCentsPerMinute"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={form.timeCentsPerMinute}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Idle fee per minute ({unit})
+                    <input
+                      name="idleCentsPerMinute"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={form.idleCentsPerMinute}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Session fee ({unit})
+                    <input
+                      name="sessionFeeCents"
+                      type="number"
+                      min={0}
+                      step={1}
+                      defaultValue={form.sessionFeeCents}
+                      required
+                    />
+                  </label>
+                  <label>
+                    Card hold ({unit})
+                    <input
+                      name="holdCents"
+                      type="number"
+                      min={50}
+                      max={50000}
+                      step={1}
+                      defaultValue={form.holdCents || s.defaultHoldCents}
+                      required
+                    />
+                    <span className="muted small">
+                      Hold limits are the card-checkout rules, tested in{" "}
+                      {DEFAULT_CURRENCY} only for now.
+                    </span>
+                  </label>
+                </div>
+                {usedBy.length > 1 ? (
+                  <p className="muted">
+                    This tariff is shared: saving changes the price on every
+                    connector listed above.
+                  </p>
+                ) : null}
+                <button type="submit">Save prices</button>
+              </form>
+            ) : (
+              <p className="muted">
+                This tariff has time-of-day or other conditional prices. Edit it
+                through the Ivora API.
+              </p>
+            )}
+          </section>
+        );
+      })}
       <section className="card">
         <h2>Connectors and QR codes</h2>
         {data.qrProblem ? <p className="notice">{data.qrProblem}</p> : null}

@@ -1,6 +1,7 @@
 import { guard } from "@/lib/auth";
 import { now, report } from "@/lib/depot";
 import { reportToCsv } from "@/lib/reports";
+import { groupByCurrency } from "@/lib/money";
 import { depotOf } from "@/lib/demo-visitor";
 
 export const dynamic = "force-dynamic";
@@ -17,12 +18,19 @@ export async function GET(req: Request) {
   const by = q.get("by") === "driver" ? "driver" : "vehicle";
   const rows = await report(d, month, by);
   if (q.get("format") === "csv") {
-    return new Response(reportToCsv(rows, d.settings.currency), {
+    return new Response(reportToCsv(rows), {
       headers: {
         "content-type": "text/csv; charset=utf-8",
         "content-disposition": `attachment; filename="depot-${by}-${month}.csv"`,
       },
     });
   }
-  return Response.json({ month, by, currency: d.settings.currency, rows });
+  return Response.json({
+    month,
+    by,
+    groups: groupByCurrency(rows).map((g) => ({
+      currency: g.currency,
+      rows: g.items,
+    })),
+  });
 }

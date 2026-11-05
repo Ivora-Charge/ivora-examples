@@ -12,6 +12,8 @@ export type Site = SiteInput & {
   id: string;
   /** Ivora location resource ID (demo: a demo-* ID). */
   locationId: string;
+  /** ISO 4217 code of the location, when the API or the demo gives one. */
+  currency?: string;
 };
 
 /** An Ivora location the installer can pick instead of creating a new site. */
@@ -19,6 +21,8 @@ export type LocationOption = {
   locationId: string;
   name: string;
   address: string;
+  /** ISO 4217 code when the location carries one. */
+  currency?: string;
 };
 
 export type ConnectionState = "waiting" | "connected" | "booted" | "offline";
@@ -93,7 +97,10 @@ export type Charger = {
   connectors: Connector[];
   test?: TestRun;
   config?: ConfigReadback;
-  tariffCentsPerKwh?: number;
+  /** Minor units of `tariffCurrency` per kWh (cents for USD). */
+  tariffMinorPerKwh?: number;
+  /** ISO 4217 code of the price; unset on a record that predates it means the default. */
+  tariffCurrency?: string;
   /** Set by "Mark in service"; no test session can start after it. */
   inServiceAt?: string;
   /** Counters that make idempotency keys unique per record and action. */

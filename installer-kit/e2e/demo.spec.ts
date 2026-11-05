@@ -51,7 +51,7 @@ test("demo: site, charger, connection, test, config, price and hand-over", async
   await expect(page.getByText("120 s")).toBeVisible();
 
   // 5. Price
-  await page.getByLabel("Price per kWh (cents)").fill("40");
+  await page.getByLabel("Price per kWh (USD minor units)").fill("40");
   await expect(page.getByText("$8.00")).toBeVisible();
   await page.getByRole("button", { name: "Add to report" }).click();
 
@@ -87,4 +87,28 @@ test("demo: site, charger, connection, test, config, price and hand-over", async
   const code = /\((\w{8})\)/.exec((await sticker.textContent())!)![1];
   await page.goto(`/s/${code}`);
   await expect(page.getByText(/connector\s+2/)).toBeVisible();
+});
+
+test("demo: a CAD site prices in CA$ with the currency next to the field", async ({
+  page,
+}) => {
+  await page.goto("/commission");
+  await page.getByLabel("Existing location").selectOption({
+    label: "Sample Annex Toronto (demo) (5 Example St, Toronto)",
+  });
+  await page.getByRole("button", { name: "Use this location" }).click();
+  await page.getByRole("button", { name: "Add charger" }).click();
+  await expect(page.getByText("Charger connected and booted")).toBeVisible({
+    timeout: 15_000,
+  });
+  await page.getByRole("button", { name: "Start test session" }).click();
+  await page.waitForTimeout(1500);
+  await page.getByRole("button", { name: "Stop test session" }).click();
+  await expect(page.getByText(/^Passed/)).toBeVisible();
+  await expect(page.getByLabel("Currency")).toHaveValue("CAD");
+  await page.getByLabel("Price per kWh (CAD minor units)").fill("40");
+  await expect(page.getByText("CA$8.00")).toBeVisible();
+  await expect(page.getByText("40 = CA$0.40 per kWh")).toBeVisible();
+  await page.getByRole("button", { name: "Add to report" }).click();
+  await expect(page.getByText("CA$0.40 / kWh")).toBeVisible();
 });

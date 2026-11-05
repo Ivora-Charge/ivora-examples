@@ -24,6 +24,11 @@ import {
   type SessionsResult,
   type StatsResult,
 } from "@/lib/server/reports";
+import {
+  billedFigure,
+  revenueText,
+  totalsFigures,
+} from "@/lib/server/reports/figures";
 import { shortInZone } from "@/lib/server/reports/time";
 import type { Stats, StatsBucket } from "@/lib/server/ivora";
 import { formatKwh, whToKwh } from "@/lib/units";
@@ -254,14 +259,6 @@ function duration(seconds: number | null): string {
 
 const kwh = (wh: number) => formatKwh(whToKwh(wh));
 
-function revenueText(
-  lines: { currency: string; billed_minor: number }[] | null,
-) {
-  if (lines === null) return "Needs billing:read";
-  if (!lines.length) return "None";
-  return lines.map((l) => formatMinor(l.billed_minor, l.currency)).join(" · ");
-}
-
 function StatsSection({ result }: { result: StatsResult }) {
   if (!result.ok)
     return (
@@ -307,15 +304,7 @@ function StatsSection({ result }: { result: StatsResult }) {
           label="Average duration"
           value={duration(t.average_duration_seconds)}
         />
-        <Stat
-          label="Billed (final bills)"
-          value={revenueText(s.revenue?.currencies ?? null)}
-          note={
-            s.revenue
-              ? `${s.revenue.currencies.reduce((n, l) => n + l.bills, 0)} final bills`
-              : undefined
-          }
-        />
+        <Stat label="Billed (final bills)" {...billedFigure(s.revenue)} />
       </section>
       <p className="muted">
         Every session on your chargers, as Ivora counts them: also staff/test
@@ -455,15 +444,6 @@ function money(minor: number | null, currency: string) {
   return minor === null ? "–" : formatMinor(minor, currency);
 }
 
-function moneyText(
-  lines: ReportTotals["currencies"],
-  pick: (l: ReportTotals["currencies"][number]) => number,
-) {
-  return lines.length
-    ? lines.map((l) => formatMinor(pick(l), l.currency)).join(" · ")
-    : "None";
-}
-
 function When({ iso, zone }: { iso: string | null; zone: string }) {
   if (!iso) return <span className="muted">–</span>;
   const ms = Date.parse(iso);
@@ -500,6 +480,7 @@ function Energy({ r }: { r: SessionRow }) {
 
 function Totals({ t }: { t: ReportTotals }) {
   const sessions = t.withSession;
+  const figures = totalsFigures(t);
   return (
     <>
       <section className="stats" aria-label="Totals of your sessions">
@@ -517,20 +498,10 @@ function Totals({ t }: { t: ReportTotals }) {
         />
         <Stat
           label="Collected (captured minus refunds)"
-          value={moneyText(
-            t.currencies,
-            (l) => l.capturedMinor - l.refundedMinor,
-          )}
-          note={`${t.byStatus.charged} charged`}
+          {...figures.collected}
         />
-        <Stat
-          label="Refunded"
-          value={moneyText(t.currencies, (l) => l.refundedMinor)}
-        />
-        <Stat
-          label="Billed (their final bills)"
-          value={moneyText(t.currencies, (l) => l.billedMinor)}
-        />
+        <Stat label="Refunded" {...figures.refunded} />
+        <Stat label="Billed (their final bills)" {...figures.billed} />
         <Stat
           label="Needs you"
           value={t.byStatus.attention.toLocaleString("en-US")}

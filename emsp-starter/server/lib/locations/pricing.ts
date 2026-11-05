@@ -64,7 +64,8 @@ const UNIT: Record<TariffDimensionType, DisplayComponent["unit"]> = {
   FLAT: "session",
 };
 
-const fractionDigits = (currency: string) => {
+/** Digits of a currency's minor unit, from Intl: 2 for CAD, 0 for JPY, 3 for KWD. */
+export const fractionDigits = (currency: string) => {
   try {
     return new Intl.NumberFormat("en", {
       style: "currency",
@@ -125,6 +126,11 @@ export function formatUnits(
 /** An OCPI price (at most 4 decimals) in its currency: at least the currency's usual decimals. */
 export function formatMoney(value: number, currency: string): string {
   return formatUnits(toE4(value), 4, currency);
+}
+
+/** Integer minor units in their currency: 1235 CAD is "CA$12.35", 1350 JPY is "¥1,350". */
+export function formatMinorAmount(minor: number, currency: string): string {
+  return formatUnits(BigInt(minor), fractionDigits(currency), currency);
 }
 
 /** A component's price per unit in E4, with VAT when the CPO gave the rate. */

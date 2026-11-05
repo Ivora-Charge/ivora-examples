@@ -218,6 +218,8 @@ export function TariffEditor(p: {
   simulation: SimulationValues;
   /** Saving is refused while an earlier version is unconfirmed. */
   locked?: boolean;
+  /** Shown while Paid is chosen: paid tariffs save in one currency for now. */
+  paidNote?: string;
 }) {
   const [previewState, preview, previewing] = useActionState(
     previewTariffAction,
@@ -288,6 +290,11 @@ export function TariffEditor(p: {
           />
           Free: zero price, no card hold
         </label>
+        {kind === "paid" && p.paidNote && (
+          <p className="hint" data-testid="paid-currency-note">
+            {p.paidNote}
+          </p>
+        )}
       </fieldset>
       <div className="field">
         <label htmlFor={f("tz")}>Time zone</label>

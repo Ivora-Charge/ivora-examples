@@ -11,6 +11,7 @@ import { db } from "./store";
 import { newStickerCode } from "../codes";
 import { firstDisplay, generatePassword, maskSecret } from "../credentials";
 import { mapEvent } from "../status";
+import { isCurrencyCode } from "../money";
 import type { Charger, ConfigKey, Site, TestRun } from "../types";
 
 let override: Backend | null = null;
@@ -81,6 +82,7 @@ export async function pickLocation(locationId: string): Promise<Site> {
     locationId,
     name: location.name,
     address: location.address,
+    ...(location.currency && { currency: location.currency }),
     city: "",
     state: "",
     postalCode: "",
@@ -440,11 +442,18 @@ export async function changeConfig(id: string, raw: unknown) {
 // ---- Tariff, stickers and report ----
 
 export async function setTariff(id: string, raw: unknown) {
-  const { centsPerKwh } = z
-    .object({ centsPerKwh: z.coerce.number().int().min(0).max(10_000) })
+  const { minorPerKwh, currency } = z
+    .object({
+      minorPerKwh: z.coerce.number().int().min(0).max(10_000),
+      currency: z
+        .string()
+        .transform((v) => v.toUpperCase())
+        .refine(isCurrencyCode, "Use a three-letter ISO 4217 currency code."),
+    })
     .parse(raw);
   const c = charger(id);
-  c.tariffCentsPerKwh = centsPerKwh;
+  c.tariffMinorPerKwh = minorPerKwh;
+  c.tariffCurrency = currency;
   return c;
 }
 

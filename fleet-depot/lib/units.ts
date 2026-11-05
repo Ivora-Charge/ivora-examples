@@ -1,4 +1,4 @@
-// Units: OCPP 1.6 meter registers are Wh, session energy is kWh, money is integer cents.
+// Units: OCPP 1.6 meter registers are Wh, session energy is kWh, money is integer minor units (see money.ts).
 export const whToKwh = (wh: number) => wh / 1000;
 export const kwhToWh = (kwh: number) => Math.round(kwh * 1000);
 
@@ -38,7 +38,7 @@ export function sessionKwhFromRegisters(
   return Math.max(0, whToKwh(stopWh - startWh));
 }
 
-/** Cost in integer cents for an energy amount and a per-kWh price in cents. */
-export function costCents(kwh: number, centsPerKwh: number): number {
-  return Math.round(kwh * centsPerKwh);
+/** Cost in integer minor units for an energy amount and a per-kWh price in minor units. */
+export function costMinor(kwh: number, minorPerKwh: number): number {
+  return Math.round(kwh * minorPerKwh);
 }

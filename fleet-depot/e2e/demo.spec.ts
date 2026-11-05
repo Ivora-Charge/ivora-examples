@@ -203,11 +203,28 @@ test("cost per vehicle and per driver, and the CSV downloads", async ({
     const path = await download.path();
     const text = (await import("node:fs")).readFileSync(path, "utf8");
     const lines = text.trim().split("\n");
-    expect(lines[0]).toBe("name,sessions,energy_kwh,cost_usd");
+    expect(lines[0]).toBe("name,sessions,energy_kwh,currency,cost");
     expect(lines.length).toBeGreaterThan(5);
   }
   await page.getByLabel("Month").selectOption("last");
   await expect(page.locator(".cost li").first()).toBeVisible();
+});
+
+test("cost shows USD and CAD lists, each in its own currency", async ({
+  page,
+}) => {
+  await openDepot(page);
+  await page.getByRole("tab", { name: "Sessions and cost" }).click();
+  await page.getByLabel("Group by").selectOption("vehicle");
+  await expect(page.getByRole("note")).toContainText("Mixed currencies");
+  await expect(page.getByRole("note")).toContainText("CAD, USD");
+  const usd = page.getByRole("list", { name: "USD" }).locator(".amt").first();
+  const cad = page.getByRole("list", { name: "CAD" }).locator(".amt").first();
+  await expect(usd).toHaveText(/^\$[\d,]+\.\d{2}$/);
+  await expect(cad).toHaveText(/^CA\$[\d,]+\.\d{2}$/);
+  await expect(
+    page.getByText("Toronto annex CA$0.22/kWh").first(),
+  ).toBeVisible();
 });
 
 test("card import is labelled and reports per-line errors", async ({

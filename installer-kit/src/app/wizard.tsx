@@ -2,7 +2,13 @@
 import { useEffect, useState } from "react";
 import { brand as copy } from "../../brand/brand";
 import { describe } from "@/lib/status";
-import { formatCents, quoteCents } from "@/lib/tariff";
+import {
+  currencyExponent,
+  currencyOr,
+  formatMinor,
+  PRICE_CURRENCIES,
+} from "@/lib/money";
+import { quoteMinor } from "@/lib/tariff";
 import {
   TEST_SESSION_LABEL,
   type Charger,
@@ -185,6 +191,9 @@ export default function Wizard({
   const [configValue, setConfigValue] = useState("300");
   const [configAnswer, setConfigAnswer] = useState<string>();
   const [tariff, setTariff] = useState(35);
+  // Chosen by the installer; until then the site's currency, else the default.
+  const [pickedCurrency, setPickedCurrency] = useState<string>();
+  const currency = pickedCurrency ?? currencyOr(site?.currency);
   const [, setTick] = useState(0);
 
   const run = async (f: () => Promise<void>) => {
@@ -267,7 +276,7 @@ export default function Wizard({
       ? 2
       : charger.test?.phase !== "done"
         ? 3
-        : charger.tariffCentsPerKwh === undefined
+        : charger.tariffMinorPerKwh === undefined
           ? 4
           : 5;
 
@@ -681,14 +690,26 @@ export default function Wizard({
                 run(async () =>
                   setCharger(
                     await api<Charger>(`/api/chargers/${charger.id}/tariff`, {
-                      centsPerKwh: tariff,
+                      minorPerKwh: tariff,
+                      currency,
                     }),
                   ),
                 );
               }}
             >
               <label>
-                Price per kWh (cents)
+                Currency
+                <select
+                  value={currency}
+                  onChange={(e) => setPickedCurrency(e.target.value)}
+                >
+                  {[...new Set([currency, ...PRICE_CURRENCIES])].map((c) => (
+                    <option key={c}>{c}</option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Price per kWh ({currency} minor units)
                 <input
                   type="number"
                   min={0}
@@ -702,18 +723,27 @@ export default function Wizard({
                   }
                 />
               </label>
+              <p className="muted">
+                {tariff} = {formatMinor(tariff, currency)} per kWh (1 {currency}{" "}
+                = {10 ** currencyExponent(currency)} minor units).
+              </p>
               <button type="submit" className="secondary" disabled={busy}>
                 Add to report
               </button>
             </form>
             <p>
               Quote preview: 20 kWh costs{" "}
-              <strong>{formatCents(quoteCents(20_000, tariff))}</strong>
+              <strong>
+                {formatMinor(quoteMinor(20_000, tariff), currency)}
+              </strong>
               {charger.test && (
                 <>
                   ; the {TEST_SESSION_LABEL.toLowerCase()} (
                   {formatKwh(charger.test.energyWh)}) would cost{" "}
-                  {formatCents(quoteCents(charger.test.energyWh, tariff))}
+                  {formatMinor(
+                    quoteMinor(charger.test.energyWh, tariff),
+                    currency,
+                  )}
                 </>
               )}
               . This template does not collect payments; see forecourt-checkout.
@@ -759,9 +789,9 @@ export default function Wizard({
                   <dd>{charger.inServiceAt ?? "Not yet"}</dd>
                   <dt>Price</dt>
                   <dd>
-                    {charger.tariffCentsPerKwh === undefined
+                    {charger.tariffMinorPerKwh === undefined
                       ? "-"
-                      : `${formatCents(charger.tariffCentsPerKwh)} / kWh`}
+                      : `${formatMinor(charger.tariffMinorPerKwh, currencyOr(charger.tariffCurrency))} / kWh`}
                   </dd>
                 </dl>
               </figure>

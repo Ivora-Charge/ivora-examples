@@ -309,6 +309,40 @@ describe("sessions: live and recent, by peer, status and driver", () => {
     return s;
   }
 
+  it("shows a session's cost in its own currency, CAD with CA$ and JPY without decimals", async () => {
+    const s = new MemorySessionStore();
+    const cpo = { countryCode: "ZZ", partyId: "MCK" };
+    const emsp = { countryCode: "NL", partyId: "DMO" };
+    const [base] = sampleSessions(cpo, emsp);
+    for (const [id, currency, total] of [
+      ["cad", "CAD", { excl_vat: 19.18, incl_vat: 23.21 }],
+      ["jpy", "JPY", { excl_vat: 1350 }],
+    ] as const)
+      s.insertSession(
+        PEER,
+        {
+          session: {
+            ...base,
+            id,
+            currency,
+            total_cost: total,
+            status: "COMPLETED",
+          },
+          fieldTimes: {},
+          driverRef: null,
+          commandId: null,
+          completedAt: null,
+        },
+        "2026-10-01T00:00:00.000Z",
+      );
+    setSessionStoreForTests(s);
+    const all = await listSessionsAction({}, form({ status: "all" }));
+    const cost = (ref: string) =>
+      all.sessions!.find((r) => r.ref.endsWith(`/${ref}`))!.cost;
+    expect(cost("cad")).toBe("CA$19.18 excl. VAT, CA$23.21 incl.");
+    expect(cost("jpy")).toBe("¥1,350 excl. VAT");
+  });
+
   it("lists live sessions by default, and filters by status, peer and driver", async () => {
     store();
     const live = await listSessionsAction({}, form({}));
@@ -625,7 +659,7 @@ describe("refunds: partial or full, with a reason and an audit log", () => {
           reason: "Charger fault",
         }),
       ),
-    ).toMatchObject({ ok: true, message: "Refunded 500 (minor units)." });
+    ).toMatchObject({ ok: true, message: "Refunded €5.00 (500 minor units)." });
     const full = await refundAction(
       {},
       form({
@@ -637,7 +671,7 @@ describe("refunds: partial or full, with a reason and an audit log", () => {
     );
     expect(full).toMatchObject({
       ok: true,
-      message: "Refunded 1000 (minor units).",
+      message: "Refunded €10.00 (1000 minor units).",
     });
     expect((await payments.get(p.id))!.refundedAmount).toBe(1500);
     expect(
@@ -722,7 +756,7 @@ describe("refunds: partial or full, with a reason and an audit log", () => {
     const again = await refundAction({}, full);
     expect(again).toMatchObject({
       ok: true,
-      message: "Refunded 1500 (minor units).",
+      message: "Refunded €15.00 (1500 minor units).",
     });
     expect(requestIdSpent(again)).toBe(true);
     expect(refund.mock.calls.map(([input]) => input.amount)).toEqual([

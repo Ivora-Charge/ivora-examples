@@ -1150,6 +1150,14 @@ function publicSession(s: Session) {
   };
 }
 
+/** The currency and per-kWh price for a vehicle's tariff id (the default tariff when unset). */
+export function rateOf(settings: Settings, tariffId?: string) {
+  const t = tariffId && settings.tariffs?.find((x) => x.id === tariffId);
+  return t
+    ? { currency: t.currency, minorPerKwh: t.minorPerKwh }
+    : { currency: settings.currency, minorPerKwh: settings.centsPerKwh };
+}
+
 export async function report(
   d: Depot,
   month: string,
@@ -1163,10 +1171,13 @@ export async function report(
   const labels: Record<string, string> = { unknown: "Unmatched card" };
   for (const v of vehicles) labels[v.id] = `${v.name} (${v.plate})`;
   for (const x of drivers) labels[x.id] = x.name;
+  const tariffOf = new Map<string, string | undefined>(
+    vehicles.map((v) => [v.id, v.tariffId]),
+  );
   return buildReport(
     txs as TxRecord[],
     month,
-    d.settings.centsPerKwh,
+    (t) => rateOf(d.settings, tariffOf.get(t.vehicleId)),
     by,
     labels,
   );

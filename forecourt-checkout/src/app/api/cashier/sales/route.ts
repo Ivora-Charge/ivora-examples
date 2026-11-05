@@ -15,6 +15,11 @@ const input = z.object({
   limitWh: z.number().int().nullable().default(null),
   // One key per authorisation on the console: a retry after a timeout reuses it.
   requestId: z.uuid(),
+  // The tile's currency, only to word a validation message.
+  currency: z
+    .string()
+    .regex(/^[A-Za-z]{3}$/)
+    .optional(),
 });
 
 /** The cashier authorises a charger (pay after) or starts a prepaid sale. */
@@ -27,6 +32,7 @@ export async function POST(request: Request) {
         code: body.code,
         connector: body.connector,
         requestId: body.requestId,
+        currency: body.currency,
         terms: {
           mode: body.mode,
           prepaidCents: body.mode === "prepay" ? body.prepaidCents : null,

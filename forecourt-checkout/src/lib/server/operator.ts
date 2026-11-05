@@ -1,8 +1,13 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import QRCode from "qrcode";
-import { DEMO_CHARGERS, DEMO_SITE_NAME, DEMO_TARIFF } from "../demo";
-import { applicationFeeCents } from "../money";
+import {
+  DEMO_CHARGERS,
+  DEMO_SITE_NAME,
+  DEMO_TARIFFS,
+  demoTariff,
+} from "../demo";
+import { DEFAULT_CURRENCY, applicationFeeCents } from "../money";
 import type { Settings } from "../settings";
 import {
   elementsFromPrices,
@@ -13,6 +18,7 @@ import {
   type Tariff,
 } from "../tariff";
 import { startOfLocalDay } from "../time";
+import { totalsByCurrency, type CurrencyTotals } from "../totals";
 import { liveDeps, ivoraClient } from "./services";
 import { STORE_PREFIX } from "../store";
 import { APPLICATION_PREFIX } from "./sessions";
@@ -22,6 +28,7 @@ import { APPLICATION_PREFIX } from "./sessions";
 
 export type SessionRow = {
   reference: string;
+  currency: string;
   createdAt: string;
   station: string;
   status: string;
@@ -41,12 +48,8 @@ export type Overview = {
   activeSessions: number;
   energyKwh: string;
   successRate: string | null;
-  billedCents: number | null;
-  /** Card payments captured through Stripe. */
-  capturedCents: number;
-  /** Recorded as paid in store (settlement reports; the money never touches Stripe). */
-  inStoreCents: number;
-  feeCents: number;
+  /** One entry per currency; amounts of different currencies are never added. */
+  totals: CurrencyTotals[];
   feeBps: number;
   chargesFee: boolean;
   stations: { total: number; online: number; offline: number; faulted: number };
@@ -82,6 +85,7 @@ export async function overview(
       const store = s.application_reference.startsWith(STORE_PREFIX);
       return {
         reference: s.id,
+        currency: s.bill.currency,
         createdAt: s.created_at,
         station: names.get(s.bill.station_id) ?? `Station ${s.bill.station_id}`,
         status: s.status,
@@ -96,11 +100,9 @@ export async function overview(
         paidVia: store ? "store" : "card",
       };
     });
-  const sum = (via: SessionRow["paidVia"]) =>
-    rows
-      .filter((r) => r.paidVia === via)
-      .reduce((total, r) => total + r.capturedCents, 0);
-  const usd = stats.revenue?.currencies.find((c) => c.currency === "USD");
+  const billed = stats.revenue
+    ? new Map(stats.revenue.currencies.map((c) => [c.currency, c.billed_minor]))
+    : null;
   return {
     demo: false,
     siteName: process.env.SITE_NAME || "Your forecourt",
@@ -109,10 +111,7 @@ export async function overview(
     activeSessions: stats.totals.active_sessions,
     energyKwh: stats.totals.energy_kwh,
     successRate: stats.totals.success_rate,
-    billedCents: usd ? usd.billed_minor : null,
-    capturedCents: sum("card"),
-    inStoreCents: sum("store"),
-    feeCents: rows.reduce((total, r) => total + r.feeCents, 0),
+    totals: totalsByCurrency(rows, billed),
     feeBps: settings.applicationFeeBps,
     chargesFee: deps.payments.chargesApplicationFee,
     stations: stats.stations,
@@ -128,9 +127,25 @@ function demoOverview(settings: Settings, from: string): Overview {
     { h: 12.1, station: "Demo charger 1", wh: 35_400, billed: 2_041 },
     { h: 13.4, station: "Demo charger 2", wh: 12_050, billed: 802 },
     { h: 14.2, station: "Demo charger 6", wh: 30_400, billed: 1_754, store: 1 },
+    // The CAD sample site: totals below stay separate from the USD ones.
+    {
+      h: 10.3,
+      station: "Demo charger 11 (Toronto, CAD)",
+      wh: 33_100,
+      billed: 2_037,
+      currency: "CAD",
+    },
+    {
+      h: 15.8,
+      station: "Demo charger 11 (Toronto, CAD)",
+      wh: 22_800,
+      billed: 1_455,
+      currency: "CAD",
+    },
   ];
   const rows = sample.map((s, i): SessionRow => ({
     reference: `demo-session-${i + 1}`,
+    currency: ("currency" in s && s.currency) || DEFAULT_CURRENCY,
     createdAt: new Date(base + s.h * 3_600_000).toISOString(),
     station: s.station,
     status: "completed",
@@ -143,11 +158,12 @@ function demoOverview(settings: Settings, from: string): Overview {
         : applicationFeeCents(s.billed, settings.applicationFeeBps),
     paidVia: "store" in s ? "store" : "card",
   }));
-  const billed = rows.reduce((sum, r) => sum + (r.billedCents ?? 0), 0);
-  const via = (v: SessionRow["paidVia"]) =>
-    rows
-      .filter((r) => r.paidVia === v)
-      .reduce((sum, r) => sum + r.capturedCents, 0);
+  const billed = new Map<string, number>();
+  for (const r of rows)
+    billed.set(
+      r.currency,
+      (billed.get(r.currency) ?? 0) + (r.billedCents ?? 0),
+    );
   return {
     demo: true,
     siteName: DEMO_SITE_NAME,
@@ -156,10 +172,7 @@ function demoOverview(settings: Settings, from: string): Overview {
     activeSessions: 1,
     energyKwh: (rows.reduce((sum, r) => sum + r.energyWh, 0) / 1000).toFixed(3),
     successRate: "1.0000",
-    billedCents: billed,
-    capturedCents: via("card"),
-    inStoreCents: via("store"),
-    feeCents: rows.reduce((sum, r) => sum + r.feeCents, 0),
+    totals: totalsByCurrency(rows, billed),
     feeBps: settings.applicationFeeBps,
     chargesFee: true,
     stations: {
@@ -223,7 +236,7 @@ export async function pricesPage(settings: Settings): Promise<PricesPage> {
           code: c.code,
           connector: k.number,
           status: k.status,
-          tariffId: DEMO_TARIFF.id,
+          tariffId: demoTariff(c).id,
           driverUrl,
           qrSvg: await qr(driverUrl),
         });
@@ -231,7 +244,7 @@ export async function pricesPage(settings: Settings): Promise<PricesPage> {
     return {
       demo: true,
       connectors,
-      tariffs: [card(DEMO_TARIFF, connectors)],
+      tariffs: DEMO_TARIFFS.map((t) => card(t, connectors)),
       qrProblem: null,
     };
   }
@@ -288,7 +301,12 @@ export async function savePrices(
   tariffId: number,
   form: PriceForm,
 ) {
-  const elements = elementsFromPrices(form);
+  // Amounts are minor units of the tariff's own currency.
+  const currency = settings.demo
+    ? (DEMO_TARIFFS.find((t) => t.id === tariffId)?.currency ??
+      DEFAULT_CURRENCY)
+    : (await ivoraClient(settings).getTariff(tariffId)).currency;
+  const elements = elementsFromPrices(form, currency);
   if (settings.demo) return { saved: false as const };
   const body = { elements, authorization_minor: form.holdCents };
   const hash = createHash("sha256")
