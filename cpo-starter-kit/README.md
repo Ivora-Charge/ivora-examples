@@ -102,7 +102,17 @@ Vercel asks for the live credentials: `IVORA_API_KEY`, `IVORA_TENANT_ID`, `SUPAB
 2. In Vercel Project Settings → Environment Variables, replace each `demo` with the real value and add what else you need from [the table above](#connect-real-services): at least `APP_URL` and `CRON_SECRET` (at least 32 characters). Redeploy.
 3. Point your own domain at the deployment and set `APP_URL` (and `PUBLIC_BASE_URL`, if stickers use another domain) to it, before inviting staff or printing any QR codes.
 4. Create the first owner at `/setup` with `SETUP_SECRET`.
-5. [Register the webhook](#register-the-webhook) and call the settlement sweep every minute (`GET /api/cron/settle` with `Authorization: Bearer <CRON_SECRET>`; Vercel Cron on a plan with per-minute schedules, or any scheduler).
+5. [Register the webhook](#register-the-webhook) and call the settlement sweep every minute (`GET /api/cron/settle` with `Authorization: Bearer <CRON_SECRET>`; Vercel Cron on a plan with per-minute schedules, or any scheduler). `vercel.json` declares the sweep once a day (`0 4 * * *`), which deploys on every Vercel plan (a Hobby project refuses a more frequent schedule) and works as a backstop only. On a paid plan change the schedule to `* * * * *`.
+
+**Runs serverless.** Nothing in the kit needs a long-running server:
+
+- Ivora holds the charger connections; the kit only makes requests to the Ivora API and receives webhooks.
+- The kit keeps its own state (team, sites, checkouts, reports) in your Supabase database.
+- Webhooks are deduplicated by event ID.
+- Every write to Ivora sends an `Idempotency-Key`, so a retry after a timeout never repeats the action.
+- The settlement sweep (`/api/cron/settle`) catches events a webhook missed. It is protected by `CRON_SECRET`: Vercel Cron sends it as `Authorization: Bearer <CRON_SECRET>` when the variable is set, and without it the route refuses every call.
+
+Ivora's developer docs page on building serverless apps will be linked here once it is published.
 
 A public demo instance sets `DEMO_MODE=true`, which keeps demo mode on whatever else is set.
 
