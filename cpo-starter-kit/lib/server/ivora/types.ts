@@ -232,8 +232,9 @@ export interface TransactionBill {
 
 /**
  * `GET /transactions/{id}` (needs billing:read): the session with its stop reason,
- * duration and bill. The list (`GET /transactions`) carries none of these, has no date
- * filter and lists oldest first, so reports never scan it for a period.
+ * duration and bill in full. The filtered list (`listSessions`) carries the station
+ * name, stop reason and bill ID per item, so Reports and Live page it rather than
+ * reading each session; this read is for one session a webhook or command names.
  */
 export interface TransactionDetail extends Transaction {
   /** The station's OCPP connection name. */
@@ -338,6 +339,48 @@ export interface ReadLimits {
   deadline?: number;
   /** A 429 comes back at once with its Retry-After, instead of being waited out. */
   failOn429?: boolean;
+}
+
+/**
+ * One item of `GET /transactions` on an Ivora API version with the filtered
+ * transaction list (`active`, `started_from`/`started_to`, `order`, `cursor`): the
+ * masked ID token, connector, station name and bill ID are in the list itself.
+ */
+export interface SessionListItem extends Transaction {
+  station_name?: string | null;
+  evse_number?: number | null;
+  stop_reason?: string | null;
+  /** The bill this session settles; null when none. */
+  bill_id?: string | null;
+}
+
+/** A page of the filtered lists: `next_cursor` is opaque, null on the last page. */
+export interface CursorPage<T> {
+  data: T[];
+  next_cursor: string | null;
+}
+
+/** Query of the filtered session list (`GET /transactions`). Dates are ISO 8601. */
+export interface SessionQuery {
+  /** Started at or after (inclusive). */
+  started_from?: string;
+  /** Started before (exclusive). */
+  started_to?: string;
+  /** true: in progress; false: ended; unset: both. */
+  active?: boolean;
+  station_id?: number;
+  /** Always newest first: the kit never needs oldest first from this list. */
+  cursor?: string | null;
+  limit?: number;
+}
+
+/** Query of the filtered bill list (`GET /bills`), newest first by (created_at, id). */
+export interface BillQuery {
+  created_from?: string;
+  created_to?: string;
+  station_id?: number;
+  cursor?: string | null;
+  limit?: number;
 }
 
 export type TransactionListItem = Pick<Transaction, "id"> &
@@ -795,6 +838,19 @@ export interface IvoraClient {
     },
     limits?: ReadLimits,
   ): Promise<Page<TransactionListItem>>;
+  /**
+   * One page of the filtered session list, newest first (`order=desc`; needs the API
+   * version with the filtered transaction list). Pass `next_cursor` back as `cursor`.
+   */
+  listSessions(
+    q: SessionQuery,
+    limits?: ReadLimits,
+  ): Promise<CursorPage<SessionListItem>>;
+  /**
+   * One page of bills created in a period, newest first (needs the API version with
+   * the filtered bill list, `created_from`/`created_to`, `order`). Needs billing:read.
+   */
+  listBills(q: BillQuery, limits?: ReadLimits): Promise<CursorPage<Bill>>;
   getTransaction(
     transactionId: number,
     limits?: ReadLimits,

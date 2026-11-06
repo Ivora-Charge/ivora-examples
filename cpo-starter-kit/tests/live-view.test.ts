@@ -160,27 +160,44 @@ function fakeIvora() {
       return { body: { data: locations, next_cursor: null } };
     if (c.method === "GET" && p === "stations")
       return { body: { data: stations, next_cursor: null } };
-    // Like Ivora: oldest first, paged with `after` (a transaction ID), and list items
-    // without the ID token or connector (the read by ID has them).
+    // Like Ivora's filtered list: `active` and `order=desc` filters, an opaque cursor
+    // (returned also on the last page), and the masked ID token and connector in
+    // each item. Without `order=desc` the old oldest-first list is refused here.
     if (c.method === "GET" && p === "transactions") {
+      if (q.get("order") !== "desc")
+        throw new Error("Live must read the filtered, newest-first list");
       const st = q.get("station_id");
-      const after = Number(q.get("after") ?? 0);
+      const active = q.get("active");
+      const cursor = q.get("cursor");
+      const below = cursor
+        ? (
+            JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as {
+              id: number;
+            }
+          ).id
+        : Infinity;
       const limit = Number(q.get("limit") ?? 50);
-      const rows = transactions
-        .filter((t) => (!st || t.station_id === Number(st)) && t.id > after)
-        .sort((a, b) => a.id - b.id);
-      const data = rows.slice(0, limit).map((t) => ({
-        id: t.id,
-        station_id: t.station_id,
-        active: t.active,
-        started_at: t.started_at,
-        ended_at: t.ended_at,
-      }));
-      // As Ivora: the last item's ID, also on the last page; `after` when empty.
+      const data = transactions
+        .filter(
+          (t) =>
+            (!st || t.station_id === Number(st)) &&
+            (active === null || String(t.active === true) === active) &&
+            t.id < below,
+        )
+        .sort((a, b) => b.id - a.id)
+        .slice(0, limit);
       return {
         body: {
           data,
-          next_cursor: data.length ? data[data.length - 1].id : after,
+          next_cursor: null,
+          // Ivora's shape: base64url JSON of {"order":"desc","id":N}.
+          next_page_cursor: Buffer.from(
+            JSON.stringify({
+              order: "desc",
+              id: data.length ? data[data.length - 1].id : 0,
+            }),
+            "utf8",
+          ).toString("base64url"),
         },
       };
     }

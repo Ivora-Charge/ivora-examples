@@ -4,7 +4,9 @@ import {
   describeError,
   ERRORS_URL,
   IvoraError,
+  type Bill,
   type IvoraClient,
+  type SessionListItem,
   type Location,
   type Station,
   type Stats,
@@ -44,9 +46,11 @@ const HOUR_MS = 3_600_000;
 
 /**
  * What reports read. Period figures for every session on the operator's chargers come
- * from Ivora's GET /stats. Session rows, their totals and driver revenue come from the
- * kit's own checkout records (`store`): Ivora's transaction list has no date filter,
- * so the kit never scans it.
+ * from Ivora's GET /stats. Driver revenue (captured minus refunded), the status
+ * figures and the CSV come from the kit's own checkout records (`store`). Every
+ * session on the chargers, whoever started it, and the period's bills are listed from
+ * Ivora's filtered lists (`started_from` / `started_to`, `created_from` /
+ * `created_to`, newest first, paged with Ivora's cursor).
  */
 export interface ReportsDeps {
   ivora: IvoraClient;
@@ -378,6 +382,109 @@ export async function loadSessions(
     };
   } catch (e) {
     logFailure("sessions", e);
+    return { ok: false, error: describeError(e) };
+  }
+}
+
+// ---- Ivora's own lists: every session and bill of the period ----
+
+/** Rows per page of the two Ivora lists. */
+export const IVORA_PAGE_ROWS = 25;
+/** An Ivora cursor in a URL: opaque text of reasonable length, else ignored. */
+export const cleanCursor = (v: string | null): string | null =>
+  v && v.length <= 200 && /^[\w.:|+=\-/ ]+$/.test(v) ? v : null;
+
+/** One session of Ivora's list: any session on the operator's chargers. */
+export interface IvoraSessionRow {
+  id: number;
+  stationId: number | null;
+  stationName: string;
+  siteName: string | null;
+  timeZone: string;
+  connectorNumber: number | null;
+  /** The ID token as Ivora masks it (last 4 characters behind ****). */
+  idToken: string | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  active: boolean;
+  energyWh: number | null;
+  stopReason: string | null;
+  billId: string | null;
+}
+
+export type IvoraSessionsResult =
+  | { ok: true; rows: IvoraSessionRow[]; next: string | null }
+  | { ok: false; error: string };
+
+/** One page of the period's sessions, newest first, from Ivora's filtered list. */
+export async function loadIvoraSessions(
+  d: Pick<ReportsDeps, "ivora">,
+  q: ReportQuery,
+  ctx: StationContext,
+  cursor: string | null,
+): Promise<IvoraSessionsResult> {
+  try {
+    const page = await d.ivora.listSessions({
+      started_from: new Date(q.fromMs).toISOString(),
+      started_to: new Date(q.toMs).toISOString(),
+      station_id: q.stationId ?? undefined,
+      cursor,
+      limit: IVORA_PAGE_ROWS,
+    });
+    return {
+      ok: true,
+      rows: page.data.map((t: SessionListItem) => {
+        const st =
+          t.station_id == null ? undefined : ctx.stations.get(t.station_id);
+        return {
+          id: t.id,
+          stationId: t.station_id,
+          stationName:
+            st?.name ?? t.station_name ?? `Charger ${t.station_id ?? "?"}`,
+          siteName: st?.siteName ?? null,
+          timeZone: st?.timeZone ?? ctx.timeZone,
+          connectorNumber:
+            safeInt(t.connector_number) !== null && t.connector_number! > 0
+              ? t.connector_number!
+              : null,
+          idToken: t.id_token ?? null,
+          startedAt: t.started_at,
+          endedAt: t.active === true ? null : t.ended_at,
+          active: t.active === true,
+          energyWh: safeInt(t.energy_wh),
+          stopReason: t.stop_reason ? t.stop_reason.slice(0, 60) : null,
+          billId: t.bill_id ?? null,
+        };
+      }),
+      next: page.next_cursor,
+    };
+  } catch (e) {
+    logFailure("ivora sessions", e);
+    return { ok: false, error: describeError(e) };
+  }
+}
+
+export type IvoraBillsResult =
+  | { ok: true; bills: Bill[]; next: string | null }
+  | { ok: false; error: string };
+
+/** One page of bills created in the period, newest first, from Ivora's filtered list. */
+export async function loadIvoraBills(
+  d: Pick<ReportsDeps, "ivora">,
+  q: ReportQuery,
+  cursor: string | null,
+): Promise<IvoraBillsResult> {
+  try {
+    const page = await d.ivora.listBills({
+      created_from: new Date(q.fromMs).toISOString(),
+      created_to: new Date(q.toMs).toISOString(),
+      station_id: q.stationId ?? undefined,
+      cursor,
+      limit: IVORA_PAGE_ROWS,
+    });
+    return { ok: true, bills: page.data, next: page.next_cursor };
+  } catch (e) {
+    logFailure("ivora bills", e);
     return { ok: false, error: describeError(e) };
   }
 }

@@ -7,17 +7,16 @@ import type {
 import type { LiveStore, SeedProgress } from "./types";
 
 /**
- * Finding a new session at a station. On Ivora, `GET /transactions` lists a station's
- * sessions OLDEST first, with no date or active filter, and its items carry no ID
- * token or connector. A "newest 20" read therefore never sees today's session on a
- * charger with a long history. Instead, each station keeps a high-water mark (the
- * highest transaction ID every finder is done with): a scan pages on from it with
- * `after=<mark>`, reads each new candidate in full (`GET /transactions/{id}`, which has
- * the masked ID token and the connector) and hands it to the caller.
+ * Finding a new session at a station, for the driver checkout finder and the Cards
+ * usage scan. These still page Ivora's oldest-first list by transaction ID
+ * (`GET /transactions?station_id=…&after=<id>`; Live and Reports use the newest-first
+ * filtered list, `listSessions`). Each station keeps a high-water mark (the highest
+ * transaction ID every finder is done with): a scan pages on from it with
+ * `after=<mark>`, reads each new candidate in full (`GET /transactions/{id}`) and
+ * hands it to the caller.
  *
  * The mark moves only over sessions that started more than MARK_LAG_MS ago, so a
  * session that starts while another scan is under way is still offered next time.
- * Live (and anything else that looks for a session by token or connector) reuses it.
  */
 
 /** Sessions younger than this stay above the mark and are offered again next scan. */

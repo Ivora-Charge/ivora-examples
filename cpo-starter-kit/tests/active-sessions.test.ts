@@ -8,13 +8,12 @@ import type {
 import {
   endedSessions,
   REFRESH_AFTER_MS,
-  SEEDS_PER_SYNC,
   STALL_AFTER_MS,
   STALLED_REFRESH_AFTER_MS,
   SYNC_BUDGET_MS,
   SYNC_INTERVAL_MS,
   SYNC_MAX_CALLS,
-  SYNC_MAX_STATIONS,
+  LIST_PAGE_SIZE,
   syncActiveSessions,
   trackTransaction,
 } from "@/lib/server/live/active";
@@ -44,9 +43,19 @@ import type {
 import type { Staff } from "@/lib/server/team/types";
 
 // The Live view's running sessions against an API-shaped fake of Ivora: GET
-// /transactions lists oldest first, pages with `after` (next_cursor is the last ID,
-// also on the last page), and its items carry no ID token or connector; GET
-// /transactions/{id} has them.
+// /transactions with `active=true` and `order=desc` lists the running sessions newest
+// first with the masked ID token and connector in each item, pages with an opaque
+// cursor (also returned on the last page); GET /transactions/{id} reads one. The old
+// oldest-first list (`after`) remains for the checkout finder.
+
+// Ivora's transaction cursor: base64url JSON of {"order":"desc","id":N}.
+const txCursor = (id: number) =>
+  Buffer.from(JSON.stringify({ order: "desc", id }), "utf8").toString(
+    "base64url",
+  );
+const cursorId = (c: string) =>
+  (JSON.parse(Buffer.from(c, "base64url").toString("utf8")) as { id: number })
+    .id;
 
 const NOW = Date.parse("2026-10-22T10:00:00Z");
 const OLD = "2025-01-01T00:00:00Z";
@@ -111,6 +120,32 @@ function api(rows: Transaction[], stations = [station(STATION, "DEPOT-01")]) {
       };
     },
   );
+  const sessions = vi.fn(
+    async (
+      q: {
+        active?: boolean;
+        cursor?: string | null;
+        limit?: number;
+        station_id?: number;
+      },
+      _limits?: unknown,
+    ) => {
+      const below = q.cursor ? cursorId(q.cursor) : Infinity;
+      const all = rows
+        .filter(
+          (t) =>
+            (q.active === undefined || (t.active === true) === q.active) &&
+            (q.station_id === undefined || t.station_id === q.station_id) &&
+            t.id < below,
+        )
+        .sort((a, b) => b.id - a.id);
+      const data = all.slice(0, q.limit ?? 100).map((t) => structuredClone(t));
+      return {
+        data,
+        next_cursor: data.length ? txCursor(data[data.length - 1].id) : null,
+      };
+    },
+  );
   const read = vi.fn(async (id: number) => {
     const t = rows.find((x) => x.id === id);
     if (!t) throw new IvoraError(404, "transaction_not_found", "Unknown");
@@ -119,6 +154,7 @@ function api(rows: Transaction[], stations = [station(STATION, "DEPOT-01")]) {
   const ivora = {
     mode: "live",
     listTransactionsAfter: list,
+    listSessions: sessions,
     getTransaction: read,
     // The old, wrong read: nothing may use it for Live.
     listTransactions: vi.fn(async () => {
@@ -132,7 +168,7 @@ function api(rows: Transaction[], stations = [station(STATION, "DEPOT-01")]) {
     getStation: async (id: number) => stations.find((s) => s.id === id)!,
     listFaults: async () => [],
   } as unknown as IvoraClient;
-  return { rows, list, read, ivora };
+  return { rows, list, sessions, read, ivora };
 }
 
 /**
@@ -243,8 +279,8 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-describe("running sessions with a long, oldest-first history", () => {
-  it("shows exactly the 2 current sessions among 1,000+ old ones, labelled", async () => {
+describe("running sessions with a long history", () => {
+  it("shows exactly the 2 current sessions among 1,000+ old ones, labelled, from one list read", async () => {
     const a = api([
       ...history(1200),
       running(1201, { id_token: "****STAF" }),
@@ -268,43 +304,81 @@ describe("running sessions with a long, oldest-first history", () => {
     expect(r.live.counts.charging).toBe(2);
     expect(r.live.sessionsComplete).toBe(true);
     expect(r.live.retryAfter).toBeNull();
-    // Old sessions were passed over by their list item, never read in full.
-    expect(a.read.mock.calls.map((c) => c[0]).sort()).toEqual([1201, 1202]);
-    // One seeding probe (nothing above 2,000), then 13 pages: the short last page
-    // ends the scan, with no extra empty page.
-    expect(a.list.mock.calls.length).toBe(14);
+    // One list request with the filters, no read per session, never the old list.
+    expect(a.sessions).toHaveBeenCalledTimes(1);
+    expect(a.sessions.mock.calls[0][0]).toMatchObject({ active: true });
+    expect(a.read).not.toHaveBeenCalled();
+    expect(a.list).not.toHaveBeenCalled();
   });
 
-  it("rebuilds on a cold start, then pages on from the stored mark, not from 0", async () => {
+  it("finds a session started outside the kit, and a later one a minute on", async () => {
     const a = api([...history(1200), running(1201)]);
     const { d, store } = deps(a);
     await syncActiveSessions(d, [STATION]);
-    expect(await store.getTrackerMark(STATION)).toBe(1201);
-    // Another instance, a minute later: same tables.
-    a.list.mockClear();
+    a.sessions.mockClear();
     a.rows.push(running(1202, { connector_id: 702 }));
     vi.setSystemTime(NOW + 60_000);
     const later = deps(a, () => NOW + 60_000, store);
     const s = await syncActiveSessions(later.d, [STATION]);
     expect(s.sessions.map((x) => x.transactionId)).toEqual([1202, 1201]);
-    expect(a.list.mock.calls.every((c) => c[0].after >= 1201)).toBe(true);
+    expect(a.sessions).toHaveBeenCalledTimes(1);
   });
 
-  it("seeds the mark on a first scan of 50,000 old sessions and finds the new one", async () => {
-    const a = api([...history(50_000), running(50_001)]);
-    const { d, store } = deps(a);
-    const s = await syncActiveSessions(d, [STATION]);
-    expect(s.sessions.map((x) => x.transactionId)).toEqual([50_001]);
-    expect(s.complete).toBe(true);
-    // A binary search plus about SEED_MARGIN / 100 pages, not 500 pages.
-    expect(a.list.mock.calls.length).toBeLessThan(
-      30 + Math.ceil(SEED_MARGIN / 100) + 2,
+  it("reads the list at most every 30 seconds per charger", async () => {
+    const c = clock();
+    const a = api([running(1201)]);
+    const { d } = deps(a, c.now, bigStore());
+    await syncActiveSessions(d, [STATION]);
+    c.add(SYNC_INTERVAL_MS - 1);
+    await syncActiveSessions(d, [STATION]);
+    expect(a.sessions).toHaveBeenCalledTimes(1);
+    c.add(2);
+    await syncActiveSessions(d, [STATION]);
+    expect(a.sessions).toHaveBeenCalledTimes(2);
+    // A command's check ignores the throttle.
+    await syncActiveSessions(d, [STATION], { fresh: true });
+    expect(a.sessions).toHaveBeenCalledTimes(3);
+  });
+
+  it("pages on with the cursor past 100 running sessions", async () => {
+    const rows = Array.from({ length: LIST_PAGE_SIZE + 20 }, (_, i) =>
+      running(1000 + i),
     );
-    expect(await store.getTrackerMark(STATION)).toBe(50_001);
-    expect(a.read).toHaveBeenCalledTimes(1);
-    expect(
-      a.list.mock.calls.some((c) => c[0].after === 50_001 - SEED_MARGIN),
-    ).toBe(true);
+    const a = api(rows);
+    const { d } = deps(a, () => NOW, bigStore());
+    const s = await syncActiveSessions(d, [STATION]);
+    expect(s.sessions.length).toBe(rows.length);
+    expect(s.complete).toBe(true);
+    expect(a.sessions).toHaveBeenCalledTimes(2);
+    expect(a.sessions.mock.calls[1][0].cursor).toBe(
+      txCursor(1000 + rows.length - LIST_PAGE_SIZE),
+    );
+  });
+
+  it("ends a tracked session the list no longer shows, by reading it once", async () => {
+    const c = clock();
+    const a = api([running(1201), running(1202, { connector_id: 702 })]);
+    const { d } = deps(a, c.now, bigStore());
+    await syncActiveSessions(d, [STATION]);
+    a.rows[0] = tx(1201, { ended_at: new Date(c.now()).toISOString() });
+    c.add(SYNC_INTERVAL_MS);
+    a.read.mockClear();
+    const s = await syncActiveSessions(d, [STATION]);
+    expect(s.sessions.map((x) => x.transactionId)).toEqual([1202]);
+    expect(a.read.mock.calls.map((x) => x[0])).toEqual([1201]);
+  });
+
+  it("keeps a station that is not running anything out of the way of the others", async () => {
+    const stations = [station(70, "A"), station(71, "B")];
+    const a = api(
+      [...history(1200, 70), running(6000, { station_id: 71 })],
+      stations,
+    );
+    const { d } = deps(a);
+    const s = await syncActiveSessions(d, [70, 71]);
+    expect(s.sessions.map((x) => [x.stationId, x.transactionId])).toEqual([
+      [71, 6000],
+    ]);
   });
 
   it("seeds the checkout finder's mark the same way", async () => {
@@ -322,23 +396,6 @@ describe("running sessions with a long, oldest-first history", () => {
     expect(seen).toEqual([]);
     // The session started an hour ago: below `since`, but the scan was cheap.
     expect(a.list.mock.calls.length).toBeLessThan(75);
-  });
-
-  it("keeps a station that is not scanned yet out of the way of the others", async () => {
-    const stations = [station(70, "A"), station(71, "B")];
-    const a = api(
-      [
-        ...history(1200, 70),
-        ...history(5, 71, 5001),
-        running(6000, { station_id: 71 }),
-      ],
-      stations,
-    );
-    const { d } = deps(a);
-    const s = await syncActiveSessions(d, [70, 71]);
-    expect(s.sessions.map((x) => [x.stationId, x.transactionId])).toEqual([
-      [71, 6000],
-    ]);
   });
 });
 
@@ -393,182 +450,10 @@ describe("many tracked sessions", () => {
 describe("the request budget", () => {
   const fleet = (n: number) =>
     Array.from({ length: n }, (_, i) => station(100 + i, `S${i}`));
-  /** n stations with 30,000 old sessions each (IDs interleaved) and one running. */
-  function longHistories(n: number) {
-    const rows: Transaction[] = [];
-    for (let i = 0; i < 30_000; i++)
-      rows.push(tx(i * n + 1 + (i % n), { station_id: 100 + (i % n) }));
-    for (let s = 0; s < n; s++)
-      rows.push(running(30_000 * n + 1 + s, { station_id: 100 + s }));
-    return rows;
-  }
-
-  it("caps a cold start of 10 long-history stations and carries on over the next loads", async () => {
-    const c = clock();
-    const a = api(longHistories(10), fleet(10));
-    const { d, store } = deps(a, c.now, bigStore());
-    const ids = fleet(10).map((s) => s.id);
-    const first = await syncActiveSessions(d, ids);
-    expect(
-      a.list.mock.calls.length + a.read.mock.calls.length,
-    ).toBeLessThanOrEqual(SYNC_MAX_CALLS);
-    const seeded = [...(await store.listTrackerMarks()).values()].filter(
-      (m) => m.mark > 0,
-    );
-    expect(seeded.length).toBeLessThanOrEqual(SEEDS_PER_SYNC);
-    // Stations never scanned were left: that matters, so the note shows.
-    expect(first.complete).toBe(false);
-    let s = first;
-    for (let load = 0; load < 10 && s.sessions.length < 10; load++) {
-      c.add(10_000);
-      s = await syncActiveSessions(d, ids);
-    }
-    expect(s.sessions.length).toBe(10);
-    c.add(SYNC_INTERVAL_MS);
-    expect((await syncActiveSessions(d, ids)).complete).toBe(true);
-  });
-
-  it("finishes seeding 10 stations of about 400,000 IDs at 300 ms a call, then commands work", async () => {
-    const c = clock();
-    const n = 10;
-    const OLD_PER_STATION = 40_000;
-    const ids = fleet(n).map((s) => s.id);
-    // Old sessions only as list items (IDs interleaved across stations), one running
-    // session per station read in full.
-    const newest = OLD_PER_STATION * n;
-    const current = ids.map((id, i) =>
-      running(newest + 1 + i, { station_id: id }),
-    );
-    const a = api(current, fleet(n));
-    const listed = (station: number) => {
-      const s = station - 100;
-      return (after: number, limit: number) => {
-        const out: number[] = [];
-        let i = Math.max(0, Math.floor((after - s - 1) / n));
-        for (; i < OLD_PER_STATION && out.length < limit; i++) {
-          const id = i * n + s + 1;
-          if (id > after) out.push(id);
-        }
-        const cur = newest + 1 + s;
-        if (out.length < limit && cur > after) out.push(cur);
-        return out;
-      };
-    };
-    a.list.mockImplementation(async (o) => {
-      c.add(300);
-      const data = listed(o.station_id)(o.after, o.limit ?? 100).map((id) => {
-        const t = a.rows.find((r) => r.id === id) ?? tx(id);
-        return {
-          id,
-          station_id: o.station_id,
-          active: t.active,
-          started_at: t.started_at,
-          ended_at: t.ended_at,
-        };
-      });
-      return {
-        data,
-        next_cursor: data.length ? data[data.length - 1].id : o.after,
-      };
-    });
-    a.read.mockImplementation(async (id: number) => {
-      c.add(300);
-      const t = a.rows.find((x) => x.id === id);
-      if (!t) throw new IvoraError(404, "transaction_not_found", "Unknown");
-      return structuredClone(t);
-    });
-    const { d, store } = deps(a, c.now, bigStore());
-
-    // Before seeding, a command on the last station is refused (its sessions are not
-    // known yet), as before; but every load now moves the seeds forward.
-    const fresh = () => syncActiveSessions(d, [ids[n - 1]], { fresh: true });
-    expect((await fresh()).complete).toBe(false);
-
-    let s = await syncActiveSessions(d, ids);
-    let loads = 1;
-    for (; loads < 30 && s.sessions.length < n; loads++) {
-      c.add(10_000);
-      s = await syncActiveSessions(d, ids);
-    }
-    expect(s.sessions.map((x) => x.transactionId).sort()).toEqual(
-      current.map((t) => t.id).sort(),
-    );
-    // About 30 requests per seed at about 23 per load.
-    expect(loads).toBeLessThanOrEqual(20);
-    const marks = await store.listTrackerMarks();
-    for (const id of ids)
-      expect(marks.get(id)?.mark).toBeGreaterThan(newest - SEED_MARGIN - n);
-    // Never a probe below the start of the search twice: no search restarted from 0.
-    const fromScratch = a.list.mock.calls.filter(
-      (call) => call[0].after === 2_000 && call[0].limit === 1,
-    );
-    expect(fromScratch.length).toBeLessThanOrEqual(n);
-
-    // Commands: the fresh check before each one is complete on every charger.
-    for (const id of ids) {
-      c.add(1_000);
-      const f = await syncActiveSessions(d, [id], { fresh: true });
-      expect(f.complete).toBe(true);
-      expect(f.sessions.map((x) => x.stationId)).toEqual([id]);
-    }
-  });
-
-  it("resumes a seed cut short by the budget where it stopped", async () => {
-    const a = api([...history(50_000), running(50_001)]);
-    const store = bigStore();
-    const marks = {
-      getTransactionMark: (id: number) => store.getTrackerMark(id),
-      advanceTransactionMark: (id: number, t: number) =>
-        store.advanceTrackerMark(id, t),
-    };
-    const progress = {
-      getSeed: (id: number) => store.getTrackerSeed(id),
-      saveSeed: (id: number, p: SeedProgress) => store.saveTrackerSeed(id, p),
-    };
-    // A whole search, for comparison.
-    await seedMark(
-      { ivora: a.ivora, marks: createDemoLiveStore(memoryDemoLive()) },
-      STATION,
-    );
-    const whole = a.list.mock.calls.length;
-    a.list.mockClear();
-    // Each run is cut after 4 probes.
-    const real = a.list.getMockImplementation()!;
-    let left = 0;
-    a.list.mockImplementation(async (o) => {
-      if (left-- <= 0) throw new Error("budget");
-      return real(o);
-    });
-    let runs = 0;
-    for (; runs < 20 && !((await store.getTrackerMark(STATION)) ?? 0); runs++) {
-      left = 4;
-      await seedMark({ ivora: a.ivora, marks, progress }, STATION).catch(
-        () => {},
-      );
-    }
-    expect(await store.getTrackerMark(STATION)).toBe(50_001 - SEED_MARGIN);
-    // Cut 4 at a time, the same probes as one whole search (each refused call counts).
-    expect(runs).toBe(Math.ceil(whole / 4));
-    expect(a.list.mock.calls.length).toBe(whole + runs - 1);
-  });
-
-  it("starts a first seed from the newest session a webhook already named", async () => {
-    const a = api([...history(50_000), running(50_001)]);
-    const store = bigStore();
-    const { d } = deps(a, () => NOW, store);
-    await store.trackSession(trackedOf(running(50_001)));
-    await syncActiveSessions(d, [STATION]);
-    // No probe at the bottom of the range: the search started at 50,000.
-    expect(
-      a.list.mock.calls.some((c) => c[0].limit === 1 && c[0].after < 50_000),
-    ).toBe(false);
-    expect(await store.getTrackerMark(STATION)).toBe(50_001);
-  });
-
   it("stops at the first 429 and hands its Retry-After to the page", async () => {
     const a = api([...history(1200), running(1201)]);
     const { d } = deps(a);
-    a.list.mockImplementationOnce(async () => {
+    a.sessions.mockImplementationOnce(async () => {
       throw new IvoraError(429, "rate_limited", "slow", undefined, 42);
     });
     const r = await loadLive(d, viewer);
@@ -577,7 +462,7 @@ describe("the request budget", () => {
     expect(r.live.retryAfter).toBe(42);
     expect(r.live.sessionsComplete).toBe(false);
     // Nothing after the 429.
-    expect(a.list).toHaveBeenCalledTimes(1);
+    expect(a.sessions).toHaveBeenCalledTimes(1);
     expect(a.read).not.toHaveBeenCalled();
   });
 
@@ -585,43 +470,42 @@ describe("the request budget", () => {
     const a = api([running(1)]);
     const { d } = deps(a);
     await syncActiveSessions(d, [STATION]);
-    const calls = [...a.list.mock.calls, ...a.read.mock.calls] as unknown[][];
-    expect(calls.length).toBeGreaterThan(1);
-    for (const c of calls) expect(c[1]).toMatchObject({ failOn429: true });
+    expect(a.sessions).toHaveBeenCalled();
+    for (const c of a.sessions.mock.calls)
+      expect(c[1]).toMatchObject({ failOn429: true });
   });
 
   it("starts no request after its time budget", async () => {
     const c = clock();
-    const a = api([...history(5000), running(5001)], fleet(3));
-    // Each list page takes 1.5 s.
-    a.list.mockImplementation(async () => {
-      c.add(1_500);
-      return { data: [], next_cursor: 0 };
+    // More running sessions than one load reads, each page taking 3 s.
+    const rows = Array.from({ length: LIST_PAGE_SIZE * 5 }, (_, i) =>
+      running(1000 + i),
+    );
+    const a = api(rows, fleet(3));
+    const real = a.sessions.getMockImplementation()!;
+    a.sessions.mockImplementation(async (q) => {
+      c.add(3_000);
+      return real(q);
     });
     const { d } = deps(a, c.now, bigStore());
-    const s = await syncActiveSessions(d, [100, 101, 102, 103, 104, 105]);
-    expect(a.list.mock.calls.length).toBeLessThanOrEqual(
-      Math.ceil(SYNC_BUDGET_MS / 1_500),
+    const s = await syncActiveSessions(d, [100, 101, 102]);
+    expect(a.sessions.mock.calls.length).toBeLessThanOrEqual(
+      Math.ceil(SYNC_BUDGET_MS / 3_000),
     );
     expect(s.complete).toBe(false);
   });
 
-  it("does not show the note for chargers checked a moment ago and left for the next load", async () => {
-    const c = clock();
-    const n = SYNC_MAX_STATIONS + 5;
-    const a = api([], fleet(n));
-    const { d } = deps(a, c.now, bigStore());
-    const ids = fleet(n).map((s) => s.id);
-    await syncActiveSessions(d, ids);
-    c.add(1_000);
-    await syncActiveSessions(d, ids);
-    c.add(SYNC_INTERVAL_MS);
-    a.list.mockClear();
-    const s = await syncActiveSessions(d, ids);
-    expect(new Set(a.list.mock.calls.map((c) => c[0].station_id)).size).toBe(
-      SYNC_MAX_STATIONS,
+  it("stops after the page limit of a huge list and does not call the throttle done", async () => {
+    const rows = Array.from({ length: LIST_PAGE_SIZE * 7 }, (_, i) =>
+      running(1000 + i),
     );
-    expect(s.complete).toBe(true);
+    const a = api(rows);
+    const { d, store } = deps(a, () => NOW, bigStore());
+    await syncActiveSessions(d, [STATION], { fresh: true });
+    expect(a.sessions).toHaveBeenCalledTimes(5);
+    expect(
+      (await store.listTrackerMarks()).get(STATION)?.scannedAt,
+    ).toBeFalsy();
   });
 });
 
@@ -722,7 +606,7 @@ describe("webhooks and gaps", () => {
     expect(await store.listActiveSessions()).toEqual([]);
   });
 
-  it("repairs a webhook gap: finds a missed start by scanning and a missed end by re-reading", async () => {
+  it("repairs a webhook gap: finds a missed start and a missed end from the list", async () => {
     const c = clock();
     const a = api([...history(1200), running(1201)]);
     const { d } = deps(a, c.now);
@@ -731,26 +615,24 @@ describe("webhooks and gaps", () => {
     a.rows[1200] = tx(1201, { ended_at: new Date(c.now()).toISOString() });
     a.rows.push(running(1202, { started_at: new Date(c.now()).toISOString() }));
     c.add(SYNC_INTERVAL_MS + 1);
-    // Within the refresh window the old row is trusted; the new one is found by scan.
-    let s = await syncActiveSessions(d, [STATION]);
-    expect(s.sessions.map((x) => x.transactionId)).toEqual([1202, 1201]);
-    c.add(REFRESH_AFTER_MS);
-    s = await syncActiveSessions(d, [STATION]);
+    const s = await syncActiveSessions(d, [STATION]);
     expect(s.sessions.map((x) => x.transactionId)).toEqual([1202]);
     expect(
       (await endedSessions(d, STATION)).map((x) => x.transactionId),
     ).toEqual([1201]);
   });
 
-  it("throttles scans per station and says so when Ivora fails", async () => {
+  it("throttles list reads per station and says so when Ivora fails", async () => {
     const a = api([...history(1200), running(1201)]);
     const { d } = deps(a);
     await syncActiveSessions(d, [STATION]);
-    const calls = a.list.mock.calls.length;
+    const calls = a.sessions.mock.calls.length;
     await syncActiveSessions(d, [STATION]);
-    expect(a.list.mock.calls.length).toBe(calls);
+    expect(a.sessions.mock.calls.length).toBe(calls);
     // A forced check (before a command) ignores the throttle and refuses a guess.
-    a.list.mockRejectedValueOnce(new IvoraError(503, "unavailable", "down"));
+    a.sessions.mockRejectedValueOnce(
+      new IvoraError(503, "unavailable", "down"),
+    );
     const f = await syncActiveSessions(d, [STATION], { fresh: true });
     expect(f.complete).toBe(false);
     expect(f.sessions.map((x) => x.transactionId)).toEqual([1201]);
@@ -758,7 +640,7 @@ describe("webhooks and gaps", () => {
 });
 
 describe("stale and odd rows", () => {
-  it("marks a session stalled after 12 hours without energy, and reads it less often", async () => {
+  it("marks a session stalled after 12 hours without energy, with no extra read (the list covers it)", async () => {
     const c = clock();
     const a = api([running(1201)]);
     const { d } = deps(a, c.now);
@@ -775,7 +657,7 @@ describe("stale and odd rows", () => {
     expect(a.read).not.toHaveBeenCalled();
     c.add(STALLED_REFRESH_AFTER_MS);
     await syncActiveSessions(d, [STATION]);
-    expect(a.read).toHaveBeenCalledTimes(1);
+    expect(a.read).not.toHaveBeenCalled();
     // Energy again: no longer stalled.
     a.rows[0] = running(1201, { energy_wh: 2000 });
     c.add(STALLED_REFRESH_AFTER_MS);
