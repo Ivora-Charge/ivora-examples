@@ -539,9 +539,18 @@ The server and the admin web deploy together as one Vercel project:
 
 1. The button copies this folder into a new repository of yours and asks for the live-mode settings: `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID`, `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `OCPI_TOKEN_ENCRYPTION_KEY` (see [Connect real services](#connect-real-services)). Vercel takes no empty field, so type `demo` in any you don't have yet: `demo` counts as unset, and the server stays in demo mode until every one is real. `PUBLIC_BASE_URL` is the deployment's own `https://` address, so it is often `demo` the first time.
 2. To go live, apply the migrations (`npm run db:migrate` from your machine, see [Database](#database)), replace each `demo` in the project's environment settings, and redeploy. Add your first admin (see [Admin sign-in](#admin-sign-in)).
-3. For the scheduled pulls, token push retries and the payment sweep, set `CRON_SECRET` and add a cron for `/api/cron/ocpi-sync` in a `vercel.json` (Vercel Cron sends the header itself). The template ships none, because Vercel's free plan runs crons at most once a day.
+3. For the scheduled pulls, token push retries and the payment sweep, set `CRON_SECRET` (at least 32 characters; Vercel Cron then sends it as `Authorization: Bearer <CRON_SECRET>` itself). `vercel.json` declares `/api/cron/ocpi-sync` once a day (`0 4 * * *`), because Vercel's free plan runs crons at most once a day and refuses a more frequent schedule. On a paid plan change it to every 15 minutes (`*/15 * * * *`). Without `CRON_SECRET` the route answers 503.
 4. For payments, add the Stripe variables and the webhook; see [Go live with payments](#go-live-with-payments). For receipts and push, add `RESEND_API_KEY`, `RECEIPT_FROM` and `EXPO_ACCESS_TOKEN`. For the app's web build, add its origin to `APP_ORIGINS`.
 5. Give your CPOs the versions URL from **CPO peers**, or connect to theirs.
+
+**Runs serverless.** The server holds no long-lived connection and keeps no state in memory that it needs later:
+
+- The chargers stay connected to your CPO peers (this server speaks OCPI with them over HTTPS; for CPOs on Ivora, Ivora holds the charger connections). The server itself only answers requests and calls the peers.
+- Its state (peers, tokens, sessions, CDRs, payments) is in your Supabase database.
+- Every Stripe write sends an `Idempotency-Key` derived from the record and action, so a retry never repeats it.
+- A scheduled sweep catches what an event missed: `/api/cron/ocpi-sync` pulls from the peers, settles CDRs, retries token pushes and releases uncertain holds. It is protected by `CRON_SECRET`.
+
+Ivora's developer docs page on building serverless apps will be linked here once it is published.
 
 For a public demo, set `DEMO_MODE=true` and nothing else. The driver app deploys separately: see the [app README](../app/README.md#deploy).
 

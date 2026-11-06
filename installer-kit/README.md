@@ -83,7 +83,11 @@ Register `https://<your domain>/api/webhooks/ivora` in your Ivora project for `s
 
 ## Deploy
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=installer-kit&env=OPERATOR_PASSWORD,QR_BASE_URL,IVORA_API_KEY,IVORA_TENANT_ID,IVORA_WEBHOOK_SECRET)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=installer-kit&project-name=installer-kit&repository-name=installer-kit&env=OPERATOR_PASSWORD,QR_BASE_URL,IVORA_API_KEY,IVORA_TENANT_ID,IVORA_WEBHOOK_SECRET&envDescription=Operator%20password%2C%20the%20https%20address%20printed%20in%20QR%20codes%2C%20your%20Ivora%20API%20key%20and%20tenant%20ID%2C%20and%20the%20webhook%20signing%20secret.&envLink=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples%2Ftree%2Fmain%2Finstaller-kit%23deploy)
+
+The button asks for `OPERATOR_PASSWORD`, `QR_BASE_URL` (your own domain, `https://`), `IVORA_API_KEY`, `IVORA_TENANT_ID` and `IVORA_WEBHOOK_SECRET`. Never paste a real key into the button's URL.
+
+**Runs serverless, with one limit.** Ivora holds the charger connections; the kit calls the Ivora API and receives webhooks. Webhooks are deduplicated by event ID and every write sends an `Idempotency-Key`. Unlike the other templates, **this kit has no database yet**: sites, chargers, sticker codes and event IDs are in memory (see [Limits](#limits-and-next-steps)), so dedupe holds only within one instance and the data is lost on a restart. It declares no cron, because nothing here needs a reconciliation: the wizard reads each station from the API. Move `src/lib/server/store.ts` to a database before printing real stickers. Ivora's developer docs page on building serverless apps will be linked here once it is published.
 
 Then point your own domain at the deployment and set `QR_BASE_URL` to it. Do not use the `*.vercel.app` address for stickers: it changes if you rename or move the project, and the app refuses it.
 

@@ -129,9 +129,13 @@ With no credentials it starts in **demo mode**, with a persistent "Demo" banner.
 
 ## Deploy
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=fleet-depot&env=IVORA_API_KEY,IVORA_TENANT_ID,IVORA_WEBHOOK_SECRET,OPERATOR_PASSWORD,DATABASE_URL)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=fleet-depot&project-name=fleet-depot&repository-name=fleet-depot&env=IVORA_API_KEY,IVORA_TENANT_ID,IVORA_WEBHOOK_SECRET,OPERATOR_PASSWORD,DATABASE_URL&envDescription=Ivora%20API%20key%20and%20tenant%20ID%2C%20webhook%20signing%20secret%2C%20operator%20password%20and%20a%20Postgres%20connection%20string.&envLink=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples%2Ftree%2Fmain%2Ffleet-depot%23deploy)
+
+The button asks for `IVORA_API_KEY`, `IVORA_TENANT_ID`, `IVORA_WEBHOOK_SECRET`, `OPERATOR_PASSWORD` and `DATABASE_URL`. Never paste a real key into the button's URL.
 
 SQLite needs a writable disk, so on Vercel set `DATABASE_URL` to a Postgres database. State changes are serialized within one process, so run a single instance per depot.
+
+**Runs serverless, with limits.** Ivora holds the charger connections; the template keeps its state in its own database (`DATABASE_URL`). Webhooks are deduplicated by event ID (stored in that database) and every write sends an `Idempotency-Key`. It does **not** yet declare a reconciliation cron: a missed event is not caught up (see [Limits](#limits-and-next-steps)), and the replan timer and single-process lock assume a long-running server. Prefer a long-running host for live mode. Ivora's developer docs page on building serverless apps will be linked here once it is published.
 
 ## What it uses from the Ivora API
 
