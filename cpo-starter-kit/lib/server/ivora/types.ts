@@ -735,16 +735,55 @@ export interface Bill {
 }
 
 /**
- * `POST /payment/stripe/…/payments`: a hosted authorization for a bill. With
- * return_surface driver, Stripe Checkout returns the driver to Ivora's driver page for
- * the bill's station and connector (URLs chosen by the API), which resumes the session
- * named by return_reference.
+ * `POST /payment/stripe/…/payments`: a hosted authorization for a bill. Where Stripe
+ * Checkout returns the driver is one of two (setting both answers 422):
+ * - `return_surface: "driver"`: Ivora's driver page for the bill's station and
+ *   connector (URLs chosen by the API), which resumes the session named by
+ *   return_reference. A bill read then starts the charger once the hold is authorized.
+ * - `return_url`: a page of your own, on one of the tenant's verified return domains
+ *   (an unverified hostname answers 409 return_url_not_verified). The redirect is not
+ *   proof of payment and a bill read never starts the charger: read the payment, and
+ *   start the bill yourself once it is `authorized`.
  */
-export interface PaymentInput {
-  bill_id: string;
-  return_surface: "driver";
-  /** ^[A-Za-z0-9_-]{1,128}$: our own session record, never a URL. */
-  return_reference: string;
+export type PaymentInput =
+  | {
+      bill_id: string;
+      return_surface: "driver";
+      /** ^[A-Za-z0-9_-]{1,128}$: our own session record, never a URL. */
+      return_reference: string;
+      return_url?: undefined;
+    }
+  | {
+      bill_id: string;
+      /** Only bill_id with it: Ivora answers 422 to return_surface or return_reference. */
+      return_url: string;
+      return_surface?: undefined;
+      return_reference?: undefined;
+    };
+
+/** One DNS record Ivora asks the tenant to publish for a return domain. */
+export interface ReturnDomainDnsRecord {
+  type: string;
+  name: string;
+  value: string;
+  ttl?: number | null;
+}
+
+/**
+ * A hostname the tenant may send drivers back to (`/return-domains`), as Ivora returns
+ * it. `ready` is true once the TXT record in `dns_records`
+ * (`_ivora-return.<hostname>`) was found. A `disabled` domain counts as not
+ * registered: registering it again issues a new challenge, and verifying it is a 409.
+ */
+export interface ReturnDomain {
+  id: string;
+  hostname: string;
+  status: "pending_dns" | "dns_verified" | "disabled";
+  dns_records: ReturnDomainDnsRecord[];
+  return_url_prefix: string | null;
+  ready: boolean;
+  checked_at: string | null;
+  verified_at: string | null;
 }
 
 export interface Payment {
@@ -941,6 +980,12 @@ export interface IvoraClient {
   startBill(billId: string, key: string): Promise<Operation>;
   /** One payment per bill: a retry with the same key answers with the same payment. */
   createPayment(input: PaymentInput, key: string): Promise<Payment>;
+  /** The tenant's return domains (`stations:read`). */
+  listReturnDomains(): Promise<ReturnDomain[]>;
+  /** Registers a hostname (`stations:write`); the same hostname answers with the same record. */
+  createReturnDomain(hostname: string, key: string): Promise<ReturnDomain>;
+  /** Checks the TXT record now (`stations:write`). Repeat until `ready` is true. */
+  verifyReturnDomain(id: string, key: string): Promise<ReturnDomain>;
   /** One tariff by its Ivora ID (its authorization_minor is the card hold). */
   getTariff(tariffId: number): Promise<Tariff>;
   /**

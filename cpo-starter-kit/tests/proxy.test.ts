@@ -57,6 +57,7 @@ describe("proxy, signed out", () => {
       "/setup",
       "/invite",
       "/c/ABC123",
+      "/s/30000000-0000-4000-8000-000000000001",
       "/api/webhooks/ivora",
     ])
       expect(await visit(path), path).toBeNull();

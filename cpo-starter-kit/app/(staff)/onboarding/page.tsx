@@ -1,6 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { atLeast } from "@/lib/roles";
+import { publicBase } from "@/lib/server/checkout";
+import { loadReturnDomain } from "@/lib/server/onboarding/return-domain";
 import { requireRole } from "@/lib/server/auth";
 import {
   getOnboarding,
@@ -13,6 +15,7 @@ import {
   DemoReset,
   NoAccess,
   PaymentsSection,
+  ReturnDomainSection,
 } from "./sections";
 import { Loading } from "@/app/loading-skeleton";
 
@@ -22,6 +25,7 @@ const STEPS = [
   { key: "company", label: "Company" },
   { key: "brand", label: "Brand" },
   { key: "payments", label: "Payments" },
+  { key: "domain", label: "Return domain (optional)" },
 ] as const;
 type Step = (typeof STEPS)[number]["key"];
 
@@ -45,10 +49,13 @@ async function Content({
   // form re-renders the same step (with its message) rather than jumping ahead.
   if (!step) redirect(`/onboarding?step=${first}`);
   const stripe = step === "payments" ? await loadStripe(d) : null;
+  const domain =
+    step === "domain" ? await loadReturnDomain(d, publicBase(), me.demo) : null;
   const done: Record<Step, boolean> = {
     company: o.companyDone,
     brand: o.brandDone,
     payments: stripe?.ok ? stripe.view.state === "ready" : false,
+    domain: domain?.ok ? domain.view.state === "ready" : false,
   };
   const index = STEPS.findIndex((s) => s.key === step);
   const next = STEPS[index + 1];
@@ -57,9 +64,9 @@ async function Content({
     <>
       <h1>Onboarding</h1>
       <p className="muted">
-        Three steps to put your name on the driver payment pages and take card
-        payments. You can change everything later in{" "}
-        <Link href="/settings">Settings</Link>.
+        Three steps, plus an optional return domain, to put your name on the
+        driver payment pages and take card payments. You can change everything
+        later in <Link href="/settings">Settings</Link>.
       </p>
       <nav aria-label="Setup steps">
         <ol className="steps">
@@ -98,6 +105,7 @@ async function Content({
           </Link>
         )}
       </p>
+      {step === "domain" && domain && <ReturnDomainSection result={domain} />}
       {me.demo && <DemoReset />}
     </>
   );

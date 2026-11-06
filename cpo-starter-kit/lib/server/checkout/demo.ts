@@ -223,6 +223,10 @@ export function createDemoCheckoutStore(
       );
       return r ? view(r) : null;
     },
+    async getById(id) {
+      const r = (await cookie.load()).records.find((x) => x.id === id);
+      return r ? view(r) : null;
+    },
     async getByRequest(operatorId, requestId) {
       const r = (await cookie.load()).records.find(
         (x) => mine(x, operatorId) && x.requestId === requestId.toLowerCase(),

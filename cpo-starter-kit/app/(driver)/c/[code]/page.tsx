@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import Link from "next/link";
 import {
   driverSessions,
   EXAMPLE_SESSION,
@@ -143,6 +144,11 @@ async function Content({ params }: { params: Promise<{ code: string }> }) {
                 {s.canStop && (
                   <StopForm code={page.code} requestId={s.requestId} />
                 )}
+                {s.sessionPath && s.live && (
+                  <p>
+                    <Link href={s.sessionPath}>Open your session page</Link>
+                  </p>
+                )}
               </li>
             ))}
           </ul>
@@ -276,6 +282,11 @@ async function Content({ params }: { params: Promise<{ code: string }> }) {
               Simulate
             </button>
           </form>
+          <p className="muted">
+            With your own verified domain, drivers return to a session page
+            after paying:{" "}
+            <Link href="/s/demo-charging">see the demo session page</Link>.
+          </p>
         </section>
       )}
     </>

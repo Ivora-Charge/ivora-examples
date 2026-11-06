@@ -1,5 +1,7 @@
 import Link from "next/link";
 import { atLeast } from "@/lib/roles";
+import { publicBase } from "@/lib/server/checkout";
+import { loadReturnDomain } from "@/lib/server/onboarding/return-domain";
 import { requireRole } from "@/lib/server/auth";
 import {
   getOnboarding,
@@ -12,6 +14,7 @@ import {
   DemoReset,
   NoAccess,
   PaymentsSection,
+  ReturnDomainSection,
 } from "../onboarding/sections";
 import { Loading } from "@/app/loading-skeleton";
 
@@ -21,13 +24,18 @@ async function Content() {
   const me = await requireRole("viewer");
   if (!atLeast(me.role, "manager")) return <NoAccess title="Settings" />;
   const d = getOnboarding();
-  const [o, stripe] = await Promise.all([loadOnboarding(d, me), loadStripe(d)]);
+  const [o, stripe, domain] = await Promise.all([
+    loadOnboarding(d, me),
+    loadStripe(d),
+    loadReturnDomain(d, publicBase(), me.demo),
+  ]);
   return (
     <>
       <h1>Settings</h1>
       <CompanySection o={o} />
       <BrandSection o={o} demo={me.demo} />
       <PaymentsSection stripe={stripe} demo={me.demo} />
+      <ReturnDomainSection result={domain} />
       <section className="card" aria-labelledby="roaming-link-heading">
         <h2 id="roaming-link-heading">
           Roaming <span className="badge">Placeholder</span>
