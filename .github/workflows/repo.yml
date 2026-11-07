@@ -1,31 +1,12 @@
 name: repo
 
+# Called from ci.yml, which decides when it runs. Can also be run by hand.
 on:
-  pull_request:
-    paths:
-      - "*.md"
-      - "docs/**"
-      - ".github/**"
-      - ".editorconfig"
-      - ".gitignore"
-  push:
-    branches: [main, preproduction]
-    paths:
-      - "*.md"
-      - "docs/**"
-      - ".github/**"
-      - ".editorconfig"
-      - ".gitignore"
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
-
-# One run per workflow and PR: a new push to a PR cancels its older run.
-# Pushes to branches (preproduction, main) are never cancelled, so every
-# merge commit is verified.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   root-files:
