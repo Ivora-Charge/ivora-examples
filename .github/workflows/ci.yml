@@ -11,11 +11,13 @@ on:
 permissions:
   contents: read
 
-# One run per workflow and PR: a new push to a PR cancels its older run.
-# Pushes to branches (preproduction, main) are never cancelled, so every
-# merge commit is verified.
+# One run per PR: a new push to a PR cancels its older run. Pushes to
+# branches (preproduction, main) get a group per commit SHA, so a queued
+# run is never replaced by a later merge and every merge commit is verified.
+# The called workflows have no concurrency blocks of their own, so they
+# can't cancel each other through a shared group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
