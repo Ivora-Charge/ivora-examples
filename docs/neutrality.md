@@ -9,6 +9,8 @@ Polished templates are welcome. Neutrality is about who owns and operates a temp
 5. Partner-built apps get equal listing next to Ivora's templates.
 6. Ivora earns only from the platform, never from a template, and never holds the driver or customer relationship.
 
+Ivora's own apps, such as Squid, are listed separately in the README, use only the public API, pay the same platform fee and get no data privilege.
+
 ## Review rule
 
 A pull request fails review if it adds any of the following:
