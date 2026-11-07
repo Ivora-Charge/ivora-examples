@@ -1,25 +1,12 @@
 name: fleet-depot
 
+# Called from ci.yml, which decides when it runs. Can also be run by hand.
 on:
-  pull_request:
-    paths:
-      - "fleet-depot/**"
-      - ".github/workflows/fleet-depot.yml"
-  push:
-    branches: [main, preproduction]
-    paths:
-      - "fleet-depot/**"
-      - ".github/workflows/fleet-depot.yml"
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
-
-# One run per workflow and PR: a new push to a PR cancels its older run.
-# Pushes to branches (preproduction, main) are never cancelled, so every
-# merge commit is verified.
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   check:

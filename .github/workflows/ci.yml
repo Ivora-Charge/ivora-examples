@@ -1,0 +1,157 @@
+name: ci
+
+# One always-running entry point. The `changes` job works out which areas a
+# change touches, each area's workflow runs only when needed, and `ci-gate`
+# gives branch protection a single check that always reports.
+on:
+  pull_request:
+  push:
+    branches: [main, preproduction]
+
+permissions:
+  contents: read
+
+# One run per workflow and PR: a new push to a PR cancels its older run.
+# Pushes to branches (preproduction, main) are never cancelled, so every
+# merge commit is verified.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      cpo: ${{ steps.diff.outputs.cpo }}
+      emsp: ${{ steps.diff.outputs.emsp }}
+      fleet: ${{ steps.diff.outputs.fleet }}
+      forecourt: ${{ steps.diff.outputs.forecourt }}
+      installer: ${{ steps.diff.outputs.installer }}
+      tools: ${{ steps.diff.outputs.tools }}
+      repo: ${{ steps.diff.outputs.repo }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Work out which areas changed
+        id: diff
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          base=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE"
+          else
+            base="$PUSH_BEFORE"
+          fi
+
+          # A new branch (all-zero SHA), a missing SHA, or a SHA this clone
+          # does not have (force push) means everything changed.
+          all=false
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ] \
+            || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            all=true
+          else
+            git diff --name-only --no-renames "$base" HEAD > changed.txt
+            echo "Changed files:"
+            cat changed.txt
+          fi
+
+          declare -A hit
+          for k in cpo emsp fleet forecourt installer tools repo; do hit[$k]=$all; done
+
+          if [ "$all" = false ]; then
+            while IFS= read -r f; do
+              case "$f" in
+                cpo-starter-kit/* | tools/check-migrations/* | .github/workflows/cpo-starter-kit.yml) hit[cpo]=true ;;
+              esac
+              case "$f" in
+                emsp-starter/* | tools/check-migrations/* | .github/workflows/emsp-starter.yml) hit[emsp]=true ;;
+              esac
+              case "$f" in
+                fleet-depot/* | .github/workflows/fleet-depot.yml) hit[fleet]=true ;;
+              esac
+              case "$f" in
+                forecourt-checkout/* | .github/workflows/forecourt-checkout.yml) hit[forecourt]=true ;;
+              esac
+              case "$f" in
+                installer-kit/* | .github/workflows/installer-kit.yml) hit[installer]=true ;;
+              esac
+              case "$f" in
+                tools/* | .github/workflows/tools.yml) hit[tools]=true ;;
+              esac
+              # Root files covered by the repo workflow.
+              case "$f" in
+                docs/* | .github/* | .editorconfig | .gitignore) hit[repo]=true ;;
+                */*) ;;
+                *.md) hit[repo]=true ;;
+              esac
+              # Editing this workflow re-checks every area.
+              if [ "$f" = ".github/workflows/ci.yml" ]; then
+                for k in cpo emsp fleet forecourt installer tools repo; do hit[$k]=true; done
+              fi
+            done < changed.txt
+          fi
+
+          for k in cpo emsp fleet forecourt installer tools repo; do
+            echo "$k=${hit[$k]}" | tee -a "$GITHUB_OUTPUT"
+          done
+
+  cpo:
+    needs: changes
+    if: needs.changes.outputs.cpo == 'true'
+    uses: ./.github/workflows/cpo-starter-kit.yml
+
+  emsp:
+    needs: changes
+    if: needs.changes.outputs.emsp == 'true'
+    uses: ./.github/workflows/emsp-starter.yml
+
+  fleet:
+    needs: changes
+    if: needs.changes.outputs.fleet == 'true'
+    uses: ./.github/workflows/fleet-depot.yml
+
+  forecourt:
+    needs: changes
+    if: needs.changes.outputs.forecourt == 'true'
+    uses: ./.github/workflows/forecourt-checkout.yml
+
+  installer:
+    needs: changes
+    if: needs.changes.outputs.installer == 'true'
+    uses: ./.github/workflows/installer-kit.yml
+
+  tools:
+    needs: changes
+    if: needs.changes.outputs.tools == 'true'
+    uses: ./.github/workflows/tools.yml
+
+  repo:
+    needs: changes
+    if: needs.changes.outputs.repo == 'true'
+    uses: ./.github/workflows/repo.yml
+
+  # The one check branch protection requires. Skipped areas are fine; a
+  # failed or cancelled area, or a failed `changes` job, is not.
+  ci-gate:
+    if: always()
+    needs: [changes, cpo, emsp, fleet, forecourt, installer, tools, repo]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check results
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          bad=$(echo "$NEEDS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+          if [ -n "$bad" ]; then
+            echo "Failed or cancelled: $bad"
+            exit 1
+          fi
+          echo "All checks passed or were skipped."

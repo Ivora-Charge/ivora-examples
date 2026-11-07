@@ -9,7 +9,7 @@ By contributing, you agree that your contribution is licensed under [Apache-2.0]
 1. Open an issue with the **Template proposal** form. Describe who the template is for, the problem it solves, which Ivora API features it uses, and what its demo mode shows.
 2. Wait for a maintainer to agree on scope and a folder name before writing code. A template should serve one kind of charging business well, not overlap heavily with an existing one.
 3. Build the template in its own top-level folder, following the [conventions](docs/conventions.md).
-4. Add its CI workflow at `.github/workflows/<folder>.yml`, with a `paths` filter on the folder and the workflow file.
+4. Add its CI as a reusable workflow at `.github/workflows/<folder>.yml` (`on: workflow_call` plus `workflow_dispatch`, no `pull_request` or `push` trigger), then call it from `.github/workflows/ci.yml`: add the folder and the workflow file to the `changes` job, a job with an `if:` on that output, and the job to the `needs:` of `ci-gate`.
 5. Suggest the row for the template index in your pull request description. Maintainers update the root `README.md`.
 
 ## Change a template
