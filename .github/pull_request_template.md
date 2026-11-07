@@ -15,6 +15,7 @@
 - [ ] Ivora API key and tenant ID are read on the server only.
 - [ ] Webhook signatures are verified; writes send idempotency keys.
 - [ ] README and `.env.example` are updated for any new variables, setup steps or Ivora API usage.
+- [ ] Uses only the public Ivora API; adds no Ivora-hosted operation and no template-only fee (see docs/neutrality.md).
 - [ ] No secrets, `.env` files, real customer or site data, logs or build output are committed.
 
 ## Index row (new templates only)

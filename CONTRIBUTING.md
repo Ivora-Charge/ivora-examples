@@ -12,6 +12,8 @@ By contributing, you agree that your contribution is licensed under [Apache-2.0]
 4. Add its CI workflow at `.github/workflows/<folder>.yml`, with a `paths` filter on the folder and the workflow file.
 5. Suggest the row for the template index in your pull request description. Maintainers update the root `README.md`.
 
+Proposals must follow [docs/neutrality.md](docs/neutrality.md).
+
 ## Change a template
 
 - Keep a pull request to one template. Do not edit another template's folder or workflow in the same change.
@@ -24,6 +26,7 @@ By contributing, you agree that your contribution is licensed under [Apache-2.0]
 - **Demo mode.** The template runs with `npm ci && npm run dev` and no credentials or network access. Demo data is clearly labelled, and demo mode never sends payment requests, charger commands or emails.
 - **Server-side credentials.** The Ivora API key and tenant ID are only read on the server.
 - **Webhooks and writes.** Webhook signatures are verified, and writes to the Ivora API send idempotency keys.
+- **Neutrality.** Public Ivora API only, deployed and branded by whoever forks it, no template-only fees, no Ivora-hosted operation. See [docs/neutrality.md](docs/neutrality.md).
 - **README.** Who it is for, a demo screenshot, run locally, connect real services (environment variable table), deploy (a Deploy to Vercel button), what it uses from the Ivora API, limits and next steps.
 
 ## Required checks

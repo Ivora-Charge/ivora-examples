@@ -46,3 +46,10 @@ body:
     attributes:
       label: Other services
       description: Payment provider, database, email, maps. Anything a deployer must sign up for.
+  - type: checkboxes
+    id: neutrality
+    attributes:
+      label: Neutrality
+      options:
+        - label: This proposal follows docs/neutrality.md.
+          required: true

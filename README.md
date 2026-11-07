@@ -45,6 +45,10 @@ npm run dev
 
 All templates follow the shared [conventions](docs/conventions.md): server-side API keys, one Ivora project per deployment, verified webhooks, idempotent writes, consistent units, and QR codes on your own domain.
 
+## How templates relate to Ivora
+
+Templates are neutral starting points. Ivora never hosts or operates one as its own service: you deploy it in your own account, under your own brand, using only the public Ivora API. They are Apache-2.0, so you may fork, rebrand and sell them. Read the full [neutrality policy](docs/neutrality.md).
+
 ## Ivora API
 
 The [Ivora developer portal](https://ivoracharge.com/developers/guides) documents the API, including [errors and statuses](https://ivoracharge.com/developers/guides/reference/errors). The schema is published as [OpenAPI](https://api.ivoracharge.com/openapi.json).
