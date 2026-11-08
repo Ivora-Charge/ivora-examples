@@ -1,6 +1,6 @@
 # Template conventions
 
-Every template in this repository follows these conventions, the same ones used by the [Squid](https://github.com/Ivora-Charge/squid) reference app. The API reference is the [Ivora developer portal](https://ivoracharge.com/developers/guides) and the published [OpenAPI schema](https://api.ivoracharge.com/openapi.json). They keep templates safe to fork, easy to review, and consistent for people who run more than one.
+Every template in this repository follows these conventions, the same ones used by [Squid](https://github.com/Ivora-Charge/squid), Ivora's own app for rental hosts (not a template). The API reference is the [Ivora developer portal](https://ivoracharge.com/developers/guides) and the published [OpenAPI schema](https://api.ivoracharge.com/openapi.json). They keep templates safe to fork, easy to review, and consistent for people who run more than one.
 
 If a template needs to break a convention, say why in its README and in the pull request.
 
