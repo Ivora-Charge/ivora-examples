@@ -2,6 +2,7 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /installer-kit
+    target-branch: preproduction
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -15,6 +16,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /forecourt-checkout
+    target-branch: preproduction
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -28,6 +30,7 @@ updates:
 
   - package-ecosystem: npm
     directory: /fleet-depot
+    target-branch: preproduction
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
@@ -41,6 +44,7 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    target-branch: preproduction
     schedule:
       interval: weekly
     groups:
