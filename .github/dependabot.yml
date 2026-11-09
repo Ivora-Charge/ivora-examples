@@ -42,6 +42,70 @@ updates:
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
 
+  - package-ecosystem: npm
+    directory: /cpo-starter-kit
+    target-branch: preproduction
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Keep @types/node on the Node.js major the templates run on (22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /emsp-starter/server
+    target-branch: preproduction
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Keep @types/node on the Node.js major the templates run on (22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /emsp-starter/app
+    target-branch: preproduction
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Keep @types/node on the Node.js major the templates run on (22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # Expo pins react-native and expo-* packages to the SDK version, so
+      # major bumps must move together with an Expo SDK upgrade done by hand.
+      - dependency-name: "expo"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "expo-*"
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: npm
+    directory: /tools/check-migrations
+    target-branch: preproduction
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: ["minor", "patch"]
+    ignore:
+      # Keep @types/node on the Node.js major the templates run on (22).
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: github-actions
     directory: /
     target-branch: preproduction
