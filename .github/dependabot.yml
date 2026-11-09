@@ -80,17 +80,26 @@ updates:
       minor-and-patch:
         update-types: ["minor", "patch"]
     ignore:
-      # Keep @types/node on the Node.js major the templates run on (22).
+      # Keep @types/node on the major the app's own package.json uses.
       - dependency-name: "@types/node"
         update-types: ["version-update:semver-major"]
-      # Expo pins react-native and expo-* packages to the SDK version, so
-      # major bumps must move together with an Expo SDK upgrade done by hand.
+      # Expo pins expo, expo-*, @expo/*, react, react-dom and react-native
+      # to the SDK version. Those bumps come with an Expo SDK upgrade done by
+      # hand (`npx expo install --fix`), not by Dependabot. react-native is
+      # 0.x, so its SDK-breaking bumps are semver-minor and are ignored too.
       - dependency-name: "expo"
-        update-types: ["version-update:semver-major"]
-      - dependency-name: "react-native"
         update-types: ["version-update:semver-major"]
       - dependency-name: "expo-*"
         update-types: ["version-update:semver-major"]
+      - dependency-name: "@expo/*"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-native"
+        update-types:
+          ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: npm
     directory: /tools/check-migrations
