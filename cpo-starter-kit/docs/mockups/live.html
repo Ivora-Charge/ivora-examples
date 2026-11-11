@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Live · Ampleaf mockups</title>
+    <link rel="stylesheet" href="../../brand/tokens.css" />
+    <link rel="stylesheet" href="mock.css" />
+  </head>
+  <body class="review-body">
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="review" id="main">
+      <header>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <ol>
+            <li><a href="index.html">Mockups</a></li>
+            <li><span aria-current="page">1. Live</span></li>
+          </ol>
+        </nav>
+        <h1>1. Live</h1>
+        <p>
+          The Live screen becomes a monitoring page: a faults banner with a next
+          step, a status summary strip that doubles as filters, a dense table
+          beside the map, and remote actions on the selected charger.
+        </p>
+      </header>
+      <div class="controls" role="group" aria-label="Preview options">
+        <span class="seg" role="group" aria-label="Theme"
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="light"
+            aria-pressed="true"
+          >
+            Light</button
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="dark"
+            aria-pressed="false"
+          >
+            Dark
+          </button></span
+        >
+        <span class="seg" role="group" aria-label="Width"
+          ><button
+            type="button"
+            data-set="size"
+            data-value="desktop"
+            aria-pressed="true"
+          >
+            Desktop 1440</button
+          ><button
+            type="button"
+            data-set="size"
+            data-value="phone"
+            aria-pressed="false"
+          >
+            Phone 390
+          </button></span
+        >
+        <a class="btn" href="proposed/live.html"
+          >Open proposed screen full size</a
+        >
+      </div>
+      <div class="pair">
+        <figure>
+          <figcaption>Current (shipped template)</figcaption>
+          <img
+            data-current="../screens/live-{size}-{theme}.png"
+            src="../screens/live-desktop-light.png"
+            alt="Current Live screen in the shipped template"
+          />
+        </figure>
+        <figure>
+          <figcaption>Proposed</figcaption>
+          <div class="frame">
+            <iframe
+              data-proposed="proposed/live.html"
+              title="Proposed Live mockup"
+            ></iframe>
+          </div>
+          <noscript
+            ><p>
+              <a href="proposed/live.html">Open the proposed screen</a>
+            </p></noscript
+          >
+        </figure>
+      </div>
+      <div class="notes">
+        <section class="card">
+          <h2>What changes and why</h2>
+          <ul>
+            <li>
+              Faults move to the top as one banner with a link to the charger,
+              not a section below the list (an operator with many chargers looks
+              for problems first).
+            </li>
+            <li>
+              Summary strip counts double as status filters; the table gets
+              search, site filter, sort and a sticky header (the template shows
+              cards only).
+            </li>
+            <li>
+              Map sits beside the list on desktop and below it on a phone;
+              marker shapes repeat the status.
+            </li>
+            <li>
+              Remote actions (reset, unlock, start) live in a panel for the
+              selected charger, each with a one-line consequence and a
+              confirmation.
+            </li>
+            <li>
+              Live is read-only monitoring, so it has no primary action in the
+              header.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Follows</h2>
+          <ul>
+            <li>
+              Squid: host dashboard cards (status, one clear next action per
+              property) and its empty and error states.
+            </li>
+            <li>
+              Adapted for many chargers: a table with filters where Squid has
+              cards. Dense-table look from the hosted Ivora dashboard (by look
+              only).
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Accessibility</h2>
+          <ul>
+            <li>
+              Text pairs are palette v2 pairs already checked at 4.5:1 or more
+              in light and dark (tests/contrast.test.ts); no new pair is
+              introduced.
+            </li>
+            <li>
+              Keyboard order follows the visual order: skip link, navigation,
+              page header, primary action, then content. Tabs use arrow keys;
+              table sort heads are buttons with <code>aria-sort</code>.
+            </li>
+            <li>
+              Focus: the existing 3 px token ring on every control; tap targets
+              44 px (36 px on dense table actions, with 44 px on a phone).
+            </li>
+            <li>
+              Status is a shape, a word and a colour; charts have a text
+              equivalent.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Brand tokens</h2>
+          <ul>
+            <li>
+              All colours from tokens; chips use
+              <code>ok/warn/danger</code> tints; lime marks charging only.
+            </li>
+            <li>Map tiles stay configurable through MAP_TILE_URL as today.</li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Build size</h2>
+          <p>
+            <span class="size">M</span> Table, chip set and summary strip are
+            shared; the panel and banner are new. No API change.
+          </p>
+        </section>
+      </div>
+      <p class="muted sm" style="margin-top: var(--space-5)">
+        Demo data only. Current screens are the shipped template's own
+        screenshots (docs/screens).
+      </p>
+    </div>
+    <script src="compare.js"></script>
+  </body>
+</html>

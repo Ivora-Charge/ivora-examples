@@ -7,3 +7,6 @@ next-env.d.ts
 *.tsbuildinfo
 test-results
 playwright-report
+
+# Preview-only staging of docs/mockups (scripts/stage-mockups.mjs)
+/public/mockups/
