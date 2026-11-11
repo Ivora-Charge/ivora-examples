@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Chargers: list · Ampleaf mockups</title>
+    <link rel="stylesheet" href="../../brand/tokens.css" />
+    <link rel="stylesheet" href="mock.css" />
+  </head>
+  <body class="review-body">
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="review" id="main">
+      <header>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <ol>
+            <li><a href="index.html">Mockups</a></li>
+            <li><span aria-current="page">2. Chargers: list</span></li>
+          </ol>
+        </nav>
+        <h1>2. Chargers: list</h1>
+        <p>
+          The list becomes a table that scales to dozens of chargers, with one
+          primary action. The detail page leads with a summary strip, tabs
+          below, QR stickers and the test in their own tabs, and removal in a
+          bordered zone.
+        </p>
+      </header>
+      <div class="controls" role="group" aria-label="Preview options">
+        <span class="seg" role="group" aria-label="Theme"
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="light"
+            aria-pressed="true"
+          >
+            Light</button
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="dark"
+            aria-pressed="false"
+          >
+            Dark
+          </button></span
+        >
+        <span class="seg" role="group" aria-label="Width"
+          ><button
+            type="button"
+            data-set="size"
+            data-value="desktop"
+            aria-pressed="true"
+          >
+            Desktop 1440</button
+          ><button
+            type="button"
+            data-set="size"
+            data-value="phone"
+            aria-pressed="false"
+          >
+            Phone 390
+          </button></span
+        >
+        <a class="btn" href="proposed/chargers.html"
+          >Open proposed screens full size</a
+        >
+        <a class="btn" href="proposed/charger.html">charger</a>
+      </div>
+      <div class="pair">
+        <figure>
+          <figcaption>Current (shipped template)</figcaption>
+          <img
+            data-current="../screens/chargers-{size}-{theme}.png"
+            src="../screens/chargers-desktop-light.png"
+            alt="Current Chargers: list screen in the shipped template"
+          />
+        </figure>
+        <figure>
+          <figcaption>Proposed</figcaption>
+          <div class="frame">
+            <iframe
+              data-proposed="proposed/chargers.html"
+              title="Proposed Chargers: list mockup"
+            ></iframe>
+          </div>
+          <noscript
+            ><p>
+              <a href="proposed/chargers.html">Open the proposed screen</a>
+            </p></noscript
+          >
+        </figure>
+      </div>
+      <div class="notes">
+        <section class="card">
+          <h2>What changes and why</h2>
+          <ul>
+            <li>
+              List: search, site and status filters, sortable columns,
+              right-aligned numbers, sticky header, pagination; rows stack on a
+              phone.
+            </li>
+            <li>
+              Empty state with a single next step, “Add your first charger”.
+            </li>
+            <li>
+              Detail: summary strip (status, connectors, today, tariff, last
+              seen) first, then Overview, Configuration, QR stickers, Test.
+            </li>
+            <li>
+              Forms: label above, help beneath, inline error with text, “Saved”
+              beside the button with the last-saved line.
+            </li>
+            <li>
+              Remove charger sits apart in a danger zone and asks for
+              confirmation.
+            </li>
+            <li>
+              Second mock file:
+              <a href="proposed/charger.html">charger detail</a>.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Follows</h2>
+          <ul>
+            <li>
+              Squid: the charger setup flow (add-charger steps, QR sticker
+              preview) and host dashboard cards.
+            </li>
+            <li>
+              Adapted for many chargers: filters, sorting and paging instead of
+              a card per charger.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Accessibility</h2>
+          <ul>
+            <li>
+              Text pairs are palette v2 pairs already checked at 4.5:1 or more
+              in light and dark (tests/contrast.test.ts); no new pair is
+              introduced.
+            </li>
+            <li>
+              Keyboard order follows the visual order: skip link, navigation,
+              page header, primary action, then content. Tabs use arrow keys;
+              table sort heads are buttons with <code>aria-sort</code>.
+            </li>
+            <li>
+              Focus: the existing 3 px token ring on every control; tap targets
+              44 px (36 px on dense table actions, with 44 px on a phone).
+            </li>
+            <li>
+              Status is a shape, a word and a colour; charts have a text
+              equivalent.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Brand tokens</h2>
+          <ul>
+            <li>Sticker page uses the operator's brand tokens.</li>
+            <li>
+              Row density is one spacing token; it can be set once per brand.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Build size</h2>
+          <p>
+            <span class="size">M</span> List and detail restructure existing
+            pages; no route or API change.
+          </p>
+        </section>
+      </div>
+      <p class="muted sm" style="margin-top: var(--space-5)">
+        Demo data only. Current screens are the shipped template's own
+        screenshots (docs/screens).
+      </p>
+    </div>
+    <script src="compare.js"></script>
+  </body>
+</html>

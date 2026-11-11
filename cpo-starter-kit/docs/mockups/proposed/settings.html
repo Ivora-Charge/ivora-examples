@@ -1,0 +1,397 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Settings · Ampleaf mockup</title>
+    <link rel="stylesheet" href="../../../brand/tokens.css" />
+    <link rel="stylesheet" href="../mock.css" />
+  </head>
+  <body>
+    <svg width="0" height="0" style="position: absolute" aria-hidden="true">
+      <symbol id="mark" viewBox="0 0 48 48">
+        <path
+          d="M18 2H46V30A16 16 0 0 1 30 46H2V18A16 16 0 0 1 18 2Z"
+          fill="var(--color-primary)"
+        />
+        <g
+          fill="none"
+          stroke="var(--color-accent)"
+          stroke-width="4"
+          stroke-linecap="round"
+        >
+          <path d="M11 37 33 15" />
+          <path d="M18 30V22M25 23V14" />
+        </g>
+        <circle cx="35.5" cy="12.5" r="3.5" fill="var(--color-accent)" />
+      </symbol>
+      <symbol id="i-dash" viewBox="0 0 24 24">
+        <rect width="7" height="9" x="3" y="3" rx="1" />
+        <rect width="7" height="5" x="14" y="3" rx="1" />
+        <rect width="7" height="9" x="14" y="12" rx="1" />
+        <rect width="7" height="5" x="3" y="16" rx="1" />
+      </symbol>
+      <symbol id="i-live" viewBox="0 0 24 24">
+        <path
+          d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"
+        />
+      </symbol>
+      <symbol id="i-plug" viewBox="0 0 24 24">
+        <path
+          d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"
+        />
+        <path d="m2 22 3-3M7.5 13.5 10 11M10.5 16.5 13 14M18 3l-4 4h6l-4 4" />
+      </symbol>
+      <symbol id="i-tag" viewBox="0 0 24 24">
+        <path
+          d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"
+        />
+        <circle cx="7.5" cy="7.5" r=".5" fill="currentColor" />
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24">
+        <path d="M3 3v16a2 2 0 0 0 2 2h16M18 17V9M13 17V5M8 17v-3" />
+      </symbol>
+      <symbol id="i-users" viewBox="0 0 24 24">
+        <path
+          d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M16 3.128a4 4 0 0 1 0 7.744M22 21v-2a4 4 0 0 0-3-3.87"
+        />
+        <circle cx="9" cy="7" r="4" />
+      </symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24">
+        <path
+          d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"
+        />
+        <circle cx="12" cy="12" r="3" />
+      </symbol>
+      <symbol id="i-menu" viewBox="0 0 24 24">
+        <path d="M4 5h16M4 12h16M4 19h16" />
+      </symbol>
+      <symbol id="i-more" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="1" />
+        <circle cx="19" cy="12" r="1" />
+        <circle cx="5" cy="12" r="1" />
+      </symbol>
+      <symbol id="i-inbox" viewBox="0 0 24 24">
+        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+        <path
+          d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"
+        />
+      </symbol>
+      <symbol id="i-alert" viewBox="0 0 24 24">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 8v4M12 16h.01" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="M20 6 9 17l-5-5" />
+      </symbol>
+    </svg>
+    <a class="skip" href="#main">Skip to content</a>
+    <p class="demo" role="status">
+      <b>Mockup</b>Demo data only. Nothing here is real or sent anywhere.
+    </p>
+    <div class="menu-btn">
+      <span class="brand"
+        ><svg viewBox="0 0 48 48" aria-hidden="true"><use href="#mark" /></svg
+        >ampleaf</span
+      ><button class="btn sm" type="button">
+        <svg class="i" aria-hidden="true"><use href="#i-menu" /></svg>Menu
+      </button>
+    </div>
+    <div class="shell">
+      <aside class="nav" aria-label="Sections">
+        <div class="brand">
+          <svg viewBox="0 0 48 48" aria-hidden="true"><use href="#mark" /></svg
+          >ampleaf
+        </div>
+        <span class="ws">Your charging network<span>Workspace</span></span>
+        <nav aria-label="Main">
+          <h2>Run</h2>
+          <ul>
+            <li>
+              <a href="live.html"
+                ><svg class="i" aria-hidden="true"><use href="#i-live" /></svg
+                >Live</a
+              >
+            </li>
+            <li>
+              <a href="chargers.html"
+                ><svg class="i" aria-hidden="true"><use href="#i-plug" /></svg
+                >Chargers</a
+              >
+            </li>
+          </ul>
+          <h2>Money</h2>
+          <ul>
+            <li>
+              <a href="pricing.html"
+                ><svg class="i" aria-hidden="true"><use href="#i-tag" /></svg
+                >Pricing</a
+              >
+            </li>
+            <li>
+              <a href="reports.html"
+                ><svg class="i" aria-hidden="true"><use href="#i-chart" /></svg
+                >Reports</a
+              >
+            </li>
+          </ul>
+          <h2>Workspace</h2>
+          <ul>
+            <li>
+              <a href="settings.html" aria-current="page"
+                ><svg class="i" aria-hidden="true"><use href="#i-gear" /></svg
+                >Settings</a
+              >
+            </li>
+          </ul>
+        </nav>
+      </aside>
+      <main id="main">
+        <div class="page">
+          <nav class="crumbs" aria-label="Breadcrumb">
+            <ol>
+              <li><a href="#">Workspace</a></li>
+              <li><a href="settings.html">Settings</a></li>
+              <li><span aria-current="page">Brand</span></li>
+            </ol>
+          </nav>
+          <div class="phead">
+            <div>
+              <h1>Settings</h1>
+              <p>
+                Company, brand, payments and team. Each section saves on its
+                own.
+              </p>
+            </div>
+          </div>
+          <div
+            class="note ok"
+            role="status"
+            style="border-left-color: var(--color-primary)"
+          >
+            <span
+              ><b>2 of 4 setup steps done.</b> Connect payments next, then add a
+              charger.</span
+            ><a class="btn sm" href="#pay">Go to Payments</a>
+          </div>
+          <ol class="steps" aria-label="Setup progress">
+            <li>
+              <span class="done"
+                ><svg class="i" aria-hidden="true">
+                  <use href="#i-check" /></svg></span
+              >Company
+            </li>
+            <li>
+              <span class="done"
+                ><svg class="i" aria-hidden="true">
+                  <use href="#i-check" /></svg></span
+              >Brand
+            </li>
+            <li aria-current="step">Payments</li>
+            <li>First charger</li>
+          </ol>
+          <div class="sub">
+            <nav aria-label="Settings sections">
+              <a href="#co">Company</a
+              ><a href="#brand" aria-current="location">Brand</a
+              ><a href="#pay">Payments</a><a href="#team">Team</a
+              ><a href="#roam">Roaming</a>
+            </nav>
+            <div class="stack">
+              <form class="card" id="co" data-mock>
+                <h2>Company</h2>
+                <div class="field">
+                  <label for="cn">Business name</label
+                  ><input
+                    id="cn"
+                    value="Your charging network"
+                    aria-describedby="cn-h"
+                  /><span class="help" id="cn-h"
+                    >Shown in the header, page titles and emails.</span
+                  >
+                </div>
+                <div class="field">
+                  <label for="tz">Time zone</label
+                  ><select id="tz">
+                    <option>Europe/Berlin</option></select
+                  ><span class="help">Reports and receipts use this.</span>
+                </div>
+                <div class="formfoot">
+                  <button class="btn primary" type="submit">Save company</button
+                  ><span class="saved" role="status">✓ Saved 10:02</span>
+                </div>
+              </form>
+              <form class="card" id="brand" data-mock>
+                <h2>Brand</h2>
+                <div class="grid g2">
+                  <div>
+                    <div class="field">
+                      <label for="c1">Primary colour</label>
+                      <div class="inrow">
+                        <span
+                          class="sw"
+                          style="background: var(--color-primary)"
+                        ></span
+                        ><input id="c1" value="#17613A" />
+                      </div>
+                      <span class="ok"
+                        >✓ AA: 7.5:1 on white, 9.1:1 on dark</span
+                      >
+                    </div>
+                    <div class="field">
+                      <label for="c2">Accent (fill only)</label>
+                      <div class="inrow">
+                        <span
+                          class="sw"
+                          style="background: var(--color-accent)"
+                        ></span
+                        ><input
+                          id="c2"
+                          value="#C5F24A"
+                          aria-invalid="true"
+                          aria-describedby="c2-e"
+                        />
+                      </div>
+                      <span class="err" id="c2-e"
+                        >Text on this colour is 2.1:1. Pick a darker text colour
+                        or a deeper accent.</span
+                      >
+                    </div>
+                  </div>
+                  <div
+                    class="card"
+                    aria-label="Preview of the driver page header"
+                    style="background: var(--color-bg)"
+                  >
+                    <span class="demo-tag">Preview</span>
+                    <div
+                      class="dhead"
+                      style="
+                        font: 600 1.25rem var(--font-display);
+                        display: flex;
+                        gap: 8px;
+                        align-items: center;
+                        margin: var(--space-2) 0;
+                      "
+                    >
+                      <svg
+                        viewBox="0 0 48 48"
+                        width="28"
+                        height="28"
+                        aria-hidden="true"
+                      >
+                        <use href="#mark" /></svg
+                      >Your charging network
+                    </div>
+                    <button class="btn primary wide" type="button">
+                      Pay and charge
+                    </button>
+                  </div>
+                </div>
+                <div class="formfoot">
+                  <button class="btn primary" type="submit">Save brand</button
+                  ><span class="saved" role="status" hidden></span>
+                </div>
+              </form>
+              <section class="card" id="pay">
+                <div class="chead">
+                  <h2>Payments</h2>
+                  <span class="chip warn">Action needed</span>
+                </div>
+                <p class="muted sm" style="margin-bottom: var(--space-3)">
+                  Drivers pay by card into your own Stripe account.
+                </p>
+                <ul
+                  style="
+                    list-style: none;
+                    padding: 0;
+                    margin: 0 0 var(--space-4);
+                    display: grid;
+                    gap: var(--space-2);
+                  "
+                >
+                  <li>
+                    <span class="chip ok">Done</span> Stripe account created
+                  </li>
+                  <li>
+                    <span class="chip warn">To do</span> Bank details for
+                    payouts
+                  </li>
+                  <li>
+                    <span class="chip idle">Waiting</span> First test payment
+                  </li>
+                </ul>
+                <a class="btn primary" href="#">Continue in Stripe</a>
+              </section>
+              <section class="card" id="team">
+                <div class="chead">
+                  <h2>Team</h2>
+                  <button class="btn sm" type="button">Invite someone</button>
+                </div>
+                <table class="stack-sm">
+                  <thead>
+                    <tr>
+                      <th scope="col">Person</th>
+                      <th scope="col">Role</th>
+                      <th scope="col">State</th>
+                      <th scope="col"><span class="sr">Actions</span></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>demo-owner@example.com</td>
+                      <td class="sec">Owner</td>
+                      <td class="status">
+                        <span class="chip ok">Active</span>
+                      </td>
+                      <td class="hide-sm"></td>
+                    </tr>
+                    <tr>
+                      <td>demo-manager@example.com</td>
+                      <td class="sec">Manager</td>
+                      <td class="status">
+                        <span class="chip ok">Active</span>
+                      </td>
+                      <td class="hide-sm">
+                        <button class="btn sm" type="button">
+                          Change role
+                        </button>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td>demo-staff@example.com</td>
+                      <td class="sec">Staff</td>
+                      <td class="status">
+                        <span class="chip idle">Invited</span>
+                      </td>
+                      <td class="hide-sm">
+                        <button class="btn sm" type="button">Resend</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </section>
+            </div>
+          </div>
+        </div>
+      </main>
+    </div>
+    <nav class="tabbar" aria-label="Main">
+      <a href="live.html"
+        ><svg class="i" aria-hidden="true"><use href="#i-live" /></svg>Live</a
+      ><a href="chargers.html"
+        ><svg class="i" aria-hidden="true"><use href="#i-plug" /></svg
+        >Chargers</a
+      ><a href="pricing.html"
+        ><svg class="i" aria-hidden="true"><use href="#i-tag" /></svg>Pricing</a
+      ><a href="reports.html"
+        ><svg class="i" aria-hidden="true"><use href="#i-chart" /></svg
+        >Reports</a
+      ><a href="settings.html" aria-current="page"
+        ><svg class="i" aria-hidden="true"><use href="#i-gear" /></svg
+        >Settings</a
+      >
+    </nav>
+    <script src="../mock.js"></script>
+  </body>
+</html>
