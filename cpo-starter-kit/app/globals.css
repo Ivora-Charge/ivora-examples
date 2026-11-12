@@ -401,7 +401,7 @@ h2 {
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: var(--space-2);
   margin-left: auto;
   padding: var(--space-0) var(--space-3) var(--space-0) var(--space-2);
   font-size: var(--font-size-sm);
@@ -1526,6 +1526,7 @@ main > p > a:only-child,
   white-space: nowrap;
 }
 main.public-main {
+  max-width: var(--content-max);
   margin: 0 auto;
 }
 .state-code {
@@ -2051,7 +2052,7 @@ select[aria-invalid="true"] {
 }
 .grid-table th,
 .grid-table td {
-  padding: 10px var(--space-4);
+  padding: var(--space-3) var(--space-4);
   text-align: left;
   vertical-align: middle;
   border-bottom: var(--border-width) solid var(--color-border);

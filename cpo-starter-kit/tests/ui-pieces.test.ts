@@ -43,6 +43,17 @@ describe("breadcrumbs", () => {
       { label: "Stickers" },
     ]);
   });
+  it("uses a page's own name for its level instead of the raw key", () => {
+    expect(
+      crumbsFor("/chargers/st%201/stickers", SECTIONS, {
+        "/chargers/st 1": "Harbour 1",
+      }),
+    ).toEqual([
+      { label: "Chargers", href: "/chargers" },
+      { label: "Harbour 1", href: "/chargers/st%201" },
+      { label: "Stickers" },
+    ]);
+  });
   it("skips path levels that have no page", () => {
     expect(crumbsFor("/live/stations/9102", SECTIONS)).toEqual([
       { label: "Live", href: "/live" },

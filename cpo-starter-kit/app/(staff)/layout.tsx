@@ -101,14 +101,17 @@ export default async function StaffLayout({
       </header>
       <main id="main" tabIndex={-1}>
         <div className="page">
-          {staff && (
+          {staff ? (
             <ShellBreadcrumbs
               sections={visibleModules({ fleet: config.fleetModule }).map(
                 ({ href, label }) => ({ href, label }),
               )}
-            />
+            >
+              {children}
+            </ShellBreadcrumbs>
+          ) : (
+            children
           )}
-          {children}
         </div>
       </main>
     </div>

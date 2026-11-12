@@ -109,6 +109,33 @@ test("nested pages show a breadcrumb trail back to their section; top-level page
   await expect(crumbs.locator("[aria-current=page]")).toHaveText("New");
 });
 
+test("public pages keep the same page width", async ({ page, isMobile }) => {
+  test.skip(isMobile, "the cap only matters on a wide screen");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/welcome");
+  const width = await page
+    .locator("main#main")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(width).toBeLessThanOrEqual(1180);
+});
+
+test("a charger's breadcrumb shows its name, not its key", async ({ page }) => {
+  await page.goto("/chargers");
+  const first = page
+    .getByRole("list", { name: "Chargers" })
+    .getByRole("link")
+    .first();
+  const name = (await first.textContent())!.trim();
+  const href = (await first.getAttribute("href"))!;
+  await page.goto(`${href}/stickers`);
+  const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(crumbs.getByRole("link", { name, exact: true })).toHaveAttribute(
+    "href",
+    href,
+  );
+  await expect(crumbs.locator("[aria-current=page]")).toHaveText("Stickers");
+});
+
 test("every page sits in one centred page width, and the phone menu closes with Escape", async ({
   page,
   isMobile,
