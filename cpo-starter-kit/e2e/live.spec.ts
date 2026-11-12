@@ -25,9 +25,10 @@ test("demo: live map and list show status, faults and sessions", async ({
   });
   await openLive(page, isMobile);
   await expect(page.getByText("Faulted").first()).toBeVisible();
-  await expect(page.getByRole("alert").first()).toContainText(
-    /need.* attention/,
-  );
+  // The banner is a polite status, so a refresh with the same faults isn't re-read.
+  await expect(
+    page.locator(".fault-banner[role=status]").filter({ hasText: /attention/ }),
+  ).toContainText(/need.* attention/);
   // The map draws the sample sites without tiles; the list works on its own.
   await expect(page.locator(".live-map .map-marker").first()).toBeAttached();
   await expect(page.getByText(/no map tiles are loaded/)).toBeVisible();
@@ -177,4 +178,76 @@ test("demo: remote start on a free connector, observed in the sessions", async (
   await expect(page.getByRole("list", { name: "Sessions" })).toContainText(
     "staff session",
   );
+});
+
+test("demo: map markers show status by shape and narrow the table to their site", async ({
+  page,
+  isMobile,
+}) => {
+  await openLive(page, isMobile);
+  const map = page.locator(".live-map");
+  const harbour = map.getByRole("button", {
+    name: /^Sample Site: Harbour Car Park: Faulted/,
+  });
+  const market = map.getByRole("button", {
+    name: /^Sample Site: Market Street: /,
+  });
+  // Faulted is a triangle; the others are a circle (online) or a square (offline).
+  await expect(harbour.locator("svg path.shape")).toHaveCount(1);
+  for (const [state, shape] of [
+    ["online", "circle"],
+    ["faulted", "path"],
+    ["offline", "rect"],
+  ])
+    for (const m of await map.locator(`.map-marker.${state}`).all())
+      await expect(m.locator(`svg ${shape}.shape`)).toHaveCount(1);
+
+  const chargers = page.getByRole("table", { name: "Chargers" });
+  await market.click();
+  await expect(page).toHaveURL(/[?&]site=9002\b/);
+  await expect(page.getByRole("note")).toContainText(
+    "Showing chargers at Sample Site: Market Street",
+  );
+  await expect(chargers).toContainText("DEMO-MARKET-01");
+  await expect(
+    chargers.getByRole("row").filter({ hasText: "DEMO-HARBOUR" }),
+  ).toHaveCount(0);
+
+  // A marker is a button for the keyboard too.
+  await harbour.focus();
+  await page.keyboard.press("Enter");
+  await expect(page).toHaveURL(/[?&]site=9001\b/);
+  await expect(chargers).toContainText("DEMO-HARBOUR-02");
+  await expect(
+    chargers.getByRole("row").filter({ hasText: "DEMO-MARKET-01" }),
+  ).toHaveCount(0);
+
+  await page.getByRole("link", { name: "Show all sites" }).click();
+  await expect(chargers).toContainText("DEMO-MARKET-01");
+  await expect(chargers).toContainText("DEMO-HARBOUR-02");
+});
+
+test("demo: at 1440 px the charger table fits beside the map, actions in view", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "desktop layout");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openLive(page, false);
+  const area = page.locator(".live-list .table-scroll-area");
+  const { scrollWidth, clientWidth } = await area.evaluate((el) => ({
+    scrollWidth: el.scrollWidth,
+    clientWidth: el.clientWidth,
+  }));
+  expect(scrollWidth).toBeLessThanOrEqual(clientWidth);
+  const box = (await area.boundingBox())!;
+  const action = page.getByRole("link", {
+    name: "Remote actions for DEMO-HARBOUR-02",
+  });
+  await expect(action).toBeInViewport();
+  const a = (await action.boundingBox())!;
+  expect(a.x + a.width).toBeLessThanOrEqual(box.x + box.width);
+  // The map sits beside the table, not below it.
+  const map = (await page.locator(".live-map").boundingBox())!;
+  expect(map.x).toBeGreaterThanOrEqual(box.x + box.width);
 });

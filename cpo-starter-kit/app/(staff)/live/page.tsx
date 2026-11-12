@@ -11,13 +11,14 @@ import {
   liveHref,
   matchesLiveFilter,
   parseLiveFilter,
+  parseLiveId,
   type LiveFilter,
 } from "@/lib/live-table";
 import { resetDemoLiveAction } from "./actions";
 import { CommandsCard } from "./commands";
 import LiveMap from "./map";
 import { Refresher } from "./refresher";
-import { ConnectorPill, StatePill, when } from "./status";
+import { StatePill, when } from "./status";
 import { ChargerPanel } from "./charger-panel";
 import { DataTable, type DataTableRow } from "@/app/ui/data-table";
 import { EmptyState } from "@/app/ui/empty-state";
@@ -27,7 +28,11 @@ import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "Live" };
 
-type Search = { status?: string | string[]; charger?: string | string[] };
+type Search = {
+  status?: string | string[];
+  charger?: string | string[];
+  site?: string | string[];
+};
 
 const TITLE = "Live";
 const DESCRIPTION =
@@ -82,51 +87,65 @@ async function Content({ search }: { search: Search }) {
   const all = live.sites.flatMap((s) =>
     s.stations.map((st) => ({ st, site: s.name })),
   );
-  const chargerId = /^\d{1,15}$/.test(String(search.charger ?? ""))
-    ? Number(search.charger)
-    : null;
+  const chargerId = parseLiveId(search.charger);
+  // A map marker narrows the table to its site.
+  const site =
+    live.sites.find(
+      (s) => s.id !== null && s.id === parseLiveId(search.site),
+    ) ?? null;
+  const siteId = site?.id ?? null;
   const selected = all.find((x) => x.st.id === chargerId) ?? null;
   const needAttention = all.filter((x) => x.st.state !== "online");
   const rows: DataTableRow[] = all
-    .filter((x) => matchesLiveFilter(x.st, filter))
+    .filter(
+      (x) =>
+        matchesLiveFilter(x.st, filter) &&
+        (siteId === null || x.st.siteId === siteId),
+    )
     .map(({ st, site }) => {
       const kwh = st.sessions.reduce((n, x) => n + x.energyKwh, 0);
+      const free = freeConnectors(st);
       return {
         id: String(st.id),
         values: {
           charger: st.name,
           site,
           status: st.state,
-          free: freeConnectors(st),
-          faults: st.openFaults,
+          free,
           energy: kwh,
         },
         cells: {
+          // The site sits under the name, so the table fits beside the map.
           charger: (
-            <Link className="name" href={`/live/stations/${st.id}`}>
-              {st.name}
-            </Link>
-          ),
-          status: <StatePill state={st.state} />,
-          free: (
-            <span className="connectors">
-              {st.connectors.length === 0 && (
-                <span className="muted">None reported</span>
-              )}
-              {st.connectors.map((c) => (
-                <span key={c.id} className="connector">
-                  <span className="muted">{c.number}</span>
-                  <ConnectorPill status={c.status} />
-                </span>
-              ))}
+            <span className="cell-stack">
+              <Link className="name" href={`/live/stations/${st.id}`}>
+                {st.name}
+              </Link>
+              <span className="muted">{site}</span>
             </span>
           ),
-          faults: st.openFaults > 0 ? st.openFaults : "None",
+          status: (
+            <span className="cell-stack">
+              <StatePill state={st.state} />
+              {st.openFaults > 0 && (
+                <span className="muted">
+                  {st.openFaults} open{" "}
+                  {st.openFaults === 1 ? "fault" : "faults"}
+                </span>
+              )}
+            </span>
+          ),
+          free:
+            st.connectors.length === 0 ? (
+              <span className="muted">None reported</span>
+            ) : (
+              `${free} of ${st.connectors.length}`
+            ),
           energy: st.sessions.length ? formatKwh(kwh) : "—",
           select: (
             <Link
               className="button secondary"
-              href={`${liveHref(filter, st.id)}#charger-panel`}
+              href={`${liveHref(filter, st.id, siteId)}#charger-panel`}
               aria-label={`Remote actions for ${st.name}`}
               aria-current={st.id === chargerId ? "true" : undefined}
             >
@@ -163,7 +182,7 @@ async function Content({ search }: { search: Search }) {
     label: x.label,
     value: x.value,
     unit: x.unit,
-    href: liveHref(x.filter, chargerId),
+    href: liveHref(x.filter, chargerId, siteId),
     active: filter === x.filter,
   }));
 
@@ -177,7 +196,9 @@ async function Content({ search }: { search: Search }) {
         retryAfter={live.retryAfter}
       />
       {needAttention.length > 0 && (
-        <div className="error fault-banner" role="alert">
+        // role="status": announced politely, and only when the text changes, not on
+        // every refresh.
+        <div className="error fault-banner" role="status">
           <span>
             <strong>
               {needAttention.length}{" "}
@@ -194,7 +215,7 @@ async function Content({ search }: { search: Search }) {
           </span>
           <Link
             className="button"
-            href={`${liveHref(filter, needAttention[0].st.id)}#charger-panel`}
+            href={`${liveHref(filter, needAttention[0].st.id, siteId)}#charger-panel`}
           >
             Open {needAttention[0].st.name}
           </Link>
@@ -258,27 +279,37 @@ async function Content({ search }: { search: Search }) {
         </div>
       ) : (
         <div className="live-grid">
-          <div className="live-list">
+          <div className="live-list" id="chargers" tabIndex={-1}>
             <h2 className="visually-hidden">
               Chargers
               {demo ? " (sample)" : ""}
             </h2>
+            {site && (
+              <p className="notice site-scope" role="note">
+                <span>
+                  Showing chargers at <strong>{site.name}</strong>.
+                </span>
+                <Link href={`${liveHref(filter, chargerId)}#chargers`}>
+                  Show all sites
+                </Link>
+              </p>
+            )}
             <DataTable
               caption="Chargers"
               emptyTitle="No chargers match"
               columns={[
                 { key: "charger", label: "Charger" },
-                { key: "site", label: "Site", filter: true },
+                {
+                  key: "site",
+                  label: "Site",
+                  filter: true,
+                  hidden: true,
+                  allLabel: "All sites",
+                },
                 { key: "status", label: "Status", noSearch: true },
                 {
                   key: "free",
-                  label: "Connectors",
-                  numeric: true,
-                  noSearch: true,
-                },
-                {
-                  key: "faults",
-                  label: "Open faults",
+                  label: "Free",
                   numeric: true,
                   noSearch: true,
                 },
@@ -299,8 +330,12 @@ async function Content({ search }: { search: Search }) {
               empty={{
                 text:
                   filter === "all"
-                    ? "No chargers to show."
-                    : "No charger has this status right now.",
+                    ? site
+                      ? "No chargers at this site."
+                      : "No chargers to show."
+                    : site
+                      ? "No charger at this site has this status right now."
+                      : "No charger has this status right now.",
                 action: (
                   <Link className="button secondary" href="/live">
                     Show all chargers
@@ -316,10 +351,17 @@ async function Content({ search }: { search: Search }) {
                   Map
                   {demo && <span className="badge">Sample</span>}
                 </h2>
-                <LiveMap sites={live.points} tiles={tiles} />
+                <LiveMap
+                  sites={live.points.map((p) => ({
+                    ...p,
+                    href: `${liveHref(filter, chargerId, p.id)}#chargers`,
+                  }))}
+                  tiles={tiles}
+                />
                 <p className="muted sm">
                   Marker shape repeats the status: circle online, triangle
-                  fault, square offline. The table has the same information.
+                  fault, square offline. Select a marker to show that
+                  site&apos;s chargers; the table has the same information.
                 </p>
                 {demo ? (
                   <p className="muted sm">

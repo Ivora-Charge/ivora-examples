@@ -31,10 +31,23 @@ export function matchesLiveFilter(
 export const freeConnectors = (st: Pick<StationView, "connectors">) =>
   st.connectors.filter((c) => c.status === "Available" && !c.session).length;
 
-/** A link to Live with a status filter and, optionally, a selected charger. */
-export function liveHref(f: LiveFilter, charger?: number | null): string {
+/** A `?charger=` or `?site=` id, or null for anything that isn't one. */
+export function parseLiveId(v: string | string[] | undefined): number | null {
+  return typeof v === "string" && /^\d{1,15}$/.test(v) ? Number(v) : null;
+}
+
+/**
+ * A link to Live with a status filter and, optionally, a selected charger and a
+ * site the table is narrowed to.
+ */
+export function liveHref(
+  f: LiveFilter,
+  charger?: number | null,
+  site?: number | null,
+): string {
   const q = new URLSearchParams();
   if (f !== "all") q.set("status", f);
+  if (site != null) q.set("site", String(site));
   if (charger != null) q.set("charger", String(charger));
   const s = q.toString();
   return s ? `/live?${s}` : "/live";

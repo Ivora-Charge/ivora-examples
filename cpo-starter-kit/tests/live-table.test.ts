@@ -4,6 +4,7 @@ import {
   liveHref,
   matchesLiveFilter,
   parseLiveFilter,
+  parseLiveId,
 } from "@/lib/live-table";
 
 const station = (
@@ -53,5 +54,21 @@ describe("Live screen helpers", () => {
     expect(liveHref("faulted")).toBe("/live?status=faulted");
     expect(liveHref("all", 7)).toBe("/live?charger=7");
     expect(liveHref("offline", 7)).toBe("/live?status=offline&charger=7");
+  });
+
+  it("adds the site a map marker narrows the table to", () => {
+    expect(liveHref("all", null, 3)).toBe("/live?site=3");
+    expect(liveHref("faulted", 7, 3)).toBe(
+      "/live?status=faulted&site=3&charger=7",
+    );
+  });
+
+  it("reads charger and site ids, ignoring anything else", () => {
+    expect(parseLiveId("42")).toBe(42);
+    expect(parseLiveId("4x")).toBeNull();
+    expect(parseLiveId("")).toBeNull();
+    expect(parseLiveId(undefined)).toBeNull();
+    expect(parseLiveId(["42"])).toBeNull();
+    expect(parseLiveId("1".repeat(16))).toBeNull();
   });
 });

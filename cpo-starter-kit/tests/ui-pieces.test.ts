@@ -292,6 +292,29 @@ describe("page pieces", () => {
     expect(out).toContain("3 rows");
   });
 
+  it("data table keeps a hidden column out of the grid but offers its filter", () => {
+    const out = html(
+      h(DataTable, {
+        caption: "Chargers",
+        columns: [
+          { key: "name", label: "Name" },
+          {
+            key: "state",
+            label: "Status",
+            filter: true,
+            hidden: true,
+            allLabel: "Every status",
+          },
+        ],
+        rows: ROWS,
+      }),
+    );
+    expect(out).not.toContain('data-label="Status"');
+    expect(out.match(/scope="col"/g)).toHaveLength(1);
+    expect(out).toContain("Every status");
+    expect(out).toContain("Filter by status");
+  });
+
   it("data table with no rows shows the empty state and its next step", () => {
     const out = html(
       h(DataTable, {

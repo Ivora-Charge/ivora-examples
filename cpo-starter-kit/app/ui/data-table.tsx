@@ -22,6 +22,13 @@ export interface DataTableColumn {
   filter?: boolean;
   /** Left out of the search. */
   noSearch?: boolean;
+  /**
+   * Not drawn as a column (another cell shows it), but still searched and, with
+   * `filter`, offered as a filter.
+   */
+  hidden?: boolean;
+  /** The filter's "everything" option; "All <label>" by default. */
+  allLabel?: string;
 }
 
 export interface DataTableRow extends TableRow {
@@ -54,6 +61,7 @@ export function DataTable({
   const [sort, setSort] = useState<SortState | null>(null);
   const [compact, setCompact] = useState(false);
 
+  const drawn = columns.filter((c) => !c.hidden);
   const searchKeys = columns.filter((c) => !c.noSearch).map((c) => c.key);
   const filterCols = columns.filter((c) => c.filter);
   const options = useMemo(
@@ -111,7 +119,9 @@ export function DataTable({
                 setFilters((f) => ({ ...f, [c.key]: e.target.value }))
               }
             >
-              <option value="">All {c.label.toLowerCase()}</option>
+              <option value="">
+                {c.allLabel ?? `All ${c.label.toLowerCase()}`}
+              </option>
               {options[c.key].map((o) => (
                 <option key={o} value={o}>
                   {o}
@@ -139,7 +149,7 @@ export function DataTable({
           <caption className="visually-hidden">{caption}</caption>
           <thead>
             <tr>
-              {columns.map((c) => (
+              {drawn.map((c) => (
                 <th
                   key={c.key}
                   scope="col"
@@ -163,7 +173,7 @@ export function DataTable({
           <tbody>
             {shown.map((row) => (
               <tr key={row.id}>
-                {columns.map((c) => (
+                {drawn.map((c) => (
                   <td
                     key={c.key}
                     data-label={c.label}

@@ -1041,20 +1041,37 @@ h2 .muted {
     ),
     var(--color-surface-hover);
 }
+/* Map markers: circle online, triangle faulted, square offline (shape plus colour). */
 .map-marker {
-  fill-opacity: 0.9;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
 }
-.map-marker.online {
+.map-marker svg {
+  display: block;
+  overflow: visible;
+}
+.map-marker .shape {
+  stroke-width: 2;
+  stroke-linejoin: round;
+}
+.map-marker.online .shape {
   fill: var(--color-ok);
   stroke: var(--color-surface);
 }
-.map-marker.offline {
+.map-marker.offline .shape {
   fill: var(--color-surface);
   stroke: var(--color-danger);
+  stroke-width: 3.5;
 }
-.map-marker.faulted {
+.map-marker.faulted .shape {
   fill: var(--color-warn);
   stroke: var(--color-text);
+}
+.map-marker:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: var(--focus-offset);
 }
 .site + .site {
   margin-top: var(--space-4);
@@ -2203,4 +2220,22 @@ select[aria-invalid="true"] {
 }
 .fault-banner a.button {
   color: var(--color-on-primary);
+}
+.cell-stack {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-1);
+}
+.live-list .grid-table td:last-child {
+  white-space: nowrap;
+}
+.site-scope {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.live-list:focus {
+  outline: none;
 }
