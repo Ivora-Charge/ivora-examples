@@ -567,6 +567,12 @@ export function TariffEditor(p: {
         </FormActions>
       </div>
       <div className="tariff-side" aria-live="polite">
+        {last === null && (
+          <p className="tariff-side-empty" data-testid="preview-placeholder">
+            Choose the prices, then press &quot;Preview price&quot; to see what
+            a driver would pay for the session below.
+          </p>
+        )}
         {last === "save" && (
           <>
             <Result state={saveState} />

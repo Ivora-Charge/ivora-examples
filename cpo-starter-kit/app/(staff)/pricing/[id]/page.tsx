@@ -30,7 +30,10 @@ const DAY_NAMES: Record<string, string> = {
   SUNDAY: "Sun",
 };
 
-/** "Every day", "Mon–Fri" or a list, as the periods store them (display only). */
+/**
+ * "Every day" when all seven days are set, otherwise the days as a list in stored
+ * order, for example "Mon, Tue, Wed, Thu, Fri" (display only).
+ */
 function dayText(days: string[]) {
   if (days.length === 7) return "Every day";
   return days.map((d) => DAY_NAMES[d] ?? d).join(", ");

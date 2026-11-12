@@ -2375,6 +2375,15 @@ details.how > summary:focus-visible {
 .tariff-side > .quote:first-child {
   margin-top: 0;
 }
+/* Desktop only: below the form on a phone it would only repeat the button's label. */
+.tariff-side-empty {
+  display: none;
+  margin: 0;
+  padding: var(--space-4);
+  color: var(--color-text-muted);
+  border: var(--border-width) dashed var(--color-border);
+  border-radius: var(--radius-sm);
+}
 @media (min-width: 72rem) {
   .form.tariff-form {
     grid-template-columns: minmax(0, var(--form-max)) minmax(0, 1fr);
@@ -2383,6 +2392,9 @@ details.how > summary:focus-visible {
   .tariff-side {
     position: sticky;
     top: var(--space-4);
+  }
+  .tariff-side-empty {
+    display: block;
   }
 }
 .seg-choice {
