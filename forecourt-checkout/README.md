@@ -43,8 +43,6 @@ Everything brand-specific lives in [`brand/`](brand). Components use only its to
 4. **Fonts:** put `.woff2` files in `brand/fonts/` and point `brand/fonts.ts` at them (self-hosted through `next/font`, nothing loads from a font CDN).
 5. **Theme:** the page follows the system light/dark setting until the header toggle is used; the choice is kept in `localStorage` (key in `src/lib/theme.ts`).
 
-The design brief and mocks are in `brand/BRIEF.md` and `docs/brief/`.
-
 ### Fonts and icons
 
 - [Archivo Black](https://fonts.google.com/specimen/Archivo+Black) and [Atkinson Hyperlegible](https://fonts.google.com/specimen/Atkinson+Hyperlegible), both under the SIL Open Font License 1.1 (`brand/fonts/OFL-*.txt`).
@@ -129,7 +127,7 @@ The button asks for `IVORA_API_KEY` and `IVORA_TENANT_ID` (from your Ivora proje
 
 This template uses Ivora's **externally funded charging sessions** (application-managed payments), the same path as Squid.
 
-The settlement guides on the developer portal describe two ways to take a driver's money. The ticket asked to prefer **Ivora bills with a payment service** (Ivora-managed payments, `/payment/{service}/...`), so this template would show the path Squid does not use, unless that path cannot carry the site operator's own fee. It cannot today:
+The settlement guides on the developer portal describe two ways to take a driver's money. The preferred one was **Ivora bills with a payment service** (Ivora-managed payments, `/payment/{service}/...`), so this template would show the path Squid does not use, unless that path cannot carry the site operator's own fee. It cannot today:
 
 - The managed path's documented limits list application fees and marketplace payouts as unsupported, and Ivora takes no application fee on those direct charges.
 - The payment request takes only a bill ID and return options, and capture "captures exactly the immutable bill amount" with no amount or fee field. There is nowhere to put the deployer's basis-point fee.

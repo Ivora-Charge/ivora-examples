@@ -131,7 +131,7 @@ The kit ships as **Ampleaf**, a placeholder brand you are meant to replace. Ever
 
 **Lime marks what is current or live** (the current page, the demo chip). `--color-accent` is a fill only, always with `--color-on-accent` text on it, and never a text colour on the page or a card: it is unreadable there. `tests/contrast.test.ts` fails if a stylesheet or component uses it as text. If you change the accent, keep that rule.
 
-The design brief, the approved mock and the palette are `brand/BRIEF.md`, `brand/mock.html` and `docs/brief/`. Screenshots of the main screens in light and dark, desktop and phone, are in `docs/screens/`.
+Screenshots of the main screens in light and dark, desktop and phone, are in `docs/screens/`.
 
 **Where the screens live.** `app/layout.tsx` is the document, the skip link and the Demo banner, and reads no session. The staff app (sidebar shell, grouped menu, the operator's brand colour) is `app/(staff)/`; the driver pages (`/c/<code>` and the demo checkout, one phone-width column under the operator's name, no staff menu) are `app/(driver)/`; the public landing page is `app/welcome/page.tsx`. A signed-out visitor to `/` lands on `/welcome`; a signed-out deep link goes to `/login` (`proxy.ts`, tested in `tests/proxy.test.ts`). The landing page reads nothing but the public operator name: in demo mode its button is "Try the demo", in live mode "Sign in".
 

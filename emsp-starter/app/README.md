@@ -2,7 +2,7 @@
 
 See the [template README](../README.md) for what the eMSP Starter is, who it is for, and how the server and the app fit together.
 
-The driver app of the eMSP Starter, built with Expo and expo-router: iOS, Android and a web build from one codebase. It talks only to your eMSP Starter server's API; it holds no keys and never reads the database. Its brand, **Kilolane**, comes from the [design brief](../docs/brief/BRIEF.md) and lives in `brand/tokens.json`.
+The driver app of the eMSP Starter, built with Expo and expo-router: iOS, Android and a web build from one codebase. It talks only to your eMSP Starter server's API; it holds no keys and never reads the database. Its brand, **Kilolane**, lives in `brand/tokens.json`.
 
 | Phone, light                                                             | Phone, dark                                                            |
 | ------------------------------------------------------------------------ | ---------------------------------------------------------------------- |

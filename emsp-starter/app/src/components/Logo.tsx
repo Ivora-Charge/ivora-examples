@@ -7,7 +7,7 @@ const PIN =
 
 /**
  * The mark: a map pin tilted 12° (on the move) with a plug's two prongs cut out, and a
- * flare dot at its foot (you, arriving). Same drawing as docs/brief/logo.svg.
+ * flare dot at its foot (you, arriving).
  */
 export function Mark({
   size = 32,
