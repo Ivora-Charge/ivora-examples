@@ -24,17 +24,24 @@ test("demo: live map and list show status, faults and sessions", async ({
     if (!r.url().startsWith("http://localhost")) external.push(r.url());
   });
   await openLive(page, isMobile);
-  await expect(
-    page.getByRole("region", { name: "Live summary" }),
-  ).toContainText("Faulted");
+  await expect(page.getByText("Faulted").first()).toBeVisible();
+  await expect(page.getByRole("alert").first()).toContainText(
+    /need.* attention/,
+  );
   // The map draws the sample sites without tiles; the list works on its own.
   await expect(page.locator(".live-map .map-marker").first()).toBeAttached();
   await expect(page.getByText(/no map tiles are loaded/)).toBeVisible();
-  const harbour = page.getByRole("list", {
-    name: "Chargers at Sample Site: Harbour Car Park",
-  });
-  await expect(harbour).toContainText("DEMO-HARBOUR-02");
+  const chargers = page.getByRole("table", { name: "Chargers" });
+  const harbour = chargers
+    .getByRole("row")
+    .filter({ hasText: "DEMO-HARBOUR-02" });
   await expect(harbour.getByText("Faulted").first()).toBeVisible();
+  // The status figures filter the table.
+  await page.getByRole("link", { name: /^Faulted/ }).click();
+  await expect(
+    chargers.getByRole("row").filter({ hasText: "DEMO-HARBOUR-01" }),
+  ).toHaveCount(0);
+  await expect(harbour).toBeVisible();
   await expect(
     page.getByRole("list", { name: "Sessions running" }),
   ).toContainText("DEMO-HARBOUR-02");
@@ -42,6 +49,31 @@ test("demo: live map and list show status, faults and sessions", async ({
     "GroundFailure",
   );
   expect(external).toEqual([]);
+});
+
+test("demo: a selected charger gets its remote actions, each behind a confirmation", async ({
+  page,
+  isMobile,
+}) => {
+  await openLive(page, isMobile);
+  await page
+    .getByRole("link", { name: "Remote actions for DEMO-HARBOUR-02" })
+    .click();
+  const panel = page.getByRole("region", { name: "DEMO-HARBOUR-02" });
+  await expect(panel).toBeVisible();
+  await panel.getByText("Reset…").click();
+  const send = panel.getByRole("button", { name: "Reset the charger" });
+  await send.click();
+  // Nothing is sent until the confirmation is ticked.
+  await expect(page.getByText(/Reset accepted/)).toHaveCount(0);
+  // The driver's running session is named, and needs its own tick.
+  await panel
+    .getByLabel(/^End session \d+ on connector 1/)
+    .last()
+    .check();
+  await panel.getByLabel("I understand this restarts DEMO-HARBOUR-02.").check();
+  await send.click();
+  await expect(page.getByText(/Reset accepted by the charger/)).toBeVisible();
 });
 
 test("demo: stop a driver's session only after naming it, then reset and unlock", async ({

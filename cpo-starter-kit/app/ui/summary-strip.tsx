@@ -8,6 +8,8 @@ export interface SummaryItem {
   unit?: string;
   /** Makes the figure a link. */
   href?: string;
+  /** The figure is the one in force (a filter that is on): marked for screen readers. */
+  active?: boolean;
 }
 
 /** The figures at the top of a list or detail page, in one row that wraps. */
@@ -32,7 +34,12 @@ export function SummaryStrip({
             <dt>{it.label}</dt>
             <dd>
               {it.href ? (
-                <Link className="strip-link" href={it.href}>
+                <Link
+                  className="strip-link"
+                  href={it.href}
+                  aria-current={it.active ? "true" : undefined}
+                >
+                  <span className="visually-hidden">{it.label}: </span>
                   {value}
                 </Link>
               ) : (

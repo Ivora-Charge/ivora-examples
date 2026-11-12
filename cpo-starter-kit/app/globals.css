@@ -2153,3 +2153,54 @@ select[aria-invalid="true"] {
     text-align: left;
   }
 }
+
+/* Live: faults banner, table beside the map, selected-charger panel */
+.fault-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.live-grid {
+  display: grid;
+  gap: var(--space-4);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  margin-bottom: var(--space-4);
+}
+.live-side {
+  display: grid;
+  gap: var(--space-4);
+  min-width: 0;
+}
+.live-list > .card,
+.live-side > .card {
+  margin-bottom: 0;
+}
+@media (min-width: 64rem) {
+  .live-grid {
+    grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+  }
+}
+.charger-panel .chead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.charger-panel h2,
+.charger-panel h3 {
+  margin-top: 0;
+}
+.strip-link[aria-current="true"] {
+  text-decoration: underline;
+  text-underline-offset: 0.25em;
+}
+.strip-cell:has(.strip-link[aria-current="true"]) {
+  background: var(--color-surface-hover);
+}
+.fault-banner a.button {
+  color: var(--color-on-primary);
+}
