@@ -122,7 +122,7 @@ test("public pages keep the same page width", async ({ page, isMobile }) => {
 test("a charger's breadcrumb shows its name, not its key", async ({ page }) => {
   await page.goto("/chargers");
   const first = page
-    .getByRole("list", { name: "Chargers" })
+    .getByRole("table", { name: "Chargers" })
     .getByRole("link")
     .first();
   const name = (await first.textContent())!.trim();

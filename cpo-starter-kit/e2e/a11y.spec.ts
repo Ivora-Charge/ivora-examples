@@ -75,7 +75,7 @@ test("main screens do not scroll sideways on a tablet or a desktop", async ({
 });
 
 async function createSticker(page: Page) {
-  await page.goto("/chargers/station-9101");
+  await page.goto("/chargers/station-9101?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const url = await page.locator(".sticker-url").first().textContent();
   return new URL(url!).pathname;

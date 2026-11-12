@@ -6,9 +6,115 @@ import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { resetDemoChargersAction } from "./actions";
 import { AddChargerForm } from "./forms";
 import { StatusPill } from "./status";
+import { DataTable, type DataTableRow } from "@/app/ui/data-table";
+import { EmptyState } from "@/app/ui/empty-state";
+import { PageHeader } from "@/app/ui/page-header";
+import { SummaryStrip } from "@/app/ui/summary-strip";
+import {
+  chargerCounts,
+  chargerStatusText,
+  freeConnectorCount,
+} from "@/lib/charger-table";
+import type { ChargersResult } from "@/lib/server/chargers";
 import { Loading } from "@/app/loading-skeleton";
 
 export const metadata = { title: "Chargers" };
+
+type Loaded = Extract<ChargersResult, { ok: true }>;
+
+function description(r: ChargersResult, demo: boolean) {
+  if (!r.ok) return undefined;
+  const sites = new Set(r.chargers.map((c) => c.siteName).filter(Boolean));
+  const n = r.chargers.length;
+  const sample = demo ? " Sample data." : "";
+  if (n === 0) return `No chargers yet.${sample}`;
+  return `${n} ${n === 1 ? "charger" : "chargers"}${sites.size ? ` at ${sites.size} ${sites.size === 1 ? "site" : "sites"}` : ""}.${sample}`;
+}
+
+function ChargersTable({ r, canWork }: { r: Loaded; canWork: boolean }) {
+  const counts = chargerCounts(r.chargers);
+  const rows: DataTableRow[] = r.chargers.map((c) => {
+    const free = freeConnectorCount(c);
+    return {
+      id: c.key,
+      values: {
+        charger: c.label,
+        id: c.name,
+        site: c.siteName ?? "No site",
+        status: chargerStatusText(c),
+        free: c.connectors.length ? free : -1,
+        seen: c.lastSeen ?? "",
+      },
+      cells: {
+        charger: (
+          <span className="cell-stack">
+            <Link className="name" href={`/chargers/${c.key}`}>
+              {c.label}
+            </Link>
+            {c.label !== c.name && <span className="muted">{c.name}</span>}
+          </span>
+        ),
+        status: <StatusPill c={c} />,
+        free: c.connectors.length ? (
+          `${free} of ${c.connectors.length}`
+        ) : (
+          <span className="muted">None reported</span>
+        ),
+        seen: c.lastSeen ? (
+          <time dateTime={c.lastSeen}>
+            {c.lastSeen.replace("T", " ").slice(0, 16)} UTC
+          </time>
+        ) : (
+          <span className="muted">Never</span>
+        ),
+      },
+    };
+  });
+  return (
+    <>
+      {r.chargers.length > 0 && (
+        <SummaryStrip
+          label="Chargers at a glance"
+          items={[
+            {
+              label: "Online",
+              value: counts.online,
+              unit: `of ${counts.total}`,
+            },
+            { label: "Connectors", value: counts.connectors },
+            { label: "Needs attention", value: counts.attention },
+          ]}
+        />
+      )}
+      <DataTable
+        caption="Chargers"
+        emptyTitle="No chargers yet"
+        empty={{
+          text: "Add your first charger to see it here. You need its ID; the next step creates the connection password for you.",
+          action: canWork ? (
+            <a className="button" href="#add-heading">
+              Add your first charger
+            </a>
+          ) : undefined,
+        }}
+        columns={[
+          { key: "charger", label: "Charger" },
+          { key: "id", label: "Connection name", hidden: true },
+          { key: "site", label: "Site", filter: true, allLabel: "All sites" },
+          {
+            key: "status",
+            label: "Status",
+            filter: true,
+            allLabel: "All statuses",
+          },
+          { key: "free", label: "Connectors free", numeric: true },
+          { key: "seen", label: "Last message" },
+        ]}
+        rows={rows}
+      />
+    </>
+  );
+}
 
 async function Content({
   searchParams,
@@ -21,7 +127,17 @@ async function Content({
   const removed = (await searchParams).removed;
   return (
     <>
-      <h1>Chargers</h1>
+      <PageHeader
+        title="Chargers"
+        description={description(r, me.demo)}
+        action={
+          canWork && r.ok ? (
+            <a className="button" href="#add-heading">
+              Add charger
+            </a>
+          ) : undefined
+        }
+      />
       {removed === "deleted" && (
         <p className="success" role="status">
           Charger removed, and deleted in Ivora. Its stickers no longer lead to
@@ -36,9 +152,22 @@ async function Content({
         </p>
       )}
       {!r.ok ? (
-        <p className="error" role="alert">
-          {r.error}
-        </p>
+        <div className="card">
+          <EmptyState
+            tone="error"
+            title="Chargers did not load"
+            action={
+              <>
+                <Link className="button" href="/chargers">
+                  Try again
+                </Link>
+                <Link href="/settings">Check your settings</Link>
+              </>
+            }
+          >
+            {r.error} Nothing was changed.
+          </EmptyState>
+        </div>
       ) : (
         <>
           {r.truncated && (
@@ -47,37 +176,7 @@ async function Content({
               sites and chargers.
             </p>
           )}
-          <section className="card" aria-labelledby="list-heading">
-            <h2 id="list-heading">
-              Your chargers
-              {me.demo && <span className="badge">Sample</span>}
-            </h2>
-            {r.chargers.length === 0 ? (
-              <p className="muted">No chargers yet.</p>
-            ) : (
-              <ul className="rows" aria-label="Chargers">
-                {r.chargers.map((c) => (
-                  <li key={c.key}>
-                    <Link className="name" href={`/chargers/${c.key}`}>
-                      {c.label}
-                    </Link>
-                    <span className="muted">
-                      {[
-                        c.label !== c.name ? c.name : null,
-                        c.siteName,
-                        c.connectors.length
-                          ? `${c.connectors.length} ${c.connectors.length === 1 ? "connector" : "connectors"}`
-                          : null,
-                      ]
-                        .filter(Boolean)
-                        .join(" · ")}
-                    </span>
-                    <StatusPill c={c} />
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
+          <ChargersTable r={r} canWork={canWork} />
           {canWork ? (
             <section className="card" aria-labelledby="add-heading">
               <h2 id="add-heading">Add a charger</h2>

@@ -2239,3 +2239,18 @@ select[aria-invalid="true"] {
 .live-list:focus {
   outline: none;
 }
+
+/* Charger page: a figure that is text, not a number, in the summary strip; and the
+   destructive actions set apart under the tabs. */
+.strip dd .strip-text {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-lg);
+}
+.danger-zone {
+  margin-top: var(--space-6);
+  border-color: var(--color-danger);
+  border-width: 2px;
+}
+.danger-zone h2 {
+  color: var(--color-danger);
+}

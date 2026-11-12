@@ -34,7 +34,7 @@ const SIZES = {
 
 /** The sticker page of the first demo connector. */
 async function stickerPath(page) {
-  await page.goto(`${base}/chargers/station-9101`);
+  await page.goto(`${base}/chargers/station-9101?tab=stickers`);
   const make = page.getByRole("button", { name: "Create sticker codes" });
   if (await make.count()) await make.click();
   const url = await page.locator(".sticker-url").first().textContent();
