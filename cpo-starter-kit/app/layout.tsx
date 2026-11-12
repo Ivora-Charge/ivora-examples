@@ -1,4 +1,5 @@
 import type { Metadata, Viewport } from "next";
+import Link from "next/link";
 import type { ReactNode } from "react";
 import { config, isDemo } from "@/lib/server/env";
 import { THEME_COLORS, THEME_KEY } from "@/lib/theme";
@@ -44,20 +45,15 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: themeScript }} />
       </head>
-      <body>
+      <body data-demo={isDemo() ? "" : undefined}>
         <a className="skip" href="#main">
           Skip to content
         </a>
         {isDemo() && (
           <p className="demo-banner" role="status">
-            <strong>Demo mode:</strong> add your Ivora API key in settings to go
-            live.
-            <span className="detail">
-              Settings means your deployment&apos;s environment variables (for
-              example Vercel Project Settings → Environment Variables). Sample
-              data only: nothing is sent to Ivora, chargers, payment providers
-              or email.
-            </span>
+            <strong>Demo data</strong>
+            <span aria-hidden="true">—</span>
+            <Link href="/setup">make it yours</Link>
           </p>
         )}
         {children}

@@ -47,7 +47,7 @@ describe("/welcome", () => {
     expect(html).toContain('href="/login"');
     expect(html).toContain("Sign in");
     expect(html).not.toContain("Try the demo");
-    expect(html).not.toContain("Demo mode");
+    expect(html).not.toContain("Demo data");
     expect(html).toContain("Harbour Charging Co");
     // No staff shell: no sidebar, workspace chip or signed-in user.
     expect(html).not.toContain('aria-label="Main"');
@@ -60,7 +60,8 @@ describe("/welcome", () => {
     const html = render();
     expect(html).toContain("Try the demo");
     expect(html).not.toContain('href="/login"');
-    expect(html).toContain("Demo mode:");
+    expect(html).toContain("Demo data");
+    expect(html).toContain('href="/setup"');
     expect(touched).not.toHaveBeenCalled();
   });
 

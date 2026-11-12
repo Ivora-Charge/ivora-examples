@@ -31,7 +31,7 @@ test("demo: live map and list show status, faults and sessions", async ({
   ).toContainText(/need.* attention/);
   // The map draws the sample sites without tiles; the list works on its own.
   await expect(page.locator(".live-map .map-marker").first()).toBeAttached();
-  await expect(page.getByText(/no map tiles are loaded/)).toBeVisible();
+  await expect(page.locator(".live-map.sample-map")).toBeVisible();
   const chargers = page.getByRole("table", { name: "Chargers" });
   const harbour = chargers
     .getByRole("row")
@@ -250,4 +250,37 @@ test("demo: at 1440 px the charger table fits beside the map, actions in view", 
   // The map sits beside the table, not below it.
   const map = (await page.locator(".live-map").boundingBox())!;
   expect(map.x).toBeGreaterThanOrEqual(box.x + box.width);
+});
+
+test("demo: every interactive element on Live is at least 44 px tall", async ({
+  page,
+  isMobile,
+}) => {
+  await openLive(page, isMobile);
+  await expect(page.locator(".live-map .map-marker").first()).toBeAttached();
+  await expect(page.getByRole("button", { name: "Refresh now" })).toBeVisible();
+  // The shell's phone menu is closed; the rest of the page is measured as it stands.
+  const small = await page.evaluate(() => {
+    const sel =
+      "a[href], button, input, select, textarea, summary, [role=button], [tabindex]:not([tabindex='-1'])";
+    const out: string[] = [];
+    for (const el of document.querySelectorAll<HTMLElement>(sel)) {
+      const r = el.getBoundingClientRect();
+      const style = getComputedStyle(el);
+      if (r.width === 0 || r.height === 0 || style.visibility === "hidden")
+        continue;
+      // Skip the skip link when it is off screen, and visually hidden helpers.
+      if (r.bottom < 0 || r.top < -1000) continue;
+      if (r.height < 43.5)
+        out.push(
+          `${el.tagName} ${(el.getAttribute("aria-label") ?? el.textContent ?? "").trim().slice(0, 40)} ${Math.round(r.height)}px`,
+        );
+    }
+    return out;
+  });
+  expect(small).toEqual([]);
+  // The actions button is named for what it opens.
+  await expect(
+    page.getByRole("link", { name: /Remote actions for/ }).first(),
+  ).toHaveText("Actions");
 });

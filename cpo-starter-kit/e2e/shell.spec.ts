@@ -15,7 +15,10 @@ test("demo: overview shows labelled sample data", async ({ page }) => {
   ).toBeVisible();
   await expect(page.getByText("Chargers online")).toBeVisible();
   await expect(
-    page.getByText("Demo mode: add your Ivora API key in settings to go live"),
+    page
+      .getByRole("status")
+      .filter({ hasText: "Demo data" })
+      .getByRole("link", { name: "make it yours" }),
   ).toBeVisible();
 
   if (process.env.SCREENSHOT)
@@ -154,4 +157,61 @@ test("every page sits in one centred page width, and the phone menu closes with 
   await page.keyboard.press("Escape");
   await expect(menu).toHaveAttribute("aria-expanded", "false");
   await expect(menu).toBeFocused();
+});
+
+test("demo: the banner is one short line with one link to the setup page", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const banner = page.locator(".demo-banner");
+  await expect(banner).toHaveText(/Demo data\s*—\s*make it yours/);
+  await expect(banner.getByRole("link")).toHaveAttribute("href", "/setup");
+  const box = await banner.boundingBox();
+  expect(box!.height).toBeLessThanOrEqual(44);
+  // The longer explanation lives on the setup page.
+  await banner.getByRole("link").click();
+  await expect(page.getByText("environment variables").first()).toBeVisible();
+  await expect(
+    page.locator(".topbar").getByText("Placeholder brand"),
+  ).toHaveCount(0);
+});
+
+test("desktop: the sidebar footer is on screen at 1440x900", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(isMobile, "the sidebar is a desktop layout");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/");
+  const foot = page.locator(".who");
+  await expect(foot).toBeVisible();
+  for (const loc of [
+    foot,
+    foot.getByText("Sample", { exact: true }),
+    foot.getByRole("button", { name: /(dark|light) mode/i }),
+  ]) {
+    const box = (await loc.boundingBox())!;
+    expect(box.y + box.height).toBeLessThanOrEqual(900);
+  }
+  await expect(
+    foot.getByRole("button", { name: /(dark|light) mode/i }),
+  ).toBeInViewport({
+    ratio: 1,
+  });
+});
+
+test("phone: the account row is in the menu and the title shows by 190 px", async ({
+  page,
+  isMobile,
+}) => {
+  test.skip(!isMobile, "phone layout");
+  await page.goto("/");
+  await expect(page.locator(".who")).toBeHidden();
+  const title = (await page.getByRole("heading", { level: 1 }).boundingBox())!;
+  expect(title.y).toBeLessThanOrEqual(190);
+  await page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Menu" })
+    .click();
+  await expect(page.locator(".who")).toBeVisible();
 });

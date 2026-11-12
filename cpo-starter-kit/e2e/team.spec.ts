@@ -22,6 +22,12 @@ test("demo: signed in as the labelled demo owner, with the sample team", async (
   isMobile,
 }) => {
   await openTeam(page, isMobile);
+  // On a phone the account row is inside the menu.
+  if (isMobile)
+    await page
+      .getByRole("navigation", { name: "Main" })
+      .getByRole("button", { name: "Menu" })
+      .click();
   await expect(page.getByText("demo-owner@example.com · Owner")).toBeVisible();
   await expect(page.getByText("Sample", { exact: true }).first()).toBeVisible();
   for (const email of [
