@@ -24,21 +24,22 @@ import {
   stopTestAction,
 } from "../actions";
 import { ChargerAction, Confirm } from "../forms";
-import { Check, StatusPill } from "../status";
+import { Check, StatusPill, When } from "../status";
+import { companyZone } from "../zone";
 import { EmptyState } from "@/app/ui/empty-state";
 import { PageHeader } from "@/app/ui/page-header";
 import { Chip } from "@/app/ui/status-chip";
 import { SummaryStrip } from "@/app/ui/summary-strip";
 import { Tabs, type TabSpec } from "@/app/ui/tabs";
-import { ago, freeConnectorCount } from "@/lib/charger-table";
+import {
+  ago,
+  chargerZone,
+  freeConnectorCount,
+  zonedTime,
+} from "@/lib/charger-table";
 import { connectorChip } from "@/lib/status-chips";
 
 export const metadata = { title: "Charger" };
-
-const when = (iso: string | null) =>
-  iso
-    ? new Date(iso).toISOString().replace("T", " ").slice(0, 19) + " UTC"
-    : "Never";
 
 const TABS = ["overview", "configuration", "stickers", "test"] as const;
 
@@ -52,7 +53,10 @@ export default async function Page({
   const me = await requireRole("viewer");
   const { key } = await params;
   const { tab } = await searchParams;
-  const r = await loadCharger(getChargers(), me, key);
+  const [r, company] = await Promise.all([
+    loadCharger(getChargers(), me, key),
+    companyZone(me.operatorId),
+  ]);
   if (!r.ok)
     return (
       <>
@@ -82,11 +86,16 @@ export default async function Page({
   const registered = !c.pending && !c.missing;
   const free = freeConnectorCount(c);
   const initial = TABS.find((t) => t === tab);
+  const zone = chargerZone(
+    r.sites.find((s) => s.id === c.locationId)?.time_zone,
+    company,
+  );
+  const seen = zonedTime(c.lastSeen, zone);
   const tabs: TabSpec[] = [
     {
       id: "overview",
       label: "Overview",
-      panel: <OverviewPanel c={c} />,
+      panel: <OverviewPanel c={c} zone={zone} />,
     },
     ...(registered
       ? [
@@ -94,7 +103,10 @@ export default async function Page({
             id: "configuration",
             label: "Configuration",
             panel: (
-              <ConfigurationPanel c={c} sites={r.sites} canWork={canWork} />
+              <>
+                <ConnectionCard c={c} />
+                <ConfigurationPanel c={c} sites={r.sites} canWork={canWork} />
+              </>
             ),
           },
           {
@@ -107,7 +119,7 @@ export default async function Page({
             label: "Test",
             panel: (
               <>
-                <ConnectionTestCard c={c} canWork={canWork} />
+                <ConnectionTestCard c={c} canWork={canWork} zone={zone} />
                 <RemoteTestCard c={c} canWork={canWork} />
               </>
             ),
@@ -159,7 +171,18 @@ export default async function Page({
           },
           {
             label: "Last message",
-            value: <span className="strip-text">{ago(c.lastSeen)}</span>,
+            value: (
+              <span className="strip-text">
+                {seen ? (
+                  <time dateTime={c.lastSeen!}>{seen.local}</time>
+                ) : (
+                  "Never"
+                )}
+              </span>
+            ),
+            unit: seen
+              ? `${seen.zone === "UTC" ? "UTC" : seen.zone} · ${ago(c.lastSeen)}`
+              : "",
           },
         ]}
       />
@@ -196,20 +219,73 @@ export default async function Page({
   );
 }
 
-function OverviewPanel({ c }: { c: ChargerView }) {
+function OverviewPanel({ c, zone }: { c: ChargerView; zone: string }) {
   return (
-    <section className="card" aria-labelledby="about-heading">
-      <h2 id="about-heading">Charger</h2>
+    <>
+      <section className="card" aria-labelledby="connectors-heading">
+        <h2 id="connectors-heading">Connectors</h2>
+        {c.connectors.length ? (
+          <ul className="connector-tiles" aria-label="Connectors">
+            {c.connectors.map((k) => (
+              <li key={k.id} className="connector-tile">
+                <span className="name">Connector {k.number}</span>
+                {k.status ? (
+                  <Chip spec={connectorChip(k.status)} />
+                ) : (
+                  <span className="muted">No status yet</span>
+                )}
+                <span className="muted">
+                  {k.maxPowerKw
+                    ? `Up to ${k.maxPowerKw} kW`
+                    : "Power not reported"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="muted">
+            Ivora reports no connectors yet. They appear once the charger
+            connects.
+          </p>
+        )}
+      </section>
+      <section className="card" aria-labelledby="about-heading">
+        <h2 id="about-heading">Charger</h2>
+        <dl className="facts">
+          <div>
+            <dt>Site</dt>
+            <dd>{c.siteName ?? "None"}</dd>
+          </div>
+          <div>
+            <dt>Make and model</dt>
+            <dd>
+              {[c.vendor, c.model].filter(Boolean).join(" · ") ||
+                "Not reported yet"}
+            </dd>
+          </div>
+          <div>
+            <dt>Last message</dt>
+            <dd>
+              <When iso={c.lastSeen} zone={zone} />
+            </dd>
+          </div>
+        </dl>
+      </section>
+    </>
+  );
+}
+
+/** Read-only: how the charger connects. Everyone who can see the charger sees it. */
+function ConnectionCard({ c }: { c: ChargerView }) {
+  return (
+    <section className="card" aria-labelledby="connection-heading">
+      <h2 id="connection-heading">Connection</h2>
       <dl className="facts">
         <div>
           <dt>Connection name</dt>
           <dd>
             <code>{c.name}</code>
           </dd>
-        </div>
-        <div>
-          <dt>Site</dt>
-          <dd>{c.siteName ?? "None"}</dd>
         </div>
         {c.connectionUrl && (
           <div>
@@ -228,30 +304,10 @@ function OverviewPanel({ c }: { c: ChargerView }) {
           </dd>
         </div>
         <div>
-          <dt>Charger</dt>
-          <dd>
-            {[c.vendor, c.model, c.protocol].filter(Boolean).join(" · ") ||
-              "Not reported yet"}
-          </dd>
-        </div>
-        <div>
-          <dt>Last message</dt>
-          <dd>{when(c.lastSeen)}</dd>
+          <dt>Protocol</dt>
+          <dd>{c.protocol ?? "Not reported yet"}</dd>
         </div>
       </dl>
-      {c.connectors.length > 0 && (
-        <ul className="rows" aria-label="Connectors">
-          {c.connectors.map((k) => (
-            <li key={k.id}>
-              <span className="name">Connector {k.number}</span>
-              <span className="muted">
-                {k.maxPowerKw ? `${k.maxPowerKw} kW` : ""}
-              </span>
-              {k.status && <Chip spec={connectorChip(k.status)} />}
-            </li>
-          ))}
-        </ul>
-      )}
     </section>
   );
 }
@@ -342,9 +398,11 @@ function ConfigurationPanel({
 function ConnectionTestCard({
   c,
   canWork,
+  zone,
 }: {
   c: ChargerView;
   canWork: boolean;
+  zone: string;
 }) {
   const t = c.connectionTest;
   return (
@@ -358,9 +416,8 @@ function ConnectionTestCard({
         )}
       </h2>
       <p className="muted">
-        Checks the charger is connected, has booted (sent its BootNotification)
-        and sent a message in the last {HEARTBEAT_FRESH_SECONDS / 60} minutes.
-        Reads only: nothing is sent to the charger.
+        Checks the charger is connected, has booted and sent a message in the
+        last {HEARTBEAT_FRESH_SECONDS / 60} minutes. Nothing is sent to it.
       </p>
       {t && (
         <>
@@ -369,7 +426,9 @@ function ConnectionTestCard({
             <Check ok={t.booted} label="Booted" />
             <Check ok={t.heartbeat} label="Recent heartbeat" />
           </ul>
-          <p className="muted">Last run {when(t.at)}.</p>
+          <p className="muted">
+            Last run <When iso={t.at} zone={zone} />
+          </p>
         </>
       )}
       {canWork && (
@@ -419,13 +478,20 @@ function RemoteTestCard({ c, canWork }: { c: ChargerView; canWork: boolean }) {
         )}
       </h2>
       <p className="muted">
-        Starts a short session on one connector with an operator command (no
-        payment) and the staff token, so it shows as a staff/test session in
-        Live and Ivora's reports, then stops it. Energy is 0 kWh without a
-        vehicle; the test passes when the charger accepts the start and stop and
-        reports the session. It runs only on an Available connector, and it only
-        ever stops its own session.
+        Starts and stops a short free session on one connector, to prove the
+        charger takes remote commands.
       </p>
+      <details className="how">
+        <summary>How this test works</summary>
+        <p className="muted">
+          Starts a short session on one connector with an operator command (no
+          payment) and the staff token, so it shows as a staff/test session in
+          Live and Ivora&apos;s reports, then stops it. Energy is 0 kWh without
+          a vehicle; the test passes when the charger accepts the start and stop
+          and reports the session. It runs only on an Available connector, and
+          it only ever stops its own session.
+        </p>
+      </details>
       {t && (
         <p>
           Test {t.attempt}, connector {t.connectorNumber}:{" "}

@@ -17,6 +17,8 @@ const PAGES = [
   "/settings",
   "/settings/roaming",
   "/chargers/station-9101",
+  "/chargers/station-9101?tab=configuration",
+  "/chargers/station-9101?tab=test",
   "/live/stations/9102",
   "/pricing/new",
   "/pricing/demo-standard",

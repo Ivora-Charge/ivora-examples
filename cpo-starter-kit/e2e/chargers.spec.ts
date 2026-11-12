@@ -48,7 +48,8 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
   await expect(
     page.getByRole("heading", { level: 1, name: "Bay 1" }),
   ).toBeVisible();
-  // Shown once: the charger page has only "set by the kit".
+  // Shown once: the charger page has only "set by the kit", in the Connection card.
+  await page.getByRole("tab", { name: "Configuration" }).click();
   await expect(
     page.getByText("Set by the kit (not shown again)"),
   ).toBeVisible();

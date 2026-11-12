@@ -5,7 +5,8 @@ import { getChargers, loadChargers } from "@/lib/server/chargers";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { resetDemoChargersAction } from "./actions";
 import { AddChargerForm } from "./forms";
-import { StatusPill } from "./status";
+import { StatusPill, When } from "./status";
+import { companyZone } from "./zone";
 import { DataTable, type DataTableRow } from "@/app/ui/data-table";
 import { EmptyState } from "@/app/ui/empty-state";
 import { PageHeader } from "@/app/ui/page-header";
@@ -13,6 +14,7 @@ import { SummaryStrip } from "@/app/ui/summary-strip";
 import {
   chargerCounts,
   chargerStatusText,
+  chargerZone,
   freeConnectorCount,
 } from "@/lib/charger-table";
 import type { ChargersResult } from "@/lib/server/chargers";
@@ -31,8 +33,17 @@ function description(r: ChargersResult, demo: boolean) {
   return `${n} ${n === 1 ? "charger" : "chargers"}${sites.size ? ` at ${sites.size} ${sites.size === 1 ? "site" : "sites"}` : ""}.${sample}`;
 }
 
-function ChargersTable({ r, canWork }: { r: Loaded; canWork: boolean }) {
+function ChargersTable({
+  r,
+  canWork,
+  company,
+}: {
+  r: Loaded;
+  canWork: boolean;
+  company: string | null;
+}) {
   const counts = chargerCounts(r.chargers);
+  const siteZone = new Map(r.sites.map((s) => [s.id, s.time_zone]));
   const rows: DataTableRow[] = r.chargers.map((c) => {
     const free = freeConnectorCount(c);
     return {
@@ -60,12 +71,14 @@ function ChargersTable({ r, canWork }: { r: Loaded; canWork: boolean }) {
         ) : (
           <span className="muted">None reported</span>
         ),
-        seen: c.lastSeen ? (
-          <time dateTime={c.lastSeen}>
-            {c.lastSeen.replace("T", " ").slice(0, 16)} UTC
-          </time>
-        ) : (
-          <span className="muted">Never</span>
+        seen: (
+          <When
+            iso={c.lastSeen}
+            zone={chargerZone(
+              c.locationId !== null ? siteZone.get(c.locationId) : null,
+              company,
+            )}
+          />
         ),
       },
     };
@@ -123,7 +136,10 @@ async function Content({
 }) {
   const me = await requireRole("viewer");
   const canWork = atLeast(me.role, "technician");
-  const r = await loadChargers(getChargers(), me);
+  const [r, company] = await Promise.all([
+    loadChargers(getChargers(), me),
+    companyZone(me.operatorId),
+  ]);
   const removed = (await searchParams).removed;
   return (
     <>
@@ -176,7 +192,7 @@ async function Content({
               sites and chargers.
             </p>
           )}
-          <ChargersTable r={r} canWork={canWork} />
+          <ChargersTable r={r} canWork={canWork} company={company} />
           {canWork ? (
             <section className="card" aria-labelledby="add-heading">
               <h2 id="add-heading">Add a charger</h2>
