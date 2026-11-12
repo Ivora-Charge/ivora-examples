@@ -8,6 +8,8 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { Field, FormActions } from "@/app/ui/field";
+import { currencyExponent, parseMajor } from "@/lib/money";
 import { EMPTY, type ActionState, type QuotePreview } from "@/lib/action-state";
 // Type only (erased from the client bundle).
 import type { EditorValues } from "@/lib/server/pricing/service";
@@ -203,6 +205,30 @@ function Period(p: {
 }
 
 /**
+ * Inline check of a money field as staff leave it: the text must be a plain amount with
+ * at most the currency's decimals. Display only: the server still checks every value.
+ */
+function useMoneyError(currency: string, optional: boolean) {
+  const [error, setError] = useState<string | undefined>();
+  const places = currencyExponent(currency);
+  return {
+    error,
+    onBlur: (value: string) => {
+      const v = value.trim();
+      if (v === "" || parseMajor(v, currency) !== null)
+        return setError(undefined);
+      if (v === "" && optional) return setError(undefined);
+      setError(
+        places === 0
+          ? `Use a whole number, for example 5 (${currency} has no decimals).`
+          : `Use a number with at most ${places} decimals, for example 0.50 (a dot, not a comma).`,
+      );
+    },
+    clear: () => setError(undefined),
+  };
+}
+
+/**
  * Create or edit a tariff. "Preview price" asks Ivora's simulation for the session
  * below; "Save" creates the tariff, or a new version of it. The form is sent from a
  * transition rather than as a form action, so what staff typed stays in the fields
@@ -235,6 +261,9 @@ export function TariffEditor(p: {
   const id = useId();
   const f = (n: string) => `${id}-${n}`;
   const busy = previewing || saving;
+  const energyCheck = useMoneyError(p.currency, false);
+  const feeCheck = useMoneyError(p.currency, true);
+  const idleCheck = useMoneyError(p.currency, true);
 
   const submit = (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -248,277 +277,296 @@ export function TariffEditor(p: {
 
   return (
     <form className="form tariff-form" onSubmit={submit} noValidate={false}>
-      {p.tariffId && (
-        <>
-          <input type="hidden" name="tariffId" value={p.tariffId} />
-          <input type="hidden" name="revision" value={p.revision ?? ""} />
-        </>
-      )}
-      <div className="field">
-        <label htmlFor={f("name")}>Tariff name</label>
-        <input
-          id={f("name")}
-          name="name"
-          defaultValue={p.initial.name}
-          maxLength={60}
-          required
-          aria-describedby={f("name-hint")}
-        />
-        <span id={f("name-hint")} className="hint">
-          For your team, for example &quot;Standard&quot; or &quot;Staff&quot;.
-        </span>
-      </div>
-      <fieldset className="choice">
-        <legend>Price</legend>
-        <label>
-          <input
-            type="radio"
-            name="kind"
-            value="paid"
-            checked={kind === "paid"}
-            onChange={() => setKind("paid")}
-          />
-          Paid: drivers pay per kWh
-        </label>
-        <label>
-          <input
-            type="radio"
-            name="kind"
-            value="free"
-            checked={kind === "free"}
-            onChange={() => setKind("free")}
-          />
-          Free: zero price, no card hold
-        </label>
-        {kind === "paid" && p.paidNote && (
-          <p className="hint" data-testid="paid-currency-note">
-            {p.paidNote}
-          </p>
+      <div className="tariff-fields">
+        {p.tariffId && (
+          <>
+            <input type="hidden" name="tariffId" value={p.tariffId} />
+            <input type="hidden" name="revision" value={p.revision ?? ""} />
+          </>
         )}
-      </fieldset>
-      <div className="field">
-        <label htmlFor={f("tz")}>Time zone</label>
-        <select
-          id={f("tz")}
-          name="timeZone"
-          defaultValue={p.initial.timeZone}
-          aria-describedby={f("tz-hint")}
-        >
-          {p.timeZones.map((z) => (
-            <option key={z} value={z}>
-              {z}
-            </option>
-          ))}
-        </select>
-        <span id={f("tz-hint")} className="hint">
-          The time-of-use periods are local times in this zone. Prices are in{" "}
-          {p.currency}.
-        </span>
-      </div>
-      {kind === "paid" && (
-        <>
-          <div className="field">
-            <label htmlFor={f("energy")}>Price per kWh ({p.currency})</label>
+        <div className="field">
+          <label htmlFor={f("name")}>Tariff name</label>
+          <input
+            id={f("name")}
+            name="name"
+            defaultValue={p.initial.name}
+            maxLength={60}
+            required
+            aria-describedby={f("name-hint")}
+          />
+          <span id={f("name-hint")} className="hint">
+            For your team, for example &quot;Standard&quot; or
+            &quot;Staff&quot;.
+          </span>
+        </div>
+        <fieldset className="choice seg-choice">
+          <legend>Type</legend>
+          <label>
             <input
-              id={f("energy")}
-              name="energy"
-              inputMode="decimal"
-              defaultValue={p.initial.energy}
-              placeholder="0.35"
-              required
-              aria-describedby={f("energy-hint")}
+              type="radio"
+              name="kind"
+              value="paid"
+              checked={kind === "paid"}
+              onChange={() => setKind("paid")}
             />
-            <span id={f("energy-hint")} className="hint">
-              Outside the time-of-use periods below. Excluding tax.
-            </span>
-          </div>
-          <div className="field">
-            <label htmlFor={f("fee")}>
-              Session fee ({p.currency}, optional)
-            </label>
-            <input
-              id={f("fee")}
-              name="sessionFee"
-              inputMode="decimal"
-              defaultValue={p.initial.sessionFee}
-              placeholder="0.00"
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={f("idle")}>
-              Idle fee per minute ({p.currency}, optional)
-            </label>
-            <input
-              id={f("idle")}
-              name="idleFee"
-              inputMode="decimal"
-              defaultValue={p.initial.idleFee}
-              placeholder="0.00"
-              aria-describedby={f("idle-hint")}
-            />
-            <span id={f("idle-hint")} className="hint">
-              Charged per started minute a car is plugged in but not charging:
-              after charging ends, and while charging is paused.
-            </span>
-          </div>
-          <div className="field">
-            <label htmlFor={f("grace")}>Idle grace period (minutes)</label>
-            <input
-              id={f("grace")}
-              name="idleGrace"
-              inputMode="numeric"
-              defaultValue={p.initial.idleGrace}
-              aria-describedby={f("grace-hint")}
-            />
-            <span id={f("grace-hint")} className="hint">
-              Free idle minutes per session, applied by Ivora. The kit checks
-              Ivora applies them before saving; if your account can&apos;t yet,
-              set 0.
-            </span>
-          </div>
-          <fieldset className="periods">
-            <legend>Time-of-use periods</legend>
-            <p className="hint muted">
-              A different price per kWh on some days and hours, for example peak
-              hours. Periods may not overlap.
-            </p>
-            {periods.map((x, i) => (
-              <Period
-                key={x.key}
-                index={i}
-                value={x.v}
-                currency={p.currency}
-                onRemove={() =>
-                  setPeriods((all) => all.filter((y) => y.key !== x.key))
-                }
-              />
-            ))}
-            {periods.length < 4 && (
-              <div>
-                <button
-                  type="button"
-                  className="button secondary"
-                  onClick={() =>
-                    setPeriods((all) => [
-                      ...all,
-                      {
-                        key: nextKey.current++,
-                        v: {
-                          start: "16:00",
-                          end: "21:00",
-                          price: "",
-                          days: WEEKDAYS,
-                        },
-                      },
-                    ])
-                  }
-                >
-                  Add a time-of-use period
-                </button>
-              </div>
-            )}
-          </fieldset>
-        </>
-      )}
-      <div className="field">
-        <label htmlFor={f("text")}>What drivers read (optional)</label>
-        <textarea
-          id={f("text")}
-          name="driverText"
-          defaultValue={p.initial.driverText}
-          maxLength={512}
-          rows={3}
-          aria-describedby={f("text-hint")}
-        />
-        <span id={f("text-hint")} className="hint">
-          Leave empty to use the kit&apos;s description of the prices (the
-          preview shows it). If you write your own, update it whenever the
-          prices change.
-        </span>
-      </div>
-      {p.tariffId && p.initial.driverText && (
-        <div className="confirm">
-          <input id={f("text-ok")} type="checkbox" name="driverTextConfirmed" />
-          <label htmlFor={f("text-ok")}>
-            My text for drivers matches these prices
+            Paid: drivers pay per kWh
           </label>
+          <label>
+            <input
+              type="radio"
+              name="kind"
+              value="free"
+              checked={kind === "free"}
+              onChange={() => setKind("free")}
+            />
+            Free: zero price, no card hold
+          </label>
+          <p className="help">
+            Paid is per kWh; add an idle fee or time-of-use periods below if you
+            want them. Free needs no card. Private chargers are set per charger
+            on the Pricing page.
+          </p>
+          {kind === "paid" && p.paidNote && (
+            <p className="hint" data-testid="paid-currency-note">
+              {p.paidNote}
+            </p>
+          )}
+        </fieldset>
+        <div className="field">
+          <label htmlFor={f("tz")}>Time zone</label>
+          <select
+            id={f("tz")}
+            name="timeZone"
+            defaultValue={p.initial.timeZone}
+            aria-describedby={f("tz-hint")}
+          >
+            {p.timeZones.map((z) => (
+              <option key={z} value={z}>
+                {z}
+              </option>
+            ))}
+          </select>
+          <span id={f("tz-hint")} className="hint">
+            The time-of-use periods are local times in this zone. Prices are in{" "}
+            {p.currency}.
+          </span>
         </div>
-      )}
-      <fieldset className="simulate">
-        <legend>Preview a session</legend>
-        <div className="period-times">
-          <div className="field">
-            <label htmlFor={f("sim-date")}>Date</label>
-            <input
-              id={f("sim-date")}
-              name="sim.date"
-              type="date"
-              defaultValue={p.simulation.date}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={f("sim-start")}>Charging from</label>
-            <input
-              id={f("sim-start")}
-              name="sim.start"
-              type="time"
-              defaultValue={p.simulation.start}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={f("sim-end")}>Until</label>
-            <input
-              id={f("sim-end")}
-              name="sim.end"
-              type="time"
-              defaultValue={p.simulation.end}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={f("sim-kwh")}>Energy (kWh)</label>
-            <input
-              id={f("sim-kwh")}
-              name="sim.energyKwh"
-              inputMode="decimal"
-              defaultValue={p.simulation.energyKwh}
-            />
-          </div>
-          <div className="field">
-            <label htmlFor={f("sim-idle")}>Then idle (minutes)</label>
-            <input
-              id={f("sim-idle")}
-              name="sim.idleMinutes"
-              inputMode="numeric"
-              defaultValue={p.simulation.idleMinutes}
-            />
-          </div>
+        {kind === "paid" && (
+          <>
+            <Field
+              id={f("energy")}
+              label={`Price per kWh (${p.currency})`}
+              help="Outside the time-of-use periods below. Excluding tax."
+              error={energyCheck.error}
+            >
+              {(c) => (
+                <input
+                  {...c}
+                  name="energy"
+                  inputMode="decimal"
+                  defaultValue={p.initial.energy}
+                  placeholder="0.35"
+                  required
+                  onBlur={(e) => energyCheck.onBlur(e.currentTarget.value)}
+                />
+              )}
+            </Field>
+            <Field
+              id={f("fee")}
+              label={`Session fee (${p.currency}, optional)`}
+              error={feeCheck.error}
+            >
+              {(c) => (
+                <input
+                  {...c}
+                  name="sessionFee"
+                  inputMode="decimal"
+                  defaultValue={p.initial.sessionFee}
+                  placeholder="0.00"
+                  onBlur={(e) => feeCheck.onBlur(e.currentTarget.value)}
+                />
+              )}
+            </Field>
+            <Field
+              id={f("idle")}
+              label={`Idle fee per minute (${p.currency}, optional)`}
+              help="Charged per started minute a car is plugged in but not charging: after charging ends, and while charging is paused."
+              error={idleCheck.error}
+            >
+              {(c) => (
+                <input
+                  {...c}
+                  name="idleFee"
+                  inputMode="decimal"
+                  defaultValue={p.initial.idleFee}
+                  placeholder="0.00"
+                  onBlur={(e) => idleCheck.onBlur(e.currentTarget.value)}
+                />
+              )}
+            </Field>
+            <div className="field">
+              <label htmlFor={f("grace")}>Idle grace period (minutes)</label>
+              <input
+                id={f("grace")}
+                name="idleGrace"
+                inputMode="numeric"
+                defaultValue={p.initial.idleGrace}
+                aria-describedby={f("grace-hint")}
+              />
+              <span id={f("grace-hint")} className="hint">
+                Free idle minutes per session, applied by Ivora. The kit checks
+                Ivora applies them before saving; if your account can&apos;t
+                yet, set 0.
+              </span>
+            </div>
+            <fieldset className="periods">
+              <legend>Time-of-use periods</legend>
+              <p className="hint muted">
+                A different price per kWh on some days and hours, for example
+                peak hours. Periods may not overlap.
+              </p>
+              {periods.map((x, i) => (
+                <Period
+                  key={x.key}
+                  index={i}
+                  value={x.v}
+                  currency={p.currency}
+                  onRemove={() =>
+                    setPeriods((all) => all.filter((y) => y.key !== x.key))
+                  }
+                />
+              ))}
+              {periods.length < 4 && (
+                <div>
+                  <button
+                    type="button"
+                    className="button secondary"
+                    onClick={() =>
+                      setPeriods((all) => [
+                        ...all,
+                        {
+                          key: nextKey.current++,
+                          v: {
+                            start: "16:00",
+                            end: "21:00",
+                            price: "",
+                            days: WEEKDAYS,
+                          },
+                        },
+                      ])
+                    }
+                  >
+                    Add a time-of-use period
+                  </button>
+                </div>
+              )}
+            </fieldset>
+          </>
+        )}
+        <div className="field">
+          <label htmlFor={f("text")}>What drivers read (optional)</label>
+          <textarea
+            id={f("text")}
+            name="driverText"
+            defaultValue={p.initial.driverText}
+            maxLength={512}
+            rows={3}
+            aria-describedby={f("text-hint")}
+          />
+          <span id={f("text-hint")} className="hint">
+            Leave empty to use the kit&apos;s description of the prices (the
+            preview shows it). If you write your own, update it whenever the
+            prices change.
+          </span>
         </div>
-      </fieldset>
-      <div className="actions">
-        <button
-          type="submit"
-          name="intent"
-          value="preview"
-          className="button secondary"
-          disabled={busy}
-        >
-          {previewing ? "Asking Ivora…" : "Preview price"}
-        </button>
-        <button
-          type="submit"
-          name="intent"
-          value="save"
-          className="button"
-          disabled={busy || p.locked}
-        >
-          {saving
-            ? "Saving…"
-            : p.tariffId
-              ? "Save as a new version"
-              : "Create tariff"}
-        </button>
+        {p.tariffId && p.initial.driverText && (
+          <div className="confirm">
+            <input
+              id={f("text-ok")}
+              type="checkbox"
+              name="driverTextConfirmed"
+            />
+            <label htmlFor={f("text-ok")}>
+              My text for drivers matches these prices
+            </label>
+          </div>
+        )}
+        <fieldset className="simulate">
+          <legend>Preview a session</legend>
+          <div className="period-times">
+            <div className="field">
+              <label htmlFor={f("sim-date")}>Date</label>
+              <input
+                id={f("sim-date")}
+                name="sim.date"
+                type="date"
+                defaultValue={p.simulation.date}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={f("sim-start")}>Charging from</label>
+              <input
+                id={f("sim-start")}
+                name="sim.start"
+                type="time"
+                defaultValue={p.simulation.start}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={f("sim-end")}>Until</label>
+              <input
+                id={f("sim-end")}
+                name="sim.end"
+                type="time"
+                defaultValue={p.simulation.end}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={f("sim-kwh")}>Energy (kWh)</label>
+              <input
+                id={f("sim-kwh")}
+                name="sim.energyKwh"
+                inputMode="decimal"
+                defaultValue={p.simulation.energyKwh}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor={f("sim-idle")}>Then idle (minutes)</label>
+              <input
+                id={f("sim-idle")}
+                name="sim.idleMinutes"
+                inputMode="numeric"
+                defaultValue={p.simulation.idleMinutes}
+              />
+            </div>
+          </div>
+        </fieldset>
+        <FormActions saved={last === "save" && Boolean(saveState.ok)}>
+          <button
+            type="submit"
+            name="intent"
+            value="preview"
+            className="button secondary"
+            disabled={busy}
+          >
+            {previewing ? "Asking Ivora…" : "Preview price"}
+          </button>
+          <button
+            type="submit"
+            name="intent"
+            value="save"
+            className="button"
+            disabled={busy || p.locked}
+          >
+            {saving
+              ? "Saving…"
+              : p.tariffId
+                ? "Save as a new version"
+                : "Create tariff"}
+          </button>
+        </FormActions>
       </div>
-      <div aria-live="polite">
+      <div className="tariff-side" aria-live="polite">
         {last === "save" && (
           <>
             <Result state={saveState} />

@@ -11,16 +11,30 @@ import {
   loadTariff,
 } from "@/lib/server/pricing";
 import { holdMinor, paidCurrencyNote } from "@/lib/server/pricing/tariff";
+import { CrumbName } from "@/app/ui/shell-breadcrumbs";
+import { PageHeader } from "@/app/ui/page-header";
+import { StatusChip } from "@/app/ui/status-chip";
+import { tariffType } from "@/lib/tariff-table";
+import { When } from "../../chargers/status";
 import { FinishTariff, TariffEditor } from "../forms";
 
 export const metadata = { title: "Tariff" };
 
-const when = (iso: string) =>
-  new Intl.DateTimeFormat("en-US", {
-    dateStyle: "medium",
-    timeStyle: "short",
-    timeZone: "UTC",
-  }).format(Date.parse(iso)) + " UTC";
+const DAY_NAMES: Record<string, string> = {
+  MONDAY: "Mon",
+  TUESDAY: "Tue",
+  WEDNESDAY: "Wed",
+  THURSDAY: "Thu",
+  FRIDAY: "Fri",
+  SATURDAY: "Sat",
+  SUNDAY: "Sun",
+};
+
+/** "Every day", "Mon–Fri" or a list, as the periods store them (display only). */
+function dayText(days: string[]) {
+  if (days.length === 7) return "Every day";
+  return days.map((d) => DAY_NAMES[d] ?? d).join(", ");
+}
 
 export default async function Page({
   params,
@@ -42,10 +56,11 @@ export default async function Page({
     : await idleGraceDefault(pricing, me, def);
   return (
     <>
-      <p>
-        <Link href="/pricing">← Pricing</Link>
-      </p>
-      <h1>{t.name}</h1>
+      <CrumbName path={`/pricing/${t.id}`} label={t.name} />
+      <PageHeader
+        title={t.name}
+        description={`${t.summary || "Not live yet"}${t.current ? ` · version ${t.current.version}` : ""}`}
+      />
       {created === "1" && !t.pending && (
         <p className="success" role="status">
           Tariff created in Ivora. Assign it to chargers on the{" "}
@@ -75,6 +90,10 @@ export default async function Page({
         </h2>
         <dl className="facts">
           <div>
+            <dt>Type</dt>
+            <dd>{tariffType(def)}</dd>
+          </div>
+          <div>
             <dt>Prices</dt>
             <dd>{t.summary}</dd>
           </div>
@@ -99,6 +118,49 @@ export default async function Page({
             </div>
           )}
         </dl>
+        {def.periods.length > 0 && (
+          <>
+            <h3>Time-of-use periods</h3>
+            <p className="muted">
+              Local times in {def.timeZone}. Outside these periods the price is{" "}
+              {formatMinor(def.energyMinorPerKwh, def.currency)} per kWh.
+            </p>
+            <div
+              className="table-scroll-area"
+              tabIndex={0}
+              role="region"
+              aria-label="Time-of-use periods"
+            >
+              <table className="grid-table">
+                <caption className="visually-hidden">
+                  Time-of-use periods
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Days</th>
+                    <th scope="col">From</th>
+                    <th scope="col">To</th>
+                    <th scope="col" className="num">
+                      Per kWh
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {def.periods.map((p, i) => (
+                    <tr key={i}>
+                      <td data-label="Days">{dayText(p.days)}</td>
+                      <td data-label="From">{p.start}</td>
+                      <td data-label="To">{p.end}</td>
+                      <td data-label="Per kWh" className="num">
+                        {formatMinor(p.energyMinorPerKwh, def.currency)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </section>
       <section className="card" aria-labelledby="editor-heading">
         <h2 id="editor-heading">Change prices</h2>
@@ -125,14 +187,12 @@ export default async function Page({
             <li key={v.version}>
               <span className="name">Version {v.version}</span>
               <span className="muted">
-                {[
-                  when(v.createdAt),
-                  v.ivoraTariffId ? `Ivora tariff ${v.ivoraTariffId}` : null,
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
+                {v.ivoraTariffId ? `Ivora tariff ${v.ivoraTariffId}` : ""}
               </span>
-              <span className={v === t.current ? "pill ok" : "pill off"}>
+              <When iso={v.createdAt} zone={def.timeZone} />
+              <StatusChip
+                tone={v === t.pending ? "busy" : v === t.current ? "ok" : "off"}
+              >
                 {v === t.pending
                   ? "Waiting for Ivora"
                   : v === t.current
@@ -140,7 +200,7 @@ export default async function Page({
                     : v.archivedAt
                       ? "Replaced (archived in Ivora)"
                       : "Replaced"}
-              </span>
+              </StatusChip>
             </li>
           ))}
         </ul>

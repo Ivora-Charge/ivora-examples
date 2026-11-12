@@ -10,8 +10,11 @@ test("demo: the CAD tariff shows CA$ and its editor says CAD", async ({
   await page.goto("/pricing");
   const cad = page.getByRole("link", { name: "Sample: Standard (CAD)" });
   await expect(cad).toBeVisible();
-  await expect(page.getByText(/CA\$0\.40 per kWh/).first()).toBeVisible();
-  await expect(page.getByText(/(^|[^A])\$0\.35 per kWh/).first()).toBeVisible();
+  const table = page.getByRole("table", { name: "Tariffs" });
+  await expect(table.getByText("CA$0.40").first()).toBeVisible();
+  await expect(
+    table.getByText("$0.35–0.45", { exact: true }).first(),
+  ).toBeVisible();
   await cad.click();
   await expect(page.getByText(/CA\$25\.00/).first()).toBeVisible();
   await expect(
