@@ -104,11 +104,11 @@ Every endpoint uses the OCPI response envelope, `Authorization: Token <base64>`,
 
 ## Make it yours in 5 minutes
 
-The template ships with its own brand, **Kilolane** (see the [design brief](docs/brief/BRIEF.md)): violet, a sodium-yellow "flare", warm paper by day and indigo by night, square power tiles. It is meant to be replaced. Every colour, font and size in both packages is a token, so restyling never means editing components.
+The template ships with its own brand, **Kilolane**: violet, a sodium-yellow "flare", warm paper by day and indigo by night, square power tiles. It is meant to be replaced. Every colour, font and size in both packages is a token, so restyling never means editing components.
 
 1. Edit [`server/brand/tokens.json`](server/brand/tokens.json): `name`, `shortName`, the `color` (light) and `colorDark` palettes with the same keys (including the `map*` colours of the app's map), `font` names, sizes, spacing and radii.
 2. Run `npm run brand:sync` in `server/`. It copies the file to `app/brand/tokens.json`; CI fails if the two differ.
-3. Set the app's display name in [`app/app.json`](app/app.json) (`expo.name`), and its `slug` and `scheme`. Replace the mark in `app/src/components/Logo.tsx` (and `docs/brief/logo.svg`).
+3. Set the app's display name in [`app/app.json`](app/app.json) (`expo.name`), and its `slug` and `scheme`. Replace the mark in `app/src/components/Logo.tsx`.
 4. For other fonts, set their names in `font`, import their files in `app/src/fonts.ts` (the app bundles them with `expo-font`) and replace the files in `server/brand/fonts/` and `server/brand/fonts.ts` (the admin web self-hosts them with `next/font/local`). Keep each font's licence next to its files.
 5. Run `npm test` in `app/`: it checks every text pair for WCAG AA (4.5:1) and the focus ring for 3:1, in light and dark mode, and fails on a colour that does not pass.
 

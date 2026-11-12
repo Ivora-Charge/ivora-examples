@@ -2,7 +2,7 @@ import type { EvseStatus, LocationSummary } from "./types";
 
 /**
  * The four states a driver sees. Never shown by colour alone: each has its own tile
- * shape and glyph (see docs/brief/BRIEF.md) and its word is always printed.
+ * shape and glyph, and its word is always printed.
  * - free: filled tile, filled dot
  * - busy: outlined tile, half dot
  * - down: hatched outlined tile, cross

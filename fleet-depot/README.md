@@ -15,7 +15,7 @@ The whole brand lives in [`brand/`](brand); components use only its tokens.
 3. **Logo:** `brand/logo.svg` (standalone file) and `brand/Logo.tsx` (the same shapes inline, so it follows `currentColor` and `--accent`). Keep both in step.
 4. **Fonts:** put woff2 files in `brand/fonts/` and point `brand/fonts.ts` at them. Use open-licensed fonts and keep their license files next to them.
 
-Light and dark follow the system setting; the header button switches and remembers the choice in the browser. The design brief and the approved mock are `brand/BRIEF.md` and `brand/mock.html`.
+Light and dark follow the system setting; the header button switches and remembers the choice in the browser.
 
 ### Fonts and icons
 
