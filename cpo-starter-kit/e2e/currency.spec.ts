@@ -48,7 +48,7 @@ test("demo: the CAD editor previews in CA$, and Save shows the USD-only note", a
 test("demo: a driver pays in CAD from the Waterfront sticker and gets a CA$ receipt", async ({
   page,
 }) => {
-  await page.goto("/chargers/station-9104");
+  await page.goto("/chargers/station-9104?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const url = (await page
     .getByRole("article")

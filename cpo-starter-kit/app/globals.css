@@ -2098,7 +2098,18 @@ select[aria-invalid="true"] {
   display: inline-flex;
   align-items: center;
   gap: var(--space-1);
+  min-height: var(--tap-target);
   cursor: pointer;
+}
+/* Header cells hold a 44 px sort button, so they need less padding of their own. */
+.grid-table thead th {
+  padding-block: 0;
+}
+/* Links in a row (a charger's name) are tap targets too. */
+.grid-table td a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--tap-target);
 }
 .grid-table th[aria-sort="ascending"] button::after {
   content: "▲";
@@ -2238,4 +2249,60 @@ select[aria-invalid="true"] {
 }
 .live-list:focus {
   outline: none;
+}
+
+/* Charger page: a figure that is text, not a number, in the summary strip; and the
+   destructive actions set apart under the tabs. */
+.strip dd .strip-text {
+  font-family: var(--font-sans);
+  font-size: var(--font-size-lg);
+}
+.danger-zone {
+  margin-top: var(--space-6);
+  border-color: var(--color-danger);
+  border-width: 2px;
+}
+.danger-zone h2 {
+  color: var(--color-danger);
+}
+
+/* Charger page: one tile per connector, an instant in local time with UTC beneath,
+   and the long explanation of a test behind "How this test works". */
+.connector-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.connector-tile {
+  display: grid;
+  justify-items: start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius-sm);
+}
+.connector-tile .pill {
+  margin-left: 0;
+}
+.when {
+  display: inline-flex;
+  flex-direction: column;
+}
+details.how {
+  margin-bottom: var(--space-3);
+}
+details.how > summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  min-height: var(--tap-target);
+  color: var(--color-link);
+  cursor: pointer;
+}
+details.how > summary:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: 2px;
 }

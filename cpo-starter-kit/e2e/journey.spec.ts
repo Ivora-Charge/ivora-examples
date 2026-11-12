@@ -66,7 +66,7 @@ test("demo journey: onboarding to a first charger and price, a paid session, Liv
     await open(page, isMobile, "Chargers");
     await page.getByLabel("Connection name (charge point ID)").fill(CHARGER);
     await page.getByLabel("Connectors").selectOption("2");
-    await page.getByLabel("Site").selectOption("new");
+    await page.getByLabel("Site", { exact: true }).selectOption("new");
     await page.getByLabel("Site name").fill("Sample Site: Journey Lot");
     await page.getByRole("button", { name: "Add charger" }).click();
     await expect(page.getByText(/is registered/)).toBeVisible();
@@ -76,6 +76,7 @@ test("demo journey: onboarding to a first charger and price, a paid session, Liv
     await page
       .getByRole("link", { name: "Open the charger to test it" })
       .click();
+    await page.getByRole("tab", { name: "Test" }).click();
     const conn = page.getByRole("region", { name: /Connection test/ });
     await expect(async () => {
       await conn
@@ -121,9 +122,10 @@ test("demo journey: onboarding to a first charger and price, a paid session, Liv
   await test.step("driver checkout: scan, pay with the demo card, charge", async () => {
     await open(page, isMobile, "Chargers");
     await page
-      .getByRole("list", { name: "Chargers" })
+      .getByRole("table", { name: "Chargers" })
       .getByRole("link", { name: CHARGER })
       .click();
+    await page.getByRole("tab", { name: "QR stickers" }).click();
     await page.getByRole("button", { name: "Create sticker codes" }).click();
     const url = (await page
       .getByRole("article")

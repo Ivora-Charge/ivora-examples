@@ -19,7 +19,7 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
   isMobile,
 }) => {
   await openChargers(page, isMobile);
-  const list = page.getByRole("list", { name: "Chargers" });
+  const list = page.getByRole("table", { name: "Chargers" });
   await expect(list).toContainText("DEMO-HARBOUR-01");
 
   // Add, with a new site. The password is shown once, with the connection URL.
@@ -28,7 +28,7 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
     .fill("DEMO-BAY-01");
   await page.getByLabel("Display name (optional)").fill("Bay 1");
   await page.getByLabel("Connectors").selectOption("2");
-  await page.getByLabel("Site").selectOption("new");
+  await page.getByLabel("Site", { exact: true }).selectOption("new");
   await page.getByLabel("Site name").fill("North Depot");
   await page.getByRole("button", { name: "Add charger" }).click();
   await expect(page.getByText(/Bay 1 is registered/)).toBeVisible();
@@ -48,12 +48,14 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
   await expect(
     page.getByRole("heading", { level: 1, name: "Bay 1" }),
   ).toBeVisible();
-  // Shown once: the charger page has only "set by the kit".
+  // Shown once: the charger page has only "set by the kit", in the Connection card.
+  await page.getByRole("tab", { name: "Configuration" }).click();
   await expect(
     page.getByText("Set by the kit (not shown again)"),
   ).toBeVisible();
 
   // Connection test: the simulated charger connects and boots a few seconds later.
+  await page.getByRole("tab", { name: "Test" }).click();
   const conn = page.getByRole("region", { name: /Connection test/ });
   await expect(async () => {
     await conn
@@ -69,6 +71,7 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
 
   // Remote test: needs the "this starts the charger" confirmation.
   await page.reload();
+  await page.getByRole("tab", { name: "Test" }).click();
   const remote = page.getByRole("region", {
     name: /Remote start and stop test/,
   });
@@ -94,6 +97,7 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
 
   // Stickers: a stable code per connector on this deployment's own address.
   await page.reload();
+  await page.getByRole("tab", { name: "QR stickers" }).click();
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   await expect(
     page.getByRole("heading", { level: 1, name: /QR stickers: Bay 1/ }),
@@ -114,9 +118,10 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
   // Edit, then remove: it charged, so Ivora keeps it and the kit hides it.
   await openChargers(page, isMobile);
   await page
-    .getByRole("list", { name: "Chargers" })
+    .getByRole("table", { name: "Chargers" })
     .getByRole("link", { name: "Bay 1" })
     .click();
+  await page.getByRole("tab", { name: "Configuration" }).click();
   await page.getByLabel("Display name", { exact: true }).fill("Bay 1 north");
   await page.getByRole("button", { name: "Save", exact: true }).click();
   await expect(page.getByText(/Charger saved/)).toBeVisible();
@@ -127,7 +132,7 @@ test("demo: add a charger, test it, print its stickers and remove it", async ({
   await expect(
     page.getByText(/Ivora keeps it because it has charging history/),
   ).toBeVisible();
-  await expect(page.getByRole("list", { name: "Chargers" })).not.toContainText(
+  await expect(page.getByRole("table", { name: "Chargers" })).not.toContainText(
     "Bay 1",
   );
   await page.goto(new URL(url).pathname);
@@ -144,6 +149,7 @@ test("demo: a sample charger that never charged is deleted in Ivora", async ({
     page.getByRole("heading", { level: 1, name: "DEMO-MARKET-01" }),
   ).toBeVisible();
   // Offline: no remote test until it is connected.
+  await page.getByRole("tab", { name: "Test" }).click();
   await expect(page.getByText(/The charger is offline/)).toBeVisible();
   const remove = page.getByRole("region", { name: "Remove" });
   await remove.getByLabel(/I understand, remove/).check();
@@ -151,13 +157,13 @@ test("demo: a sample charger that never charged is deleted in Ivora", async ({
   await expect(
     page.getByText("Charger removed, and deleted in Ivora.", { exact: false }),
   ).toBeVisible();
-  await expect(page.getByRole("list", { name: "Chargers" })).not.toContainText(
+  await expect(page.getByRole("table", { name: "Chargers" })).not.toContainText(
     "DEMO-MARKET-01",
   );
   await page
     .getByRole("button", { name: "Demo: reset chargers to the samples" })
     .click();
-  await expect(page.getByRole("list", { name: "Chargers" })).toContainText(
+  await expect(page.getByRole("table", { name: "Chargers" })).toContainText(
     "DEMO-MARKET-01",
   );
 });

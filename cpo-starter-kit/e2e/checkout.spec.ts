@@ -9,7 +9,7 @@ import { expect, test, type Page } from "@playwright/test";
 
 /** The sticker page of DEMO-HARBOUR-01's connector 1 (paid, "Sample: Standard"). */
 async function openSticker(page: Page) {
-  await page.goto("/chargers/station-9101");
+  await page.goto("/chargers/station-9101?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const url = (await page
     .getByRole("article")
@@ -112,7 +112,7 @@ test("demo: clear errors for an offline charger, a connector in use and Stripe n
 test("demo: a private charger and a free connector have no card checkout", async ({
   page,
 }) => {
-  await page.goto("/chargers/station-9103");
+  await page.goto("/chargers/station-9103?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const priv = (await page
     .getByRole("article")
@@ -126,7 +126,7 @@ test("demo: a private charger and a free connector have no card checkout", async
   ).toHaveCount(0);
 
   // DEMO-HARBOUR-02's connector 2 uses "Sample: Free staff charging".
-  await page.goto("/chargers/station-9102");
+  await page.goto("/chargers/station-9102?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const free = (await page
     .getByRole("article")
@@ -161,7 +161,7 @@ test("demo: start and stop a free session, with no payment", async ({
     harbour1.getByText("Prices saved for DEMO-HARBOUR-01."),
   ).toBeVisible();
 
-  await page.goto("/chargers/station-9101");
+  await page.goto("/chargers/station-9101?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const url = (await page
     .getByRole("article")

@@ -157,7 +157,7 @@ test("demo: assign tariffs per charger and connector; a private charger has no Q
   await expect(again).toContainText("Connector 2: Sample: Standard (its own)");
 
   // The private charger's sticker leads to no checkout.
-  await page.goto("/chargers/station-9103");
+  await page.goto("/chargers/station-9103?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const url = (await page
     .getByRole("article")
@@ -168,7 +168,7 @@ test("demo: assign tariffs per charger and connector; a private charger has no Q
   await expect(page.getByText(/This is a private charger/)).toBeVisible();
 
   // A public one shows its price.
-  await page.goto("/chargers/station-9101");
+  await page.goto("/chargers/station-9101?tab=stickers");
   await page.getByRole("button", { name: "Create sticker codes" }).click();
   const url2 = (await page
     .getByRole("article")

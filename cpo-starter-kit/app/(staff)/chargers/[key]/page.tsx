@@ -24,30 +24,58 @@ import {
   stopTestAction,
 } from "../actions";
 import { ChargerAction, Confirm } from "../forms";
-import { Check, StatusPill } from "../status";
+import { Check, StatusPill, When } from "../status";
+import { companyZone } from "../zone";
+import { ConnectionCard, OverviewPanel } from "./overview";
+import { EmptyState } from "@/app/ui/empty-state";
+import { PageHeader } from "@/app/ui/page-header";
+import { SummaryStrip } from "@/app/ui/summary-strip";
+import { Tabs, type TabSpec } from "@/app/ui/tabs";
+import {
+  ago,
+  chargerZone,
+  freeConnectorCount,
+  zonedTime,
+} from "@/lib/charger-table";
 
 export const metadata = { title: "Charger" };
 
-const when = (iso: string | null) =>
-  iso
-    ? new Date(iso).toISOString().replace("T", " ").slice(0, 19) + " UTC"
-    : "Never";
+const TABS = ["overview", "configuration", "stickers", "test"] as const;
 
 export default async function Page({
   params,
+  searchParams,
 }: {
   params: Promise<{ key: string }>;
+  searchParams: Promise<{ tab?: string | string[] }>;
 }) {
   const me = await requireRole("viewer");
   const { key } = await params;
-  const r = await loadCharger(getChargers(), me, key);
+  const { tab } = await searchParams;
+  const [r, company] = await Promise.all([
+    loadCharger(getChargers(), me, key),
+    companyZone(me.operatorId),
+  ]);
   if (!r.ok)
     return (
       <>
-        <h1>Charger</h1>
-        <p className="error" role="alert">
-          {r.error}
-        </p>
+        <PageHeader title="Charger" />
+        <div className="card">
+          <EmptyState
+            tone="error"
+            title="This charger did not load"
+            action={
+              <>
+                <Link className="button" href={`/chargers/${key}`}>
+                  Try again
+                </Link>
+                <Link href="/chargers">All chargers</Link>
+              </>
+            }
+          >
+            {r.error} Nothing was changed.
+          </EmptyState>
+        </div>
       </>
     );
   const c = r.charger;
@@ -55,170 +83,111 @@ export default async function Page({
   const canWork = atLeast(me.role, "technician");
   const canRemove = atLeast(me.role, "manager") || (canWork && c.pending);
   const registered = !c.pending && !c.missing;
+  const free = freeConnectorCount(c);
+  const initial = TABS.find((t) => t === tab);
+  const zone = chargerZone(
+    r.sites.find((s) => s.id === c.locationId)?.time_zone,
+    company,
+  );
+  const seen = zonedTime(c.lastSeen, zone);
+  const tabs: TabSpec[] = [
+    {
+      id: "overview",
+      label: "Overview",
+      panel: <OverviewPanel c={c} zone={zone} registered={registered} />,
+    },
+    ...(registered
+      ? [
+          {
+            id: "configuration",
+            label: "Configuration",
+            panel: (
+              <>
+                <ConnectionCard c={c} />
+                <ConfigurationPanel c={c} sites={r.sites} canWork={canWork} />
+              </>
+            ),
+          },
+          {
+            id: "stickers",
+            label: "QR stickers",
+            panel: <StickersCard c={c} canWork={canWork} />,
+          },
+          {
+            id: "test",
+            label: "Test",
+            panel: (
+              <>
+                <ConnectionTestCard c={c} canWork={canWork} zone={zone} />
+                <RemoteTestCard c={c} canWork={canWork} />
+              </>
+            ),
+          },
+        ]
+      : []),
+  ];
   return (
     <>
-      <p>
-        <Link href="/chargers">← All chargers</Link>
-      </p>
-      <h1>{c.label}</h1>
+      <PageHeader
+        title={c.label}
+        description={[c.label !== c.name ? c.name : null, c.siteName]
+          .filter(Boolean)
+          .join(" · ")}
+      />
       <CrumbName path={`/chargers/${c.key}`} label={c.label} />
-      <section className="card" aria-labelledby="about-heading">
-        <h2 id="about-heading">
-          Charger <StatusPill c={c} />
-          {me.demo && <span className="badge">Sample</span>}
-        </h2>
-        {c.pending && (
-          <div className="notice" role="note">
-            <p>
-              This charger is in the kit but not registered in Ivora yet: the
-              last try did not finish. Finishing repeats the same steps with the
-              same idempotency keys, so nothing is created twice.
-            </p>
-            {canWork && (
-              <ChargerAction
-                action={finishAddingAction}
-                chargerKey={c.key}
-                label="Finish adding"
-                pendingLabel="Registering…"
-              />
-            )}
-          </div>
-        )}
-        {c.missing && (
-          <p className="notice" role="note">
-            Ivora no longer has this charger&apos;s station (it was deleted
-            outside the kit). Remove it from the kit below.
+      {me.demo && <p className="muted">Sample charger: demo data only.</p>}
+      {c.pending && (
+        <div className="notice" role="note">
+          <p>
+            This charger is in the kit but not registered in Ivora yet: the last
+            try did not finish. Finishing repeats the same steps with the same
+            idempotency keys, so nothing is created twice.
           </p>
-        )}
-        <dl className="facts">
-          <div>
-            <dt>Connection name</dt>
-            <dd>
-              <code>{c.name}</code>
-            </dd>
-          </div>
-          <div>
-            <dt>Site</dt>
-            <dd>{c.siteName ?? "None"}</dd>
-          </div>
-          {c.connectionUrl && (
-            <div>
-              <dt>OCPP connection URL</dt>
-              <dd>
-                <code>{c.connectionUrl}</code>
-              </dd>
-            </div>
+          {canWork && (
+            <ChargerAction
+              action={finishAddingAction}
+              chargerKey={c.key}
+              label="Finish adding"
+              pendingLabel="Registering…"
+            />
           )}
-          <div>
-            <dt>Password</dt>
-            <dd>
-              {c.passwordSet
-                ? "Set by the kit (not shown again)"
-                : "Not set by the kit"}
-            </dd>
-          </div>
-          <div>
-            <dt>Charger</dt>
-            <dd>
-              {[c.vendor, c.model, c.protocol].filter(Boolean).join(" · ") ||
-                "Not reported yet"}
-            </dd>
-          </div>
-          <div>
-            <dt>Last message</dt>
-            <dd>{when(c.lastSeen)}</dd>
-          </div>
-        </dl>
-        {c.connectors.length > 0 && (
-          <ul className="rows" aria-label="Connectors">
-            {c.connectors.map((k) => (
-              <li key={k.id}>
-                <span className="name">Connector {k.number}</span>
-                <span className="muted">
-                  {[k.status, k.maxPowerKw ? `${k.maxPowerKw} kW` : null]
-                    .filter(Boolean)
-                    .join(" · ")}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </section>
-
-      {registered && <ConnectionTestCard c={c} canWork={canWork} />}
-      {registered && <RemoteTestCard c={c} canWork={canWork} />}
-      {registered && <StickersCard c={c} canWork={canWork} />}
-
-      {canWork && registered && (
-        <section className="card" aria-labelledby="edit-heading">
-          <h2 id="edit-heading">Edit</h2>
-          <ChargerAction
-            action={editChargerAction}
-            chargerKey={c.key}
-            label="Save"
-            pendingLabel="Saving…"
-          >
-            <div className="field">
-              <label htmlFor="edit-label">Display name</label>
-              <input
-                id="edit-label"
-                name="label"
-                defaultValue={c.label === c.name ? "" : c.label}
-                maxLength={80}
-                placeholder={c.name}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="edit-site">Site</label>
-              <select
-                id="edit-site"
-                name="locationId"
-                defaultValue={c.locationId ?? undefined}
-                aria-describedby="edit-site-hint"
-              >
-                {r.sites.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <span id="edit-site-hint" className="hint">
-                Moving the charger changes its site in Ivora. The connection
-                name can&apos;t change once the charger has connected; to rename
-                it, add it again under a new name.
+        </div>
+      )}
+      {c.missing && (
+        <p className="notice" role="note">
+          Ivora no longer has this charger&apos;s station (it was deleted
+          outside the kit). Remove it from the kit below.
+        </p>
+      )}
+      <SummaryStrip
+        label="Charger at a glance"
+        items={[
+          { label: "Status", value: <StatusPill c={c} /> },
+          {
+            label: "Connectors",
+            value: c.connectors.length ? free : "None",
+            unit: c.connectors.length ? `of ${c.connectors.length} free` : "",
+          },
+          {
+            label: "Last message",
+            value: (
+              <span className="strip-text">
+                {seen ? (
+                  <time dateTime={c.lastSeen!}>{seen.local}</time>
+                ) : (
+                  "Never"
+                )}
               </span>
-            </div>
-          </ChargerAction>
-        </section>
-      )}
-
-      {canWork && registered && (
-        <section className="card" aria-labelledby="password-heading">
-          <h2 id="password-heading">Charger password</h2>
-          <p className="muted">
-            A new random password, shown once. An offline charger gets it when
-            it next connects; a connected OCPP 2.0.1 charger receives it now. A
-            connected OCPP 1.6 charger can&apos;t be changed remotely: Ivora
-            refuses, so disconnect it first or change it in the charger&apos;s
-            own settings. Ivora limits how often a password can change.
-          </p>
-          <ChargerAction
-            action={resetPasswordAction}
-            chargerKey={c.key}
-            label="Set a new password"
-            pendingLabel="Setting…"
-            variant="secondary"
-          >
-            <Confirm>
-              I understand the charger can&apos;t connect with its old password
-              afterwards.
-            </Confirm>
-          </ChargerAction>
-        </section>
-      )}
-
+            ),
+            unit: seen
+              ? `${seen.zone === "UTC" ? "UTC" : seen.zone} · ${ago(c.lastSeen)}`
+              : "",
+          },
+        ]}
+      />
+      <Tabs label="Charger sections" tabs={tabs} initial={initial} />
       {canRemove && (
-        <section className="card" aria-labelledby="remove-heading">
+        <section className="card danger-zone" aria-labelledby="remove-heading">
           <h2 id="remove-heading">Remove</h2>
           <ul className="explain">
             <li>
@@ -249,12 +218,97 @@ export default async function Page({
   );
 }
 
-function ConnectionTestCard({
+function ConfigurationPanel({
   c,
+  sites,
   canWork,
 }: {
   c: ChargerView;
+  sites: { id: number; name: string }[];
   canWork: boolean;
+}) {
+  if (!canWork)
+    return (
+      <p className="muted">
+        Technicians, managers and owners can change a charger&apos;s settings.
+      </p>
+    );
+  return (
+    <>
+      <section className="card" aria-labelledby="edit-heading">
+        <h2 id="edit-heading">Edit</h2>
+        <ChargerAction
+          action={editChargerAction}
+          chargerKey={c.key}
+          label="Save"
+          pendingLabel="Saving…"
+        >
+          <div className="field">
+            <label htmlFor="edit-label">Display name</label>
+            <input
+              id="edit-label"
+              name="label"
+              defaultValue={c.label === c.name ? "" : c.label}
+              maxLength={80}
+              placeholder={c.name}
+            />
+          </div>
+          <div className="field">
+            <label htmlFor="edit-site">Site</label>
+            <select
+              id="edit-site"
+              name="locationId"
+              defaultValue={c.locationId ?? undefined}
+              aria-describedby="edit-site-hint"
+            >
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <span id="edit-site-hint" className="hint">
+              Moving the charger changes its site in Ivora. The connection name
+              can&apos;t change once the charger has connected; to rename it,
+              add it again under a new name.
+            </span>
+          </div>
+        </ChargerAction>
+      </section>
+      <section className="card" aria-labelledby="password-heading">
+        <h2 id="password-heading">Charger password</h2>
+        <p className="muted">
+          A new random password, shown once. An offline charger gets it when it
+          next connects; a connected OCPP 2.0.1 charger receives it now. A
+          connected OCPP 1.6 charger can&apos;t be changed remotely: Ivora
+          refuses, so disconnect it first or change it in the charger&apos;s own
+          settings. Ivora limits how often a password can change.
+        </p>
+        <ChargerAction
+          action={resetPasswordAction}
+          chargerKey={c.key}
+          label="Set a new password"
+          pendingLabel="Setting…"
+          variant="secondary"
+        >
+          <Confirm>
+            I understand the charger can&apos;t connect with its old password
+            afterwards.
+          </Confirm>
+        </ChargerAction>
+      </section>
+    </>
+  );
+}
+
+function ConnectionTestCard({
+  c,
+  canWork,
+  zone,
+}: {
+  c: ChargerView;
+  canWork: boolean;
+  zone: string;
 }) {
   const t = c.connectionTest;
   return (
@@ -268,9 +322,8 @@ function ConnectionTestCard({
         )}
       </h2>
       <p className="muted">
-        Checks the charger is connected, has booted (sent its BootNotification)
-        and sent a message in the last {HEARTBEAT_FRESH_SECONDS / 60} minutes.
-        Reads only: nothing is sent to the charger.
+        Checks the charger is connected, has booted and sent a message in the
+        last {HEARTBEAT_FRESH_SECONDS / 60} minutes. Nothing is sent to it.
       </p>
       {t && (
         <>
@@ -279,7 +332,9 @@ function ConnectionTestCard({
             <Check ok={t.booted} label="Booted" />
             <Check ok={t.heartbeat} label="Recent heartbeat" />
           </ul>
-          <p className="muted">Last run {when(t.at)}.</p>
+          <p className="muted">
+            Last run <When iso={t.at} zone={zone} />
+          </p>
         </>
       )}
       {canWork && (
@@ -329,13 +384,20 @@ function RemoteTestCard({ c, canWork }: { c: ChargerView; canWork: boolean }) {
         )}
       </h2>
       <p className="muted">
-        Starts a short session on one connector with an operator command (no
-        payment) and the staff token, so it shows as a staff/test session in
-        Live and Ivora's reports, then stops it. Energy is 0 kWh without a
-        vehicle; the test passes when the charger accepts the start and stop and
-        reports the session. It runs only on an Available connector, and it only
-        ever stops its own session.
+        Starts and stops a short free session on one connector, to prove the
+        charger takes remote commands.
       </p>
+      <details className="how">
+        <summary>How this test works</summary>
+        <p className="muted">
+          Starts a short session on one connector with an operator command (no
+          payment) and the staff token, so it shows as a staff/test session in
+          Live and Ivora&apos;s reports, then stops it. Energy is 0 kWh without
+          a vehicle; the test passes when the charger accepts the start and stop
+          and reports the session. It runs only on an Available connector, and
+          it only ever stops its own session.
+        </p>
+      </details>
       {t && (
         <p>
           Test {t.attempt}, connector {t.connectorNumber}:{" "}
