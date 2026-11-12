@@ -11,6 +11,7 @@ import { Logo } from "@/brand/Logo";
 import { signOutAction } from "./auth-actions";
 import Nav from "./nav";
 import ThemeToggle from "../theme-toggle";
+import ShellBreadcrumbs from "../ui/shell-breadcrumbs";
 
 async function signedInStaff() {
   try {
@@ -99,7 +100,16 @@ export default async function StaffLayout({
         )}
       </header>
       <main id="main" tabIndex={-1}>
-        {children}
+        <div className="page">
+          {staff && (
+            <ShellBreadcrumbs
+              sections={visibleModules({ fleet: config.fleetModule }).map(
+                ({ href, label }) => ({ href, label }),
+              )}
+            />
+          )}
+          {children}
+        </div>
       </main>
     </div>
   );

@@ -92,3 +92,39 @@ test("demo: screenshots of the Overview for the README (SCREENSHOT=1, desktop)",
       await context.close();
     }
 });
+
+test("nested pages show a breadcrumb trail back to their section; top-level pages show none", async ({
+  page,
+}) => {
+  await page.goto("/pricing");
+  await expect(
+    page.getByRole("navigation", { name: "Breadcrumb" }),
+  ).toHaveCount(0);
+  await page.goto("/pricing/new");
+  const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(crumbs.getByRole("link", { name: "Pricing" })).toHaveAttribute(
+    "href",
+    "/pricing",
+  );
+  await expect(crumbs.locator("[aria-current=page]")).toHaveText("New");
+});
+
+test("every page sits in one centred page width, and the phone menu closes with Escape", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto("/chargers");
+  const width = await page
+    .locator("main > .page")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(width).toBeLessThanOrEqual(1180);
+  if (!isMobile) return;
+  const menu = page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Menu" });
+  await menu.click();
+  await expect(menu).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveAttribute("aria-expanded", "false");
+  await expect(menu).toBeFocused();
+});
