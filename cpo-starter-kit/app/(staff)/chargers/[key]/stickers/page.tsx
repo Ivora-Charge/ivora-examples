@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CrumbName } from "@/app/ui/shell-breadcrumbs";
 import { requireRole } from "@/lib/server/auth";
 import { config } from "@/lib/server/env";
 import { getChargers, loadCharger } from "@/lib/server/chargers";
@@ -32,6 +33,7 @@ export default async function Page({
   const base = await qrBase();
   const back = (
     <p className="no-print">
+      <CrumbName path={`/chargers/${c.key}`} label={c.label} />
       <Link href={`/chargers/${c.key}`}>← {c.label}</Link>
     </p>
   );

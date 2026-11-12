@@ -1,13 +1,14 @@
+import { StatusChip } from "@/app/ui/status-chip";
 import type { ChargerView } from "@/lib/server/chargers";
 
 /** Status is never colour alone: a word, plus a dot (online) or square (offline). */
 export function StatusPill({ c }: { c: ChargerView }) {
-  if (c.pending) return <span className="pill warn">Not registered yet</span>;
-  if (c.missing) return <span className="pill off">Not in Ivora</span>;
+  if (c.pending) return <StatusChip tone="warn">Not registered yet</StatusChip>;
+  if (c.missing) return <StatusChip tone="off">Not in Ivora</StatusChip>;
   return (
-    <span className={c.online ? "pill ok" : "pill off"}>
+    <StatusChip tone={c.online ? "ok" : "off"}>
       {c.online ? "Online" : "Offline"}
-    </span>
+    </StatusChip>
   );
 }
 
@@ -15,9 +16,7 @@ export function StatusPill({ c }: { c: ChargerView }) {
 export function Check({ ok, label }: { ok: boolean; label: string }) {
   return (
     <li>
-      <span className={ok ? "pill ok" : "pill off"}>
-        {ok ? "Pass" : "Fail"}
-      </span>
+      <StatusChip tone={ok ? "ok" : "off"}>{ok ? "Pass" : "Fail"}</StatusChip>
       <span>{label}</span>
     </li>
   );

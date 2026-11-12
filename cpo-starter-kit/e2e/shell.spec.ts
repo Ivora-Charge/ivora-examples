@@ -92,3 +92,66 @@ test("demo: screenshots of the Overview for the README (SCREENSHOT=1, desktop)",
       await context.close();
     }
 });
+
+test("nested pages show a breadcrumb trail back to their section; top-level pages show none", async ({
+  page,
+}) => {
+  await page.goto("/pricing");
+  await expect(
+    page.getByRole("navigation", { name: "Breadcrumb" }),
+  ).toHaveCount(0);
+  await page.goto("/pricing/new");
+  const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(crumbs.getByRole("link", { name: "Pricing" })).toHaveAttribute(
+    "href",
+    "/pricing",
+  );
+  await expect(crumbs.locator("[aria-current=page]")).toHaveText("New");
+});
+
+test("public pages keep the same page width", async ({ page, isMobile }) => {
+  test.skip(isMobile, "the cap only matters on a wide screen");
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await page.goto("/welcome");
+  const width = await page
+    .locator("main#main")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(width).toBeLessThanOrEqual(1180);
+});
+
+test("a charger's breadcrumb shows its name, not its key", async ({ page }) => {
+  await page.goto("/chargers");
+  const first = page
+    .getByRole("list", { name: "Chargers" })
+    .getByRole("link")
+    .first();
+  const name = (await first.textContent())!.trim();
+  const href = (await first.getAttribute("href"))!;
+  await page.goto(`${href}/stickers`);
+  const crumbs = page.getByRole("navigation", { name: "Breadcrumb" });
+  await expect(crumbs.getByRole("link", { name, exact: true })).toHaveAttribute(
+    "href",
+    href,
+  );
+  await expect(crumbs.locator("[aria-current=page]")).toHaveText("Stickers");
+});
+
+test("every page sits in one centred page width, and the phone menu closes with Escape", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto("/chargers");
+  const width = await page
+    .locator("main > .page")
+    .evaluate((el) => el.getBoundingClientRect().width);
+  expect(width).toBeLessThanOrEqual(1180);
+  if (!isMobile) return;
+  const menu = page
+    .getByRole("navigation", { name: "Main" })
+    .getByRole("button", { name: "Menu" });
+  await menu.click();
+  await expect(menu).toHaveAttribute("aria-expanded", "true");
+  await page.keyboard.press("Escape");
+  await expect(menu).toHaveAttribute("aria-expanded", "false");
+  await expect(menu).toBeFocused();
+});

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import { CrumbName } from "@/app/ui/shell-breadcrumbs";
 import { atLeast } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
 import {
@@ -60,6 +61,7 @@ export default async function Page({
         <Link href="/chargers">← All chargers</Link>
       </p>
       <h1>{c.label}</h1>
+      <CrumbName path={`/chargers/${c.key}`} label={c.label} />
       <section className="card" aria-labelledby="about-heading">
         <h2 id="about-heading">
           Charger <StatusPill c={c} />

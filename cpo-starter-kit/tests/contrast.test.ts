@@ -79,6 +79,10 @@ const TEXT_PAIRS = [
   ["text", "ok-bg"], // success, online pill
   ["text", "warn-bg"], // notices
   ["text", "danger-bg"], // errors, offline pill
+  ["ok", "ok-bg"], // status chips (words in the tone colour)
+  ["warn", "warn-bg"],
+  ["danger", "danger-bg"],
+  ["primary", "surface-hover"], // busy chip, selected filter
 ] as const;
 
 // [shape, background]: borders and focus rings that must be seen (3:1).

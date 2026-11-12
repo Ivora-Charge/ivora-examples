@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Icon } from "@/brand/icons";
 
 export interface NavItem {
@@ -23,9 +23,22 @@ const GROUPS: [string, string[]][] = [
 export default function Nav({ items }: { items: NavItem[] }) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   // Close the phone menu after navigating.
   useEffect(() => setOpen(false), [pathname]);
+
+  // Escape closes the phone menu and returns focus to its button.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setOpen(false);
+      buttonRef.current?.focus();
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [open]);
 
   const listed = GROUPS.flatMap(([, slugs]) => slugs);
   const groups = GROUPS.map(([name, slugs], i) => ({
@@ -40,6 +53,7 @@ export default function Nav({ items }: { items: NavItem[] }) {
   return (
     <nav aria-label="Main" className="nav">
       <button
+        ref={buttonRef}
         type="button"
         className="menu-button"
         aria-expanded={open}
