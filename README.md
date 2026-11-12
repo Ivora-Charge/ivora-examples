@@ -41,7 +41,7 @@ npm ci
 npm run dev
 ```
 
-All templates follow the shared [conventions](docs/conventions.md): server-side API keys, one Ivora project per deployment, verified webhooks, idempotent writes, consistent units, and QR codes on your own domain. Planned: [Connect and install-as-app modes](docs/connect-and-app-modes.md) (design, under security review).
+All templates follow the shared [conventions](docs/conventions.md): server-side API keys, one Ivora project per deployment, verified webhooks, idempotent writes, consistent units, and QR codes on your own domain. Design under review: [Connect and install-as-app modes](docs/connect-and-app-modes.md).
 
 ## How templates relate to Ivora
 
