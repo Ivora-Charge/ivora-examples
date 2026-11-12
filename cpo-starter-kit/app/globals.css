@@ -1062,20 +1062,15 @@ h2 .muted {
   position: relative;
   background: var(--color-surface-hover);
 }
-.live-map.sample-map::before {
-  content: "";
+/* The drawing sits under Leaflet's panes and takes no clicks. */
+.live-map.sample-map .sample-map-art {
   position: absolute;
   inset: 0;
-  background: url("/sample-map.svg") center / cover no-repeat;
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+  pointer-events: none;
   border-radius: inherit;
-}
-:root[data-theme="dark"] .live-map.sample-map::before {
-  filter: brightness(0.55) saturate(0.8);
-}
-@media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) .live-map.sample-map::before {
-    filter: brightness(0.55) saturate(0.8);
-  }
 }
 .live-map.no-tiles {
   background:

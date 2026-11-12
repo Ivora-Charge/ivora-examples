@@ -3,6 +3,7 @@
 import "leaflet/dist/leaflet.css";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef } from "react";
+import { SampleMap } from "./sample-map";
 
 export interface MapSite {
   id: number;
@@ -56,7 +57,7 @@ const escape = (s: string) =>
 export default function LiveMap(p: {
   sites: MapSite[];
   tiles: MapTiles | null;
-  /** Demo mode: a static sample map image stands in for the tiles. */
+  /** Demo mode: a static sample map drawing (`SampleMap`) stands in for the tiles. */
   sample?: boolean;
 }) {
   const el = useRef<HTMLDivElement>(null);
@@ -149,6 +150,8 @@ export default function LiveMap(p: {
       }
       role="application"
       aria-label={`${p.sample ? "Sample map of sites" : "Map of sites"}. Select a site to show its chargers in the table, which has the same information.`}
-    />
+    >
+      {p.sample && !p.tiles ? <SampleMap /> : null}
+    </div>
   );
 }
