@@ -26,9 +26,9 @@ import {
 import { ChargerAction, Confirm } from "../forms";
 import { Check, StatusPill, When } from "../status";
 import { companyZone } from "../zone";
+import { ConnectionCard, OverviewPanel } from "./overview";
 import { EmptyState } from "@/app/ui/empty-state";
 import { PageHeader } from "@/app/ui/page-header";
-import { Chip } from "@/app/ui/status-chip";
 import { SummaryStrip } from "@/app/ui/summary-strip";
 import { Tabs, type TabSpec } from "@/app/ui/tabs";
 import {
@@ -37,7 +37,6 @@ import {
   freeConnectorCount,
   zonedTime,
 } from "@/lib/charger-table";
-import { connectorChip } from "@/lib/status-chips";
 
 export const metadata = { title: "Charger" };
 
@@ -95,7 +94,7 @@ export default async function Page({
     {
       id: "overview",
       label: "Overview",
-      panel: <OverviewPanel c={c} zone={zone} />,
+      panel: <OverviewPanel c={c} zone={zone} registered={registered} />,
     },
     ...(registered
       ? [
@@ -216,99 +215,6 @@ export default async function Page({
         </section>
       )}
     </>
-  );
-}
-
-function OverviewPanel({ c, zone }: { c: ChargerView; zone: string }) {
-  return (
-    <>
-      <section className="card" aria-labelledby="connectors-heading">
-        <h2 id="connectors-heading">Connectors</h2>
-        {c.connectors.length ? (
-          <ul className="connector-tiles" aria-label="Connectors">
-            {c.connectors.map((k) => (
-              <li key={k.id} className="connector-tile">
-                <span className="name">Connector {k.number}</span>
-                {k.status ? (
-                  <Chip spec={connectorChip(k.status)} />
-                ) : (
-                  <span className="muted">No status yet</span>
-                )}
-                <span className="muted">
-                  {k.maxPowerKw
-                    ? `Up to ${k.maxPowerKw} kW`
-                    : "Power not reported"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="muted">
-            Ivora reports no connectors yet. They appear once the charger
-            connects.
-          </p>
-        )}
-      </section>
-      <section className="card" aria-labelledby="about-heading">
-        <h2 id="about-heading">Charger</h2>
-        <dl className="facts">
-          <div>
-            <dt>Site</dt>
-            <dd>{c.siteName ?? "None"}</dd>
-          </div>
-          <div>
-            <dt>Make and model</dt>
-            <dd>
-              {[c.vendor, c.model].filter(Boolean).join(" · ") ||
-                "Not reported yet"}
-            </dd>
-          </div>
-          <div>
-            <dt>Last message</dt>
-            <dd>
-              <When iso={c.lastSeen} zone={zone} />
-            </dd>
-          </div>
-        </dl>
-      </section>
-    </>
-  );
-}
-
-/** Read-only: how the charger connects. Everyone who can see the charger sees it. */
-function ConnectionCard({ c }: { c: ChargerView }) {
-  return (
-    <section className="card" aria-labelledby="connection-heading">
-      <h2 id="connection-heading">Connection</h2>
-      <dl className="facts">
-        <div>
-          <dt>Connection name</dt>
-          <dd>
-            <code>{c.name}</code>
-          </dd>
-        </div>
-        {c.connectionUrl && (
-          <div>
-            <dt>OCPP connection URL</dt>
-            <dd>
-              <code>{c.connectionUrl}</code>
-            </dd>
-          </div>
-        )}
-        <div>
-          <dt>Password</dt>
-          <dd>
-            {c.passwordSet
-              ? "Set by the kit (not shown again)"
-              : "Not set by the kit"}
-          </dd>
-        </div>
-        <div>
-          <dt>Protocol</dt>
-          <dd>{c.protocol ?? "Not reported yet"}</dd>
-        </div>
-      </dl>
-    </section>
   );
 }
 
