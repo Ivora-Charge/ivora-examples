@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { config, isDemo } from "@/lib/server/env";
+import { config } from "@/lib/server/env";
 import { currentStaff } from "@/lib/server/auth";
 import { visibleModules } from "@/lib/modules";
 import { ROLE_LABELS } from "@/lib/roles";
@@ -69,7 +69,6 @@ export default async function StaffLayout({
             <p className="workspace">
               <span>Workspace</span>
               {config.operatorName}
-              {isDemo() && <span>Placeholder brand: replace it in brand/</span>}
             </p>
             <Nav
               items={visibleModules({ fleet: config.fleetModule }).map(
@@ -80,22 +79,24 @@ export default async function StaffLayout({
                   soon: status === "coming-soon",
                 }),
               )}
+              account={
+                <div className="who">
+                  <span>
+                    {staff.email} · {ROLE_LABELS[staff.role]}
+                  </span>
+                  {staff.demo ? (
+                    <span className="badge">Sample</span>
+                  ) : (
+                    <form action={signOutAction}>
+                      <button type="submit" className="button secondary">
+                        Sign out
+                      </button>
+                    </form>
+                  )}
+                  <ThemeToggle />
+                </div>
+              }
             />
-            <div className="who">
-              <span>
-                {staff.email} · {ROLE_LABELS[staff.role]}
-              </span>
-              {staff.demo ? (
-                <span className="badge">Sample</span>
-              ) : (
-                <form action={signOutAction}>
-                  <button type="submit" className="button secondary">
-                    Sign out
-                  </button>
-                </form>
-              )}
-              <ThemeToggle />
-            </div>
           </>
         )}
       </header>

@@ -56,6 +56,8 @@ const escape = (s: string) =>
 export default function LiveMap(p: {
   sites: MapSite[];
   tiles: MapTiles | null;
+  /** Demo mode: a static sample map image stands in for the tiles. */
+  sample?: boolean;
 }) {
   const el = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -95,6 +97,8 @@ export default function LiveMap(p: {
       for (const s of sites) {
         const label = `${s.name}: ${STATE_LABEL[s.state]} (${s.online} online, ${s.offline} offline, ${s.faulted} faulted)`;
         const size = s.state === "online" ? 22 : 26;
+        // The marker is a button: its box is a 44 px tap target around the shape.
+        const box = 44;
         const go = () => {
           const href = hrefs.current.get(s.id);
           if (href) router.push(href);
@@ -104,8 +108,8 @@ export default function LiveMap(p: {
           icon: L.divIcon({
             className: `map-marker ${s.state}`,
             html: `<svg viewBox="0 0 24 24" width="${size}" height="${size}" aria-hidden="true" focusable="false">${SHAPE[s.state]}</svg>`,
-            iconSize: [size, size],
-            iconAnchor: [size / 2, size / 2],
+            iconSize: [box, box],
+            iconAnchor: [box / 2, box / 2],
           }),
         })
           .bindTooltip(escape(label))
@@ -136,9 +140,15 @@ export default function LiveMap(p: {
   return (
     <div
       ref={el}
-      className={p.tiles ? "live-map" : "live-map no-tiles"}
+      className={
+        p.tiles
+          ? "live-map"
+          : p.sample
+            ? "live-map sample-map"
+            : "live-map no-tiles"
+      }
       role="application"
-      aria-label="Map of sites. Select a site to show its chargers in the table, which has the same information."
+      aria-label={`${p.sample ? "Sample map of sites" : "Map of sites"}. Select a site to show its chargers in the table, which has the same information.`}
     />
   );
 }

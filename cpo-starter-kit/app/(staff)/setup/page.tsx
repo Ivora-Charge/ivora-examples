@@ -16,6 +16,16 @@ export default async function Page() {
             creates the first owner, once, with the setup secret from the
             deployment&apos;s environment variables.
           </p>
+          <h2>Make it yours</h2>
+          <p>
+            Everything here is sample data: nothing is sent to Ivora, chargers,
+            payment providers or email. To go live, add your Ivora API key in
+            your deployment&apos;s environment variables (for example Vercel
+            Project Settings → Environment Variables, or <code>.env.local</code>{" "}
+            locally); the kit has no in-app key entry. Live mode also needs
+            Supabase. The README lists every variable. The placeholder brand
+            (name, logo, colours) is replaced in <code>brand/</code>.
+          </p>
           <Link className="button" href="/team">
             See the demo team
           </Link>

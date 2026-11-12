@@ -14,6 +14,7 @@ import {
   parseLiveId,
   type LiveFilter,
 } from "@/lib/live-table";
+import { companyZone } from "../chargers/zone";
 import { resetDemoLiveAction } from "./actions";
 import { CommandsCard } from "./commands";
 import LiveMap from "./map";
@@ -41,13 +42,17 @@ const DESCRIPTION =
 async function Content({ search }: { search: Search }) {
   const me = await requireRole("viewer");
   const canWork = atLeast(me.role, "technician");
-  const r = await loadLive(getLive(), me);
+  const [r, zone] = await Promise.all([
+    loadLive(getLive(), me),
+    companyZone(me.operatorId),
+  ]);
   if (!r.ok)
     return (
       <>
         <PageHeader title={TITLE} description={DESCRIPTION} />
         <Refresher
           readAt={new Date().toISOString()}
+          zone={zone}
           webhooks={Boolean(config.webhookSecret)}
           pending={false}
           retryAfter={r.retryAfter}
@@ -149,7 +154,7 @@ async function Content({ search }: { search: Search }) {
               aria-label={`Remote actions for ${st.name}`}
               aria-current={st.id === chargerId ? "true" : undefined}
             >
-              {st.id === chargerId ? "Selected" : "Select"}
+              {st.id === chargerId ? "Selected" : "Actions"}
             </Link>
           ),
         },
@@ -191,6 +196,7 @@ async function Content({ search }: { search: Search }) {
       <PageHeader title={TITLE} description={DESCRIPTION} />
       <Refresher
         readAt={live.readAt}
+        zone={zone}
         webhooks={!demo && Boolean(config.webhookSecret)}
         pending={pending}
         retryAfter={live.retryAfter}
@@ -349,7 +355,14 @@ async function Content({ search }: { search: Search }) {
               <section className="card" aria-labelledby="map-heading">
                 <h2 id="map-heading">
                   Map
-                  {demo && <span className="badge">Sample</span>}
+                  {demo && (
+                    <span
+                      className="badge"
+                      title="Sample map: the demo loads no map tiles, so it stays offline. Live mode shows OpenStreetMap."
+                    >
+                      Sample
+                    </span>
+                  )}
                 </h2>
                 <LiveMap
                   sites={live.points.map((p) => ({
@@ -357,24 +370,18 @@ async function Content({ search }: { search: Search }) {
                     href: `${liveHref(filter, chargerId, p.id)}#chargers`,
                   }))}
                   tiles={tiles}
+                  sample={demo}
                 />
                 <p className="muted sm">
                   Marker shape repeats the status: circle online, triangle
                   fault, square offline. Select a marker to show that
                   site&apos;s chargers; the table has the same information.
                 </p>
-                {demo ? (
+                {!demo && !tiles && (
                   <p className="muted sm">
-                    Demo: no map tiles are loaded, so the demo stays offline.
-                    Live mode shows OpenStreetMap.
+                    Map tiles are off (MAP_TILE_URL). The markers still show
+                    each site.
                   </p>
-                ) : (
-                  !tiles && (
-                    <p className="muted sm">
-                      Map tiles are off (MAP_TILE_URL). The markers still show
-                      each site.
-                    </p>
-                  )
                 )}
               </section>
             )}

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Icon } from "@/brand/icons";
 
 export interface NavItem {
@@ -20,7 +20,14 @@ const GROUPS: [string, string[]][] = [
 ];
 
 /** Main navigation: a grouped sidebar on wide screens, a menu button on phones. */
-export default function Nav({ items }: { items: NavItem[] }) {
+export default function Nav({
+  items,
+  account,
+}: {
+  items: NavItem[];
+  /** The account row (who, sign out, theme): at the foot of the sidebar, inside the phone menu. */
+  account?: ReactNode;
+}) {
   const pathname = usePathname();
   const [open, setOpen] = useState(false);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -64,32 +71,35 @@ export default function Nav({ items }: { items: NavItem[] }) {
         Menu
       </button>
       <div id="nav-list" className={open ? "nav-list open" : "nav-list"}>
-        {groups.map((g) => (
-          <div key={g.name} className="nav-group">
-            <p id={`nav-${g.name}`}>{g.name}</p>
-            <ul aria-labelledby={`nav-${g.name}`}>
-              {g.items.map((item) => {
-                const current =
-                  item.href === "/"
-                    ? pathname === "/"
-                    : pathname === item.href ||
-                      pathname.startsWith(`${item.href}/`);
-                return (
-                  <li key={item.href}>
-                    <Link
-                      href={item.href}
-                      aria-current={current ? "page" : undefined}
-                    >
-                      <Icon name={item.slug} />
-                      {item.label}
-                      {item.soon && <span className="soon">Soon</span>}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
+        <div className="nav-groups">
+          {groups.map((g) => (
+            <div key={g.name} className="nav-group">
+              <p id={`nav-${g.name}`}>{g.name}</p>
+              <ul aria-labelledby={`nav-${g.name}`}>
+                {g.items.map((item) => {
+                  const current =
+                    item.href === "/"
+                      ? pathname === "/"
+                      : pathname === item.href ||
+                        pathname.startsWith(`${item.href}/`);
+                  return (
+                    <li key={item.href}>
+                      <Link
+                        href={item.href}
+                        aria-current={current ? "page" : undefined}
+                      >
+                        <Icon name={item.slug} />
+                        {item.label}
+                        {item.soon && <span className="soon">Soon</span>}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          ))}
+        </div>
+        {account}
       </div>
     </nav>
   );

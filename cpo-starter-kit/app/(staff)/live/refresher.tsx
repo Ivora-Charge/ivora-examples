@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { updatedLabel } from "@/lib/updated-label";
 import { useEffect, useRef, useState } from "react";
 
 /** How often an open page asks the kit (not Ivora) whether anything changed. */
@@ -16,8 +17,6 @@ const PENDING_FOR_MS = 120_000;
 /** After a 429 without Retry-After, wait this long before reading again. */
 export const RATE_LIMITED_MS = 60_000;
 
-const time = (iso: string) => `${iso.slice(11, 19)} UTC`;
-
 /**
  * Keeps the Live view current. With webhooks, it polls the kit's own /api/live/changes
  * (a database read, no Ivora request) and re-reads the page when a webhook or command
@@ -29,6 +28,8 @@ const time = (iso: string) => `${iso.slice(11, 19)} UTC`;
  */
 export function Refresher(p: {
   readAt: string;
+  /** The company's IANA time zone from Settings; null shows UTC only. */
+  zone?: string | null;
   webhooks: boolean;
   pending: boolean;
   /** Seconds Ivora asked to wait (the page's read was rate limited). */
@@ -95,7 +96,7 @@ export function Refresher(p: {
 
   return (
     <p className="muted refresher" role="status" aria-live="polite">
-      Updated {time(p.readAt)}
+      Updated {updatedLabel(p.readAt, p.zone ?? null)}
       {refreshing ? " · refreshing…" : ""}.{" "}
       {p.retryAfter
         ? `Ivora asked the kit to slow down: the next update is in ${p.retryAfter} seconds.`

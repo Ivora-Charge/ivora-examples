@@ -167,7 +167,7 @@ test("missing pages answer 404, outside and inside the staff app", async ({
 
 test("the landing page leads into the demo", async ({ page }) => {
   await page.goto("/welcome");
-  await expect(page.getByText("Demo mode:")).toBeVisible();
+  await expect(page.getByText("Demo data")).toBeVisible();
   await page
     .getByRole("main")
     .getByRole("link", { name: "Try the demo" })
