@@ -4,23 +4,20 @@ import { notFound } from "next/navigation";
 import { atLeast } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
 import { config } from "@/lib/server/env";
-import {
-  getLive,
-  loadStation,
-  STARTABLE,
-  type SessionView,
-} from "@/lib/server/live";
+import { getLive, loadStation, STARTABLE } from "@/lib/server/live";
 import { formatKwh } from "@/lib/units";
 import { CommandsCard } from "../../commands";
 import { CommandForm, RecheckForm, ResendForm } from "../../forms";
 import { Refresher } from "../../refresher";
-import { commandTitle, ConnectorPill, StatePill, when } from "../../status";
+import {
+  commandTitle,
+  ConnectorPill,
+  sessionLabel,
+  StatePill,
+  when,
+} from "../../status";
 
 export const metadata = { title: "Live charger" };
-
-/** How a session is named in a confirmation: the driver's session, unmistakably. */
-const sessionLabel = (s: SessionView) =>
-  `${s.staff ? "staff " : s.free ? "free " : ""}session ${s.id}${s.connectorNumber ? ` on connector ${s.connectorNumber}` : ""} (since ${when(s.startedAt)}, ${formatKwh(s.energyKwh)}${s.idToken ? `, token ${s.idToken}` : ""})`;
 
 export default async function Page({
   params,

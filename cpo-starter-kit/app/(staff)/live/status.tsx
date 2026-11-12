@@ -1,4 +1,5 @@
-import type { CommandView, StationState } from "@/lib/server/live";
+import type { CommandView, SessionView, StationState } from "@/lib/server/live";
+import { formatKwh } from "@/lib/units";
 
 import { Chip } from "@/app/ui/status-chip";
 import { PHASE_CHIPS, STATION_CHIPS, connectorChip } from "@/lib/status-chips";
@@ -37,3 +38,7 @@ export const when = (iso: string | null) =>
   iso
     ? `${new Date(iso).toISOString().replace("T", " ").slice(0, 16)} UTC`
     : "—";
+
+/** How a session is named in a confirmation: the driver's session, unmistakably. */
+export const sessionLabel = (s: SessionView) =>
+  `${s.staff ? "staff " : s.free ? "free " : ""}session ${s.id}${s.connectorNumber ? ` on connector ${s.connectorNumber}` : ""} (since ${when(s.startedAt)}, ${formatKwh(s.energyKwh)}${s.idToken ? `, token ${s.idToken}` : ""})`;

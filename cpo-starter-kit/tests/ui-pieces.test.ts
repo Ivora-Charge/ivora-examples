@@ -234,7 +234,27 @@ describe("page pieces", () => {
       }),
     );
     expect(out).toContain("<dt>Online</dt>");
-    expect(out).toContain('<a class="strip-link" href="/live">1</a>');
+    expect(out).toContain('href="/live"');
+    // The link names itself with the label, not the bare figure.
+    expect(out).toContain('<span class="visually-hidden">Faults: </span>1</a>');
+  });
+
+  it("summary strip marks the figure in force as current", () => {
+    const out = html(
+      h(SummaryStrip, {
+        label: "Live summary",
+        items: [
+          { label: "All", value: 4, href: "/live" },
+          {
+            label: "Faulted",
+            value: 1,
+            href: "/live?status=faulted",
+            active: true,
+          },
+        ],
+      }),
+    );
+    expect(out.match(/aria-current="true"/g)).toHaveLength(1);
   });
 
   it("tabs render a tablist, with only the first panel visible", () => {
@@ -270,6 +290,29 @@ describe("page pieces", () => {
     expect(out).toContain("<button");
     expect(out).toContain("All status");
     expect(out).toContain("3 rows");
+  });
+
+  it("data table keeps a hidden column out of the grid but offers its filter", () => {
+    const out = html(
+      h(DataTable, {
+        caption: "Chargers",
+        columns: [
+          { key: "name", label: "Name" },
+          {
+            key: "state",
+            label: "Status",
+            filter: true,
+            hidden: true,
+            allLabel: "Every status",
+          },
+        ],
+        rows: ROWS,
+      }),
+    );
+    expect(out).not.toContain('data-label="Status"');
+    expect(out.match(/scope="col"/g)).toHaveLength(1);
+    expect(out).toContain("Every status");
+    expect(out).toContain("Filter by status");
   });
 
   it("data table with no rows shows the empty state and its next step", () => {
