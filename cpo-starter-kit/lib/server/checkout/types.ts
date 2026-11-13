@@ -197,6 +197,13 @@ export interface CheckoutStore {
     id: string,
     changes: CheckoutChanges,
   ): Promise<boolean>;
+  /**
+   * The settlement sweep (/api/cron/settle) finished a pass at `at` (ISO). Only ever
+   * moves forward: an older pass that finishes last changes nothing.
+   */
+  markSwept(at: string): Promise<void>;
+  /** When the settlement sweep last finished a pass; null if it never did. */
+  lastSweptAt(): Promise<string | null>;
 }
 
 export type CheckoutErrorCode =

@@ -316,6 +316,11 @@ export function createDemoCheckoutStore(
         return true;
       });
     },
+    // Demo mode has no sweep and takes no payment: nothing to record.
+    async markSwept() {},
+    async lastSweptAt() {
+      return null;
+    },
   };
 }
 
