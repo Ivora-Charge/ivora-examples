@@ -79,6 +79,17 @@ export const CARD_CURRENCY = "USD";
  * seconds; START_TIMEOUT_MS is how long a start may take after that.
  */
 export const UNSTARTED_HOLD_MS = 30 * 60 * 1000;
+/**
+ * reconcile() creates no charging session for a hold older than UNSTARTED_HOLD_MS
+ * minus this margin; it releases the hold instead. Without the cutoff, a late Stripe
+ * webhook or a returning driver could start charging on a hold the sweep is releasing
+ * at that moment, and the energy would go unpaid. The margin covers a slow request
+ * and clock drift between this server and Stripe.
+ */
+export const LATE_START_MARGIN_MS = 20 * 60 * 1000;
+export const LATE_START_MS = UNSTARTED_HOLD_MS - LATE_START_MARGIN_MS;
+/** Checkout metadata naming the deployment's Ivora tenant (Settings.tenantId). */
+export const TENANT_TAG = "fc_tenant";
 
 export const applicationReference = (id: string) =>
   `${APPLICATION_PREFIX}${id}`;
@@ -266,6 +277,7 @@ export async function createCheckout(
     fc_tariff: String(tariffId),
     fc_hold: String(holdCents),
     fc_name: station.name.slice(0, 100),
+    [TENANT_TAG]: settings.tenantId,
   };
   return payments.createCheckout({
     idempotencyKey: `forecourt:checkout:${input.requestId}`,
@@ -466,6 +478,22 @@ export async function reconcile(id: string, deps: Deps): Promise<SessionView> {
         phase: "canceled",
         canStop: false,
         message: "Canceled before charging. Your hold was released.",
+      };
+    }
+    // Too late to start: the sweep may be releasing this hold right now. A hold
+    // without a creation time is never swept, so it may still start.
+    if (
+      hold.createdAt !== undefined &&
+      deps.now() - hold.createdAt > LATE_START_MS
+    ) {
+      await releaseHold(id, hold, null, deps);
+      deps.log?.("released a hold too old to start charging", { session: id });
+      return {
+        ...view,
+        phase: "canceled",
+        canStop: false,
+        message:
+          "This payment is too old to start charging. Your hold was released; please pay again.",
       };
     }
     session = await ivora.createSession(
@@ -877,8 +905,15 @@ export async function sweepUnstartedHolds(
   for (const c of checkouts) {
     const hold = c.hold;
     if (!hold || hold.status !== "requires_capture") continue;
-    // Only this app's holds: its session IDs and metadata.
+    // Only this deployment's holds: its session IDs, metadata and tenant tag. A
+    // checkout from another deployment on the same Stripe account (or from before
+    // the tag existed) is left alone.
     if (!LIVE_SESSION_ID.test(c.id) || !readMeta(c.metadata)) continue;
+    if (
+      !deps.settings.tenantId ||
+      c.metadata[TENANT_TAG] !== deps.settings.tenantId
+    )
+      continue;
     if (hold.metadata.ivora_session) continue;
     if (
       hold.createdAt === undefined ||

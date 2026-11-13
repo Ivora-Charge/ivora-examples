@@ -19,6 +19,12 @@ export type Settings = {
   typicalSessionMinutes: number;
   siteTimeZone: string;
   publicBaseUrl: string;
+  /**
+   * The Ivora tenant (project) ID, from IVORA_TENANT_ID; empty in demo mode. Card
+   * checkouts are tagged with it, so the hold sweep only releases this deployment's
+   * holds when several share one Stripe account.
+   */
+  tenantId: string;
   /** Stripe connected account of the site operator; empty when the deployer runs the site. */
   stripeConnectedAccount: string;
   /** Drivers may pay at the counter: on in demo mode, or when CASHIER_PASSWORD is set. */
@@ -92,6 +98,7 @@ export function readSettings(
     ),
     siteTimeZone: env.SITE_TIME_ZONE?.trim() || "UTC",
     publicBaseUrl,
+    tenantId: env.IVORA_TENANT_ID?.trim() ?? "",
     stripeConnectedAccount: env.STRIPE_CONNECTED_ACCOUNT_ID?.trim() ?? "",
     payInStore: demo || Boolean(env.CASHIER_PASSWORD?.trim()),
     posWebhookUrl,

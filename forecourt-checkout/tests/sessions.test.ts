@@ -638,6 +638,50 @@ describe("payment safety", () => {
     expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
     expect(payments.releases).toEqual([]);
   });
+
+  it("never starts charging on a hold the sweep may be releasing", async () => {
+    await createCheckout(tap, deps);
+    payments.authorize();
+    // The sweep releases at 30 minutes; a late Stripe webhook or a returning driver
+    // past the 10-minute cutoff gets the hold released, not a charging session.
+    now = T0 + 10 * 60_000 + 1;
+    const view = await reconcile(CS, deps);
+    expect(view).toMatchObject({ phase: "canceled", canStop: false });
+    expect(ivora.calls).toEqual([]);
+    expect(payments.releases).toEqual(["pi_123"]);
+    // The sweep then finds nothing to release, and nothing starts later either.
+    now = T0 + 31 * 60_000;
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    expect((await reconcile(CS, deps)).phase).toBe("canceled");
+    expect(ivora.calls).toEqual([]);
+    expect(payments.releases).toEqual(["pi_123"]);
+  });
+
+  it("still starts a hold inside the cutoff", async () => {
+    await createCheckout(tap, deps);
+    payments.authorize();
+    now = T0 + 10 * 60_000;
+    expect((await reconcile(CS, deps)).phase).toBe("starting");
+    expect(keys("create")).toEqual([`forecourt:${CS}:create`]);
+    expect(payments.releases).toEqual([]);
+  });
+
+  it("tags each checkout with the tenant and sweeps only its own holds", async () => {
+    await createCheckout(tap, deps);
+    expect(payments.created[0].metadata.fc_tenant).toBe("1");
+    payments.authorize();
+    now = T0 + 31 * 60_000;
+    // Another deployment on the same Stripe account, or a checkout made before the tag.
+    const c = payments.checkouts.get(CS)!;
+    c.metadata.fc_tenant = "2";
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    delete c.metadata.fc_tenant;
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    expect(payments.releases).toEqual([]);
+    c.metadata.fc_tenant = "1";
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(1);
+    expect(payments.releases).toEqual(["pi_123"]);
+  });
 });
 
 describe("stop and cancel", () => {
