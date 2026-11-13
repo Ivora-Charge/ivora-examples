@@ -821,6 +821,11 @@ describe("payment safety", () => {
 
   it("keeps the hold of an accepted start whose session came, for its CDR", async () => {
     const { command } = await charging();
+    // The session's arrival took the hold off the release queue, before any sweep.
+    expect((await paymentOf(command.id)).releaseAfter).toBeNull();
+    expect(peers.auditLog.map((a) => a.action)).toContain(
+      "payment.session_linked",
+    );
     const later = new Date(Date.now() + UNCERTAIN_KEEP_MS + 60_000);
     await sweepPayments(deps({ now: () => later }));
     expect(await paymentOf(command.id)).toMatchObject({
