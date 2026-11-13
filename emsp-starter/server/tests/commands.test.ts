@@ -257,7 +257,8 @@ describe("START_SESSION", () => {
       result: "ACCEPTED",
       message: "The charger accepted the start.",
     });
-    expect(releases).toEqual([]);
+    // No session yet: the hold is queued, uncertain, in case none comes.
+    expect(releases).toEqual([{ id: command.id, uncertain: true }]);
     expect(peers.auditLog.map((a) => a.action)).toEqual(
       expect.arrayContaining([
         "command.claim",
@@ -321,11 +322,13 @@ describe("START_SESSION", () => {
       });
       expect(view.message).not.toBe("");
       // A TIMEOUT leaves it unknown whether the charger started: a session may appear.
-      expect(releases).toEqual(
-        result === "ACCEPTED"
-          ? []
-          : [{ id: command.id, uncertain: result === "TIMEOUT" }],
-      );
+      // An ACCEPTED start with no session yet queues its hold the same way.
+      expect(releases).toEqual([
+        {
+          id: command.id,
+          uncertain: result === "TIMEOUT" || result === "ACCEPTED",
+        },
+      ]);
       if (result === "NOT_SUPPORTED") {
         expect(view.message).toBe("This charger doesn't accept app starts.");
         expect(view.alternatives).toEqual(["RFID"]);
@@ -335,7 +338,7 @@ describe("START_SESSION", () => {
       // A second delivery of the same result changes nothing.
       await cpo.sendCommandResult("ACCEPTED");
       expect((await stored(command.id)).status).toBe(RESULT_STATUS[result]);
-      expect(releases.length).toBe(result === "ACCEPTED" ? 0 : 1);
+      expect(releases.length).toBe(1);
     },
   );
 
@@ -623,7 +626,8 @@ describe("an unknown outcome", () => {
     // The charger did start: the CPO's CommandResult settles it.
     await cpo.sendCommandResult("ACCEPTED");
     expect((await stored(command.id)).status).toBe("succeeded");
-    expect(releases).toEqual([]);
+    // Queued only, uncertain: lib/payments keeps it for the session's CDR.
+    expect(releases).toEqual([{ id: command.id, uncertain: true }]);
   });
 
   it.each([
@@ -897,6 +901,9 @@ describe("STOP_SESSION", () => {
         deps(),
       ),
     ).toBe(true);
+    // The accepted start queued its hold (uncertain); the stops below release nothing.
+    expect(releases).toEqual([{ id: command.id, uncertain: true }]);
+    releases = [];
     return sessionId;
   }
 

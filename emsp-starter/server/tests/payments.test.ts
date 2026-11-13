@@ -167,6 +167,8 @@ beforeEach(async () => {
   await accounts.setCustomer(DRIVER, customer, now);
   card = stripe.attachCard(customer, "visa");
   await accounts.updateDriver(DRIVER, { defaultPaymentMethodId: card }, now);
+  // The payment sweep runs every minute in live mode: holds need a recent pass.
+  await payments.markSwept(now);
 });
 
 afterEach(() => {
@@ -791,6 +793,119 @@ describe("release", () => {
       expired: 1,
     });
     expect((await payments.get(payment.id))!.status).toBe("expired");
+  });
+});
+
+describe("payment safety", () => {
+  it("queues the hold of an accepted start that never got a session, and releases it", async () => {
+    const { command } = await tapStart();
+    await cpo.sendCommandResult("ACCEPTED");
+    expect((await commands.get(command.id))!.status).toBe("succeeded");
+    // The charger accepted, but the car never plugged in: no session comes.
+    const kept = await paymentOf(command.id);
+    expect(kept.status).toBe("held");
+    expect(Date.parse(kept.releaseAfter!)).toBeGreaterThan(
+      Date.now() + UNCERTAIN_KEEP_MS - 60_000,
+    );
+    const later = new Date(Date.now() + UNCERTAIN_KEEP_MS + 60_000);
+    expect(await sweepPayments(deps({ now: () => later }))).toEqual({
+      settled: 0,
+      released: 1,
+      expired: 0,
+    });
+    expect((await paymentOf(command.id)).status).toBe("released");
+    expect(stripe.callsTo(/\/cancel$/).map((c) => c.key)).toEqual([
+      `emsp:${command.id}:cancel`,
+    ]);
+  });
+
+  it("keeps the hold of an accepted start whose session came, for its CDR", async () => {
+    const { command } = await charging();
+    const later = new Date(Date.now() + UNCERTAIN_KEEP_MS + 60_000);
+    await sweepPayments(deps({ now: () => later }));
+    expect(await paymentOf(command.id)).toMatchObject({
+      status: "held",
+      releaseAfter: null,
+    });
+    expect(stripe.callsTo(/\/cancel$/)).toHaveLength(0);
+  });
+
+  it("sends a capture Stripe refuses to review instead of retrying it until expiry", async () => {
+    const { command } = await charging();
+    stripe.state.failures.push({
+      path: /\/capture$/,
+      kind: "refused",
+      times: 1,
+    });
+    await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 });
+    expect(await paymentOf(command.id)).toMatchObject({
+      status: "held",
+      review: "capture_refused",
+      cdrAmount: 1200,
+      error: "Stripe parameter_invalid",
+    });
+    expect(events.map((e) => e.type)).toContain("payment.review");
+    // The sweep and a redelivered CDR leave it for a person: no second capture.
+    await sweepPayments(deps());
+    await cdr("SESSION-1", { excl_vat: 10, incl_vat: 12 });
+    expect(stripe.callsTo(/\/capture$/)).toHaveLength(1);
+    // The admin decides.
+    const p = await paymentOf(command.id);
+    expect(
+      await captureForReview({ paymentId: p.id, amount: 1200 }, deps()),
+    ).toMatchObject({ status: "captured", capturedAmount: 1200 });
+  });
+
+  it("keeps a session charging when Stripe refuses a raise for a reason other than the card", async () => {
+    process.env.STRIPE_INCREMENTAL_AUTH = "on";
+    const { command } = await charging();
+    stripe.state.failures.push({
+      path: /increment_authorization$/,
+      kind: "refused",
+      times: 1,
+    });
+    await cpo.patchSession(
+      "SESSION-1",
+      { total_cost: { excl_vat: 17.5, incl_vat: 21 }, kwh: 42 },
+      { push: true, at: new Date(T0.getTime() + 60_000) },
+    );
+    expect(
+      cpo.state.commands.filter((c) => c.type === "STOP_SESSION"),
+    ).toHaveLength(0);
+    expect(await paymentOf(command.id)).toMatchObject({
+      status: "held",
+      authorizedAmount: 2500,
+      incrementalAvailable: false,
+      review: null,
+      stopReason: null,
+      error: "Stripe parameter_invalid",
+    });
+    expect(events.map((e) => e.type)).not.toContain("hold_increment_declined");
+    // Not raised again: the capture stays within the hold.
+    await cpo.patchSession(
+      "SESSION-1",
+      { total_cost: { excl_vat: 19, incl_vat: 22.8 }, kwh: 45 },
+      { push: true, at: new Date(T0.getTime() + 120_000) },
+    );
+    expect(stripe.callsTo(/increment_authorization/)).toHaveLength(1);
+  });
+
+  it("refuses live holds while the payment sweep isn't running, then takes them once it runs", async () => {
+    payments.sweptAt = null;
+    const { command } = await tapStart();
+    expect(command).toMatchObject({
+      status: "hold_failed",
+      message:
+        "Payments are paused on this network right now. Try again later.",
+    });
+    // A pass more than 5 minutes ago is not recent either.
+    await payments.markSwept(new Date(Date.now() - 6 * 60_000).toISOString());
+    expect((await tapStart()).command.status).toBe("hold_failed");
+    expect(stripe.callsTo(/^\/v1\/payment_intents$/)).toHaveLength(0);
+    expect(cpo.state.commands).toHaveLength(0);
+
+    await sweepPayments(deps());
+    expect((await tapStart()).command.status).toBe("accepted");
   });
 });
 

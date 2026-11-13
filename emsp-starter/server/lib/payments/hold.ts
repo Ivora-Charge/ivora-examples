@@ -35,6 +35,12 @@ import {
 export const UNCERTAIN_KEEP_MS = 30 * 60_000;
 /** When Stripe does not say how long a hold lasts: 7 days, the usual card rule. */
 export const DEFAULT_HOLD_DAYS = 7;
+/**
+ * Live holds need the payment sweep (the cron route, every minute): it releases the
+ * holds of starts that never charged and settles CDRs the events missed. A hold is
+ * refused when the sweep has not finished a pass for this long.
+ */
+export const SWEEP_MAX_AGE_MS = 5 * 60_000;
 
 const fail = (reason: string): HoldResult => ({ ok: false, reason });
 
@@ -80,6 +86,16 @@ export async function holdCurrency(
   return currencies.size === 1 ? [...currencies][0] : config.defaultCurrency;
 }
 
+/** True when the payment sweep finished a pass within SWEEP_MAX_AGE_MS. */
+export async function sweepIsRecent(
+  deps: Pick<PaymentDeps, "payments" | "now">,
+): Promise<boolean> {
+  const at = await deps.payments.lastSweptAt();
+  return (
+    at !== null && nowOf(deps).getTime() - Date.parse(at) <= SWEEP_MAX_AGE_MS
+  );
+}
+
 /** When the card network drops a hold, from Stripe's capture_before. */
 export function holdExpiry(pi: PaymentIntent, now: Date): string {
   const before = chargeOf(pi)?.payment_method_details?.card?.capture_before;
@@ -100,6 +116,14 @@ export async function placeHold(
     return fail("This account may not charge. Contact support.");
   if (!demo && !deps.stripe)
     return fail("Payments are not set up on this network yet.");
+  if (!demo && !(await sweepIsRecent(deps))) {
+    console.error(
+      "Card holds refused: the payment sweep (/api/cron/ocpi-sync) has not run in the last 5 minutes",
+    );
+    return fail(
+      "Payments are paused on this network right now. Try again later.",
+    );
+  }
   if (!driver.defaultPaymentMethodId || (!demo && !driver.stripeCustomerId))
     return fail("Add a payment card in the app before you charge.");
   const currency = await holdCurrency(c, deps);
@@ -240,8 +264,9 @@ export async function placeHold(
 
 /**
  * Releases the hold of a start that ended without charging. When we never learnt
- * whether the charger started (`uncertain`), the hold is kept for UNCERTAIN_KEEP_MS in
- * case a session appears; the payment sweep then releases it if none did.
+ * whether the charger started (`uncertain`), or it accepted the start but no session
+ * has come yet, the hold is kept for UNCERTAIN_KEEP_MS in case a session appears; the
+ * payment sweep then releases it if none did.
  */
 export async function releaseHold(
   c: Command,

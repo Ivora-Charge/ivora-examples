@@ -31,6 +31,8 @@ import { StripeError, StripeUnknownError, type PaymentIntent } from "./stripe";
  * - A CDR in another currency than the hold charges nothing and goes to review.
  * - A CDR that comes after the hold expired charges nothing and goes to review.
  * - A zero-cost CDR releases the hold.
+ * - A capture Stripe refuses while it still holds the money goes to review at once:
+ *   the same key would only get the same answer until the hold expired.
  * - Every Stripe write has an idempotency key from the command ID and the action.
  */
 export const nowOf = (deps: Pick<PaymentDeps, "now">) =>
@@ -303,7 +305,13 @@ export async function settleCdr(
       : flag(p, "hold_expired", deps, { ...fromCdr, shortfallAmount: minor });
   }
   if (p.status !== "held") return p;
-  if (p.cdrId && p.review === "currency_mismatch" && !onStripe) return p;
+  // Waiting for a person: an admin captures or releases it.
+  if (
+    p.cdrId &&
+    (p.review === "currency_mismatch" || p.review === "capture_refused") &&
+    !onStripe
+  )
+    return p;
 
   if (cdr.currency !== p.currency) {
     if (!onStripe)
@@ -389,6 +397,15 @@ export async function settleCdr(
           releaseAfter: null,
           shortfallAmount: minor,
         });
+      if (pi.status === "requires_capture")
+        // Refused, and Stripe still holds the money (an amount it won't take, say):
+        // retrying with the same key gets the same answer until the hold expires.
+        // For a person, who captures an amount or releases the hold.
+        return flag(p, "capture_refused", deps, {
+          ...fromCdr,
+          releaseAfter: null,
+          error: `Stripe ${e.code ?? e.type}`.slice(0, 300),
+        });
       if (pi.status !== "succeeded") {
         await deps.payments.transition(
           p.id,
@@ -444,6 +461,9 @@ export async function settleCdr(
  * - a hold whose start has a CDR: settled from it;
  * - a hold past its expiry with no CDR: marked expired (a CDR that comes later goes to
  *   review).
+ *
+ * A pass that gets through records when it ran (`markSwept`): live holds are refused
+ * when it has not run for SWEEP_MAX_AGE_MS (lib/payments/hold.ts).
  */
 export async function sweepPayments(
   deps: PaymentDeps,
@@ -465,18 +485,18 @@ export async function sweepPayments(
       }
       if (p.releaseAfter && Date.parse(p.releaseAfter) <= now.getTime()) {
         const command = await deps.commands.get(p.commandId);
-        if (command?.sessionId && command.status !== "hold_failed") {
-          // A session appeared after all: its CDR settles the payment.
-          await deps.payments.transition(
+        if (!command?.sessionId || command.status === "hold_failed") {
+          if ((await cancelHold(p, deps)).status === "released") out.released++;
+          continue;
+        }
+        // A session appeared after all: its CDR settles the payment.
+        p =
+          (await deps.payments.transition(
             p.id,
             ["held"],
             { releaseAfter: null },
             now.toISOString(),
-          );
-          continue;
-        }
-        if ((await cancelHold(p, deps)).status === "released") out.released++;
-        continue;
+          )) ?? p;
       }
       if (p.holdExpiresAt && Date.parse(p.holdExpiresAt) <= now.getTime()) {
         const r = await move(
@@ -494,7 +514,34 @@ export async function sweepPayments(
       );
     }
   }
+  try {
+    await deps.payments.markSwept(now.toISOString());
+  } catch (e) {
+    console.error(
+      `Recording the payment sweep failed: ${e instanceof Error ? e.name : "unknown error"}`,
+    );
+  }
   return out;
+}
+
+/**
+ * A session linked to its start came: a hold queued for release in case none came (an
+ * accepted start, or one with no answer) now waits for the session's CDR instead.
+ */
+export async function keepHoldForSession(
+  stored: StoredSession,
+  deps: PaymentDeps,
+): Promise<void> {
+  if (!stored.commandId) return;
+  const p = await deps.payments.getByCommand(stored.commandId);
+  if (!p || p.status !== "held" || !p.releaseAfter) return;
+  const kept = await deps.payments.transition(
+    p.id,
+    ["held"],
+    { releaseAfter: null },
+    nowOf(deps).toISOString(),
+  );
+  if (kept) await audit(deps, "payment.session_linked", kept);
 }
 
 /** Why we stop a session whose hold could not be raised: stored and shown to the driver. */
@@ -504,10 +551,13 @@ export const INCREMENT_DECLINED_REASON =
 /**
  * Incremental authorization (off unless STRIPE_INCREMENTAL_AUTH is on): when a running
  * session's cost reaches HOLD_INCREMENT_AT_PERCENT of the hold, raise the hold by
- * another HOLD_AMOUNTS step, with the key `emsp:<command>:increment:<n>`. If the raise
- * is refused (or MAX_INCREMENTS is reached), ask the CPO to stop the session, store
- * the reason on the session and the payment, flag the payment for review, and emit
- * `hold_increment_declined`. Never charges beyond what is authorised.
+ * another HOLD_AMOUNTS step, with the key `emsp:<command>:increment:<n>`. If the card
+ * declines the raise (or MAX_INCREMENTS is reached), ask the CPO to stop the session,
+ * store the reason on the session and the payment, flag the payment for review, and
+ * emit `hold_increment_declined`. Any other Stripe refusal (a raise this hold can't
+ * take) is not the driver's card saying no: the hold is no longer raised and the
+ * session goes on, as with incremental authorization off. Never charges beyond what
+ * is authorised.
  */
 export async function maybeIncrement(
   stored: StoredSession,
@@ -542,6 +592,24 @@ export async function maybeIncrement(
     } catch (e) {
       if (e instanceof StripeUnknownError) return p; // the next update tries again
       if (!(e instanceof StripeError)) throw e;
+      if (!e.isCardError) {
+        const off = await deps.payments.transition(
+          p.id,
+          ["held"],
+          {
+            incrementalAvailable: false,
+            error: `Stripe ${e.code ?? e.type}`.slice(0, 300),
+          },
+          nowOf(deps).toISOString(),
+          { ifIncrements: p.increments },
+        );
+        if (off)
+          await audit(deps, "payment.increment_failed", off, {
+            code: e.code ?? e.type,
+            n,
+          });
+        return off ?? reread(p.id, deps);
+      }
       declined = true;
     }
   }

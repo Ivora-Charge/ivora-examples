@@ -332,7 +332,8 @@ const errorText = (e: unknown) =>
 /**
  * Ends an open command with `status`, if it is still in one of `from`; null when
  * another change got there first. A start that ends without charging releases its
- * payment hold here, once per command, by whichever change ended it.
+ * payment hold here, once per command, by whichever change ended it; an accepted start
+ * with no session yet queues its hold for release in case none comes.
  */
 async function finish(
   c: Command,
@@ -360,6 +361,11 @@ async function finish(
       // nobody knows whether the charger started, so a session may still appear.
       uncertain: status === "timed_out",
     });
+  else if (done.type === "START_SESSION" && !done.sessionId)
+    // Accepted, but no session yet: one should come, but a car that never plugs in
+    // leaves none. Keep the hold a while, as for a start with no answer; the payment
+    // sweep releases it if no session links to this start.
+    await release(done, deps, { uncertain: true });
   // For notifications (lib/push): after the release, so a listener sees the outcome.
   await emitCommandEvent({
     type: "command.finished",
