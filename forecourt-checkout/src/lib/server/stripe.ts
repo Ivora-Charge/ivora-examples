@@ -24,6 +24,26 @@ function toHold(pi: Stripe.PaymentIntent): Hold {
     manualCapture: pi.capture_method === "manual",
     applicationFeeCents: pi.application_fee_amount ?? 0,
     metadata: { ...pi.metadata },
+    createdAt: pi.created * 1000,
+  };
+}
+
+/** Pages of 100 read by listAuthorizedCheckouts() before it stops. */
+export const MAX_CHECKOUT_PAGES = 20;
+
+function toCheckout(session: Stripe.Checkout.Session): CheckoutState {
+  const pi = session.payment_intent;
+  return {
+    id: session.id,
+    status:
+      session.status === "complete"
+        ? "complete"
+        : session.status === "expired"
+          ? "expired"
+          : "open",
+    url: session.url,
+    metadata: { ...(session.metadata ?? {}) },
+    hold: pi && typeof pi !== "string" ? toHold(pi) : null,
   };
 }
 
@@ -91,19 +111,7 @@ export class StripeGateway implements PaymentGateway {
         { expand: ["payment_intent"] },
         this.options,
       );
-      const pi = session.payment_intent;
-      return {
-        id: session.id,
-        status:
-          session.status === "complete"
-            ? "complete"
-            : session.status === "expired"
-              ? "expired"
-              : "open",
-        url: session.url,
-        metadata: { ...(session.metadata ?? {}) },
-        hold: pi && typeof pi !== "string" ? toHold(pi) : null,
-      };
+      return toCheckout(session);
     } catch (error) {
       if (
         error instanceof Stripe.errors.StripeError &&
@@ -112,6 +120,31 @@ export class StripeGateway implements PaymentGateway {
         return null;
       throw error;
     }
+  }
+
+  async listAuthorizedCheckouts(sinceMs: number) {
+    const checkouts: CheckoutState[] = [];
+    let startingAfter: string | undefined;
+    for (let page = 0; page < MAX_CHECKOUT_PAGES; page++) {
+      const list = await this.stripe.checkout.sessions.list(
+        {
+          created: { gte: Math.floor(sinceMs / 1000) },
+          status: "complete",
+          limit: 100,
+          expand: ["data.payment_intent"],
+          ...(startingAfter ? { starting_after: startingAfter } : {}),
+        },
+        this.options,
+      );
+      for (const session of list.data) {
+        const c = toCheckout(session);
+        if (c.hold?.status === "requires_capture") checkouts.push(c);
+      }
+      if (!list.has_more || list.data.length === 0)
+        return { checkouts, truncated: false };
+      startingAfter = list.data[list.data.length - 1].id;
+    }
+    return { checkouts, truncated: true };
   }
 
   async expireCheckout(id: string, idempotencyKey: string) {

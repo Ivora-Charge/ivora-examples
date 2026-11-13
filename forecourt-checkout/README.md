@@ -82,7 +82,7 @@ npm run test:e2e    # Playwright, demo end to end: card flow on a phone; in-stor
 3. Give every connector a tariff in Ivora. The tariff's `authorization_minor` is the card hold for that charger. Prices can then be changed on the operator Prices page.
 4. In Stripe, enable Apple Pay and Google Pay under payment methods. Stripe-hosted Checkout shows them to drivers whose phone supports them; no domain verification is needed for hosted Checkout.
 5. To take payment in the store, set `CASHIER_PASSWORD` and read [Pay in store](#pay-in-store) first: **every charger must require authorisation** (no free vend, no auto-start on plug-in).
-6. Set the environment variables below. Add webhooks: an Ivora webhook to `https://<your domain>/api/webhooks/ivora` for `charging_session.status_changed` and `bill.finalized` (with pay in store, also `meter.sampled` with `"meter": {"sample_interval_seconds": 30}`; see [Stopping at the prepaid limit](#stopping-at-the-prepaid-limit)), and a Stripe webhook to `https://<your domain>/api/webhooks/stripe` for `checkout.session.completed` and `checkout.session.expired` (a Connect webhook if you use a connected account).
+6. Set the environment variables below. Add webhooks: an Ivora webhook to `https://<your domain>/api/webhooks/ivora` for `charging_session.status_changed`, `bill.finalized` and `meter.sampled` with `"meter": {"sample_interval_seconds": 30}` (the meter samples stop a card session near its hold, and a prepaid sale at its limit, with no screen open; see [Stopping at the prepaid limit](#stopping-at-the-prepaid-limit)), and a Stripe webhook to `https://<your domain>/api/webhooks/stripe` for `checkout.session.completed` and `checkout.session.expired` (a Connect webhook if you use a connected account).
 
 | Variable                      | Required | What it is                                                                                                                           |
 | ----------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
@@ -137,13 +137,13 @@ With externally funded sessions the app owns the processor integration, so it ca
 
 The flow, in `src/lib/server/sessions.ts`:
 
-1. **Pay.** The app reads the station and tariff, then creates a Stripe Checkout Session with manual capture for the hold. Nothing is sent to the charger yet. The Checkout Session ID becomes the app's session ID.
+1. **Pay.** The app reads the station and tariff, then creates a Stripe Checkout Session with manual capture for the hold. A tariff in another currency than USD is refused here, before any hold is placed (see [Limits](#limits-and-next-steps)). Nothing is sent to the charger yet. The Checkout Session ID becomes the app's session ID.
 2. **Start.** Once the hold is authorized, the app creates an Ivora externally funded session (`application_reference` = `forecourt:<session id>`, `payment_reference` = the PaymentIntent), starts it with `funding_confirmed: true`, and records an optional `authorization` settlement report.
-3. **Charge.** The driver's page polls; each poll reconciles. The app shows Ivora's live `energy_wh`, `power_w` and `estimated_minor`, and stops the session when the running cost reaches 85% of the hold.
+3. **Charge.** The driver's page polls; each poll reconciles. The app shows Ivora's live `energy_wh`, `power_w` and `estimated_minor`, and stops the session when the running cost reaches 85% of the hold. Every `meter.sampled` webhook runs the same check, so the stop also happens after the driver closed the page; subscribe to it (see step 6 of the setup) or energy above the hold can go uncollected until the next sweep.
 4. **Finished.** When the connector reports `SuspendedEV`, `SuspendedEVSE` or `Finishing`, or power falls below 100 W, the page shows "Please move your car" with the idle-fee countdown.
 5. **Receipt.** When the transaction ends, the app finalizes the bill, applies the idle grace credit, and captures the amount with the application fee, or releases the hold. It records a `capture` or `release` settlement report.
 
-Every write uses an idempotency key derived from the session ID and the action (`forecourt:<id>:start`, `:capture` and so on), for both Ivora and Stripe. Reconciling is therefore safe to repeat from a poll, a webhook or the cron sweep, on any server instance. No database is needed: the state lives in Stripe (the Checkout Session and PaymentIntent metadata) and in Ivora (the session and its bill).
+Every write uses an idempotency key derived from the session ID and the action (`forecourt:<id>:start`, `:capture` and so on), for both Ivora and Stripe. Reconciling is therefore safe to repeat from a poll, a webhook or the cron sweep, on any server instance. The sweep also lists the last 8 days' completed Stripe Checkout Sessions and releases an authorized hold that has no Ivora session 30 minutes after it was placed (the driver paid, then neither the success page nor the Stripe webhook reached the app). No database is needed: the state lives in Stripe (the Checkout Session and PaymentIntent metadata) and in Ivora (the session and its bill).
 
 ### Money rules
 
@@ -320,7 +320,7 @@ The in-process seam is still there for integrations inside the app: `saleEvents`
 | `GET /v1/tenants/{tenant_id}/stats`                                                  | Today's sessions, energy and billed revenue     |
 | `GET /v1/tenants/{tenant_id}/stations/{station_id}/faults`                           | Recent faults                                   |
 | Webhooks: `charging_session.status_changed`, `bill.finalized`                        | Settle a session as soon as it changes          |
-| Webhook: `meter.sampled` (pay in store)                                              | Stop a prepaid sale at its limit                |
+| Webhook: `meter.sampled`                                                             | Stop at the hold or the prepaid limit           |
 
 API key permissions documented on the portal: `stations:read`, `stations:control` (start and stop), `billing:read` (sessions, quotes, revenue), `billing:write` (create, finalize and cancel sessions) and `settlement:write` (create sessions and reports). Pay in store needs no extra permission: it uses the same session, command and settlement report endpoints, and reads reports back; check the portal for the scope that reads settlement reports. Editing prices also writes tariffs; check the portal for the permission your key needs. The app sends `Ivora-Version: 2026-10-15` so tariff elements and bill breakdowns are present.
 
@@ -332,13 +332,13 @@ Payment terminals are out of scope for now. `src/lib/terminal.ts` defines the `C
 
 ## Limits and next steps
 
-- **Live checkout is USD-tested.** Amounts are read and shown in the tariff's currency, but the card-hold checks (`holdMatches` in `src/lib/server/sessions.ts`), the 50-cent minimum and the hold limits are still USD rules until the money path is reviewed for other currencies. The cashier console and the demo store stay on the USD sample.
+- **Live card checkout is USD only.** Amounts are read and shown in the tariff's currency, but the card-hold checks (`holdMatches` in `src/lib/server/sessions.ts`), the 50-cent minimum and the hold limits are still USD rules until the money path is reviewed for other currencies, so a tariff in another currency is refused before any hold is placed (`currency_not_supported`). The cashier console and the demo store stay on the USD sample.
 - **No database.** Session state lives in Stripe and Ivora; in-store sales live in Ivora only (see [What is stored](#what-is-stored)). The webhook de-duplicates per server instance (reconciling is idempotent, so a duplicate on another instance is harmless).
 - **10,000-session ceiling.** A full read of the session list stops at 100 pages of 100 sessions. The session index, the operator "today" view and the daily sweep use full reads, so in a project with more sessions an open sale can be missed by them: the console shows a red banner when that happens, and the cron response says `"truncated": true`. Sales the app looks up by reference (console sales it has shown, cashier and POS actions, receipts) are unaffected. Use one Ivora project per deployment as the conventions ask, and start a new project before you reach the ceiling.
 - **Webhooks to the POS are per instance.** Each server instance remembers which `session_due` events it delivered, in memory, so a cold start or another instance may send one again, and a restart can drop a pending retry. POS systems must de-duplicate by event ID and poll `GET /api/pos/sessions?status=due` as a backstop.
 - **Idle after the transaction ends is not billed.** Ivora prices idle time inside the charging transaction. If the driver presses "End session" while still parked, the idle fee stops too.
 - **Idle detection while charging is approximate.** The countdown starts when the app first sees the connector idle; the final idle fee comes from Ivora's bill, which uses the charger's own reports.
-- **Holds expire.** Card authorizations last about 7 days with most issuers. The daily sweep settles abandoned sessions well before that; run it more often on a paid plan.
+- **Holds expire.** Card authorizations last about 7 days with most issuers. The daily sweep settles abandoned sessions and releases holds that never started charging well before that; run it more often on a paid plan so drivers get unused holds back sooner.
 - **Conditional prices** (time of day, power or energy bands) are priced correctly by Ivora but can't be edited on the Prices page; edit them through the API.
 - **Refunds** are not in the UI; issue them in the Stripe Dashboard.
 - **Prepaid overrun.** The headroom stop makes it rare, but a charger that is slow to stop, a missed meter sample, a rejected stop, or idle time after a stop can cost more than was prepaid. The console shows it and the cashier decides; it is never collected automatically.

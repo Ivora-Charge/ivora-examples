@@ -7,7 +7,11 @@ import {
   posOutbox,
   settings,
 } from "@/lib/server/services";
-import { APPLICATION_PREFIX, reconcile } from "@/lib/server/sessions";
+import {
+  APPLICATION_PREFIX,
+  reconcile,
+  sweepUnstartedHolds,
+} from "@/lib/server/sessions";
 import { reconcileStoreSession } from "@/lib/server/store";
 import { STORE_PREFIX } from "@/lib/store";
 
@@ -34,7 +38,8 @@ function authorized(request: Request) {
 
 /**
  * Safety sweep for sessions nobody is watching: drivers who closed the page,
- * missed webhooks. Settles finished sessions and releases unused holds; for
+ * missed webhooks. Settles finished sessions and releases unused holds, including
+ * authorized holds that never got a charging session; for
  * in-store sales it stops at the prepaid limit, finalizes and records the
  * prepaid capture. It never marks an in-store sale paid. It also retries
  * this instance's session_due webhooks that are due again.
@@ -71,5 +76,25 @@ export async function GET(request: Request) {
       failed.push(x.id);
     }
   }
-  return NextResponse.json({ reconciled, failed, truncated, posRetried });
+  // Holds the driver paid that never reached Ivora: not in the session list above.
+  let holdsReleased = 0;
+  let holdsTruncated = false;
+  try {
+    const swept = await sweepUnstartedHolds(liveDeps(s), Date.parse(since));
+    holdsReleased = swept.released;
+    holdsTruncated = swept.truncated;
+  } catch (error) {
+    console.warn(
+      "[forecourt] hold sweep failed",
+      error instanceof Error ? error.name : "unknown",
+    );
+    failed.push("holds");
+  }
+  return NextResponse.json({
+    reconciled,
+    failed,
+    truncated: truncated || holdsTruncated,
+    posRetried,
+    holdsReleased,
+  });
 }

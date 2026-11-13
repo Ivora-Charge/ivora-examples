@@ -11,7 +11,7 @@ import {
 } from "../tariff";
 import { idleFeeTiming } from "../idle";
 import { buildReceipt, type SessionView } from "../view";
-import { chargerLabel } from "../store";
+import { chargerLabel, STORE_PREFIX } from "../store";
 import type { Bill, ExternalSession, IvoraClient, Station } from "./ivora";
 import { IvoraError } from "./ivora";
 
@@ -66,6 +66,19 @@ export const START_TIMEOUT_MS = 20 * 60 * 1000;
 export const IDLE_POWER_W = 100;
 const IDLE_STATUSES = new Set(["SuspendedEV", "SuspendedEVSE", "Finishing"]);
 const READY_STATUSES = new Set(["Available", "Preparing"]);
+const CLOSED_STATUSES = new Set(["completed", "canceled"]);
+/**
+ * The currency the card-hold checks are written for (holdMatches, the 50-cent
+ * minimum, the hold limits). Live checkout refuses a tariff in any other currency
+ * before a hold is placed, so no hold is ever left that the app would not accept.
+ */
+export const CARD_CURRENCY = "USD";
+/**
+ * The sweep releases an authorized hold that has no charging session this long after
+ * it was placed. The driver's page and the Stripe webhook create the session within
+ * seconds; START_TIMEOUT_MS is how long a start may take after that.
+ */
+export const UNSTARTED_HOLD_MS = 30 * 60 * 1000;
 
 export const applicationReference = (id: string) =>
   `${APPLICATION_PREFIX}${id}`;
@@ -238,6 +251,12 @@ export async function createCheckout(
       "price_not_set",
       "This charger's price is being updated. Please try again shortly.",
     );
+  if (tariff.currency.toUpperCase() !== CARD_CURRENCY)
+    throw new UserError(
+      409,
+      "currency_not_supported",
+      "Card payment isn't available at this charger yet. Please ask the site staff.",
+    );
   const holdCents = holdFor(tariff, settings);
   const metadata = {
     fc_code: input.code,
@@ -289,7 +308,7 @@ function readMeta(metadata: Record<string, string>): Meta | null {
 function holdMatches(hold: Hold, meta: Meta) {
   return (
     hold.manualCapture &&
-    hold.currency.toLowerCase() === "usd" &&
+    hold.currency.toUpperCase() === CARD_CURRENCY &&
     hold.amountCents === meta.hold &&
     hold.metadata.fc_station === String(meta.station) &&
     hold.metadata.fc_connector === String(meta.connector)
@@ -774,4 +793,113 @@ export async function requestStop(
       stop_requested: "1",
     });
   return reconcile(id, deps);
+}
+
+/** A meter.sampled webhook: which transaction, on which station, if the event says. */
+export type CardMeterSample = {
+  transactionId: number | null;
+  stationId: number | null;
+};
+
+/** The open sessions this instance knows (src/lib/server/session-index.ts). */
+export type OpenSessions = {
+  read(options?: {
+    rescan?: boolean;
+  }): Promise<{ sessions: ExternalSession[] }>;
+};
+
+const isCardSession = (s: ExternalSession) =>
+  s.application_reference.startsWith(APPLICATION_PREFIX) &&
+  !s.application_reference.startsWith(STORE_PREFIX);
+
+/**
+ * A meter.sampled webhook arrived: reconcile the card sessions charging there, so the
+ * near-hold stop (NEAR_HOLD_RATIO) runs while charging even after the driver closed
+ * the page. Without this only the driver's polls and the sweep would check it, and
+ * energy above the hold would go uncollected.
+ */
+export async function onCardMeterSample(
+  sample: CardMeterSample,
+  deps: Deps,
+  index: OpenSessions,
+): Promise<SessionView[]> {
+  const here = (sessions: ExternalSession[]) =>
+    sessions.filter(
+      (s) =>
+        isCardSession(s) &&
+        !CLOSED_STATUSES.has(s.status) &&
+        (sample.stationId === null || s.bill.station_id === sample.stationId),
+    );
+  let open = here((await index.read()).sessions);
+  const tx = sample.transactionId;
+  // A transaction the index can't place: a session it last saw before charging
+  // started, or one made on another instance. Rescan (rate-limited by the index).
+  if (
+    tx !== null &&
+    !open.some((s) => s.usage?.transaction_id === tx) &&
+    !open.some((s) => !s.usage?.transaction_id)
+  )
+    open = here((await index.read({ rescan: true })).sessions);
+  const views: SessionView[] = [];
+  for (const s of open) {
+    const known = s.usage?.transaction_id ?? null;
+    if (tx !== null && known !== null && known !== tx) continue;
+    try {
+      views.push(
+        await reconcile(
+          s.application_reference.slice(APPLICATION_PREFIX.length),
+          deps,
+        ),
+      );
+    } catch (error) {
+      deps.log?.("meter sample reconcile failed", {
+        session: s.id,
+        code: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
+  return views;
+}
+
+/**
+ * The sweep's pass over card holds: releases an authorized hold that never got a
+ * charging session (the driver paid, then neither the success page nor the Stripe
+ * webhook reached the app) once it is UNSTARTED_HOLD_MS old. A hold that has a
+ * session is left to reconcile(), which the sweep runs from Ivora's session list.
+ */
+export async function sweepUnstartedHolds(
+  deps: Deps,
+  sinceMs: number,
+): Promise<{ released: number; truncated: boolean }> {
+  const { checkouts, truncated } =
+    await deps.payments.listAuthorizedCheckouts(sinceMs);
+  let released = 0;
+  for (const c of checkouts) {
+    const hold = c.hold;
+    if (!hold || hold.status !== "requires_capture") continue;
+    // Only this app's holds: its session IDs and metadata.
+    if (!LIVE_SESSION_ID.test(c.id) || !readMeta(c.metadata)) continue;
+    if (hold.metadata.ivora_session) continue;
+    if (
+      hold.createdAt === undefined ||
+      deps.now() - hold.createdAt < UNSTARTED_HOLD_MS
+    )
+      continue;
+    try {
+      // createSession may have answered before setHoldMetadata failed.
+      if (await deps.ivora.findSession(applicationReference(c.id))) continue;
+      await deps.payments.release(hold.id, `forecourt:${c.id}:release`);
+      deps.log?.("released a hold that never started charging", {
+        session: c.id,
+      });
+      released += 1;
+    } catch (error) {
+      // The next sweep tries again with the same key.
+      deps.log?.("hold release failed", {
+        session: c.id,
+        code: error instanceof Error ? error.name : "unknown",
+      });
+    }
+  }
+  return { released, truncated };
 }
