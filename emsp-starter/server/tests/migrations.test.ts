@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PGlite } from "@electric-sql/pglite";
-import { checkMigrations } from "../../../tools/check-migrations/check.mjs";
+import { checkMigrations } from "../scripts/check-migrations/check.mjs";
 import { LEDGER_SQL } from "../scripts/migrate.mjs";
 import { asRole, migratedDatabase } from "./support/pglite";
 

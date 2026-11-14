@@ -19,13 +19,38 @@ function credential(name: string): string {
   return v && v.toLowerCase() !== "demo" ? v : "";
 }
 
+/**
+ * The one rule for an on/off variable: true, 1, yes or on (any case, trimmed) is on;
+ * anything else, including empty, is off. Every template parses DEMO_MODE this way.
+ */
+export function isFlagOn(raw: string | undefined): boolean {
+  const v = raw?.trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
+
+let warnedLegacyApiUrl = false;
+
+/**
+ * The Ivora API origin: IVORA_API_URL. The old name IVORA_API_BASE_URL still works
+ * for one release and logs a warning once.
+ */
+function apiUrl(): string | undefined {
+  const current = env("IVORA_API_URL");
+  if (current) return current;
+  const old = env("IVORA_API_BASE_URL");
+  if (old && !warnedLegacyApiUrl) {
+    warnedLegacyApiUrl = true;
+    console.warn(
+      "IVORA_API_BASE_URL is deprecated and will be removed in the next release: rename it to IVORA_API_URL.",
+    );
+  }
+  return old;
+}
+
 /** Server-side settings. Read on every call so tests and restarts see the current env. */
 export const config = {
   get apiBaseUrl() {
-    return (env("IVORA_API_BASE_URL") ?? DEFAULT_API_BASE_URL).replace(
-      /\/+$/,
-      "",
-    );
+    return (apiUrl() ?? DEFAULT_API_BASE_URL).replace(/\/+$/, "");
   },
   get apiKey() {
     return credential("IVORA_API_KEY");
@@ -161,12 +186,11 @@ export function supabaseConfigured(): boolean {
 }
 
 /**
- * Demo mode: forced with DEMO_MODE=true (or 1), and on whenever live credentials are
- * missing. Live mode needs both Ivora and Supabase, so live charger data is never
- * served without staff sign-in.
+ * Demo mode: forced with DEMO_MODE set to true, 1, yes or on (any case; see
+ * isFlagOn), and on whenever live credentials are missing. Live mode needs both
+ * Ivora and Supabase, so live charger data is never served without staff sign-in.
  */
 export function isDemo(): boolean {
-  const forced = env("DEMO_MODE")?.toLowerCase();
-  if (forced === "true" || forced === "1") return true;
+  if (isFlagOn(env("DEMO_MODE"))) return true;
   return !(config.apiKey && config.tenantId && supabaseConfigured());
 }

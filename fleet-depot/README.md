@@ -84,7 +84,7 @@ With no credentials it starts in **demo mode**, with a persistent "Demo" banner.
 | ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |
 | `IVORA_API_KEY`                           | Tenant-scoped API key. Server-side only. Setting it and the tenant ID turns demo mode off.                                  |
 | `IVORA_TENANT_ID`                         | Numeric tenant ID (part of every API path). Server-side only.                                                               |
-| `IVORA_API_BASE_URL`                      | Optional; defaults to `https://api.ivoracharge.com`. An empty value counts as unset.                                        |
+| `IVORA_API_URL`                           | Optional; defaults to `https://api.ivoracharge.com`. An empty value counts as unset.                                        |
 | `IVORA_WEBHOOK_SECRET`                    | The signing secret returned once when you register the webhook endpoint                                                     |
 | `OPERATOR_PASSWORD`                       | **Required in live mode.** Protects the dashboard and every API route except webhooks. Without it live mode refuses to run. |
 | `DATABASE_URL` / `SQLITE_PATH`            | Postgres connection string, or SQLite file (default `./data/depot.db`)                                                      |
@@ -93,7 +93,7 @@ With no credentials it starts in **demo mode**, with a persistent "Demo" banner.
 | `DEFAULT_CONNECTOR_KW`                    | Power reserved for a session whose card matches no vehicle, when the station reports no rating (default 11)                 |
 | `REPLAN_INTERVAL_SECONDS`                 | Live mode replans on this timer as well as on events, to retry failed decreases and follow departures (default 60)          |
 | `TARIFF_CENTS_PER_KWH`, `TARIFF_CURRENCY` | Site tariff for reports (integer minor units; currency defaults to USD, logged once)                                        |
-| `DEMO_MODE=true`                          | Force demo mode                                                                                                             |
+| `DEMO_MODE=true`                          | Force demo mode (`true`, `1`, `yes` or `on`)                                                                                |
 
 1. Use **one Ivora project and API key per deployment**, and a test project for previews.
 2. Register the webhook endpoint (`POST /v1/tenants/{tenant_id}/webhooks`) with the URL `https://<your-domain>/api/webhooks`. Subscribe to these events:

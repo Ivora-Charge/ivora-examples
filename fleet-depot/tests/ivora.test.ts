@@ -26,7 +26,7 @@ beforeEach(() => {
 describe("config", () => {
   it("treats empty variables as unset and defaults to the public API host", () => {
     expect(config.apiBase).toBe("https://api.ivoracharge.com");
-    process.env.IVORA_API_BASE_URL = "https://sandbox.example.com/";
+    process.env.IVORA_API_URL = "https://sandbox.example.com/";
     expect(config.apiBase).toBe("https://sandbox.example.com");
   });
 });

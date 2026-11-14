@@ -139,7 +139,7 @@ export function createLiveClient(o: LiveOptions): IvoraClient {
     throw new Error("IVORA_TENANT_ID must be the numeric tenant ID");
   const base = new URL(o.baseUrl);
   if (base.protocol !== "https:" && base.hostname !== "localhost")
-    throw new Error("IVORA_API_BASE_URL must use https://");
+    throw new Error("IVORA_API_URL must use https://");
   const origin = base.origin;
   const doFetch: typeof fetch = (...a) => (o.fetch ?? globalThis.fetch)(...a);
   const sleep =

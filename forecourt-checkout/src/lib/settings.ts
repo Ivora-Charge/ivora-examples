@@ -38,6 +38,22 @@ export type Settings = {
   emailReceipts: boolean;
 };
 
+/**
+ * The one rule for an on/off variable: true, 1, yes or on (any case, trimmed) is on;
+ * anything else, including empty, is off. Every template parses DEMO_MODE this way.
+ */
+export function isFlagOn(raw: string | undefined): boolean {
+  const v = raw?.trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
+
+/** The demo notice: "DEMO_MODE is set" when forced, else the live variables still missing. */
+export function demoNotice(s: Pick<Settings, "missing">): string {
+  return s.missing.includes("DEMO_MODE")
+    ? "DEMO_MODE is set."
+    : `Live mode also needs: ${s.missing.join(", ")}`;
+}
+
 /** Live mode needs all of these. Any missing one keeps the app in demo mode. */
 export const LIVE_VARIABLES = [
   "IVORA_API_KEY",
@@ -63,7 +79,8 @@ export function readSettings(
   env: Record<string, string | undefined> = process.env,
 ): Settings {
   const missing = LIVE_VARIABLES.filter((name) => !env[name]?.trim());
-  const demo = env.DEMO_MODE === "1" || missing.length > 0;
+  const forced = isFlagOn(env.DEMO_MODE);
+  const demo = forced || missing.length > 0;
   const holdRaw = env.DEFAULT_HOLD_CENTS?.trim() || "5000";
   const defaultHoldCents = parseCents(holdRaw, "DEFAULT_HOLD_CENTS");
   if (defaultHoldCents < MIN_HOLD_CENTS || defaultHoldCents > MAX_HOLD_CENTS)
@@ -81,8 +98,12 @@ export function readSettings(
   const posWebhookUrl = demo ? "" : webhookUrl(env.POS_WEBHOOK_URL);
   return {
     demo,
-    missing: env.DEMO_MODE === "1" ? ["DEMO_MODE=1"] : [...missing],
-    ivoraApiUrl: (env.IVORA_API_URL || "https://api.ivoracharge.com").trim(),
+    missing: forced ? ["DEMO_MODE"] : [...missing],
+    ivoraApiUrl: (
+      env.IVORA_API_URL?.trim() ||
+      legacyApiUrl(env) ||
+      "https://api.ivoracharge.com"
+    ).trim(),
     applicationFeeBps: parseBasisPoints(env.APPLICATION_FEE_BPS ?? "1000"),
     defaultHoldCents,
     idleGraceMinutes: integer(env.IDLE_GRACE_MINUTES, 10, "IDLE_GRACE_MINUTES"),
@@ -127,4 +148,21 @@ function webhookUrl(raw: string | undefined) {
       "POS_WEBHOOK_URL must not contain credentials; the webhook is signed with POS_WEBHOOK_SECRET.",
     );
   return url.toString();
+}
+
+let warnedLegacyApiUrl = false;
+
+/**
+ * IVORA_API_BASE_URL is the old name of IVORA_API_URL. It still works for one
+ * release and logs a warning once.
+ */
+function legacyApiUrl(env: Record<string, string | undefined>): string {
+  const old = env.IVORA_API_BASE_URL?.trim() ?? "";
+  if (old && !warnedLegacyApiUrl) {
+    warnedLegacyApiUrl = true;
+    console.warn(
+      "IVORA_API_BASE_URL is deprecated and will be removed in the next release: rename it to IVORA_API_URL.",
+    );
+  }
+  return old;
 }
