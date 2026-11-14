@@ -13,13 +13,28 @@ const staff: Staff = {
   demo: true,
 };
 
-function deps(opts: { zone: string | null; fail?: boolean }) {
+function deps(opts: {
+  zone: string | null;
+  fail?: boolean;
+  siteZones?: (string | null)[];
+  sitesFail?: boolean;
+}) {
   const getStats = vi.fn(async () => {
     if (opts.fail) throw new IvoraError(500, "server_error", "boom");
     return { series: [] };
   });
+  const listAllLocations = vi.fn(async () => {
+    if (opts.sitesFail) throw new IvoraError(500, "server_error", "boom");
+    return {
+      data: (opts.siteZones ?? []).map((time_zone, i) => ({
+        id: i + 1,
+        time_zone,
+      })),
+      truncated: false,
+    };
+  });
   const d = {
-    ivora: { getStats, mode: "demo" },
+    ivora: { getStats, listAllLocations, mode: "demo" },
     company: {
       load: async () => ({ timeZone: opts.zone }),
     },
@@ -46,9 +61,28 @@ describe("overview 30-day trend", () => {
     expect(Math.round(days)).toBe(30);
   });
 
-  it("falls back to UTC until the company has a time zone", async () => {
-    const { d } = deps({ zone: null });
-    expect((await loadTrend(d, staff)).zone).toBe("UTC");
+  it("falls back like Reports: the sites' one shared zone, else UTC", async () => {
+    const shared = deps({
+      zone: null,
+      siteZones: ["America/Chicago", "America/Chicago"],
+    });
+    expect((await loadTrend(shared.d, staff)).zone).toBe("America/Chicago");
+    const mixed = deps({
+      zone: null,
+      siteZones: ["America/Chicago", "Europe/Berlin"],
+    });
+    expect((await loadTrend(mixed.d, staff)).zone).toBe("UTC");
+    expect((await loadTrend(deps({ zone: null }).d, staff)).zone).toBe("UTC");
+    // The company's own zone wins over the sites'.
+    const own = deps({ zone: "Europe/Berlin", siteZones: ["America/Chicago"] });
+    expect((await loadTrend(own.d, staff)).zone).toBe("Europe/Berlin");
+  });
+
+  it("still draws the chart, in UTC, when the sites can't be read", async () => {
+    const { d, getStats } = deps({ zone: null, sitesFail: true });
+    const r = await loadTrend(d, staff);
+    expect(r.zone).toBe("UTC");
+    expect(getStats).toHaveBeenCalledTimes(1);
   });
 
   it("reports a failed read instead of throwing", async () => {

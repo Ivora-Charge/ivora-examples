@@ -11,6 +11,8 @@ export async function hideSetupAction() {
   (await cookies()).set(SETUP_HIDDEN_COOKIE, "1", {
     path: "/",
     maxAge: 60 * 60 * 24 * 365,
+    // Only the server reads it.
+    httpOnly: true,
     sameSite: "lax",
     secure: process.env.NODE_ENV === "production",
   });

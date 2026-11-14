@@ -20,6 +20,18 @@ export interface ActionState {
    * response to the action that set it; never stored or logged.
    */
   secret?: { password: string; connectionUrl: string; username: string };
+  /**
+   * A form field's name to its own error, shown under that field; `error` stays the
+   * form's summary.
+   */
+  fieldErrors?: Record<string, string>;
+  /**
+   * What the visitor typed, sent back with an error so the form keeps it (React resets
+   * a form after its action). Only the visitor's own input, never stored values.
+   */
+  values?: Record<string, string>;
+  /** When a save went through (epoch ms), for the Saved state. */
+  savedAt?: number;
   /** Every problem with a form, after the first (in `error`). */
   problems?: string[];
   /** A tariff preview (Pricing). */

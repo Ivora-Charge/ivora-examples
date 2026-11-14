@@ -62,11 +62,15 @@ export interface OnboardingStore {
 export type OnboardingErrorCode =
   "invalid" | "not_allowed" | "no_company" | "logo_invalid";
 
-/** An error staff can act on. The message is safe to show. */
+/**
+ * An error staff can act on. The message is safe to show. `fields` maps a form field's
+ * name to its own message, for the inline error under that field.
+ */
 export class OnboardingError extends Error {
   constructor(
     public code: OnboardingErrorCode,
     message: string,
+    public fields?: Record<string, string>,
   ) {
     super(message);
     this.name = "OnboardingError";

@@ -103,7 +103,7 @@ export function imageInfo(bytes: Uint8Array): ImageInfo | null {
 }
 
 const invalid = (message: string) =>
-  new OnboardingError("logo_invalid", message);
+  new OnboardingError("logo_invalid", message, { logo: message });
 
 /** The upload to send, or an error that says what to fix. */
 export function checkLogo(bytes: Uint8Array): LogoUpload {

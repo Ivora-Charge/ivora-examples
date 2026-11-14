@@ -22,23 +22,45 @@ import {
 } from "./actions";
 
 /**
- * `useActionState` for a save form, plus the time of the last successful save (the
- * visitor's clock), for the Saved state.
+ * `useActionState` for a save form. The server action is passed as it is, so the form
+ * also submits without JavaScript. The action stamps `savedAt` on a successful save.
  */
 function useSave(
   save: (prev: ActionState, form: FormData) => Promise<ActionState>,
 ) {
-  const [state, action, pending] = useActionState(
-    async (
-      prev: ActionState & { at?: number },
-      form: FormData,
-    ): Promise<ActionState & { at?: number }> => {
-      const next = await save(prev, form);
-      return next.ok ? { ...next, at: Date.now() } : next;
-    },
-    EMPTY as ActionState & { at?: number },
-  );
-  return { state, action, pending, savedAt: state.ok ? state.at : undefined };
+  const [state, action, pending] = useActionState(save, EMPTY);
+  return {
+    state,
+    action,
+    pending,
+    saved: Boolean(state.ok),
+    savedAt: state.ok ? state.savedAt : undefined,
+    fieldError: (name: string) => state.fieldErrors?.[name],
+  };
+}
+
+/**
+ * A save form's message above it. A save shows only the Saved state by the button, so
+ * this is the error summary (each field's own error sits under it), or a warning when
+ * something after the save needs attention.
+ */
+function SaveResult({ state }: { state: ActionState }) {
+  if (state.error)
+    return (
+      <div className="error" role="alert">
+        <p>{state.error}</p>
+        {state.fieldErrors && Object.keys(state.fieldErrors).length > 1 && (
+          <p>Check the fields marked below.</p>
+        )}
+      </div>
+    );
+  if (state.ok && state.warning)
+    return (
+      <p className="notice" role="status">
+        {state.warning}
+      </p>
+    );
+  return null;
 }
 
 export interface CompanyDefaults {
@@ -55,15 +77,18 @@ export function CompanyForm(p: {
   timeZones: readonly string[];
   currencies: readonly string[];
 }) {
-  const { state, action, pending, savedAt } = useSave(saveCompanyAction);
+  const { state, action, pending, saved, savedAt, fieldError } =
+    useSave(saveCompanyAction);
   const id = useId();
-  const d = p.defaults;
+  // After a refused save, what was typed; otherwise the saved values.
+  const d = { ...p.defaults, ...state.values };
   return (
     <>
-      <Result state={state} />
+      <SaveResult state={state} />
       <form action={action} className="form">
         <Field
           id={`${id}-name`}
+          error={fieldError("name")}
           label="Company name"
           help="Drivers see it on the payment pages."
         >
@@ -78,7 +103,11 @@ export function CompanyForm(p: {
             />
           )}
         </Field>
-        <Field id={`${id}-email`} label="Support email">
+        <Field
+          id={`${id}-email`}
+          error={fieldError("supportEmail")}
+          label="Support email"
+        >
           {(c) => (
             <input
               {...c}
@@ -92,6 +121,7 @@ export function CompanyForm(p: {
         </Field>
         <Field
           id={`${id}-support-url`}
+          error={fieldError("supportUrl")}
           label="Support URL (optional)"
           help="An https page where drivers get help."
         >
@@ -108,7 +138,11 @@ export function CompanyForm(p: {
             />
           )}
         </Field>
-        <Field id={`${id}-website`} label="Website (optional)">
+        <Field
+          id={`${id}-website`}
+          error={fieldError("website")}
+          label="Website (optional)"
+        >
           {(c) => (
             <input
               {...c}
@@ -124,11 +158,19 @@ export function CompanyForm(p: {
         </Field>
         <Field
           id={`${id}-tz`}
+          error={fieldError("timeZone")}
           label="Time zone"
           help="Times are stored in UTC and shown in this zone."
         >
           {(c) => (
-            <select {...c} name="timeZone" defaultValue={d.timeZone} required>
+            // A mounted select ignores a new defaultValue, so a new value remounts it.
+            <select
+              {...c}
+              key={d.timeZone}
+              name="timeZone"
+              defaultValue={d.timeZone}
+              required
+            >
               <option value="" disabled>
                 Choose…
               </option>
@@ -140,9 +182,19 @@ export function CompanyForm(p: {
             </select>
           )}
         </Field>
-        <Field id={`${id}-currency`} label="Currency">
+        <Field
+          id={`${id}-currency`}
+          error={fieldError("currency")}
+          label="Currency"
+        >
           {(c) => (
-            <select {...c} name="currency" defaultValue={d.currency} required>
+            <select
+              {...c}
+              key={d.currency}
+              name="currency"
+              defaultValue={d.currency}
+              required
+            >
               {p.currencies.map((cur) => (
                 <option key={cur} value={cur}>
                   {cur}
@@ -151,7 +203,7 @@ export function CompanyForm(p: {
             </select>
           )}
         </Field>
-        <FormActions saved={Boolean(state.ok)} savedAt={savedAt}>
+        <FormActions saved={saved} savedAt={savedAt}>
           <button type="submit" className="button" disabled={pending}>
             {pending ? "Saving…" : "Save company details"}
           </button>
@@ -167,15 +219,19 @@ export function BrandForm(p: {
   /** The company name, for the preview of the driver page's header. */
   name: string;
 }) {
-  const { state, action, pending, savedAt } = useSave(saveBrandAction);
+  const { state, action, pending, saved, savedAt, fieldError } =
+    useSave(saveBrandAction);
   const [color, setColor] = useState(p.color ?? "");
   const [logoProblem, setLogoProblem] = useState<string | null>(null);
   const id = useId();
   const hex = normalizeHex(color);
   const check = hex ? checkBrandColor(hex) : null;
+  const colorError = fieldError("primaryColor");
+  // The browser's own check first (it blocks the submit), then the server's answer.
+  const logoError = logoProblem ?? fieldError("logo");
   return (
     <>
-      <Result state={state} />
+      <SaveResult state={state} />
       <form action={action} className="form">
         <div className="brand-grid">
           <div className="form">
@@ -198,9 +254,19 @@ export function BrandForm(p: {
                   maxLength={7}
                   required
                   spellCheck={false}
-                  aria-describedby={`${id}-color-check`}
+                  aria-describedby={
+                    colorError
+                      ? `${id}-color-check ${id}-color-error`
+                      : `${id}-color-check`
+                  }
+                  aria-invalid={colorError ? true : undefined}
                 />
               </div>
+              {colorError && (
+                <p id={`${id}-color-error`} className="field-error">
+                  {colorError}
+                </p>
+              )}
               <p id={`${id}-color-check`} className="hint" aria-live="polite">
                 {check
                   ? `${describeDriverColor(check)} In this app: ${describeBrandCheck(check)}`
@@ -222,7 +288,10 @@ export function BrandForm(p: {
                 <span
                   className="swatch"
                   // The darker shade the driver pages get instead, with white text.
-                  style={{ background: check.driverColor, color: "#ffffff" }}
+                  style={{
+                    background: check.driverColor,
+                    color: "var(--color-on-driver)",
+                  }}
                 >
                   Driver pages: {check.driverColor}
                 </span>
@@ -238,7 +307,7 @@ export function BrandForm(p: {
                 type="file"
                 accept="image/png,image/jpeg,image/webp"
                 aria-describedby={`${id}-logo-hint ${id}-logo-problem`}
-                aria-invalid={logoProblem ? true : undefined}
+                aria-invalid={logoError ? true : undefined}
                 onChange={(e) => {
                   const input = e.currentTarget;
                   const file = input.files?.[0];
@@ -254,10 +323,10 @@ export function BrandForm(p: {
               </span>
               <span
                 id={`${id}-logo-problem`}
-                className={logoProblem ? "error" : undefined}
+                className={logoError ? "field-error" : undefined}
                 role={logoProblem ? "alert" : undefined}
               >
-                {logoProblem}
+                {logoError}
               </span>
             </div>
           </div>
@@ -273,7 +342,10 @@ export function BrandForm(p: {
               // The saved or chosen colour with the text colour the check picked.
               style={
                 check
-                  ? { background: check.driverColor, color: "#ffffff" }
+                  ? {
+                      background: check.driverColor,
+                      color: "var(--color-on-driver)",
+                    }
                   : undefined
               }
             >
@@ -281,7 +353,7 @@ export function BrandForm(p: {
             </span>
           </div>
         </div>
-        <FormActions saved={Boolean(state.ok)} savedAt={savedAt}>
+        <FormActions saved={saved} savedAt={savedAt}>
           <button type="submit" className="button" disabled={pending}>
             {pending ? "Saving…" : "Save brand"}
           </button>

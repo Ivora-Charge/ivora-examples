@@ -87,10 +87,14 @@ export function SavedState({ saved, at }: { saved?: boolean; at?: number }) {
   );
 }
 
-/** The save's time in the visitor's own clock ("10:02"); only rendered after a save, in the browser. */
+/**
+ * The save's time in the visitor's own clock ("10:02"), rendered after a save. A form
+ * sent without JavaScript gets it from the server's render, whose clock may differ, so
+ * a later hydration may correct the text.
+ */
 function SavedTime({ at }: { at: number }) {
   return (
-    <time dateTime={new Date(at).toISOString()}>
+    <time dateTime={new Date(at).toISOString()} suppressHydrationWarning>
       {new Date(at).toLocaleTimeString([], {
         hour: "2-digit",
         minute: "2-digit",

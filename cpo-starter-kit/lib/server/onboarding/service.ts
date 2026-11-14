@@ -37,13 +37,26 @@ function requireManager(actor: Staff) {
   if (!atLeast(actor.role, "manager")) throw notAllowed();
 }
 
-function parse<T>(schema: z.ZodType<T>, value: unknown): T {
+/**
+ * Parses form input. On failure the first message is the form's summary, and each
+ * field's first message goes under that field: the issue's path names it, or `field`
+ * when the schema is a single value.
+ */
+function parse<T>(schema: z.ZodType<T>, value: unknown, field?: string): T {
   const r = schema.safeParse(value);
-  if (!r.success)
+  if (!r.success) {
+    const fields: Record<string, string> = {};
+    for (const issue of r.error.issues) {
+      const name = field ?? issue.path[0];
+      if (typeof name === "string" && !(name in fields))
+        fields[name] = issue.message;
+    }
     throw new OnboardingError(
       "invalid",
       r.error.issues[0]?.message ?? "Check the form and try again.",
+      Object.keys(fields).length ? fields : undefined,
     );
+  }
   return r.data;
 }
 
@@ -195,7 +208,7 @@ export async function saveBrand(
   raw: { primaryColor: unknown; logo: Uint8Array | null },
 ): Promise<{ sync: SyncResult; logo: LogoResult | null }> {
   requireManager(actor);
-  const color = parse(colorInput, raw.primaryColor);
+  const color = parse(colorInput, raw.primaryColor, "primaryColor");
   if (raw.logo?.length) checkLogo(raw.logo);
   const p = await d.store.load(actor.operatorId);
   if (!p.name) throw noCompany();

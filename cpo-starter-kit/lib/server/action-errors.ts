@@ -28,9 +28,12 @@ export function actionError(e: unknown, what: string): ActionState {
       error: e.message,
       problems: e.problems.length ? e.problems : undefined,
     };
+  if (e instanceof OnboardingError)
+    return e.fields
+      ? { error: e.message, fieldErrors: e.fields }
+      : { error: e.message };
   if (
     e instanceof TeamError ||
-    e instanceof OnboardingError ||
     e instanceof ChargerError ||
     e instanceof LiveError ||
     e instanceof AccessDeniedError

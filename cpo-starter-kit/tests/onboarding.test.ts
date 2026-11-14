@@ -215,6 +215,42 @@ describe("company details", () => {
     expect(api.putBranding).not.toHaveBeenCalled();
   });
 
+  it("names the field of each problem, for the inline errors", async () => {
+    const { d } = deps();
+    const e = await saveCompany(d, owner, {
+      ...COMPANY,
+      supportEmail: "not-an-email",
+      website: "example.com",
+    }).catch((x: unknown) => x);
+    expect(e).toBeInstanceOf(OnboardingError);
+    const err = e as OnboardingError;
+    // The first problem is the form's summary; each field keeps its own message.
+    expect(err.message).toMatch(/valid support email/);
+    expect(err.fields).toEqual({
+      supportEmail: "Enter a valid support email.",
+      website: "The website must be a full https:// address.",
+    });
+  });
+
+  it("puts a wrong colour or logo under its own field", async () => {
+    const { d } = deps();
+    await saveCompany(d, owner, COMPANY);
+    await expect(
+      saveBrand(d, owner, { primaryColor: "blue", logo: null }),
+    ).rejects.toMatchObject({
+      fields: { primaryColor: expect.stringMatching(/#rrggbb/) },
+    });
+    await expect(
+      saveBrand(d, owner, {
+        primaryColor: "#17613a",
+        logo: new TextEncoder().encode("<svg/>"),
+      }),
+    ).rejects.toMatchObject({
+      code: "logo_invalid",
+      fields: { logo: expect.any(String) },
+    });
+  });
+
   it("keeps the details when Ivora fails, and says so", async () => {
     const { d, api } = deps();
     api.putBranding.mockRejectedValueOnce(
