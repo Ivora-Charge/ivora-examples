@@ -21,7 +21,7 @@ test("demo: create a tariff with time-of-use and an idle fee, preview it and sav
 }) => {
   await openPricing(page, isMobile);
   await expect(
-    page.getByRole("list", { name: "Tariffs", exact: true }),
+    page.getByRole("table", { name: "Tariffs", exact: true }),
   ).toContainText("Sample: Standard");
   await page.getByRole("link", { name: "New tariff" }).click();
   await expect(
@@ -270,4 +270,25 @@ test("demo: a stale tariff editor or charger form is refused instead of undoing 
   );
   await page.reload();
   await expect(harbour(page)).toContainText("Private");
+});
+
+test("demo: the tariff table shows type, prices and state, and a money field is checked as you leave it", async ({
+  page,
+  isMobile,
+}) => {
+  await openPricing(page, isMobile);
+  const row = page
+    .getByRole("row")
+    .filter({ has: page.getByRole("link", { name: "Sample: Standard" }) });
+  await expect(row.first()).toContainText("In use");
+  await expect(row.first()).toContainText("$0.35");
+  await page.getByRole("link", { name: "New tariff" }).click();
+  const energy = page.getByLabel("Price per kWh (USD)", { exact: true });
+  await energy.fill("0,35");
+  await page.getByLabel("Tariff name").focus();
+  await expect(energy).toHaveAttribute("aria-invalid", "true");
+  await expect(page.getByText(/at most 2 decimals/)).toBeVisible();
+  await energy.fill("0.35");
+  await page.getByLabel("Tariff name").focus();
+  await expect(energy).not.toHaveAttribute("aria-invalid", "true");
 });

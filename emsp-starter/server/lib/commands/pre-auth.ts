@@ -5,7 +5,8 @@ import type { Command } from "./store";
 /**
  * The payment hold before a START_SESSION. The start is sent to the CPO only after
  * `hold` succeeds, and a start that ends without charging (refused, not supported,
- * failed, timed out) calls `release` at once.
+ * failed, timed out) calls `release` at once. An accepted start with no session yet
+ * calls it too, `uncertain`: its hold waits for a session.
  *
  * `preAuth()` is the card hold of lib/payments (paymentsPreAuth): a manual-capture
  * PaymentIntent on the driver's default card, captured later from the session's CDR.
@@ -22,9 +23,10 @@ export type PreAuth = {
    * Releases the hold of a start that ended without charging. Must be safe to call when
    * no hold was placed, and more than once (a hold placed after the start timed out is
    * released again). `uncertain`: we never learnt whether the CPO started a session
-   * (no answer before the deadline, or the CPO's CommandResult TIMEOUT); a session may
-   * still appear for this authorization_reference: lib/payments keeps that hold a
-   * while, and charges it from the session's CDR if one comes.
+   * (no answer before the deadline, or the CPO's CommandResult TIMEOUT), or the CPO
+   * accepted the start but no session has come yet; a session may still appear for
+   * this authorization_reference: lib/payments keeps that hold a while, and charges it
+   * from the session's CDR if one comes.
    */
   release(command: Command, why: { uncertain: boolean }): Promise<void>;
 };

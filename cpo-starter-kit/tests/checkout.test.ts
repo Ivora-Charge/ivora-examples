@@ -16,6 +16,8 @@ import {
   payAndCharge,
   settleCheckout,
   settleOpenCheckouts,
+  sweepIsRecent,
+  SWEEP_MAX_AGE_MINUTES,
   STALLED_HOURS,
   START_RESERVED_MINUTES,
   startFreeSession,
@@ -801,6 +803,62 @@ describe("pay and charge", () => {
       CHECKOUT_LIMITS.sourceConnector.quota * PAYMENT_WINDOW_MINUTES,
     ).toBeLessThanOrEqual(30);
     expect(CHECKOUT_LIMITS.sourceConnector.periodSeconds).toBe(3600);
+  });
+});
+
+describe("the settlement sweep", () => {
+  /** The test's demo store, as the live (Supabase) store: payments need the sweep. */
+  function liveStore(d: CheckoutDeps) {
+    let sweptAt: string | null = null;
+    d.store = {
+      ...d.store,
+      mode: "live",
+      async markSwept(at) {
+        if (!sweptAt || Date.parse(at) > Date.parse(sweptAt)) sweptAt = at;
+      },
+      async lastSweptAt() {
+        return sweptAt;
+      },
+    };
+  }
+
+  it("refuses a live paid checkout until the sweep has run lately, before any bill", async () => {
+    const c = clock();
+    const { d, api } = deps({ now: c.now });
+    liveStore(d);
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(pay(d)).rejects.toMatchObject({
+      code: "unavailable",
+      message: expect.stringContaining("Nothing was charged"),
+    });
+    expect(error).toHaveBeenCalledWith(
+      expect.stringContaining("/api/cron/settle"),
+    );
+    expect(api.createBill).not.toHaveBeenCalled();
+
+    // The sweep ran: paid checkouts are taken.
+    await settleOpenCheckouts(d);
+    expect(await sweepIsRecent(d)).toBe(true);
+    const requestId = req();
+    expect((await pay(d, requestId)).url).toBe(CHECKOUT_URL);
+
+    // A webhook's cue at one station is not the sweep.
+    c.add(SWEEP_MAX_AGE_MINUTES + 1);
+    await settleOpenCheckouts(d, { stationId: 9101 });
+    expect(await sweepIsRecent(d)).toBe(false);
+    await expect(pay(d, req(), CODE, "s2")).rejects.toMatchObject({
+      code: "unavailable",
+    });
+    // A checkout already made reopens its payment page; only new ones wait.
+    expect((await pay(d, requestId)).url).toBe(CHECKOUT_URL);
+    expect(api.createBill).toHaveBeenCalledTimes(1);
+    error.mockRestore();
+  });
+
+  it("needs no sweep in demo mode", async () => {
+    const { d } = deps();
+    expect(await sweepIsRecent(d)).toBe(true);
+    expect((await pay(d)).url).toBe(CHECKOUT_URL);
   });
 });
 

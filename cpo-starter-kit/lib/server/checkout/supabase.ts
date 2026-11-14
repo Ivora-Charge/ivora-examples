@@ -185,5 +185,18 @@ export function createSupabaseCheckoutStore(): CheckoutStore {
       );
       return data === true;
     },
+    async markSwept(at) {
+      check(await svc().rpc("cpo_mark_settlement_sweep", { p_swept_at: at }));
+    },
+    async lastSweptAt() {
+      const { data } = check(
+        await svc()
+          .from("cpo_settlement_sweeps")
+          .select("swept_at")
+          .eq("id", 1)
+          .maybeSingle(),
+      );
+      return (data as { swept_at: string } | null)?.swept_at ?? null;
+    },
   };
 }

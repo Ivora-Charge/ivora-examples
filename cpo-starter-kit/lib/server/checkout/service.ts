@@ -120,6 +120,13 @@ export const STALLED_HOURS = 12;
 /** Settlement that still fails after this goes to the operator (attention). */
 const GIVE_UP_HOURS = 24;
 /**
+ * Live payments need the settlement sweep every minute: it stops paid sessions before
+ * their cost reaches the hold when no page or webhook looks at them, and releases holds
+ * that never started charging. A new paid checkout is refused while the sweep's last
+ * finished pass is older than this (or it never ran).
+ */
+export const SWEEP_MAX_AGE_MINUTES = 5;
+/**
  * A returning driver's sessions are shown on the sticker's page this long: longer than
  * STALLED_HOURS, so a driver whose session stalled still sees what happened to it.
  */
@@ -801,6 +808,15 @@ export async function payAndCharge(
 
   let rec = await d.store.getByRequest(found.operatorId, requestId);
   if (!rec) {
+    if (!(await sweepIsRecent(d))) {
+      console.error(
+        `cpo-starter-kit: paid checkout refused: the settlement sweep (/api/cron/settle) has not run in the last ${SWEEP_MAX_AGE_MINUTES} minutes`,
+      );
+      throw new CheckoutError(
+        "unavailable",
+        `Card payment is paused at this charger right now. Try again later or contact ${operatorName}. Nothing was charged.`,
+      );
+    }
     await takeLimits(d, found, input.source);
     let hold: number | null;
     try {
@@ -1742,9 +1758,22 @@ export async function settleCheckout(
 export const SETTLE_BUDGET_MS = 25_000;
 
 /**
+ * True in demo mode (no payments), and in live mode when the settlement sweep finished
+ * a pass within SWEEP_MAX_AGE_MINUTES.
+ */
+export async function sweepIsRecent(d: CheckoutDeps): Promise<boolean> {
+  if (d.store.mode !== "live") return true;
+  const at = await d.store.lastSweptAt();
+  const now = (d.now ?? Date.now)();
+  return at !== null && now - Date.parse(at) <= minutes(SWEEP_MAX_AGE_MINUTES);
+}
+
+/**
  * Settles the checkouts still in progress, least recently checked first: the server's
  * regular sweep (/api/cron/settle) or, with a station, a webhook's cue (and the
- * transaction ID the event carries, if any). Returns how many were looked at.
+ * transaction ID the event carries, if any). Returns how many were looked at. The
+ * sweep (no station) records that it ran (`markSwept`), even when it stopped at its
+ * budget: paid checkouts are refused when it has not run lately (sweepIsRecent).
  */
 export async function settleOpenCheckouts(
   d: CheckoutDeps,
@@ -1786,6 +1815,15 @@ export async function settleOpenCheckouts(
       });
     }
   }
+  if (o.stationId === undefined)
+    try {
+      await d.store.markSwept(new Date(now()).toISOString());
+    } catch (e) {
+      console.error(
+        "cpo-starter-kit: recording the settlement sweep failed:",
+        e instanceof Error ? e.name : "error",
+      );
+    }
   return checked;
 }
 

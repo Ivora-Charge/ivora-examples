@@ -16,6 +16,8 @@ const REVIEW_TEXT: Record<string, string> = {
   refund_outside: "Money moved outside this server (the Stripe Dashboard)",
   second_cdr:
     "Another CDR came for this charge: compare it with the one settled (see the audit log)",
+  capture_refused:
+    "Stripe refused the capture: nothing was charged yet; capture an amount or release the hold",
 };
 
 export function PaymentFacts({ p }: { p: PaymentSummary }) {

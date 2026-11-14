@@ -330,6 +330,31 @@ export class SupabasePaymentStore implements PaymentStore {
     return rows.length > 0;
   }
 
+  async markSwept(now: string) {
+    // Moves the one row forward only; makes it the first time.
+    const moved = await this.rest<{ id: number }[]>(
+      "PATCH",
+      `emsp_payment_sweeps?id=eq.1&swept_at=lt.${encodeURIComponent(now)}&select=id`,
+      { swept_at: now },
+      "return=representation",
+    );
+    if (moved.length) return;
+    await this.rest<unknown>(
+      "POST",
+      "emsp_payment_sweeps?on_conflict=id",
+      { id: 1, swept_at: now },
+      "resolution=ignore-duplicates,return=minimal",
+    );
+  }
+
+  async lastSweptAt() {
+    const [row] = await this.rest<{ swept_at: string }[]>(
+      "GET",
+      "emsp_payment_sweeps?id=eq.1&select=swept_at",
+    );
+    return row?.swept_at ?? null;
+  }
+
   async reconcileCdrs(
     q: ReconciliationQuery,
   ): Promise<PaymentReconciliationRow[]> {

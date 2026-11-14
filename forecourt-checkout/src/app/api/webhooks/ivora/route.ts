@@ -6,8 +6,16 @@ import {
   liveStoreDeps,
   settings,
 } from "@/lib/server/services";
-import { APPLICATION_PREFIX, reconcile } from "@/lib/server/sessions";
-import { onMeterSample, reconcileStoreSession } from "@/lib/server/store";
+import {
+  APPLICATION_PREFIX,
+  onCardMeterSample,
+  reconcile,
+} from "@/lib/server/sessions";
+import {
+  onMeterSample,
+  reconcileStoreSession,
+  sessionIndex,
+} from "@/lib/server/store";
 import { STORE_PREFIX } from "@/lib/store";
 import {
   meterSampleFromEvent,
@@ -61,9 +69,24 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "unknown_tenant" }, { status: 400 });
   if (!seen.add(request.headers.get("ivora-event-id") ?? event.id))
     return NextResponse.json({ received: true, duplicate: true });
-  // Pay in store: meter samples drive the prepaid stop check while charging.
+  // Meter samples drive the stop checks while charging, with no screen open: the
+  // card sessions' near-hold stop, and pay in store's prepaid limit.
   const sample = meterSampleFromEvent(event);
   if (sample) {
+    after(async () => {
+      try {
+        await onCardMeterSample(
+          sample,
+          liveDeps(s),
+          sessionIndex(liveStoreDeps(s)),
+        );
+      } catch (error) {
+        console.warn(
+          "[forecourt] card meter sample check failed",
+          error instanceof Error ? error.name : "unknown",
+        );
+      }
+    });
     if (s.payInStore)
       after(async () => {
         try {

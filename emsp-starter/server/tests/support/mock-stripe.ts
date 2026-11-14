@@ -60,10 +60,13 @@ export function createMockStripe({ now = () => Date.now() } = {}) {
     declineIncrements: false,
     /** The status a new refund gets (Stripe's: succeeded, pending, requires_action…). */
     refundStatus: "succeeded",
-    /** Failures to inject, first match first: drops the request or answers 5xx. */
+    /**
+     * Failures to inject, first match first: drops the request, answers 5xx, or
+     * refuses it (400 invalid_request_error, Stripe's answer to a request it can't do).
+     */
     failures: [] as {
       path: RegExp;
-      kind: "network" | "500";
+      kind: "network" | "500" | "refused";
       times: number;
       after?: boolean;
     }[],
@@ -345,6 +348,14 @@ export function createMockStripe({ now = () => Date.now() } = {}) {
     if (failure && !failure.after) {
       failure.times--;
       if (failure.kind === "network") throw new TypeError("fetch failed");
+      if (failure.kind === "refused") {
+        const refused = error(
+          400,
+          "invalid_request_error",
+          "parameter_invalid",
+        );
+        return Response.json(refused.body, { status: refused.status });
+      }
       return Response.json({ error: { type: "api_error" } }, { status: 500 });
     }
     const fingerprint = `${method} ${url.pathname} ${text}`;

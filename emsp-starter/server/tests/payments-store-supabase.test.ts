@@ -40,6 +40,7 @@ beforeEach(async () => {
   await db.exec(`
     delete from public.emsp_payment_refunds; delete from public.emsp_payments;
     delete from public.emsp_stripe_events; delete from public.emsp_drivers;
+    delete from public.emsp_payment_sweeps;
     delete from public.emsp_admins;
     delete from public.emsp_sessions; delete from public.emsp_commands;
     delete from public.emsp_ocpi_peers;`);
@@ -132,6 +133,7 @@ describe("driver accounts and admin roles in Supabase", () => {
         "emsp_payments",
         "emsp_payment_refunds",
         "emsp_stripe_events",
+        "emsp_payment_sweeps",
       ])
         await expect(
           asRole(db, role, () => db.query(`select * from public.${table}`)),
@@ -342,6 +344,28 @@ describe("payments in Supabase", () => {
       expect((await payments.get(p.id))!.refundedAmount).toBe(0);
     },
   );
+
+  it("records the payment sweep's last pass, only ever later", async () => {
+    expect(await payments.lastSweptAt()).toBeNull();
+    await payments.markSwept(NOW);
+    expect(Date.parse((await payments.lastSweptAt())!)).toBe(Date.parse(NOW));
+    const later = "2026-10-22T10:01:00.000Z";
+    await payments.markSwept(later);
+    await payments.markSwept(NOW); // an older pass that finished last
+    expect(Date.parse((await payments.lastSweptAt())!)).toBe(Date.parse(later));
+  });
+
+  it("takes capture_refused as a review reason", async () => {
+    const p = await newPayment();
+    expect(
+      await payments.transition(
+        p.id,
+        ["pending"],
+        { review: "capture_refused" },
+        NOW,
+      ),
+    ).toMatchObject({ review: "capture_refused" });
+  });
 
   it("records each Stripe event once", async () => {
     expect(await payments.hasEvent("evt_1Abc")).toBe(false);

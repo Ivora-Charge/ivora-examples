@@ -57,6 +57,8 @@ export const REVIEW_REASONS = [
   "refund_outside",
   /** Another CDR came for a start already settled from one (a correction, say). */
   "second_cdr",
+  /** Stripe refused the capture of a hold it still has: nothing was charged yet. */
+  "capture_refused",
 ] as const;
 export type ReviewReason = (typeof REVIEW_REASONS)[number];
 
@@ -232,6 +234,10 @@ export interface PaymentStore {
   hasEvent(id: string): Promise<boolean>;
   /** Records a handled Stripe event: true the first time, false for a redelivery. */
   recordEvent(id: string, type: string): Promise<boolean>;
+  /** Records that the payment sweep (the cron route) finished a pass at `now`. */
+  markSwept(now: string): Promise<void>;
+  /** When the payment sweep last finished a pass; null if it never did. */
+  lastSweptAt(): Promise<string | null>;
   /** The payment side of reconciliation for CDRs that started in [from, to). */
   reconcileCdrs(
     query: ReconciliationQuery,
@@ -248,6 +254,7 @@ export class MemoryPaymentStore implements PaymentStore {
   readonly payments = new Map<string, Payment>();
   readonly refunds = new Map<string, Refund>();
   readonly events = new Set<string>();
+  sweptAt: string | null = null;
 
   constructor(private readonly cdrs: () => Iterable<StoredCdr> = () => []) {}
 
@@ -427,6 +434,14 @@ export class MemoryPaymentStore implements PaymentStore {
     if (this.events.has(id)) return false;
     this.events.add(id);
     return true;
+  }
+
+  async markSwept(now: string) {
+    if (!this.sweptAt || ms(now) > ms(this.sweptAt)) this.sweptAt = now;
+  }
+
+  async lastSweptAt() {
+    return this.sweptAt;
   }
 
   /** The same figures as the database function emsp_payment_reconciliation. */

@@ -15,8 +15,10 @@ import {
 } from "@/lib/server/ivora";
 import {
   createCheckout,
+  onCardMeterSample,
   reconcile,
   requestStop,
+  sweepUnstartedHolds,
   UserError,
   type ChargingApi,
   type Deps,
@@ -61,12 +63,24 @@ class FakePayments implements PaymentGateway {
       manualCapture: true,
       applicationFeeCents: 0,
       metadata: { ...c.metadata },
+      createdAt: T0,
       ...overrides,
     };
   }
   async getCheckout(id: string) {
     const c = this.checkouts.get(id);
     return c ? structuredClone(c) : null;
+  }
+  async listAuthorizedCheckouts(sinceMs: number) {
+    const checkouts = [...this.checkouts.values()]
+      .filter(
+        (c) =>
+          c.status === "complete" &&
+          c.hold?.status === "requires_capture" &&
+          (c.hold.createdAt ?? 0) >= sinceMs,
+      )
+      .map((c) => structuredClone(c));
+    return { checkouts, truncated: false };
   }
   async expireCheckout(id: string) {
     this.checkouts.get(id)!.status = "expired";
@@ -563,6 +577,110 @@ describe("live session from authorization to receipt", () => {
     const view = await reconcile(CS, deps);
     expect(keys("stop")).toEqual([`forecourt:${CS}:stop`]);
     expect(view.message).toMatch(/hold/);
+  });
+});
+
+describe("payment safety", () => {
+  const tap = {
+    code: "PUMP-3",
+    connector: 1,
+    requestId: "8a6e0804-2bd0-4672-b79d-d97027f55c9b",
+  };
+
+  it("stops at 85% of the hold on a meter sample, with no page open", async () => {
+    await paidAndStarted();
+    ivora.charging(80_000, 4250);
+    // The driver closed the page: only the meter.sampled webhook reads the session.
+    const index = { read: async () => ({ sessions: [ivora.session!] }) };
+    await onCardMeterSample({ transactionId: 21, stationId: 7 }, deps, index);
+    expect(keys("stop")).toEqual([`forecourt:${CS}:stop`]);
+    // A sample for another transaction or station leaves the session alone.
+    ivora.calls = [];
+    ivora.session!.stop_operation = null;
+    await onCardMeterSample({ transactionId: 99, stationId: 7 }, deps, index);
+    await onCardMeterSample({ transactionId: null, stationId: 8 }, deps, index);
+    expect(keys("stop")).toEqual([]);
+  });
+
+  it("refuses a non-USD tariff before any hold is placed", async () => {
+    ivora.getTariff = async () => ({ ...DEMO_TARIFF, currency: "CAD" });
+    await expect(createCheckout(tap, deps)).rejects.toMatchObject({
+      status: 409,
+      code: "currency_not_supported",
+    });
+    expect(payments.created).toEqual([]);
+  });
+
+  it("sweeps an authorized hold that never got a charging session", async () => {
+    await createCheckout(tap, deps);
+    // Paid, but neither the success page nor the Stripe webhook reached the app.
+    payments.authorize();
+    now = T0 + 10 * 60_000;
+    expect(await sweepUnstartedHolds(deps, T0 - 1)).toMatchObject({
+      released: 0,
+    });
+    now = T0 + 31 * 60_000;
+    expect(await sweepUnstartedHolds(deps, T0 - 1)).toEqual({
+      released: 1,
+      truncated: false,
+    });
+    expect(payments.releases).toEqual(["pi_123"]);
+    expect(ivora.calls).toEqual([]);
+    expect((await reconcile(CS, deps)).phase).toBe("canceled");
+  });
+
+  it("leaves a hold with a charging session to reconcile", async () => {
+    await paidAndStarted();
+    now = T0 + 31 * 60_000;
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    // Created, but the PaymentIntent was never tagged with the session.
+    delete payments.checkouts.get(CS)!.hold!.metadata.ivora_session;
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    expect(payments.releases).toEqual([]);
+  });
+
+  it("never starts charging on a hold the sweep may be releasing", async () => {
+    await createCheckout(tap, deps);
+    payments.authorize();
+    // The sweep releases at 30 minutes; a late Stripe webhook or a returning driver
+    // past the 10-minute cutoff gets the hold released, not a charging session.
+    now = T0 + 10 * 60_000 + 1;
+    const view = await reconcile(CS, deps);
+    expect(view).toMatchObject({ phase: "canceled", canStop: false });
+    expect(ivora.calls).toEqual([]);
+    expect(payments.releases).toEqual(["pi_123"]);
+    // The sweep then finds nothing to release, and nothing starts later either.
+    now = T0 + 31 * 60_000;
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    expect((await reconcile(CS, deps)).phase).toBe("canceled");
+    expect(ivora.calls).toEqual([]);
+    expect(payments.releases).toEqual(["pi_123"]);
+  });
+
+  it("still starts a hold inside the cutoff", async () => {
+    await createCheckout(tap, deps);
+    payments.authorize();
+    now = T0 + 10 * 60_000;
+    expect((await reconcile(CS, deps)).phase).toBe("starting");
+    expect(keys("create")).toEqual([`forecourt:${CS}:create`]);
+    expect(payments.releases).toEqual([]);
+  });
+
+  it("tags each checkout with the tenant and sweeps only its own holds", async () => {
+    await createCheckout(tap, deps);
+    expect(payments.created[0].metadata.fc_tenant).toBe("1");
+    payments.authorize();
+    now = T0 + 31 * 60_000;
+    // Another deployment on the same Stripe account, or a checkout made before the tag.
+    const c = payments.checkouts.get(CS)!;
+    c.metadata.fc_tenant = "2";
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    delete c.metadata.fc_tenant;
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(0);
+    expect(payments.releases).toEqual([]);
+    c.metadata.fc_tenant = "1";
+    expect((await sweepUnstartedHolds(deps, T0 - 1)).released).toBe(1);
+    expect(payments.releases).toEqual(["pi_123"]);
   });
 });
 
