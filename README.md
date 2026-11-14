@@ -33,7 +33,7 @@ Each template lives in its own top-level folder and is self-contained:
 - Its own CI workflow at `.github/workflows/<folder>.yml`, limited to changes in that folder, running format, typecheck, unit tests and build.
 - A README covering who it is for, a demo screenshot, running locally, connecting real services, deploying, which Ivora API features it uses, and its limits.
 
-Copying a single folder out of this repository is enough: `npm ci`, `npm run typecheck`, `npm test` and `npm run build` need nothing from outside it (the migration checker is vendored under `scripts/check-migrations/` in the templates with a database). Three variables share a name but not a meaning, so check the template's own `.env.example`:
+Copying a single folder out of this repository is enough: `npm ci`, `npm run typecheck`, `npm test` and `npm run build` need nothing from outside it (the migration checker is vendored under `scripts/check-migrations/` in the templates with a database, and each template's `tests/self-contained.test.ts` fails if any import, script or path leaves its folder). Three variables share a name but not a meaning, so check the template's own `.env.example`:
 
 | Variable          | `cpo-starter-kit/`                                                             | `emsp-starter/server/`                                  |
 | ----------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------- |
