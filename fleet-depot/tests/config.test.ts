@@ -45,10 +45,21 @@ describe("DEMO_MODE", () => {
     },
   );
 
-  it("isFlagOn follows the same rule for other flags", () => {
-    live({ BASELINE_PROFILE: "yes" });
-    expect(config.baselineProfile).toBe(true);
+  it("isFlagOn treats unset as off", () => {
     expect(isFlagOn(undefined)).toBe(false);
+  });
+
+  it.each([
+    ["1", true],
+    ["true", true],
+    ["yes", false],
+    ["on", false],
+    ["TRUE", false],
+    [" 1 ", true],
+    ["", false],
+  ])("BASELINE_PROFILE=%j keeps its exact rule: %s", (value, on) => {
+    live({ BASELINE_PROFILE: value });
+    expect(config.baselineProfile).toBe(on);
   });
 });
 
