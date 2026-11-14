@@ -31,6 +31,7 @@ import {
   type ReportFilter,
   type ReportsStore,
   type SessionDetails,
+  PAGE_ROWS,
 } from "@/lib/server/reports";
 import {
   afterCursor,
@@ -659,15 +660,16 @@ describe("sessions table", () => {
     const first = await loadSessions({ store }, october(), 1, places);
     expect(first.ok).toBe(true);
     if (!first.ok) return;
-    expect(first).toMatchObject({ page: 1, pages: 3 });
-    expect(first.rows).toHaveLength(50);
+    const pages = Math.ceil(120 / PAGE_ROWS);
+    expect(first).toMatchObject({ page: 1, pages });
+    expect(first.rows).toHaveLength(PAGE_ROWS);
     expect(first.rows[0].createdAt).toBe(rows[119].createdAt);
     expect(first.totals.checkouts).toBe(120);
     // A page past the end shows the last one.
     const last = await loadSessions({ store }, october(), 9, places);
     if (!last.ok) throw new Error("expected rows");
-    expect(last).toMatchObject({ page: 3, pages: 3 });
-    expect(last.rows).toHaveLength(20);
+    expect(last).toMatchObject({ page: pages, pages });
+    expect(last.rows).toHaveLength(120 - (pages - 1) * PAGE_ROWS);
     expect(last.rows.at(-1)!.createdAt).toBe(rows[0].createdAt);
   });
 
