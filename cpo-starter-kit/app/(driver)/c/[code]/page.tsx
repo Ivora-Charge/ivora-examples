@@ -14,7 +14,9 @@ import { config, isDemo } from "@/lib/server/env";
 import { demoSimulateAction } from "./actions";
 import { FreeForm, PayForm, StartForm, StopForm } from "./forms";
 import { AutoRefresh } from "./refresh";
+import type { ChipTone } from "@/lib/status-chips";
 import { Loading } from "@/app/loading-skeleton";
+import { StatusChip } from "@/app/ui/status-chip";
 
 export const metadata = { title: "Charge here" };
 
@@ -30,7 +32,7 @@ const SIMULATION_LABELS: Record<
 
 /** Status in words with a shape, never colour alone. */
 function StatusPill({ c }: { c: NonNullable<ChargePage["connector"]> }) {
-  const [tone, label] =
+  const [tone, label]: [ChipTone, string] =
     c.blocked === "offline"
       ? ["off", "Offline"]
       : c.blocked === "in_use"
@@ -38,7 +40,7 @@ function StatusPill({ c }: { c: NonNullable<ChargePage["connector"]> }) {
         : c.blocked === "out_of_order"
           ? ["warn", c.status ?? "Unavailable"]
           : ["ok", c.status === "Preparing" ? "Plugged in" : "Available"];
-  return <span className={`pill ${tone}`}>{label}</span>;
+  return <StatusChip tone={tone}>{label}</StatusChip>;
 }
 
 /**
@@ -92,14 +94,29 @@ async function Content({ params }: { params: Promise<{ code: string }> }) {
           charged.
         </p>
       )}
-      <header className="charge-board">
-        <h1 id="charge-heading">
-          {page.chargerName}, connector {page.connectorNumber}
-          {page.connector?.maxPowerKw ? (
-            <span className="muted"> up to {page.connector.maxPowerKw} kW</span>
-          ) : null}
-        </h1>
-        {page.connector && <StatusPill c={page.connector} />}
+      <header className="card charge-board">
+        <div className="chead">
+          <h1 id="charge-heading">
+            {page.chargerName}, connector {page.connectorNumber}
+            {page.connector?.maxPowerKw ? (
+              <span className="muted">
+                {" "}
+                up to {page.connector.maxPowerKw} kW
+              </span>
+            ) : null}
+          </h1>
+          {page.connector && <StatusPill c={page.connector} />}
+        </div>
+        {page.connector?.blocked === "offline" && (
+          <p className="muted" data-testid="next-step">
+            This charger is offline. Try another charger at this site.
+          </p>
+        )}
+        {page.connector?.blocked === "in_use" && (
+          <p className="muted" data-testid="next-step">
+            This connector is in use. Try another connector, or come back soon.
+          </p>
+        )}
       </header>
 
       {page.state === "open" && sessions.length > 0 && (
@@ -165,9 +182,11 @@ async function Content({ params }: { params: Promise<{ code: string }> }) {
       {page.tariffName && (
         <section className="card" aria-labelledby="price-heading">
           <h2 id="price-heading">Price</h2>
-          {page.priceText && (
-            <p>
-              <strong>Price:</strong> {page.priceText}
+          {page.priceText && <p className="price-big">{page.priceText}</p>}
+          {page.kind === "paid" && page.hold && (
+            <p className="muted" data-testid="hold-note">
+              {page.hold} is held on your card and released at the end; you pay
+              only for what you use.
             </p>
           )}
           {page.example && (
@@ -235,17 +254,9 @@ async function Content({ params }: { params: Promise<{ code: string }> }) {
         {page.kind === "paid" && (
           <>
             <p>
-              {page.hold ? (
-                <>
-                  Your card is authorized for a <strong>{page.hold}</strong>{" "}
-                  hold.
-                </>
-              ) : (
-                "Your card is authorized for a hold before charging."
-              )}{" "}
-              You pay for your session at the price above, and the rest of the
-              hold is released. Charging stops by itself before the hold is used
-              up.
+              Your card is authorized for a hold before charging. You pay for
+              your session at the price above, and the rest of the hold is
+              released. Charging stops by itself before the hold is used up.
             </p>
             <PayForm
               code={page.code}
