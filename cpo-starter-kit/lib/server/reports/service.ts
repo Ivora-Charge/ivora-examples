@@ -60,7 +60,7 @@ export interface ReportsDeps {
 }
 
 /** Rows per page of the sessions table. */
-export const PAGE_ROWS = 50;
+export const PAGE_ROWS = 20;
 
 // ---- Period and filters ----
 

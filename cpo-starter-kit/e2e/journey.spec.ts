@@ -196,16 +196,14 @@ test("demo journey: onboarding to a first charger and price, a paid session, Liv
     await open(page, isMobile, "Reports");
     await page.getByLabel("Period", { exact: true }).selectOption("24h");
     await page
-      .getByLabel("Charger (your sessions)")
+      .getByLabel("Charger", { exact: true })
       .selectOption({ label: CHARGER });
     await page.getByRole("button", { name: "Show report" }).click();
-    const yours = page.getByRole("region", {
-      name: /^Your sessions \(this kit\)/,
-    });
+    const yours = page.getByRole("tabpanel", { name: "Your sessions" });
     await expect(yours.getByRole("table")).toContainText(CHARGER);
     const [download] = await Promise.all([
       page.waitForEvent("download"),
-      page.getByRole("link", { name: "Download CSV" }).click(),
+      page.getByRole("link", { name: "Export CSV" }).click(),
     ]);
     const lines = (await readFile((await download.path())!, "utf8"))
       .trimEnd()

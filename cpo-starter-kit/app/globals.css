@@ -1398,13 +1398,6 @@ textarea:focus-visible {
   clip-path: inset(50%);
   white-space: nowrap;
 }
-.report-filters .field {
-  flex: 1 1 10rem;
-}
-/* The period names are long: a row of their own on a phone. */
-.report-filters .field:has(#period) {
-  flex-basis: 16rem;
-}
 .data-table {
   width: 100%;
   border-collapse: collapse;
@@ -1433,33 +1426,6 @@ textarea:focus-visible {
 .data-table .num {
   text-align: right;
   white-space: nowrap;
-}
-.data-table .bar-cell {
-  width: 30%;
-  min-width: 4rem;
-  vertical-align: middle;
-}
-.bar {
-  display: block;
-  min-width: 2px;
-  height: 0.5rem;
-  background: var(--color-primary);
-  border-radius: var(--radius-pill);
-}
-.sessions-table td {
-  min-width: 7rem;
-}
-.report-pair {
-  display: grid;
-  gap: 0 var(--space-4);
-}
-@media (min-width: 48rem) {
-  .report-pair {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-.section-heading {
-  margin-top: var(--space-6);
 }
 .pager {
   display: flex;
@@ -2450,4 +2416,161 @@ details.how > summary:focus-visible {
   margin: var(--space-2) 0 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-muted);
+}
+
+/* Reports: toolbar, info controls, chart, side lists */
+.report-toolbar {
+  margin-bottom: var(--space-4);
+}
+.report-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-3);
+}
+.report-filters .field {
+  flex: 1 1 11rem;
+}
+.report-filters #period {
+  min-width: 0;
+}
+.custom-dates {
+  flex: 1 0 100%;
+}
+.custom-dates > summary {
+  display: flex;
+  align-items: center;
+  width: fit-content;
+  min-height: var(--tap-target);
+  color: var(--color-link);
+  cursor: pointer;
+}
+.custom-dates > summary:focus-visible,
+.info > summary:focus-visible {
+  outline: var(--focus-width) solid var(--color-focus);
+  outline-offset: 2px;
+}
+.report-custom {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.report-custom .field {
+  flex: 1 1 11rem;
+}
+.toolbar-note {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  margin: var(--space-2) 0 0;
+}
+.section-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  margin-top: var(--space-4);
+}
+.section-head h2,
+.section-head h3 {
+  margin: 0;
+}
+details.info > summary {
+  display: grid;
+  place-items: center;
+  width: var(--tap-target);
+  height: var(--tap-target);
+  color: var(--color-link);
+  cursor: pointer;
+  list-style: none;
+}
+details.info > summary::-webkit-details-marker {
+  display: none;
+}
+details.info[open] {
+  flex: 1 0 100%;
+}
+.info-panel {
+  max-width: 65ch;
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-sm);
+  background: var(--color-surface-hover);
+  border: var(--border-width) solid var(--color-border);
+  border-radius: var(--radius);
+}
+.info-panel p,
+.info-panel ul {
+  margin: 0 0 var(--space-2);
+}
+.info-panel ul {
+  padding-left: var(--space-5);
+}
+.report-main {
+  display: grid;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+@media (min-width: 64rem) {
+  .report-main {
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+.report-main > *,
+.report-side > * {
+  margin: 0;
+  min-width: 0;
+}
+.report-side {
+  display: grid;
+  gap: var(--space-4);
+}
+.report-chart .chead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.report-chart h3,
+.report-side h3 {
+  margin: 0;
+}
+svg.bars {
+  display: block;
+  max-height: 16rem;
+}
+.bars rect {
+  fill: var(--color-primary);
+}
+.bars .grid line {
+  stroke: var(--color-border);
+  stroke-width: 1;
+}
+.bars text {
+  fill: var(--color-text-muted);
+  font-size: 11px;
+}
+.rows .count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.report-tables {
+  margin-bottom: var(--space-4);
+}
+.table-note {
+  margin: 0 0 var(--space-3);
+}
+.report-payouts p {
+  margin: var(--space-2) 0 0;
+}
+.when .muted {
+  font-size: var(--font-size-xs);
+}
+@media (max-width: 40rem) {
+  /* On a phone each row is a card: keep a long page of them to a screen or two. */
+  .report-tables .table-scroll-area {
+    max-height: 70vh;
+  }
 }

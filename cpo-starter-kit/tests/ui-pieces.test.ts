@@ -331,3 +331,32 @@ describe("page pieces", () => {
     expect(out).not.toContain("<table");
   });
 });
+
+describe("InfoTip and BarChart", () => {
+  it("InfoTip is a details control named for what it explains, closed by default", async () => {
+    const { InfoTip } = await import("@/app/ui/info-tip");
+    const out = html(h(InfoTip, { label: "these figures", children: "Why." }));
+    expect(out).toContain('<details class="info">');
+    expect(out).not.toContain(" open");
+    expect(out).toContain('aria-label="About these figures"');
+    expect(out).toContain("Why.");
+  });
+  it("BarChart draws one bar per value with a text name, in the primary colour class", async () => {
+    const { BarChart } = await import("@/app/ui/bar-chart");
+    const out = html(
+      h(BarChart, {
+        bars: [
+          { label: "Nov 1", value: 10 },
+          { label: "Nov 2", value: 0 },
+        ],
+        summary: "Energy by day, 2 bars",
+        unit: "kWh",
+      }),
+    );
+    expect(out).toContain('role="img"');
+    expect(out).toContain('aria-label="Energy by day, 2 bars"');
+    expect(out.match(/<rect/g)).toHaveLength(2);
+    expect(out).toContain("Nov 1: 10 kWh");
+    expect(out).not.toMatch(/fill="#|style="[^"]*#/);
+  });
+});

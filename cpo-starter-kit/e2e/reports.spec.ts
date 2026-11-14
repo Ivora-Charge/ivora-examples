@@ -20,31 +20,43 @@ const CSV_HEADER =
   "session_ref,session_type,status,created_at_utc,started_at_utc,ended_at_utc,time_zone,started_at_local,ended_at_local,duration_seconds,site,station_id,station,connector_id,connector_number,energy_wh,energy_kwh,stop_reason,transaction_id,bill_id,currency,hold_minor,billed_minor,captured_minor,refunded_minor,net_minor,refunds_checked_at_utc,details";
 
 const yours = (page: Page) =>
-  page.getByRole("region", { name: /^Your sessions \(this kit\)/ });
+  page.getByRole("tabpanel", { name: "Your sessions" });
 
 test("demo: Ivora's figures for every session, then your sessions with what was collected", async ({
   page,
   isMobile,
 }) => {
   await openReports(page, isMobile);
-  await expect(
-    page.getByRole("note").filter({ hasText: "Demo" }),
-  ).toContainText("Nobody paid anything");
-  const figures = page.getByRole("region", { name: "Figures for the period" });
+  // The explanations are behind info controls, not paragraphs above the tables.
+  const about = page.locator("details.info").filter({
+    has: page.getByLabel("About these figures"),
+  });
+  await expect(about).toContainText("Nobody paid anything");
+  await page.getByLabel("About these figures").click();
+  await expect(about).toContainText(
+    "Every session on your chargers, as Ivora counts them",
+  );
+  await expect(about).toContainText("sessions started outside this kit");
+  const figures = page.getByLabel("Figures for the period");
   for (const label of [
     "Sessions",
     "Energy",
-    "Success rate",
-    "Average duration",
-    "Billed (final bills)",
+    "Success",
+    "Avg. duration",
+    "Billed",
   ])
-    await expect(figures.getByText(label, { exact: false })).toBeVisible();
+    await expect(figures.getByText(label, { exact: true })).toBeVisible();
   await expect(figures).toContainText("$");
   await expect(
-    page.getByText("Every session on your chargers, as Ivora counts them"),
-  ).toContainText("sessions started outside this kit");
-  await expect(page.getByRole("heading", { name: "By day" })).toBeVisible();
-  await expect(page.getByText("America/New_York").first()).toBeVisible();
+    page.getByRole("heading", { name: "Energy by day (kWh)" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("img", { name: /^Energy by day, \d+ bars/ }),
+  ).toBeVisible();
+  // Dates in the site's zone first (the sample sites are in New York), UTC below.
+  await expect(
+    page.getByText(/^\d{4}-\d\d-\d\d \d\d:\d\d E[SD]T$/).first(),
+  ).toBeVisible();
   await expect(
     page.getByRole("list", { name: "Top chargers by energy" }),
   ).toContainText("DEMO-");
@@ -53,40 +65,30 @@ test("demo: Ivora's figures for every session, then your sessions with what was 
   );
 
   const sessions = yours(page);
-  const totals = sessions.getByRole("region", {
-    name: "Totals of your sessions",
-  });
-  for (const label of [
-    "Collected (captured minus refunds)",
-    "Refunded",
-    "Billed (their final bills)",
-    "Needs you",
-  ])
-    await expect(totals.getByText(label, { exact: false })).toBeVisible();
-  await expect(sessions).toContainText(
-    "Staff/test sessions and sessions started outside this kit",
-  );
+  const totals = page.getByLabel("Totals of your sessions");
+  for (const label of ["Collected", "Refunded", "Billed", "Needs you"])
+    await expect(totals.getByText(label, { exact: true })).toBeVisible();
+  await expect(
+    page.locator("details.info").filter({
+      has: page.getByLabel("About your sessions"),
+    }),
+  ).toContainText("Staff/test sessions and sessions started outside this kit");
   const table = sessions.getByRole("table");
-  await expect(table.getByText("Free", { exact: true }).first()).toBeVisible();
   await expect(table.getByText("Driver (paid)").first()).toBeVisible();
   await expect(table.getByText("Staff/test")).toHaveCount(0);
   await expect(table.getByText(/UTC$/).first()).toBeVisible();
   await expect(table.getByText(/^ck_[0-9a-f]{32}$/).first()).toBeVisible();
 
   // Ivora's own lists: every session of the period, and its bills.
-  const all = page.getByRole("region", {
-    name: "Sessions started in the period",
-  });
+  await page.getByRole("tab", { name: "All sessions" }).click();
+  const all = page.getByRole("tabpanel", { name: "All sessions" });
   await expect(all.getByRole("table")).toBeVisible();
   await expect(all.getByText(/^\*\*\*\*[A-Z0-9]{4}$/).first()).toBeVisible();
   await expect(all.getByRole("alert")).toHaveCount(0);
-  const bills = page.getByRole("region", {
-    name: "Bills created in the period",
-  });
+  await page.getByRole("tab", { name: "Bills" }).click();
+  const bills = page.getByRole("tabpanel", { name: "Bills" });
   await expect(bills.getByRole("table")).toBeVisible();
-  await expect(
-    bills.getByRole("cell", { name: /^bill_[0-9a-f]{32}$/ }).first(),
-  ).toBeVisible();
+  await expect(bills.getByText(/^bill_[0-9a-f]{32}$/).first()).toBeVisible();
   await expect(bills.getByRole("alert")).toHaveCount(0);
 
   const payouts = page.getByRole("region", { name: "Payouts" });
@@ -108,7 +110,7 @@ test("demo: refunded sessions, pages, and the same sessions as CSV", async ({
   await expect(page).toHaveURL(/page=2/);
   await expect(yours(page)).toContainText("Page 2 of");
 
-  await page.getByLabel("Status (your sessions)").selectOption("refunded");
+  await page.getByLabel("Status", { exact: true }).selectOption("refunded");
   await page.getByRole("button", { name: "Show report" }).click();
   await expect(page).toHaveURL(/status=refunded/);
   const table = yours(page).getByRole("table");
@@ -117,7 +119,7 @@ test("demo: refunded sessions, pages, and the same sessions as CSV", async ({
 
   const [download] = await Promise.all([
     page.waitForEvent("download"),
-    page.getByRole("link", { name: "Download CSV" }).click(),
+    page.getByRole("link", { name: "Export CSV" }).click(),
   ]);
   expect(download.suggestedFilename()).toMatch(
     /^sessions-\d{4}-\d{2}-\d{2}-to-\d{4}-\d{2}-\d{2}\.csv$/,
@@ -145,9 +147,8 @@ test("demo: Ivora's session list pages with Older and returns with Newest", asyn
   await openReports(page, isMobile);
   await page.getByLabel("Period", { exact: true }).selectOption("90d");
   await page.getByRole("button", { name: "Show report" }).click();
-  const all = page.getByRole("region", {
-    name: "Sessions started in the period",
-  });
+  await page.getByRole("tab", { name: "All sessions" }).click();
+  const all = page.getByRole("tabpanel", { name: "All sessions" });
   const rows = () => all.getByRole("row").allInnerTexts();
   await expect(all.getByRole("table")).toBeVisible();
   const first = await rows();
@@ -176,6 +177,7 @@ test("demo: a period too long for its buckets shows stats_range_too_large; by mo
 }) => {
   await openReports(page, isMobile);
   await page.getByLabel("Period", { exact: true }).selectOption("custom");
+  await page.locator("summary", { hasText: "Custom dates" }).click();
   await page.getByLabel("From", { exact: true }).fill("2026-01-01");
   await page.getByLabel("To", { exact: true }).fill("2026-06-30");
   await page.getByLabel("Group by").selectOption("day");
@@ -186,10 +188,13 @@ test("demo: a period too long for its buckets shows stats_range_too_large; by mo
   await expect(alert).toContainText("at most 92 day buckets");
   await expect(alert).toContainText("show it by month");
   await expect(page.getByText("Period too large")).toBeVisible();
+  await expect(alert.getByRole("link", { name: "Try again" })).toBeVisible();
 
   await page.getByLabel("Group by").selectOption("month");
   await page.getByRole("button", { name: "Show report" }).click();
-  await expect(page.getByRole("heading", { name: "By month" })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Energy by month (kWh)" }),
+  ).toBeVisible();
   await expect(page.getByText("stats_range_too_large")).toHaveCount(0);
 });
 
