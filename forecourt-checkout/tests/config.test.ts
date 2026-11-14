@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
-import { readSettings } from "@/lib/settings";
+import { demoNotice, readSettings } from "@/lib/settings";
 import { startOfLocalDay } from "@/lib/time";
 import { formatDuration, whToKwhText, wToKwText } from "@/lib/units";
 
@@ -121,8 +122,20 @@ describe("DEMO_MODE and the API URL name", () => {
       expect(s.demo).toBe(true);
       expect(s.posWebhookUrl).toBe("");
       expect(s.missing).toEqual(["DEMO_MODE"]);
+      expect(demoNotice(s)).toBe("DEMO_MODE is set.");
     },
   );
+
+  it("the demo notice lists missing live variables when DEMO_MODE is not set", () => {
+    const s = readSettings({ ...live, IVORA_API_KEY: "" });
+    expect(demoNotice(s)).toBe("Live mode also needs: IVORA_API_KEY");
+  });
+
+  it("the operator page shows the shared demo notice", () => {
+    const page = readFileSync("src/app/operator/page.tsx", "utf8");
+    expect(page).toContain("demoNotice(s)");
+    expect(page).not.toContain("DEMO_MODE=1");
+  });
 
   it.each(["", "0", "false", "no", "off", "maybe"])(
     "DEMO_MODE=%j does not force demo",

@@ -41,6 +41,13 @@ export function isFlagOn(raw: string | undefined): boolean {
   return v === "true" || v === "1" || v === "yes" || v === "on";
 }
 
+/** The demo notice: "DEMO_MODE is set" when forced, else the live variables still missing. */
+export function demoNotice(s: Pick<Settings, "missing">): string {
+  return s.missing.includes("DEMO_MODE")
+    ? "DEMO_MODE is set."
+    : `Live mode also needs: ${s.missing.join(", ")}`;
+}
+
 /** Live mode needs all of these. Any missing one keeps the app in demo mode. */
 export const LIVE_VARIABLES = [
   "IVORA_API_KEY",

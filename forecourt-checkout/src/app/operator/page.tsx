@@ -4,6 +4,7 @@ import { formatMoney } from "@/lib/money";
 import { errorInfo } from "@/lib/server/http";
 import { overview, type Overview } from "@/lib/server/operator";
 import { requireOperator } from "@/lib/server/operator-page";
+import { demoNotice } from "@/lib/settings";
 import { formatLocalTime } from "@/lib/time";
 import { whToKwhText } from "@/lib/units";
 
@@ -30,20 +31,7 @@ export default async function Today() {
     <main className="wide">
       <OperatorNav current="today" />
       <h1>{data.siteName}: today</h1>
-      {data.demo ? (
-        <p className="notice">
-          Demo data.{" "}
-          {s.missing.includes("DEMO_MODE=1") ? (
-            <>
-              <code>DEMO_MODE=1</code> is set.
-            </>
-          ) : (
-            <>
-              Live mode also needs: <code>{s.missing.join(", ")}</code>
-            </>
-          )}
-        </p>
-      ) : null}
+      {data.demo ? <p className="notice">Demo data. {demoNotice(s)}</p> : null}
       <div className="grid">
         <div className="stat">
           Sessions<b>{data.sessions}</b>
