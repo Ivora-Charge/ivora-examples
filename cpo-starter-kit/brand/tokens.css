@@ -22,6 +22,8 @@
   /* Leaf green: primary actions, links, focus; text on it. */
   --color-primary: light-dark(#17613a, #6fd394);
   --color-on-primary: light-dark(#ffffff, #06200f);
+  /* Text on the operator's colour on Ivora's driver pages: always white (they are light). */
+  --color-on-driver: #ffffff;
   /* Lime: current/live, FILL ONLY; text on it. */
   --color-accent: light-dark(#c5f24a, #c9f55a);
   --color-on-accent: light-dark(#10241a, #10241a);

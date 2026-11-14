@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { cookies } from "next/headers";
 import { visibleModules } from "@/lib/modules";
 import { atLeast } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
@@ -13,8 +14,15 @@ import {
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getPricing, pricingProgress } from "@/lib/server/pricing";
 import { loadOverview } from "@/lib/server/overview";
-import { formatKwh } from "@/lib/units";
+import { loadTrend } from "@/lib/server/overview-trend";
+import { getReports } from "@/lib/server/reports";
+import { SETUP_HIDDEN_COOKIE } from "@/lib/setup-hidden";
+import { formatKwh, whToKwh } from "@/lib/units";
 import { Loading } from "@/app/loading-skeleton";
+import { BarChart } from "@/app/ui/bar-chart";
+import { EmptyState } from "@/app/ui/empty-state";
+import { PageHeader } from "@/app/ui/page-header";
+import { hideSetupAction, showSetupAction } from "./setup-actions";
 
 export const metadata = { title: "Overview" };
 
@@ -28,7 +36,11 @@ function sessionsNote(o: { staffSessions: number; freeSessions: number }) {
 
 async function Content() {
   const me = await requireRole("viewer");
-  const r = await loadOverview(me.operatorId);
+  const [r, trend] = await Promise.all([
+    loadOverview(me.operatorId),
+    loadTrend(getReports(), me),
+  ]);
+  const hidden = (await cookies()).get(SETUP_HIDDEN_COOKIE)?.value === "1";
   // The setup checklist is for the people who can act on it: owners and managers.
   let checklist: ChecklistItem[] | null = null;
   if (atLeast(me.role, "manager")) {
@@ -45,10 +57,20 @@ async function Content() {
       prices,
     );
   }
+  // Until setup is done (or hidden) the checklist leads; after that the key numbers
+  // and the 30-day chart do, and the checklist is one collapsed line under them.
+  const setupOpen =
+    checklist !== null && !hidden && checklist.some((i) => i.state === "todo");
+  const setup = checklist && (
+    <Checklist items={checklist} open={setupOpen} hidden={hidden} />
+  );
   return (
     <>
-      <h1>Overview</h1>
-      {checklist && <Checklist items={checklist} />}
+      <PageHeader
+        title="Overview"
+        description="Your network now, and the last 30 days."
+      />
+      {setupOpen && setup}
       {r.ok ? (
         <>
           {r.overview.truncated && (
@@ -77,6 +99,7 @@ async function Content() {
               They are on the next load, or on <Link href="/live">Live</Link>.
             </p>
           )}
+          <Trend trend={trend} />
           <section className="card" aria-labelledby="chargers-heading">
             <h2 id="chargers-heading">
               Chargers
@@ -109,6 +132,7 @@ async function Content() {
           {r.error}
         </p>
       )}
+      {!setupOpen && setup}
       <section className="card" aria-labelledby="next-heading">
         <h2 id="next-heading">Sections</h2>
         <ul className="rows">
@@ -137,16 +161,24 @@ const STATE_LABEL: Record<ChecklistItem["state"], string> = {
   soon: "Coming soon",
 };
 
-function Checklist({ items }: { items: ChecklistItem[] }) {
+function Checklist({
+  items,
+  open,
+  hidden,
+}: {
+  items: ChecklistItem[];
+  open: boolean;
+  hidden: boolean;
+}) {
   const done = items.filter((i) => i.state === "done").length;
   return (
-    <section className="card" aria-labelledby="setup-heading">
-      <h2 id="setup-heading">
-        Setup checklist
+    <details className="card setup" open={open}>
+      <summary id="setup-heading">
+        <h2>Setup checklist</h2>
         <span className="muted">
           {done} of {items.length} done
         </span>
-      </h2>
+      </summary>
       <ul className="rows checklist" aria-label="Setup checklist">
         {items.map((i) => (
           <li key={i.key} className={`check-${i.state}`}>
@@ -163,9 +195,68 @@ function Checklist({ items }: { items: ChecklistItem[] }) {
           </li>
         ))}
       </ul>
-    </section>
+      <form action={hidden ? showSetupAction : hideSetupAction}>
+        <button type="submit" className="button secondary">
+          {hidden ? "Show the checklist at the top" : "Hide the checklist"}
+        </button>
+      </form>
+    </details>
   );
 }
+
+/** One chart of the last 30 days; a failed read says so and the rest of the page stays. */
+function Trend({ trend }: { trend: Awaited<ReturnType<typeof loadTrend>> }) {
+  const r = trend.result;
+  if (!r.ok)
+    return (
+      <EmptyState tone="error" title="The 30-day chart is unavailable">
+        {r.error} The numbers above are not affected.
+      </EmptyState>
+    );
+  const s = r.stats;
+  const bars = s.series.map((b) => {
+    const [, m, d] = b.start.slice(0, 10).split("-");
+    return {
+      label: `${MONTHS[Number(m) - 1]} ${Number(d)}`,
+      value: b.energy_wh / 1000,
+    };
+  });
+  const total = s.series.reduce((n, b) => n + b.energy_wh, 0);
+  return (
+    <figure className="card report-chart" aria-labelledby="trend-heading">
+      <div className="chead">
+        <h2 id="trend-heading">Energy, last 30 days (kWh)</h2>
+        <span className="muted">
+          {s.time_zone} · <Link href="/reports">Reports</Link>
+        </span>
+      </div>
+      {total === 0 ? (
+        <p className="muted">No sessions in the last 30 days yet.</p>
+      ) : (
+        <BarChart
+          bars={bars}
+          summary={`Energy by day for the last 30 days, ${formatKwh(whToKwh(total))} in total; Reports has the same figures as a table`}
+          unit="kWh"
+        />
+      )}
+    </figure>
+  );
+}
+
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
 
 function Stat({
   label,

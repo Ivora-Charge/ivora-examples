@@ -46,12 +46,20 @@ test("demo journey: onboarding to a first charger and price, a paid session, Liv
     await page.getByLabel("Time zone").selectOption("America/New_York");
     await page.getByLabel("Currency").selectOption("USD");
     await page.getByRole("button", { name: "Save company details" }).click();
-    await expect(page.getByText(/Company details saved/)).toBeVisible();
+    await expect(
+      page.getByRole("status").filter({ hasText: /Saved \d/ }),
+    ).toBeVisible();
 
     await page.getByRole("link", { name: "Next: Brand" }).click();
     await page.getByLabel("Brand colour").fill("#1d3fa8");
     await page.getByRole("button", { name: "Save brand" }).click();
-    await expect(page.getByText(/Brand saved/)).toBeVisible();
+    await expect(
+      page
+        .locator("form")
+        .filter({ has: page.getByRole("button", { name: "Save brand" }) })
+        .getByRole("status")
+        .filter({ hasText: /Saved \d/ }),
+    ).toBeVisible();
 
     await page.getByRole("link", { name: "Next: Payments" }).click();
     const payments = page.getByRole("region", { name: /Card payments/ });

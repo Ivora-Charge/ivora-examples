@@ -1,4 +1,9 @@
 import { DEFAULT_CURRENCY } from "@/lib/money";
+import { ROLE_LABELS } from "@/lib/roles";
+import type { Member, PendingInvite } from "@/lib/server/team";
+import { StatusChip } from "@/app/ui/status-chip";
+import type { ChipTone } from "@/lib/status-chips";
+import Link from "next/link";
 import { CURRENCIES, TIME_ZONES } from "@/lib/locale-options";
 import { config } from "@/lib/server/env";
 import { DEMO_STRIPE_STATES } from "@/lib/server/ivora/demo";
@@ -7,6 +12,7 @@ import type {
   StripeResult,
   StripeState,
 } from "@/lib/server/onboarding";
+import type { StripeView } from "@/lib/server/onboarding/stripe";
 import { STRIPE_LABELS } from "@/lib/server/onboarding/stripe";
 import {
   refreshStripeAction,
@@ -52,10 +58,10 @@ export function NoAccess({ title }: { title: string }) {
   );
 }
 
-export function CompanySection({ o }: { o: Onboarding }) {
+export function CompanySection({ o, id }: { o: Onboarding; id?: string }) {
   const p = o.profile;
   return (
-    <section className="card" aria-labelledby="company-heading">
+    <section id={id} className="card" aria-labelledby="company-heading">
       <h2 id="company-heading">
         Company details
         {o.companyDone && <span className="pill ok">Done</span>}
@@ -76,11 +82,19 @@ export function CompanySection({ o }: { o: Onboarding }) {
   );
 }
 
-export function BrandSection({ o, demo }: { o: Onboarding; demo: boolean }) {
+export function BrandSection({
+  o,
+  demo,
+  id,
+}: {
+  o: Onboarding;
+  demo: boolean;
+  id?: string;
+}) {
   const p = o.profile;
   const logo = safeLogo(p.logoUrl);
   return (
-    <section className="card" aria-labelledby="brand-heading">
+    <section id={id} className="card" aria-labelledby="brand-heading">
       <h2 id="brand-heading">
         Brand
         {o.brandDone && <span className="pill ok">Done</span>}
@@ -90,6 +104,11 @@ export function BrandSection({ o, demo }: { o: Onboarding; demo: boolean }) {
         show your name, colour, logo and support contacts. The card form itself
         is Stripe Checkout: its look comes from your Stripe account&apos;s
         branding settings.
+      </p>
+      <p className="muted">
+        This app&apos;s own name, logo and fonts are the Ampleaf placeholder
+        brand: replace them in the <code>brand/</code> folder (see the README,
+        &quot;Make it yours&quot;).
       </p>
       {!p.name ? (
         <p className="notice">Save your company details first.</p>
@@ -109,7 +128,11 @@ export function BrandSection({ o, demo }: { o: Onboarding; demo: boolean }) {
               <img src={logo} alt={`${p.name ?? "Company"} logo`} />
             </p>
           )}
-          <BrandForm color={p.primaryColor} hasLogo={Boolean(logo)} />
+          <BrandForm
+            color={p.primaryColor}
+            hasLogo={Boolean(logo)}
+            name={p.name}
+          />
           {demo && (
             <p className="muted">
               Demo mode checks a logo but does not upload or keep it.
@@ -121,16 +144,51 @@ export function BrandSection({ o, demo }: { o: Onboarding; demo: boolean }) {
   );
 }
 
+/** What is done, to do and waiting on the way to card payments, each a word and a chip. */
+function PaymentSteps({ view }: { view: StripeView }) {
+  const connected = view.state !== "none";
+  const ready = view.state === "ready";
+  const open = view.requirements.length > 0 || view.state === "pending";
+  const steps: [string, ChipTone, string][] = [
+    [
+      "Stripe account connected",
+      connected ? "ok" : "warn",
+      connected ? "Done" : "To do",
+    ],
+    [
+      "Details Stripe asks for",
+      !connected ? "idle" : open ? "warn" : "ok",
+      !connected ? "Waiting" : open ? "To do" : "Done",
+    ],
+    [
+      "Ready for card payments",
+      ready ? "ok" : "idle",
+      ready ? "Done" : "Waiting",
+    ],
+  ];
+  return (
+    <ul className="pay-steps" aria-label="Payments checklist">
+      {steps.map(([label, tone, word]) => (
+        <li key={label}>
+          <StatusChip tone={tone}>{word}</StatusChip> {label}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 export function PaymentsSection({
   stripe,
   demo,
+  id,
 }: {
   stripe: StripeResult;
   demo: boolean;
+  id?: string;
 }) {
   const v = stripe.ok ? stripe.view : null;
   return (
-    <section className="card" aria-labelledby="payments-heading">
+    <section id={id} className="card" aria-labelledby="payments-heading">
       <h2 id="payments-heading">
         Card payments (Stripe via Ivora Checkout)
         {v && <span className={PILL[v.state]}>{v.label}</span>}
@@ -138,6 +196,7 @@ export function PaymentsSection({
       {stripe.ok ? (
         <>
           <p>{stripe.view.detail}</p>
+          <PaymentSteps view={stripe.view} />
           <dl className="facts">
             {stripe.view.accountId && (
               <div>
@@ -181,19 +240,24 @@ export function PaymentsSection({
         </p>
       )}
       {v?.state !== "ready" || (v && v.requirements.length > 0) ? (
-        <p>
-          Stripe is connected in your Ivora dashboard, not in this app: open{" "}
-          <a
-            href={config.stripeSettingsUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            your Ivora dashboard
-          </a>
-          , go to your project&apos;s settings and connect Stripe (or finish
-          what Stripe asks for). Then come back and check again. This app never
-          sees or stores Stripe keys.
-        </p>
+        <>
+          <p>
+            Stripe is connected in your Ivora dashboard, not in this app: open
+            your project&apos;s settings there and connect Stripe (or finish
+            what Stripe asks for). Then come back and check again. This app
+            never sees or stores Stripe keys.
+          </p>
+          <p>
+            <a
+              className="button"
+              href={config.stripeSettingsUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              Open your Ivora dashboard
+            </a>
+          </p>
+        </>
       ) : null}
       <form action={refreshStripeAction}>
         <button type="submit" className="button secondary">
@@ -330,6 +394,57 @@ export function ReturnDomainSection({
         <p className="error" role="alert">
           {result.error}
         </p>
+      )}
+    </section>
+  );
+}
+
+/** Settings: who is on the team, with a link to manage it (the Team page does the changes). */
+export function TeamSection({
+  members,
+  invites = [],
+  error,
+  demo,
+  id,
+}: {
+  id?: string;
+  members: Member[] | null;
+  invites?: PendingInvite[];
+  error?: string;
+  demo: boolean;
+}) {
+  return (
+    <section id={id} className="card" aria-labelledby="team-heading">
+      <div className="chead">
+        <h2 id="team-heading">
+          Team
+          {demo && <span className="badge">Sample</span>}
+        </h2>
+        <Link className="button secondary" href="/team">
+          Manage team
+        </Link>
+      </div>
+      {members === null ? (
+        <p className="error" role="alert">
+          {error ?? "The team could not be read."} Nothing was changed.
+        </p>
+      ) : (
+        <ul className="rows" aria-label="Team">
+          {members.map((m) => (
+            <li key={m.userId}>
+              <span className="name">{m.email}</span>
+              <span className="role">{ROLE_LABELS[m.role]}</span>
+              <StatusChip tone="ok">Active</StatusChip>
+            </li>
+          ))}
+          {invites.map((i) => (
+            <li key={i.id}>
+              <span className="name">{i.email}</span>
+              <span className="role">{ROLE_LABELS[i.role]}</span>
+              <StatusChip tone="idle">Invited</StatusChip>
+            </li>
+          ))}
+        </ul>
       )}
     </section>
   );

@@ -39,6 +39,18 @@ const str = (form: FormData, name: string) => {
   return typeof v === "string" ? v : undefined;
 };
 
+const COMPANY_FIELDS = [
+  "name",
+  "supportEmail",
+  "supportUrl",
+  "website",
+  "timeZone",
+  "currency",
+] as const;
+
+const LOGO_TOO_LARGE =
+  "The logo is larger than 512 KB. Export a smaller image.";
+
 const demoNote = () => (isDemo() ? " Demo: nothing was sent to Ivora." : "");
 
 function syncWarning(sync: SyncResult): string | undefined {
@@ -67,9 +79,13 @@ export async function saveCompanyAction(
           ? `Company details saved, and the name and support contacts are on your driver payment pages.${demoNote()}`
           : "Company details saved.",
       warning: syncWarning(sync),
+      savedAt: Date.now(),
     };
   } catch (e) {
-    return actionError(e, "company save");
+    // The form keeps what was typed, so the error under a field matches its text.
+    const values: Record<string, string> = {};
+    for (const k of COMPANY_FIELDS) values[k] = str(form, k) ?? "";
+    return { ...actionError(e, "company save"), values };
   }
 }
 
@@ -83,10 +99,9 @@ export async function saveBrandAction(
     let logo: Uint8Array | null = null;
     if (file instanceof File && file.size > 0) {
       if (file.size > LOGO_MAX_BYTES)
-        throw new OnboardingError(
-          "logo_invalid",
-          "The logo is larger than 512 KB. Export a smaller image.",
-        );
+        throw new OnboardingError("logo_invalid", LOGO_TOO_LARGE, {
+          logo: LOGO_TOO_LARGE,
+        });
       logo = new Uint8Array(await file.arrayBuffer());
     }
     const color = str(form, "primaryColor");
@@ -120,6 +135,7 @@ export async function saveBrandAction(
         (r.logo?.state === "failed"
           ? `The brand was saved, but the logo was not uploaded: ${r.logo.error}`
           : undefined),
+      savedAt: Date.now(),
     };
   } catch (e) {
     return actionError(e, "brand save");
