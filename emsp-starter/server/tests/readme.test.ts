@@ -38,9 +38,8 @@ describe("the Deploy to Vercel button", () => {
     );
     const root = button.searchParams.get("root-directory")!;
     expect(root).toBe("emsp-starter/server");
-    expect(existsSync(path.join(server, "../..", root, "package.json"))).toBe(
-      true,
-    );
+    expect(root.endsWith(path.basename(server))).toBe(true);
+    expect(existsSync(path.join(server, "package.json"))).toBe(true);
   });
 
   it("asks for every live-mode variable, all of them documented and server-side", () => {

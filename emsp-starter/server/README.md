@@ -475,7 +475,7 @@ The **10-30 rule**, checked by the repository's shared checker, [`tools/check-mi
 - Every function or procedure created in `public` runs `revoke execute (or all) on function <name> from public` in the same migration, because Postgres grants `EXECUTE` to `PUBLIC` by default. No migration grants `EXECUTE` to `anon`, `authenticated` or `public`.
 - Every `security definer` function sets `search_path` (for example `set search_path = ''`).
 
-A fork of `emsp-starter/server/` alone needs nothing else; the checker needs no install. Keep the copy in step with [`tools/check-migrations`](../../tools/check-migrations/README.md) when you update it.
+A fork of the `emsp-starter/` folder alone needs nothing else (the server reads a few files from `../app/`, so keep `app/` and `server/` together); the checker needs no install. `tests/self-contained.test.ts` fails if any import, script or path leaves `emsp-starter/`. Keep the copy in step with [`tools/check-migrations`](../../tools/check-migrations/README.md) when you update it.
 
 `tests/migrations.test.ts` applies every migration to an in-memory Postgres ([PGlite](https://pglite.dev)) with Supabase's roles, and checks RLS, table and function grants, `search_path` on `security definer` functions and table behaviour. It runs them twice: on a database like a new Supabase project, and on one with the legacy default grants of older projects. Use `tests/support/pglite.ts` for the tests of new migrations.
 
