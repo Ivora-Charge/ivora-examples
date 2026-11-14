@@ -186,9 +186,9 @@ export function supabaseConfigured(): boolean {
 }
 
 /**
- * Demo mode: forced with DEMO_MODE=true (or 1), and on whenever live credentials are
- * missing. Live mode needs both Ivora and Supabase, so live charger data is never
- * served without staff sign-in.
+ * Demo mode: forced with DEMO_MODE set to true, 1, yes or on (any case; see
+ * isFlagOn), and on whenever live credentials are missing. Live mode needs both
+ * Ivora and Supabase, so live charger data is never served without staff sign-in.
  */
 export function isDemo(): boolean {
   if (isFlagOn(env("DEMO_MODE"))) return true;

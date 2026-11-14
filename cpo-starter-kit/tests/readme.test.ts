@@ -45,7 +45,7 @@ describe("the Deploy to Vercel button", () => {
     );
     const root = button.searchParams.get("root-directory")!;
     expect(root).toBe(path.basename(kit));
-    expect(existsSync(path.join(kit, "..", root, "package.json"))).toBe(true);
+    expect(existsSync(path.join(kit, "package.json"))).toBe(true);
   });
 
   it("asks for the live credentials, all of them variables the kit documents", () => {
