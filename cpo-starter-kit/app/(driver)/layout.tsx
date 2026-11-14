@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { Logo } from "@/brand/Logo";
 import { config } from "@/lib/server/env";
 import ThemeToggle from "../theme-toggle";
 
@@ -10,7 +11,10 @@ export default function DriverLayout({ children }: { children: ReactNode }) {
   return (
     <div className="driver-shell">
       <header className="driver-bar">
-        <p className="driver-operator">{config.operatorName}</p>
+        <p className="driver-operator">
+          <Logo size={28} />
+          <span>{config.operatorName}</span>
+        </p>
         <ThemeToggle />
       </header>
       <main id="main" tabIndex={-1}>
