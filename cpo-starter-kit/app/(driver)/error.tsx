@@ -3,9 +3,11 @@
 import { EmptyState } from "@/app/ui/empty-state";
 
 /**
- * A driver page that failed to load. Says what happened, that nothing was charged by
- * this failure (a payment starts only when the driver taps the button), and offers a
- * retry. Shows the reference, never the message or a stack.
+ * A driver page that failed to load. Says what happened and offers a retry. It covers
+ * the session page and a checkout page with a paid session running, so it must never
+ * claim nothing was charged: it says only that the error itself did not start, stop or
+ * charge anything, and that a payment already made is not affected. Shows the
+ * reference, never the message or a stack.
  */
 export default function DriverError({
   error,
@@ -28,7 +30,8 @@ export default function DriverError({
           </button>
         }
       >
-        Nothing was charged. Try again, or contact the site operator
+        This error didn&apos;t start, stop or charge anything. A payment you
+        already made is not affected. Try again, or contact the site operator
         {error.digest ? (
           <>
             {" "}

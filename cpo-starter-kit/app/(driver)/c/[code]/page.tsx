@@ -13,6 +13,7 @@ import { driverRequestIds } from "@/lib/server/checkout/driver-cookie";
 import { config, isDemo } from "@/lib/server/env";
 import { demoSimulateAction } from "./actions";
 import { FreeForm, PayForm, StartForm, StopForm } from "./forms";
+import { PriceText } from "./price-text";
 import { AutoRefresh } from "./refresh";
 import type { ChipTone } from "@/lib/status-chips";
 import { Loading } from "@/app/loading-skeleton";
@@ -182,7 +183,7 @@ async function Content({ params }: { params: Promise<{ code: string }> }) {
       {page.tariffName && (
         <section className="card" aria-labelledby="price-heading">
           <h2 id="price-heading">Price</h2>
-          {page.priceText && <p className="price-big">{page.priceText}</p>}
+          {page.priceText && <PriceText text={page.priceText} />}
           {page.kind === "paid" && page.hold && (
             <p className="muted" data-testid="hold-note">
               {page.hold} is held on your card and released at the end; you pay
