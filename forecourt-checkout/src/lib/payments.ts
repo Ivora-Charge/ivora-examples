@@ -14,6 +14,8 @@ export type Hold = {
   /** Application fee recorded on the capture, in cents. */
   applicationFeeCents: number;
   metadata: Record<string, string>;
+  /** When the provider created the hold (ms since the epoch), if it says. */
+  createdAt?: number;
 };
 
 export type CheckoutState = {
@@ -45,6 +47,14 @@ export interface PaymentGateway {
     request: CheckoutRequest,
   ): Promise<{ id: string; url: string }>;
   getCheckout(id: string): Promise<CheckoutState | null>;
+  /**
+   * Completed checkouts created since `sinceMs` whose hold is still authorized and
+   * uncaptured: the sweep releases the ones that never got a charging session.
+   * `truncated`: the listing stopped at its page ceiling.
+   */
+  listAuthorizedCheckouts(
+    sinceMs: number,
+  ): Promise<{ checkouts: CheckoutState[]; truncated: boolean }>;
   expireCheckout(id: string, idempotencyKey: string): Promise<void>;
   /** Small per-session notes the app keeps with the payment (no personal data). */
   setHoldMetadata(

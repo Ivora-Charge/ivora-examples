@@ -66,6 +66,7 @@ const TABLES = [
   "cpo_active_marks",
   "cpo_card_sessions",
   "cpo_card_marks",
+  "cpo_settlement_sweeps",
 ] as const;
 
 beforeAll(async () => {
@@ -226,6 +227,7 @@ describe("row level security", () => {
           `select cpo_record_checkout_details('${operatorA}','${OWNER_A}',now(),now(),1,1,'Local')`,
           `select cpo_record_checkout_payment('${operatorA}','${OWNER_A}',0,0)`,
           `select * from cpo_report_payments_due(1)`,
+          "select cpo_mark_settlement_sweep(now())",
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
@@ -1998,6 +2000,45 @@ describe("transaction marks", () => {
           pg.query("select * from cpo_transaction_marks"),
         ).rejects.toThrow(/permission denied/);
         await expect(advance(9103, 5000)).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
+describe("settlement sweeps", () => {
+  const sweptAt = async () =>
+    (
+      await pg.query<{ swept_at: Date }>(
+        "select swept_at from cpo_settlement_sweeps",
+      )
+    ).rows.map((r) => r.swept_at.toISOString());
+  const mark = (at: string | null) =>
+    pg.query("select public.cpo_mark_settlement_sweep($1)", [at]);
+
+  it("keeps one row that only moves forward", async () => {
+    await as("service_role", null, async () => {
+      expect(await sweptAt()).toEqual([]);
+      await mark("2026-11-13T10:00:00.000Z");
+      await mark("2026-11-13T10:01:00.000Z");
+      // An older pass that finished last.
+      await mark("2026-11-13T09:59:00.000Z");
+      expect(await sweptAt()).toEqual(["2026-11-13T10:01:00.000Z"]);
+      await expect(mark(null)).rejects.toThrow(/cpo_invalid/);
+      // The server writes only through the function.
+      await expect(
+        pg.query("update cpo_settlement_sweeps set swept_at = now()"),
+      ).rejects.toThrow(/permission denied/);
+    });
+  });
+
+  it("is not readable or writable from the browser", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, OWNER_A, async () => {
+        await expect(
+          pg.query("select * from cpo_settlement_sweeps"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(mark("2026-11-13T10:00:00.000Z")).rejects.toThrow(
+          /permission denied/,
+        );
       });
   });
 });

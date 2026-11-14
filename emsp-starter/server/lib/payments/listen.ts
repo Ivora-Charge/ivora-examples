@@ -3,12 +3,14 @@ import type { CommandDeps } from "@/lib/commands/manage";
 import { sessionOwner } from "@/lib/sessions/owner";
 import { onSessionEvent } from "@/lib/sessions/events";
 import { paymentDeps, type PaymentDeps } from "./registry";
-import { maybeIncrement, settleCdr } from "./settle";
+import { keepHoldForSession, maybeIncrement, settleCdr } from "./settle";
 
 /**
  * Connects payments to the Sessions module's events, in this server process:
  *
  * - `cdr.received`: settle the payment of the CDR's start (capture, release, or review).
+ * - any session event: the start's session came, so its hold is no longer queued for
+ *   release.
  * - `session.updated`: with incremental authorization on, raise the hold of a long
  *   session before its cost reaches the hold.
  *
@@ -35,9 +37,11 @@ export function installPaymentListeners(
   holder.__emspPaymentsListening = true;
   const off = onSessionEvent(async (event) => {
     if (event.type === "cdr.received") await settleCdr(event.cdr, deps());
-    else if (event.type === "session.updated") {
+    else {
       const d = deps();
-      await maybeIncrement(event.session, d, () => commandDepsOf(d));
+      await keepHoldForSession(event.session, d);
+      if (event.type === "session.updated")
+        await maybeIncrement(event.session, d, () => commandDepsOf(d));
     }
   });
   return () => {

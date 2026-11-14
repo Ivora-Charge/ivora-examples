@@ -288,6 +288,13 @@ export type Database = {
         Update: { [_ in never]: never };
         Relationships: [];
       };
+      cpo_settlement_sweeps: {
+        Row: { id: number; swept_at: Timestamp };
+        // Written only through cpo_mark_settlement_sweep.
+        Insert: { [_ in never]: never };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
       cpo_active_sessions: {
         Row: {
           transaction_id: number;
@@ -607,6 +614,10 @@ export type Database = {
       };
       cpo_advance_transaction_mark: {
         Args: { p_station_id: number; p_transaction_id: number };
+        Returns: undefined;
+      };
+      cpo_mark_settlement_sweep: {
+        Args: { p_swept_at: string };
         Returns: undefined;
       };
       cpo_advance_active_mark: {

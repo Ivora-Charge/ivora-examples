@@ -377,7 +377,13 @@ export async function createHarness(
     sessionEvents,
     inbound,
     fetchOurs,
-    api: callDriverApi,
+    // Live holds need a payment sweep within the last few minutes (the operator's
+    // per-minute cron). The harness stands in for that cron: a pass is recorded before
+    // each driver call, so a long real-lane run never looks unswept.
+    async api(...args: Parameters<typeof callDriverApi>) {
+      await stores.payments.markSwept(new Date().toISOString());
+      return callDriverApi(...args);
+    },
     attachCard,
     async close() {
       unsubscribe();

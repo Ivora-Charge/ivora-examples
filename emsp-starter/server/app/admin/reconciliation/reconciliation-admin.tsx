@@ -21,6 +21,7 @@ const REVIEW_TEXT: Record<string, string> = {
   dispute: "Disputed by the driver",
   refund_outside: "Refunded outside this server",
   second_cdr: "Second CDR for one charge",
+  capture_refused: "Capture refused by Stripe",
 };
 
 function Lines({ lines, caption }: { lines: ReconLine[]; caption: string }) {
