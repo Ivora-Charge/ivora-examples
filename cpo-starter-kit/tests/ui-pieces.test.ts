@@ -202,6 +202,18 @@ describe("page pieces", () => {
     expect(html(h(SavedState, { saved: true }))).toContain("Saved");
   });
 
+  it("saved state can show when it was saved, as a time element", () => {
+    const out = html(
+      h(SavedState, { saved: true, at: Date.UTC(2026, 10, 14) }),
+    );
+    expect(out).toContain("Saved <time");
+    expect(out).toContain('dateTime="2026-11-14T00:00:00.000Z"');
+    // Nothing is shown before a save, even with a time.
+    expect(html(h(SavedState, { at: 1 }))).toBe(
+      '<span class="saved" role="status"></span>',
+    );
+  });
+
   it("empty state offers a next step; an error one is an alert", () => {
     const empty = html(
       h(EmptyState, {

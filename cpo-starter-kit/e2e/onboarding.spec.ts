@@ -144,6 +144,20 @@ test("demo: the setup wizard takes company, brand and Stripe end to end", async 
 
   // The checklist follows.
   await page.getByRole("link", { name: "Back to Overview" }).click();
+  // Setup is done: the key numbers and the 30-day chart lead, and the checklist is
+  // one collapsed line under them.
+  await expect(
+    page.getByRole("heading", { name: /Energy, last 30 days/ }),
+  ).toBeVisible();
+  await expect(checklist(page)).toBeHidden();
+  const order = await page.evaluate(() => {
+    const at = (sel: string) =>
+      document.querySelector(sel)?.getBoundingClientRect().top ?? Infinity;
+    return [at(".stats"), at("#trend-heading"), at("details.setup")];
+  });
+  expect(order[0]).toBeLessThan(order[1]);
+  expect(order[1]).toBeLessThan(order[2]);
+  await page.locator("details.setup > summary").click();
   await expect(checklist(page)).toBeVisible();
   for (const label of ["Company details", "Brand", "Stripe ready"])
     await expect(checkItem(page, label)).toContainText("Done");
@@ -200,4 +214,43 @@ test("demo: settings show every step and refuse a logo that isn't an image", asy
   await expect(
     page.getByText("Save your company details first."),
   ).toBeVisible();
+});
+
+test("demo: the checklist can be hidden, and comes back", async ({ page }) => {
+  await page.goto("/");
+  // Setup is not done: the checklist leads and is open.
+  await expect(checklist(page)).toBeVisible();
+  await page.getByRole("button", { name: "Hide the checklist" }).click();
+  await expect(checklist(page)).toBeHidden();
+  await expect(page.locator(".stats")).toBeVisible();
+  await page.locator("details.setup > summary").click();
+  await page
+    .getByRole("button", { name: "Show the checklist at the top" })
+    .click();
+  await expect(checklist(page)).toBeVisible();
+});
+
+test("demo: settings has its sections, a Saved time and the payments checklist", async ({
+  page,
+  isMobile,
+}) => {
+  await openSection(page, isMobile, "Settings");
+  const nav = page.getByRole("navigation", { name: "Settings sections" });
+  for (const name of ["Company", "Brand", "Payments", "Team", "Roaming"])
+    await expect(nav.getByRole("link", { name })).toBeVisible();
+  await expect(
+    page.getByRole("list", { name: "Setup progress" }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("list", { name: "Payments checklist" }),
+  ).toContainText("To do");
+  await expect(page.getByRole("region", { name: "Team" })).toContainText(
+    "demo-owner@example.com",
+  );
+  await page.getByLabel("Company name").fill("Sample Charging Co");
+  await page.getByLabel("Support email").fill("help@example.com");
+  await page.getByLabel("Time zone").selectOption("UTC");
+  await page.getByRole("button", { name: "Save company details" }).click();
+  await expect(page.locator("#company .saved time")).toBeVisible();
+  await expect(page.locator("#company .saved")).toContainText(/Saved \d/);
 });
