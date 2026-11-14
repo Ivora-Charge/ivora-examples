@@ -84,8 +84,30 @@ test("demo: reports show USD and CAD side by side, never added together", async 
   page,
 }) => {
   await page.goto("/reports");
-  const figures = page.getByRole("region", { name: "Figures for the period" });
-  await expect(figures).toContainText(/CA\$\d/);
-  await expect(figures).toContainText(/(^|[^A])\$\d/);
-  await expect(figures).toContainText("Mixed currencies (CAD, USD)");
+  // The summary strip of Ivora's figures: Billed shows one amount per currency.
+  const figures = page.getByLabel("Figures for the period", { exact: true });
+  const billed = figures
+    .locator(".strip-cell")
+    .filter({ has: page.locator("dt", { hasText: /^Billed$/ }) })
+    .locator("dd");
+  await expect(billed).toHaveText(
+    /^(CA\$\d[\d,.]* · \$\d[\d,.]*|\$\d[\d,.]* · CA\$\d[\d,.]*)$/,
+  );
+  // A visible marker next to the totals, without opening anything.
+  const head = page
+    .locator(".section-head")
+    .filter({ has: page.locator("#figures-heading") });
+  await expect(head.getByTestId("mixed-currencies")).toHaveText(
+    "Mixed currencies",
+  );
+  await expect(head.getByTestId("mixed-currencies")).toBeVisible();
+  // The full note is behind the info control.
+  const info = head.locator("details.info");
+  await expect(info.getByText(/Mixed currencies \(CAD, USD\)/)).toBeHidden();
+  await head.getByLabel("About these figures").click();
+  await expect(
+    info.getByText(
+      /Mixed currencies \(CAD, USD\): one amount per currency, never added together/,
+    ),
+  ).toBeVisible();
 });

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { formatMinor } from "@/lib/money";
+import { formatMinor, mixedCurrenciesNote } from "@/lib/money";
 import { requireRole } from "@/lib/server/auth";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getOnboarding, loadStripe } from "@/lib/server/onboarding";
@@ -282,6 +282,35 @@ function axisLabel(b: StatsBucket, size: Stats["bucket"]): string {
   return b.start.slice(11, 16);
 }
 
+/** A visible "Mixed currencies" chip when amounts are shown in more than one currency. */
+function MixedMarker({ currencies }: { currencies: readonly string[] }) {
+  if (!mixedCurrenciesNote(currencies)) return null;
+  return (
+    <span data-testid="mixed-currencies">
+      <StatusChip tone="idle">Mixed currencies</StatusChip>
+    </span>
+  );
+}
+
+/**
+ * A money figure of one amount per currency ("CA$1.00 · $2.00"): each currency on its
+ * own line so tiles keep one width; the " · " stays for screen readers and copying.
+ */
+function PerCurrency({ text }: { text: string }) {
+  const parts = text.split(" · ");
+  if (parts.length < 2) return <>{text}</>;
+  return (
+    <span className="per-currency">
+      {parts.map((p, i) => (
+        <span key={p}>
+          {i > 0 && <span className="visually-hidden"> · </span>}
+          {p}
+        </span>
+      ))}
+    </span>
+  );
+}
+
 /** "0.9500" to "95.0%": the API's decimal text, for display only. */
 function percent(rate: string | null): string {
   if (rate === null) return "–";
@@ -304,15 +333,19 @@ function SectionHeading({
   children,
   info,
   label,
+  marker,
 }: {
   id: string;
   children: React.ReactNode;
   info?: React.ReactNode;
   label: string;
+  /** A short chip after the heading, visible without opening the info. */
+  marker?: React.ReactNode;
 }) {
   return (
     <div className="section-head">
       <h2 id={id}>{children}</h2>
+      {marker}
       {info && <InfoTip label={label}>{info}</InfoTip>}
     </div>
   );
@@ -358,7 +391,7 @@ function StatsSection({
     { label: "Energy", value: kwh(t.energy_wh) },
     { label: "Success", value: percent(t.success_rate) },
     { label: "Avg. duration", value: duration(t.average_duration_seconds) },
-    { label: "Billed", value: billed.value },
+    { label: "Billed", value: <PerCurrency text={billed.value} /> },
   ];
   const notes = [
     t.active_sessions ? `${t.active_sessions} sessions charging now` : null,
@@ -373,6 +406,11 @@ function StatsSection({
       <SectionHeading
         id="figures-heading"
         label="these figures"
+        marker={
+          <MixedMarker
+            currencies={(s.revenue?.currencies ?? []).map((l) => l.currency)}
+          />
+        }
         info={
           <>
             {demo && (
@@ -572,9 +610,9 @@ function totalsItems(t: ReportTotals): SummaryItem[] {
   return [
     { label: "Sessions", value: t.withSession.toLocaleString("en-US") },
     { label: "Energy", value: kwh(t.energyWh) },
-    { label: "Collected", value: f.collected.value },
-    { label: "Refunded", value: f.refunded.value },
-    { label: "Billed", value: f.billed.value },
+    { label: "Collected", value: <PerCurrency text={f.collected.value} /> },
+    { label: "Refunded", value: <PerCurrency text={f.refunded.value} /> },
+    { label: "Billed", value: <PerCurrency text={f.billed.value} /> },
     { label: "Needs you", value: t.byStatus.attention.toLocaleString("en-US") },
   ];
 }
@@ -756,7 +794,7 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
         </PeriodEmpty>
       ) : (
         <DataTable
-          caption="Your sessions (this kit)"
+          caption="Sessions started from this kit"
           columns={[
             { key: "started", label: "Started" },
             { key: "ended", label: "Ended" },
@@ -1017,6 +1055,13 @@ function Tables({
       <SectionHeading
         id="sessions-heading"
         label="your sessions"
+        marker={
+          sessions.ok && (
+            <MixedMarker
+              currencies={sessions.totals.currencies.map((l) => l.currency)}
+            />
+          )
+        }
         info={
           sessions.ok ? (
             <TotalsInfo t={sessions.totals} />

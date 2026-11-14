@@ -61,6 +61,30 @@ describe("GET /reports/export", () => {
     expect(text.split("\r\n").length).toBeGreaterThan(20);
   });
 
+  // Pins the export's contents: the columns, the rows and every figure for one fixed
+  // demo query at a fixed clock. A change to the CSV shows up as a snapshot diff.
+  it("exports the same CSV for a fixed demo query (snapshot)", async () => {
+    who.staff = staff("viewer");
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.parse("2026-11-01T12:00:00Z"));
+      const res = await GET(
+        new Request(
+          "http://localhost/reports/export?period=custom&from=2026-10-01&to=2026-10-31&bucket=day",
+        ),
+      );
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-disposition")).toBe(
+        'attachment; filename="sessions-2026-10-01-to-2026-10-31.csv"',
+      );
+      const text = await res.text();
+      expect(text.split("\r\n").length).toBeGreaterThan(20);
+      expect(text).toMatchSnapshot();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("refuses a staff member without a role", async () => {
     who.staff = { ...staff("viewer"), role: "none" as Staff["role"] };
     const res = await GET(new Request("http://localhost/reports/export"));

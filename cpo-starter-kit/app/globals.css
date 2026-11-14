@@ -2472,6 +2472,9 @@ details.how > summary:focus-visible {
   gap: 0 var(--space-2);
   margin-top: var(--space-4);
 }
+.card > .section-head:first-child {
+  margin-top: 0;
+}
 .section-head h2,
 .section-head h3 {
   margin: 0;
@@ -2514,7 +2517,6 @@ details.info[open] {
 @media (min-width: 64rem) {
   .report-main {
     grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-    align-items: start;
   }
 }
 .report-main > *,
@@ -2524,6 +2526,7 @@ details.info[open] {
 }
 .report-side {
   display: grid;
+  align-content: start;
   gap: var(--space-4);
 }
 .report-chart .chead {
@@ -2537,9 +2540,36 @@ details.info[open] {
 .report-side h3 {
   margin: 0;
 }
+/* Reports: a tile with one amount per currency, one per line, a step smaller. */
+.strip dd .per-currency {
+  display: flex;
+  flex-direction: column;
+  font-size: var(--font-size-brand);
+  overflow-wrap: anywhere;
+}
 svg.bars {
   display: block;
-  max-height: 16rem;
+  height: 14rem;
+  overflow: visible;
+}
+/* The plot leaves 24 px under it for the labels. */
+svg.bars > svg.plot {
+  height: calc(100% - 24px);
+}
+/* On a desktop the chart's card is as tall as the cards beside it, and the chart
+   takes the height that is left, so there is no empty gap under it. */
+@media (min-width: 64rem) {
+  .report-main {
+    align-items: stretch;
+  }
+  .report-chart {
+    display: flex;
+    flex-direction: column;
+  }
+  .report-chart svg.bars {
+    flex: 1 1 auto;
+    min-height: 14rem;
+  }
 }
 .bars rect {
   fill: var(--color-primary);
