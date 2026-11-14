@@ -7,6 +7,7 @@ import {
   getPricing,
   newTariffDefaults,
 } from "@/lib/server/pricing";
+import { PageHeader } from "@/app/ui/page-header";
 import { TariffEditor } from "../forms";
 import { Loading } from "@/app/loading-skeleton";
 
@@ -17,10 +18,10 @@ async function Content() {
   const base = await newTariffDefaults(getPricing(), me);
   return (
     <>
-      <p>
-        <Link href="/pricing">← Pricing</Link>
-      </p>
-      <h1>New tariff</h1>
+      <PageHeader
+        title="New tariff"
+        description="Per kWh, with an idle fee or time-of-use periods if you want them, or free."
+      />
       <section className="card" aria-labelledby="editor-heading">
         <h2 id="editor-heading">Prices</h2>
         <p className="muted">
