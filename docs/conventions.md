@@ -66,7 +66,7 @@ Templates that keep data in Supabase follow the 10-30 rule, because Supabase ser
 - DDL is written as plain statements, never inside `do $$ … $$` blocks.
 - Every role check and the write it guards happen in one statement or transaction, so a concurrent change can't slip in between.
 
-One shared checker, [`tools/check-migrations`](../tools/check-migrations/README.md), enforces this: `node tools/check-migrations <migrations dir>`. Each template's workflow runs it on the template's migrations and lists `tools/check-migrations/**` in its `paths` filter; the checker's own tests (including a PGlite proof with Supabase's default privileges) run in `.github/workflows/tools.yml`. CI tooling is the one thing templates share: their runtime code stays separate. **A fork of a single template** copies `tools/check-migrations` alongside the template folder, keeping the same relative layout, and the template's README says how.
+One shared checker, [`tools/check-migrations`](../tools/check-migrations/README.md), enforces this: `node tools/check-migrations <migrations dir>`. Each template's workflow runs it on the template's migrations and lists `tools/check-migrations/**` in its `paths` filter; the checker's own tests (including a PGlite proof with Supabase's default privileges) run in `.github/workflows/tools.yml`. CI tooling is the one thing templates share: their runtime code stays separate. Templates with a database keep a copy of the checker in `scripts/check-migrations/` and run it through `npm run check:migrations`, so a fork of a single template needs nothing from outside its folder; keep the copies in step with `tools/check-migrations`.
 
 ## Units
 

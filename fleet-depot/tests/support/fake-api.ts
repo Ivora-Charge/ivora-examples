@@ -41,5 +41,5 @@ export function liveEnv() {
   process.env.DEMO_MODE = "";
   process.env.IVORA_API_KEY = "iv_test_not_a_real_key";
   process.env.IVORA_TENANT_ID = "7";
-  process.env.IVORA_API_BASE_URL = "";
+  process.env.IVORA_API_URL = "";
 }

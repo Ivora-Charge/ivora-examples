@@ -1,6 +1,6 @@
 // Registers and inspects this deployment's Ivora webhook endpoint, like Squid's
 // `ivora:webhook`. Reads IVORA_API_KEY, IVORA_TENANT_ID (and optionally
-// IVORA_API_BASE_URL, APP_URL) from .env.local. Never prints the API key.
+// IVORA_API_URL (or the old IVORA_API_BASE_URL), APP_URL) from .env.local. Never prints the API key.
 //
 //   npm run ivora:webhook -- register [https://<your domain>/api/webhooks/ivora]
 //   npm run ivora:webhook -- list | test <id> | deliveries <id> | disable <id>
@@ -61,7 +61,9 @@ export function registrationKey(url, existing) {
 async function main() {
   const [command = "help", argument] = process.argv.slice(2);
   const base = (
-    env("IVORA_API_BASE_URL") || "https://api.ivoracharge.com"
+    env("IVORA_API_URL") ||
+    env("IVORA_API_BASE_URL") ||
+    "https://api.ivoracharge.com"
   ).replace(/\/+$/, "");
   const tenant = env("IVORA_TENANT_ID");
   const key = env("IVORA_API_KEY");

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { readSettings } from "@/lib/settings";
 import { startOfLocalDay } from "@/lib/time";
 import { formatDuration, whToKwhText, wToKwText } from "@/lib/units";
@@ -110,5 +110,48 @@ describe("site day", () => {
         "America/Los_Angeles",
       ).toISOString(),
     ).toBe("2026-11-02T08:00:00.000Z");
+  });
+});
+
+describe("DEMO_MODE and the API URL name", () => {
+  it.each(["true", "1", "yes", "on", " TRUE ", "Yes"])(
+    "DEMO_MODE=%j forces demo even with every live variable set",
+    (value) => {
+      const s = readSettings({ ...live, DEMO_MODE: value });
+      expect(s.demo).toBe(true);
+      expect(s.posWebhookUrl).toBe("");
+      expect(s.missing).toEqual(["DEMO_MODE"]);
+    },
+  );
+
+  it.each(["", "0", "false", "no", "off", "maybe"])(
+    "DEMO_MODE=%j does not force demo",
+    (value) => {
+      expect(readSettings({ ...live, DEMO_MODE: value }).demo).toBe(false);
+    },
+  );
+
+  it("reads IVORA_API_URL, and the old IVORA_API_BASE_URL with a warning", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(readSettings(live).ivoraApiUrl).toBe("https://api.ivoracharge.com");
+    expect(
+      readSettings({ ...live, IVORA_API_URL: "https://a.example.com" })
+        .ivoraApiUrl,
+    ).toBe("https://a.example.com");
+    expect(warn).not.toHaveBeenCalled();
+    expect(
+      readSettings({ ...live, IVORA_API_BASE_URL: "https://old.example.com" })
+        .ivoraApiUrl,
+    ).toBe("https://old.example.com");
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0][0])).toContain("IVORA_API_URL");
+    expect(
+      readSettings({
+        ...live,
+        IVORA_API_URL: "https://new.example.com",
+        IVORA_API_BASE_URL: "https://old.example.com",
+      }).ivoraApiUrl,
+    ).toBe("https://new.example.com");
+    warn.mockRestore();
   });
 });

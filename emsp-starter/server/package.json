@@ -16,10 +16,10 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "test:ocpi-e2e": "node --env-file-if-exists=.env.e2e.local scripts/ocpi-e2e.mjs",
-    "check:migrations": "node ../../tools/check-migrations supabase/migrations",
+    "check:migrations": "node scripts/check-migrations/cli.mjs supabase/migrations",
     "brand:sync": "node scripts/sync-brand.mjs",
     "app:demo-data": "UPDATE_APP_DEMO=1 vitest run tests/app-demo-data.test.ts",
-    "db:migrate": "node --env-file=.env.local scripts/migrate.mjs"
+    "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.mjs"
   },
   "dependencies": {
     "next": "^16.4.2",

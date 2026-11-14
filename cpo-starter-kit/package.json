@@ -17,7 +17,7 @@
     "test": "vitest run",
     "test:e2e": "playwright test",
     "screenshots": "node scripts/screenshots.mjs",
-    "check:migrations": "node ../tools/check-migrations supabase/migrations",
+    "check:migrations": "node scripts/check-migrations/cli.mjs supabase/migrations",
     "db:migrate": "node --env-file-if-exists=.env.local scripts/migrate.mjs",
     "ivora:webhook": "node --env-file-if-exists=.env.local scripts/ivora-webhook.mjs"
   },

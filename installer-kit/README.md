@@ -64,7 +64,7 @@ Copy `.env.example` to `.env.local` and fill it in. Use a separate Ivora project
 | `QR_BASE_URL`          | For stickers      | Your own stable HTTPS origin, for example `https://charge.example.com`. Live mode prints no stickers until it is set.       |
 | `IVORA_WEBHOOK_SECRET` | Recommended       | Signing secret of the webhook endpoint `https://<your domain>/api/webhooks/ivora`. Without it the wizard relies on polling. |
 | `IVORA_API_URL`        | No                | Defaults to `https://api.ivoracharge.com`.                                                                                  |
-| `DEMO_MODE`            | No                | `1` forces demo mode.                                                                                                       |
+| `DEMO_MODE`            | No                | `true`, `1`, `yes` or `on` forces demo mode.                                                                                |
 
 ### Operator access
 

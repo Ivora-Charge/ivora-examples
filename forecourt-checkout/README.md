@@ -63,7 +63,7 @@ Open http://localhost:3000 and pick a demo charger, as if you had scanned its QR
 
 The cashier console is at `/cashier` (demo password `demo`). It opens with sample chargers in every state: available, plugged in, charging on a prepayment, done unpaid, a prepayment that ran over, paid, paying by card, offline, faulted, and one charging without a console sale (flagged). Try pay-after on Charger 3 (authorise, stop, mark paid, print) and a $20 prepay on Charger 4, which stops itself before the money runs out and shows the change. Open `/c/DEMO-4/1` in another tab and choose "Pay at the counter" to see the driver's side. Below the chargers, a **simulated POS** shows the signed `session_due` webhooks a store POS would receive (Charger 6 and 7 are due), and its buttons pay through `POST /api/pos/mark-paid` with the demo token `demo-pos-secret`, exactly as a POS would. On a receipt, "Email receipt" shows the email instead of sending it. Demo in-store sales live in a cookie in your own browser (`src/lib/demo-store.ts`), so every visitor gets their own forecourt and nothing is stored on the server.
 
-Demo mode is on whenever a required live variable is missing, or when `DEMO_MODE=1`. It never sends payment requests, charger commands, POS webhooks or emails: demo sessions are answered by `src/lib/demo.ts`, which has no network code, and a unit test fails if demo mode calls `fetch`.
+Demo mode is on whenever a required live variable is missing, or when `DEMO_MODE` is `true`, `1`, `yes` or `on`, whatever keys are set. It never sends payment requests, charger commands, POS webhooks or emails: demo sessions are answered by `src/lib/demo.ts`, which has no network code, and a unit test fails if demo mode calls `fetch`.
 
 Checks, as CI runs them:
 
@@ -110,7 +110,7 @@ npm run test:e2e    # Playwright, demo end to end: card flow on a phone; in-stor
 | `TYPICAL_SESSION_KWH`         | No       | The typical session quoted on the charger page. Default `30`.                                                                        |
 | `TYPICAL_SESSION_MINUTES`     | No       | Default `25`.                                                                                                                        |
 | `IVORA_API_URL`               | No       | Default `https://api.ivoracharge.com`.                                                                                               |
-| `DEMO_MODE`                   | No       | `1` forces demo mode.                                                                                                                |
+| `DEMO_MODE`                   | No       | `true`, `1`, `yes` or `on` forces demo mode.                                                                                         |
 | `TRUSTED_PROXY_HEADER`        | No       | Off Vercel: the header your proxy sets to the client address, for every rate limit. See [Security](#security).                       |
 
 `.env.example` lists them all. Never commit a real `.env` file.

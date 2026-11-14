@@ -114,7 +114,7 @@ The template ships with its own brand, **Kilolane**: violet, a sodium-yellow "fl
 
 ## Data
 
-Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its README). Migrations follow the **10-30 rule**: row-level security and an explicit revoke on every public table, no default grants, grants to the Data API roles only on tables with a policy, and no public function executable by those roles. The app never reads the database directly, so tables are service-only. The repository's shared checker, [`tools/check-migrations`](../tools/check-migrations/README.md), enforces the rule in CI, and every migration runs in tests on PGlite. A fork of this template alone copies `tools/check-migrations` next to it.
+Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its README). Migrations follow the **10-30 rule**: row-level security and an explicit revoke on every public table, no default grants, grants to the Data API roles only on tables with a policy, and no public function executable by those roles. The app never reads the database directly, so tables are service-only. A copy of the repository's checker ([`tools/check-migrations`](../tools/check-migrations/README.md)) lives in `server/scripts/check-migrations/` and enforces the rule in CI, and every migration runs in tests on PGlite. A fork of this template alone needs nothing else.
 
 ## Limits and next steps
 

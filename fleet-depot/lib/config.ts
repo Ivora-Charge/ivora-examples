@@ -12,12 +12,37 @@ function num(name: string, fallback: number): number {
   return Number.isFinite(v) && v > 0 ? v : fallback;
 }
 
+/**
+ * The one rule for an on/off variable: true, 1, yes or on (any case, trimmed) is on;
+ * anything else, including empty, is off. Every template parses DEMO_MODE this way.
+ */
+export function isFlagOn(raw: string | undefined): boolean {
+  const v = raw?.trim().toLowerCase();
+  return v === "true" || v === "1" || v === "yes" || v === "on";
+}
+
+let warnedLegacyApiUrl = false;
+
+/**
+ * The Ivora API origin: IVORA_API_URL. The old name IVORA_API_BASE_URL still works
+ * for one release and logs a warning once.
+ */
+function apiUrl(): string | undefined {
+  const current = env("IVORA_API_URL");
+  if (current) return current;
+  const old = env("IVORA_API_BASE_URL");
+  if (old && !warnedLegacyApiUrl) {
+    warnedLegacyApiUrl = true;
+    console.warn(
+      "IVORA_API_BASE_URL is deprecated and will be removed in the next release: rename it to IVORA_API_URL.",
+    );
+  }
+  return old;
+}
+
 export const config = {
   get apiBase() {
-    return (env("IVORA_API_BASE_URL") ?? "https://api.ivoracharge.com").replace(
-      /\/+$/,
-      "",
-    );
+    return (apiUrl() ?? "https://api.ivoracharge.com").replace(/\/+$/, "");
   },
   get apiKey() {
     return env("IVORA_API_KEY") ?? "";
@@ -50,8 +75,7 @@ export const config = {
   },
   /** Opt-in: a per-charger baseline profile that covers the plug-in gap (live mode only). */
   get baselineProfile() {
-    const v = env("BASELINE_PROFILE");
-    return v === "1" || v === "true";
+    return isFlagOn(env("BASELINE_PROFILE"));
   },
   get centsPerKwh() {
     return Math.round(num("TARIFF_CENTS_PER_KWH", 28));
@@ -63,7 +87,6 @@ export const config = {
 
 /** Demo mode runs offline with simulated data. It is on unless both credentials are set. */
 export const isDemo = () => {
-  const forced = env("DEMO_MODE");
-  if (forced === "true" || forced === "1") return true;
+  if (isFlagOn(env("DEMO_MODE"))) return true;
   return !(config.apiKey && config.tenantId);
 };

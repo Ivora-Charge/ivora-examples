@@ -10,7 +10,7 @@ Everything here is licensed under [Apache-2.0](LICENSE).
 
 | Template                                     | For whom                                         | Ivora API features used                                                                                          | Status                                                   | Live demo                                                   |
 | -------------------------------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- | ----------------------------------------------------------- |
-| [`installer-kit/`](installer-kit/)           | Installers and hardware sellers                  | Station provisioning, OCPP connection details, station status, remote operations                                 | Demo ready; live mode not yet run against a real project | [Demo](https://ivora-example-installer-kit.vercel.app)      |
+| [`installer-kit/`](installer-kit/)           | Charger installers and commissioning teams       | Station provisioning, OCPP connection details, station status, remote operations                                 | Demo ready; live mode not yet run against a real project | [Demo](https://ivora-example-installer-kit.vercel.app)      |
 | [`forecourt-checkout/`](forecourt-checkout/) | Fuel and convenience sites with DC fast chargers | Stations and connectors, tariffs, externally funded charging sessions, settlement reports, webhooks              | Demo ready; live mode not yet run against a real project | [Demo](https://ivora-example-forecourt-checkout.vercel.app) |
 | [`fleet-depot/`](fleet-depot/)               | Fleet depots                                     | RFID authorization, charging sessions, meter values, bills, webhooks                                             | Demo ready; live mode not yet run against a real project | [Demo](https://ivora-example-fleet-depot.vercel.app)        |
 | [`cpo-starter-kit/`](cpo-starter-kit/)       | Small charging operators                         | Locations, stations, remote commands, tariffs, bills and payments, statistics, tokens, OCPI publishing, webhooks | Demo ready; live mode not yet run against a real project | [Demo](https://ivora-example-cpo-starter-kit.vercel.app)    |
@@ -28,10 +28,18 @@ The live demos run in demo mode: sample data, no keys, nothing charged and no ch
 
 Each template lives in its own top-level folder and is self-contained:
 
-- Node.js 22, Next.js App Router, TypeScript and npm, with its own `package.json`, lockfile, `README.md` and `.env.example`.
-- A demo mode that runs offline with no credentials and clearly labelled sample data.
+- Node.js 22, TypeScript and npm, with its own `package.json`, lockfile, `README.md` and `.env.example`. Four templates are single Next.js (App Router) apps; `emsp-starter/` is two npm projects, a Next.js server (`server/`) and an Expo driver app (`app/`), each installed and built in its own folder.
+- A demo mode that runs offline with no credentials and clearly labelled sample data. `DEMO_MODE` is read the same way everywhere: `true`, `1`, `yes` or `on` (any case) forces demo mode even when live keys are set; anything else leaves it to the credentials. The Ivora API origin is `IVORA_API_URL` everywhere it applies (the old `IVORA_API_BASE_URL` still works for one release and logs a warning).
 - Its own CI workflow at `.github/workflows/<folder>.yml`, limited to changes in that folder, running format, typecheck, unit tests and build.
 - A README covering who it is for, a demo screenshot, running locally, connecting real services, deploying, which Ivora API features it uses, and its limits.
+
+Copying a single folder out of this repository is enough: `npm ci`, `npm run typecheck`, `npm test` and `npm run build` need nothing from outside it (the migration checker is vendored under `scripts/check-migrations/` in the templates with a database). Three variables share a name but not a meaning, so check the template's own `.env.example`:
+
+| Variable          | `cpo-starter-kit/`                                                             | `emsp-starter/server/`                                  |
+| ----------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------- |
+| `PUBLIC_BASE_URL` | Optional: the domain printed in QR stickers; `APP_URL` is the app's own origin | Required: the HTTPS origin CPO peers call for OCPI      |
+| Sender            | `EMAIL_FROM`: invite and sign-in emails                                        | `RECEIPT_FROM`: payment receipts                        |
+| First admin       | `SETUP_SECRET`: one-time secret for the setup screen                           | `ADMIN_SECRET`: bearer secret for the admin web and API |
 
 To try a template, open its folder and follow its README. Most start with:
 
