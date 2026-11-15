@@ -1,0 +1,142 @@
+<div class="review">
+  <header>
+    <h1>Empty, loading and error states</h1>
+    <p>
+      Every list shows an empty state with one next step, a skeleton that
+      matches the loaded layout, and an error that says what happened, whether
+      data is safe, and what to do.
+    </p>
+  </header>
+  <div class="stack">
+    <section class="card" aria-labelledby="s-Live">
+      <h2 id="s-Live">Live</h2>
+      <div class="grid g3">
+        <div class="card empty">
+          <svg class="i" aria-hidden="true"><use href="#i-inbox" /></svg>
+          <h3>Empty</h3>
+          <p>
+            No chargers to show yet. Add a charger and it appears here within a
+            minute.
+          </p>
+          <button class="btn primary" type="button">Next step</button>
+        </div>
+        <div class="card" role="status" aria-label="Loading Live">
+          <h3>Loading</h3>
+          <div class="skel" style="margin-top: var(--space-3)">
+            <i style="width: 60%"></i><i></i><i></i><i style="width: 80%"></i>
+          </div>
+          <p class="muted sm" style="margin-top: var(--space-3)">
+            Same shape as the loaded page, so nothing jumps.
+          </p>
+        </div>
+        <div class="card empty" role="alert">
+          <svg class="i" aria-hidden="true"><use href="#i-alert" /></svg>
+          <h3>Error</h3>
+          <p>
+            Live data is not reaching us. Chargers and sessions are not
+            affected. Last update 10:42.
+          </p>
+          <div class="actions">
+            <button class="btn" type="button">Try again</button
+            ><a href="#">Contact support</a>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="s-Chargers">
+      <h2 id="s-Chargers">Chargers</h2>
+      <div class="grid g3">
+        <div class="card empty">
+          <svg class="i" aria-hidden="true"><use href="#i-inbox" /></svg>
+          <h3>Empty</h3>
+          <p>
+            Add your first charger. You need its ID; we create the connection
+            password.
+          </p>
+          <button class="btn primary" type="button">Next step</button>
+        </div>
+        <div class="card" role="status" aria-label="Loading Chargers">
+          <h3>Loading</h3>
+          <div class="skel" style="margin-top: var(--space-3)">
+            <i style="width: 60%"></i><i></i><i></i><i style="width: 80%"></i>
+          </div>
+          <p class="muted sm" style="margin-top: var(--space-3)">
+            Same shape as the loaded page, so nothing jumps.
+          </p>
+        </div>
+        <div class="card empty" role="alert">
+          <svg class="i" aria-hidden="true"><use href="#i-alert" /></svg>
+          <h3>Error</h3>
+          <p>We could not load your chargers. Nothing was changed.</p>
+          <div class="actions">
+            <button class="btn" type="button">Try again</button
+            ><a href="#">Contact support</a>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="s-Pricing">
+      <h2 id="s-Pricing">Pricing</h2>
+      <div class="grid g3">
+        <div class="card empty">
+          <svg class="i" aria-hidden="true"><use href="#i-inbox" /></svg>
+          <h3>Empty</h3>
+          <p>
+            No prices yet. Create one so drivers can pay. A free price needs no
+            card.
+          </p>
+          <button class="btn primary" type="button">Next step</button>
+        </div>
+        <div class="card" role="status" aria-label="Loading Pricing">
+          <h3>Loading</h3>
+          <div class="skel" style="margin-top: var(--space-3)">
+            <i style="width: 60%"></i><i></i><i></i><i style="width: 80%"></i>
+          </div>
+          <p class="muted sm" style="margin-top: var(--space-3)">
+            Same shape as the loaded page, so nothing jumps.
+          </p>
+        </div>
+        <div class="card empty" role="alert">
+          <svg class="i" aria-hidden="true"><use href="#i-alert" /></svg>
+          <h3>Error</h3>
+          <p>
+            We could not save this price. Your previous price is still active.
+          </p>
+          <div class="actions">
+            <button class="btn" type="button">Try again</button
+            ><a href="#">Contact support</a>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section class="card" aria-labelledby="s-Reports">
+      <h2 id="s-Reports">Reports</h2>
+      <div class="grid g3">
+        <div class="card empty">
+          <svg class="i" aria-hidden="true"><use href="#i-inbox" /></svg>
+          <h3>Empty</h3>
+          <p>No sessions in this period yet. Try 90 days.</p>
+          <button class="btn primary" type="button">Next step</button>
+        </div>
+        <div class="card" role="status" aria-label="Loading Reports">
+          <h3>Loading</h3>
+          <div class="skel" style="margin-top: var(--space-3)">
+            <i style="width: 60%"></i><i></i><i></i><i style="width: 80%"></i>
+          </div>
+          <p class="muted sm" style="margin-top: var(--space-3)">
+            Same shape as the loaded page, so nothing jumps.
+          </p>
+        </div>
+        <div class="card empty" role="alert">
+          <svg class="i" aria-hidden="true"><use href="#i-alert" /></svg>
+          <h3>Error</h3>
+          <p>Reports are unavailable right now. Payments are not affected.</p>
+          <div class="actions">
+            <button class="btn" type="button">Try again</button
+            ><a href="#">Contact support</a>
+          </div>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>

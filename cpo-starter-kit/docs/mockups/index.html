@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ampleaf polish mockups</title>
+    <link rel="stylesheet" href="../../brand/tokens.css" />
+    <link rel="stylesheet" href="mock.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="review" id="main">
+      <header>
+        <h1>Ampleaf polish: mockups</h1>
+        <p>
+          Static, clickable mockups for owner review (SQD-80). Nothing here is
+          built into the template: pick what you want and build work is filed
+          per screen. Every screen shows the current screen beside the proposal,
+          desktop 1440 and phone 390, light and dark, with what changes, which
+          Squid screen it follows, accessibility, brand tokens and a rough build
+          size. All names, ids and figures are invented demo data.
+        </p>
+      </header>
+      <section class="card" aria-labelledby="rules">
+        <h2 id="rules">Design rules used across every screen</h2>
+        <ul>
+          <li>
+            <b>Shell:</b> grouped sidebar (Menu and five tabs on a phone),
+            breadcrumbs, one page width (<code>--content-max</code>), one
+            primary action per page header.
+          </li>
+          <li>
+            <b>Tables:</b> sticky header, numbers right-aligned in tabular
+            figures, sortable heads with <code>aria-sort</code>, filter bar
+            above, one row density, an empty state with a next step; on a phone
+            rows stack.
+          </li>
+          <li>
+            <b>Status:</b> one chip set (shape + word + colour): Charging,
+            Available, Offline, Faulted, Idle. Never colour alone.
+          </li>
+          <li>
+            <b>Forms:</b> label above, help beneath, inline error beside the
+            field with text, a visible “Saved” state.
+          </li>
+          <li>
+            <b>Detail pages:</b> summary strip first, tabs beneath, destructive
+            actions in their own bordered zone at the bottom.
+          </li>
+          <li>
+            <b>Ampleaf stays Ampleaf:</b> palette v2, Manrope and Fraunces,
+            Lucide icons and the leaf corner. Every colour, size and radius is
+            read from <code>brand/tokens.css</code>, so an operator's rebrand
+            carries through.
+          </li>
+        </ul>
+      </section>
+      <h2 style="margin: var(--space-5) 0 var(--space-3)">Screens</h2>
+      <div class="cards">
+        <a class="card" href="live.html"
+          ><h3>1. Live</h3>
+          <p class="muted sm">
+            Map and list, faults first, remote actions beside the list.
+          </p>
+          <span class="sm">Build size: <b>M</b></span></a
+        ><a class="card" href="chargers.html"
+          ><h3>2. Chargers: list</h3>
+          <p class="muted sm">
+            A sortable, filterable table; a charger page with summary, tabs and
+            a separated danger zone.
+          </p>
+          <span class="sm">Build size: <b>M</b></span></a
+        ><a class="card" href="pricing.html"
+          ><h3>3. Pricing</h3>
+          <p class="muted sm">
+            A tariff table and one editor with a live preview.
+          </p>
+          <span class="sm">Build size: <b>M</b></span></a
+        ><a class="card" href="reports.html"
+          ><h3>4. Reports</h3>
+          <p class="muted sm">
+            Summary strip, chart with a text equivalent, a filterable session
+            table and export.
+          </p>
+          <span class="sm">Build size: <b>M</b></span></a
+        ><a class="card" href="settings.html"
+          ><h3>5. Onboarding and Settings</h3>
+          <p class="muted sm">
+            One settings page with sections, a progress strip and clear payments
+            status.
+          </p>
+          <span class="sm">Build size: <b>M</b></span></a
+        ><a class="card" href="driver.html"
+          ><h3>6. Driver checkout and session</h3>
+          <p class="muted sm">
+            A calm single-column page on the operator's domain.
+          </p>
+          <span class="sm">Build size: <b>S</b></span></a
+        ><a class="card" href="welcome.html"
+          ><h3>7. Landing and states</h3>
+          <p class="muted sm">
+            A short landing page and the empty, loading and error states of
+            screens 1–4.
+          </p>
+          <span class="sm">Build size: <b>S</b></span></a
+        >
+      </div>
+      <section class="card" style="margin-top: var(--space-5)">
+        <h2>Overall build size</h2>
+        <p>
+          1 M · 2 M · 3 M · 4 M · 5 M · 6 S · 7 S. The shared pieces (shell,
+          table, chip set, form field, tabs, empty/loading/error) are built once
+          first (M) and every screen reuses them.
+        </p>
+      </section>
+      <p class="muted sm" style="margin-top: var(--space-5)">
+        Demo data only. These files live in <code>docs/mockups/</code>, are not
+        imported by the app and are staged into a preview deployment only (see
+        README in this folder).
+      </p>
+    </div>
+  </body>
+</html>
