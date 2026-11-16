@@ -60,6 +60,7 @@ const peer = (id: string, countryCode: string, partyId: string): Peer => ({
   updatedAt: "2026-10-01T00:00:00.000Z",
   registeredAt: "2026-10-01T00:00:00.000Z",
   unregisteredAt: null,
+  hubParties: [],
 });
 const peerA = peer(A, "ZZ", "MCK");
 const peerB = peer(B, "YY", "TWO");

@@ -9,6 +9,9 @@ import type { Tariff } from "@/lib/ocpi/tariffs";
  * other. `seenAt` is when the object last arrived (pulled or pushed); a full sync
  * removes what it did not see.
  */
+/** A CPO party. */
+export type PartyKey = { countryCode: string; partyId: string };
+
 export type ObjectKey = {
   peerId: string;
   countryCode: string;
@@ -32,6 +35,8 @@ export type StoredTariff = {
 
 /** Modules pulled from a CPO's Sender interface. Sessions and CDRs keep their state here too. */
 export type SyncModule = "locations" | "tariffs" | "sessions" | "cdrs";
+/** A pull's state key: the module, and behind a hub 'module@CC-PID' of the party. */
+export type SyncKey = SyncModule | `${SyncModule}@${string}`;
 export type SyncMode = "full" | "incremental";
 
 /** A pull in progress, or interrupted: enough to resume at the next page. */
@@ -66,7 +71,7 @@ export type SyncResult = {
 
 export type SyncState = {
   peerId: string;
-  module: SyncModule;
+  module: SyncKey;
   lastFullSyncAt: string | null;
   /** date_from for the next incremental sync. */
   cursor: string | null;
@@ -111,7 +116,11 @@ export interface LocationStore {
     expectedRevision: string | null,
   ): Promise<boolean>;
   /** Removes a peer's locations last seen before `before`. Returns how many. */
-  pruneLocations(peerId: string, before: string): Promise<number>;
+  pruneLocations(
+    peerId: string,
+    before: string,
+    party?: PartyKey,
+  ): Promise<number>;
   /**
    * Published locations matching the coarse filter, at most `limit`, nearest to
    * `filter.near` first when it is given.
@@ -130,11 +139,15 @@ export interface LocationStore {
   ): Promise<boolean>;
   /** Deletes only if unchanged since read (`expectedRevision`). False: retry. */
   deleteTariff(key: ObjectKey, expectedRevision: string): Promise<boolean>;
-  pruneTariffs(peerId: string, before: string): Promise<number>;
+  pruneTariffs(
+    peerId: string,
+    before: string,
+    party?: PartyKey,
+  ): Promise<number>;
   /** The tariffs of one peer with these IDs (any party). */
   findTariffs(peerId: string, ids: string[]): Promise<StoredTariff[]>;
 
-  getSyncState(peerId: string, module: SyncModule): Promise<SyncState | null>;
+  getSyncState(peerId: string, module: SyncKey): Promise<SyncState | null>;
   /**
    * Saves the state only if its current run ID is still `expectedRunId` (null: no run
    * in progress, or no state yet). Returns false when another sync got there first.
@@ -243,8 +256,8 @@ export class MemoryLocationStore implements LocationStore {
     return true;
   }
 
-  async pruneLocations(peerId: string, before: string) {
-    return prune(this.locations, peerId, before);
+  async pruneLocations(peerId: string, before: string, party?: PartyKey) {
+    return prune(this.locations, peerId, before, party);
   }
 
   async findLocations(f: CandidateFilter) {
@@ -322,8 +335,8 @@ export class MemoryLocationStore implements LocationStore {
     return true;
   }
 
-  async pruneTariffs(peerId: string, before: string) {
-    return prune(this.tariffs, peerId, before);
+  async pruneTariffs(peerId: string, before: string, party?: PartyKey) {
+    return prune(this.tariffs, peerId, before, party);
   }
 
   async findTariffs(peerId: string, ids: string[]) {
@@ -332,7 +345,7 @@ export class MemoryLocationStore implements LocationStore {
       .map((t) => structuredClone(t));
   }
 
-  async getSyncState(peerId: string, module: SyncModule) {
+  async getSyncState(peerId: string, module: SyncKey) {
     const s = this.sync.get(`${peerId}:${module}`);
     return s ? structuredClone(s) : null;
   }
@@ -352,15 +365,26 @@ const tariffKey = (peerId: string, t: Tariff) =>
   key({ peerId, countryCode: t.country_code, partyId: t.party_id, id: t.id });
 
 function prune(
-  map: Map<string, { peerId: string; seenAt: string }>,
+  map: Map<string, StoredLocation | StoredTariff>,
   peerId: string,
   before: string,
+  party?: PartyKey,
 ): number {
   let removed = 0;
-  for (const [k, v] of map)
+  for (const [k, v] of map) {
+    const o = "location" in v ? v.location : v.tariff;
+    if (
+      party &&
+      !(
+        o.country_code.toUpperCase() === party.countryCode.toUpperCase() &&
+        o.party_id.toUpperCase() === party.partyId.toUpperCase()
+      )
+    )
+      continue;
     if (v.peerId === peerId && Date.parse(v.seenAt) < Date.parse(before)) {
       map.delete(k);
       removed++;
     }
+  }
   return removed;
 }

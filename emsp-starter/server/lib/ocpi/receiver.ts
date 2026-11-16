@@ -1,6 +1,7 @@
 import "server-only";
 import { OcpiProblem } from "./errors";
 import { sameId } from "./locations";
+import { isCpoParty } from "./parties";
 import { readJson, type OcpiContext } from "./server";
 import { STATUS } from "./types";
 
@@ -39,13 +40,7 @@ export function pushingParty(
   const from = ctx.from;
   if (!from)
     throw invalid("Missing or invalid OCPI-from/OCPI-to routing headers");
-  const cpo = ctx.peer.roles.some(
-    (r) =>
-      r.role === "CPO" &&
-      sameId(r.country_code, from.countryCode) &&
-      sameId(r.party_id, from.partyId),
-  );
-  if (!cpo)
+  if (!isCpoParty(ctx.peer, from))
     throw new OcpiProblem(
       403,
       STATUS.CLIENT_ERROR,

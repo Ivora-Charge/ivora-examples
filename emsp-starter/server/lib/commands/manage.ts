@@ -21,6 +21,7 @@ import {
 } from "@/lib/ocpi/errors";
 import { ourParty } from "@/lib/ocpi/identity";
 import { sameId, type DisplayText, type Evse } from "@/lib/ocpi/locations";
+import { isCpoParty, isHubPeer } from "@/lib/ocpi/parties";
 import type { Peer, PeerStore } from "@/lib/ocpi/store";
 import { decryptToken } from "@/lib/ocpi/tokens";
 import { sameParty, type Party } from "@/lib/ocpi/types";
@@ -230,6 +231,15 @@ async function commandPeer(
   if (!peer || peer.status !== "registered" || !peer.tokenCiphertext)
     throw new CommandError("Unknown charging network.", 404);
   return peer;
+}
+
+/**
+ * Behind a roaming hub, a command goes only to a party the operator trusts (right now,
+ * not when the location was stored). A direct CPO peer is not checked.
+ */
+function reachable(peer: Peer | null, party: Party): void {
+  if (peer && isHubPeer(peer) && !isCpoParty(peer, party))
+    throw new CommandError("Unknown charging network.", 404);
 }
 
 const STOPPED_OK = "The charger accepted the stop.";
@@ -664,6 +674,10 @@ export async function startSession(
   const peer = await commandPeer(key.peerId, deps);
   const location = (await deps.locations.getLocation(key))?.location;
   if (!location?.publish) throw new CommandError("Unknown location.", 404);
+  reachable(peer, {
+    countryCode: location.country_code,
+    partyId: location.party_id,
+  });
 
   if (connectorId && !evseUid)
     throw new CommandError("Choose the charger of this connector too.");
@@ -830,6 +844,7 @@ export async function stopSession(
   if (!owner || owner.driverRef !== ref)
     throw new CommandError("No such session.", 404);
   const peer = await commandPeer(peerId, deps);
+  reachable(peer, owner.party);
   const now = nowOf(deps);
 
   const claimed = await claim(

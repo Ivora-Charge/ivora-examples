@@ -13,6 +13,23 @@ import type { CredentialsRole, Endpoint } from "./types";
 export type PeerStatus = "pending" | "registered" | "unregistered" | "failed";
 export type PeerDirection = "outbound" | "inbound";
 
+/**
+ * A CPO party reachable through a hub peer. `offered`: the hub lists it, the operator
+ * has not accepted it, so nothing is sent to it and nothing is accepted from it.
+ * `trusted`: the operator accepted it.
+ */
+export type HubParty = {
+  countryCode: string;
+  partyId: string;
+  status: "offered" | "trusted";
+  /**
+   * Who added it: the operator, the hub's client list (hubclientinfo), or a CPO role
+   * in the hub's own credentials. Only the operator makes a party trusted.
+   */
+  source: "admin" | "hubclientinfo" | "credentials";
+  name?: string;
+};
+
 export type Peer = {
   id: string;
   label: string;
@@ -24,6 +41,8 @@ export type Peer = {
   version: string | null;
   roles: CredentialsRole[];
   endpoints: Endpoint[];
+  /** For a hub peer: the parties behind it (parties.ts). Empty for a direct CPO. */
+  hubParties: HubParty[];
   /** The token we send to the peer, encrypted (tokens.ts). Never leaves the server. */
   tokenCiphertext: string | null;
   createdAt: string;
@@ -41,6 +60,7 @@ export type PeerPatch = Partial<
     | "version"
     | "roles"
     | "endpoints"
+    | "hubParties"
     | "tokenCiphertext"
     | "registeredAt"
     | "unregisteredAt"
@@ -94,12 +114,14 @@ export interface PeerStore {
   listPeers(): Promise<Peer[]>;
   /**
    * Changes a peer. With `ifStatus`, only when the peer still has that status: returns
-   * null otherwise, so two concurrent handshakes cannot both win.
+   * null otherwise, so two concurrent handshakes cannot both win. With `ifUpdatedAt`,
+   * only when nobody changed the peer since it was read (compare-and-set).
    */
   updatePeer(
     id: string,
     patch: PeerPatch,
     ifStatus?: PeerStatus,
+    ifUpdatedAt?: string,
   ): Promise<Peer | null>;
   issueToken(token: NewToken): Promise<void>;
   /** An active (not revoked, not expired) token by its hash. */
@@ -133,6 +155,7 @@ export class MemoryPeerStore implements PeerStore {
       version: null,
       roles: [],
       endpoints: [],
+      hubParties: [],
       tokenCiphertext: null,
       createdAt: now,
       updatedAt: now,
@@ -154,11 +177,21 @@ export class MemoryPeerStore implements PeerStore {
       .map((p) => structuredClone(p));
   }
 
-  async updatePeer(id: string, patch: PeerPatch, ifStatus?: PeerStatus) {
+  async updatePeer(
+    id: string,
+    patch: PeerPatch,
+    ifStatus?: PeerStatus,
+    ifUpdatedAt?: string,
+  ) {
     const p = this.peers.get(id);
     if (!p || (ifStatus && p.status !== ifStatus)) return null;
+    if (ifUpdatedAt !== undefined && p.updatedAt !== ifUpdatedAt) return null;
+    // Every change gets a later timestamp, even within one millisecond, so a
+    // compare-and-set on updatedAt always sees it.
+    const now = Date.now();
+    const last = Date.parse(p.updatedAt);
     Object.assign(p, structuredClone(patch), {
-      updatedAt: new Date().toISOString(),
+      updatedAt: new Date(now > last ? now : last + 1).toISOString(),
     });
     return structuredClone(p);
   }
