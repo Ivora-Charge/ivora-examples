@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { BodyTooLargeError, readLimitedText } from "./body";
 import { OcpiProblem } from "./errors";
 import { ourParty } from "./identity";
+import { isPartyOfPeer } from "./parties";
 import { peerStore } from "./registry";
 import type { IssuedToken, Peer, PeerStore } from "./store";
 import { hashToken, tokensFromHeader } from "./tokens";
@@ -186,14 +187,7 @@ export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
             STATUS.INVALID_PARAMETERS,
             "OCPI-to-country-code and OCPI-to-party-id do not match this eMSP",
           );
-        if (
-          !peer.roles.some((r) =>
-            sameParty(
-              { countryCode: r.country_code, partyId: r.party_id },
-              from!,
-            ),
-          )
-        )
+        if (!isPartyOfPeer(peer, from))
           throw new OcpiProblem(
             403,
             STATUS.CLIENT_ERROR,

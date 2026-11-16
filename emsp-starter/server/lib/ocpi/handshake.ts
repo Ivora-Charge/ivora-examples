@@ -4,6 +4,7 @@ import { config, OCPI_VERSION, ocpiUrls } from "@/lib/server/config";
 import { assertLive } from "@/lib/server/demo";
 import { ocpiRequest, type ClientOptions } from "./client";
 import { OcpiError, OcpiProblem, OcpiUnauthorizedError } from "./errors";
+import { trustedParties } from "./parties";
 import { ourCredentials, ourParty } from "./identity";
 import {
   parseCredentials,
@@ -142,17 +143,18 @@ export function credentialsEndpoint(endpoints: Endpoint[]): string | undefined {
 }
 
 /**
- * A peer's roles must include a CPO, must not be this eMSP, and must not belong to
- * another peer that is registered or registering.
+ * A peer's roles must include a CPO or a roaming hub, must not be this eMSP, and must
+ * not belong to another peer that is registered or registering. A CPO party that
+ * another hub's operator already trusts cannot also register directly.
  */
 async function checkRoles(
   store: PeerStore,
   roles: CredentialsRole[],
   peerId: string,
 ): Promise<void> {
-  if (!roles.some((r) => r.role === "CPO"))
+  if (!roles.some((r) => r.role === "CPO" || r.role === "HUB"))
     throw new HandshakeError(
-      "The peer has no CPO role: this eMSP connects to CPOs",
+      "The peer has no CPO or HUB role: this eMSP connects to CPOs and roaming hubs",
       STATUS.CLIENT_ERROR,
     );
   const party = (r: CredentialsRole) => ({
@@ -174,6 +176,14 @@ async function checkRoles(
           `Party ${r.country_code}-${r.party_id} is already registered by another peer`,
           STATUS.CLIENT_ERROR,
         );
+  for (const r of roles)
+    if (r.role === "CPO")
+      for (const other of others)
+        if (trustedParties(other).some((t) => sameParty(t, party(r))))
+          throw new HandshakeError(
+            `Party ${r.country_code}-${r.party_id} is already reached through a roaming hub`,
+            STATUS.CLIENT_ERROR,
+          );
 }
 
 /** For the audit log and the admin web: who the peer is, no secrets. */

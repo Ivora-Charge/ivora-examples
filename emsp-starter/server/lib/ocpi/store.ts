@@ -13,6 +13,20 @@ import type { CredentialsRole, Endpoint } from "./types";
 export type PeerStatus = "pending" | "registered" | "unregistered" | "failed";
 export type PeerDirection = "outbound" | "inbound";
 
+/**
+ * A CPO party reachable through a hub peer. `offered`: the hub lists it, the operator
+ * has not accepted it, so nothing is sent to it and nothing is accepted from it.
+ * `trusted`: the operator accepted it.
+ */
+export type HubParty = {
+  countryCode: string;
+  partyId: string;
+  status: "offered" | "trusted";
+  /** Who added it: the operator, or the hub's client list (hubclientinfo). */
+  source: "admin" | "hubclientinfo";
+  name?: string;
+};
+
 export type Peer = {
   id: string;
   label: string;
@@ -24,6 +38,8 @@ export type Peer = {
   version: string | null;
   roles: CredentialsRole[];
   endpoints: Endpoint[];
+  /** For a hub peer: the parties behind it (parties.ts). Empty for a direct CPO. */
+  hubParties: HubParty[];
   /** The token we send to the peer, encrypted (tokens.ts). Never leaves the server. */
   tokenCiphertext: string | null;
   createdAt: string;
@@ -41,6 +57,7 @@ export type PeerPatch = Partial<
     | "version"
     | "roles"
     | "endpoints"
+    | "hubParties"
     | "tokenCiphertext"
     | "registeredAt"
     | "unregisteredAt"
@@ -133,6 +150,7 @@ export class MemoryPeerStore implements PeerStore {
       version: null,
       roles: [],
       endpoints: [],
+      hubParties: [],
       tokenCiphertext: null,
       createdAt: now,
       updatedAt: now,

@@ -9,16 +9,25 @@ import {
 } from "@/lib/ocpi/handshake";
 import { explainMessage, explainStatus } from "@/lib/admin/errors";
 import { DEMO_PEER_ID, locationStore } from "@/lib/locations/registry";
-import type { SyncModule, SyncState } from "@/lib/locations/store";
-import { syncPeer, SyncError, type SyncReport } from "@/lib/locations/sync";
+import type { SyncKey, SyncModule, SyncState } from "@/lib/locations/store";
+import {
+  pullTargets,
+  syncKey,
+  syncPeer,
+  SyncError,
+  type SyncReport,
+} from "@/lib/locations/sync";
+import { acceptParty, offerFromHub, removeParty } from "@/lib/ocpi/hub";
+import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import { peerStore } from "@/lib/ocpi/registry";
-import type { Peer } from "@/lib/ocpi/store";
+import type { HubParty, Peer } from "@/lib/ocpi/store";
 import { assertLive, isDemo } from "@/lib/server/demo";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
 /** The last pull of one module from a peer. */
 export type ModuleSync = {
-  module: SyncModule;
+  /** The module; behind a hub 'module@CC-PID' of the party pulled. */
+  module: SyncKey;
   /** When the last pull ended, ok or not; null: never pulled. */
   lastPullAt: string | null;
   lastFullSyncAt: string | null;
@@ -40,6 +49,8 @@ export type PeerSummary = {
   status: Peer["status"];
   versionsUrl: string | null;
   parties: string[];
+  /** A roaming hub: the parties behind it and whether the operator trusts them. */
+  hub?: { parties: HubParty[] };
   modules: string[];
   registeredAt: string | null;
   /** Per module this server pulls; only in the peer list. */
@@ -49,7 +60,7 @@ export type PeerSummary = {
 
 const SYNC_MODULES: SyncModule[] = ["locations", "tariffs", "sessions", "cdrs"];
 
-function moduleSync(module: SyncModule, s: SyncState | null): ModuleSync {
+function moduleSync(module: SyncKey, s: SyncState | null): ModuleSync {
   const r = s?.lastResult ?? null;
   const failed = r && !r.ok;
   const help = failed
@@ -110,6 +121,7 @@ function summary(p: Peer): PeerSummary {
       (r) =>
         `${r.role} ${r.country_code}-${r.party_id} (${r.business_details.name})`,
     ),
+    ...(isHubPeer(p) && { hub: { parties: p.hubParties } }),
     modules: [...new Set(p.endpoints.map((e) => e.identifier))].sort(),
     registeredAt: p.registeredAt,
   };
@@ -211,8 +223,11 @@ export async function listPeersAction(
       (await peerStore().listPeers()).map(async (p) => ({
         ...summary(p),
         sync: await Promise.all(
-          SYNC_MODULES.map(async (m) =>
-            moduleSync(m, await locations.getSyncState(p.id, m)),
+          SYNC_MODULES.flatMap((m) =>
+            pullTargets(p).map(async (party) => {
+              const key = syncKey(m, party);
+              return moduleSync(key, await locations.getSyncState(p.id, key));
+            }),
           ),
         ),
       })),
@@ -228,7 +243,7 @@ export async function listPeersAction(
 }
 
 const describeSync = (r: SyncReport) =>
-  `${r.module}: ${r.items} stored${r.invalid ? `, ${r.invalid} invalid skipped` : ""}${r.removed ? `, ${r.removed} removed` : ""}${r.complete ? "" : " (more pages left: pull again to continue)"}`;
+  `${r.module}${r.party ? ` of ${r.party.countryCode}-${r.party.partyId}` : ""}: ${r.items} stored${r.invalid ? `, ${r.invalid} invalid skipped` : ""}${r.removed ? `, ${r.removed} removed` : ""}${r.complete ? "" : " (more pages left: pull again to continue)"}`;
 
 /**
  * Pulls a registered peer's tariffs, then its locations: changes since the last pull,
@@ -248,13 +263,19 @@ export async function syncPeerAction(
     const peer = await deps.peers.getPeer(id);
     if (!peer) return { ok: false, message: "No such peer." };
     const reports: SyncReport[] = [];
+    if (isHubPeer(peer) && !trustedParties(peer).length)
+      return {
+        ok: false,
+        message: `${peer.label} is a roaming hub with no trusted party: accept a party first.`,
+      };
     for (const module of ["tariffs", "locations"] as const)
       if (
         peer.endpoints.some(
           (e) => e.identifier === module && e.role === "SENDER",
         )
       )
-        reports.push(await syncPeer(id, module, deps, { mode }));
+        for (const party of pullTargets(peer))
+          reports.push(await syncPeer(id, module, deps, { mode, party }));
     if (!reports.length)
       return {
         ok: false,
@@ -264,5 +285,70 @@ export async function syncPeerAction(
       ok: true,
       message: `Pulled from ${peer.label}. ${reports.map(describeSync).join("; ")}.`,
     };
+  });
+}
+
+/** The caches a hub party filled: dropped when the operator stops trusting it. */
+async function purgeParty(
+  peerId: string,
+  party: { countryCode: string; partyId: string },
+) {
+  const store = locationStore();
+  const until = new Date(Date.now() + 60_000).toISOString();
+  await store.pruneLocations(peerId, until, party);
+  await store.pruneTariffs(peerId, until, party);
+}
+
+/**
+ * The CPO parties behind a roaming hub: accept one (a new one, or one the hub offered),
+ * stop trusting one, or read the hub's client list for parties to offer. Nothing is
+ * sent to or accepted from a party until it is accepted.
+ */
+export async function hubPartyAction(
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  return asAdmin(form, async () => {
+    const id = field(form, "peerId").trim();
+    if (!/^[0-9a-f-]{36}$/i.test(id))
+      return { ok: false, message: "Peer ID must be a UUID." };
+    const deps = { store: peerStore(), actor: "admin" };
+    const intent = field(form, "intent");
+    if (intent === "offer") {
+      const { peer, offered } = await offerFromHub(id, deps);
+      return {
+        ok: true,
+        message: `${offered} new party(ies) offered by ${peer.label}. Accept the ones you trust.`,
+        peer: summary(peer),
+      };
+    }
+    const party = {
+      countryCode: field(form, "countryCode"),
+      partyId: field(form, "partyId"),
+    };
+    if (intent === "accept") {
+      const peer = await acceptParty(
+        id,
+        { ...party, name: field(form, "name") },
+        deps,
+      );
+      return {
+        ok: true,
+        message: `${party.countryCode.toUpperCase()}-${party.partyId.toUpperCase()} is trusted through ${peer.label}.`,
+        peer: summary(peer),
+      };
+    }
+    if (intent === "remove") {
+      const peer = await removeParty(id, party, {
+        ...deps,
+        purge: purgeParty,
+      });
+      return {
+        ok: true,
+        message: `Removed ${party.countryCode.toUpperCase()}-${party.partyId.toUpperCase()} from ${peer.label}.`,
+        peer: summary(peer),
+      };
+    }
+    return { ok: false, message: "Unknown action." };
   });
 }

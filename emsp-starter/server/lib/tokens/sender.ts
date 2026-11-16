@@ -1,8 +1,9 @@
 import "server-only";
 import { OcpiProblem } from "@/lib/ocpi/errors";
 import { dateTimeMs } from "@/lib/ocpi/locations";
+import { isCpoParty } from "@/lib/ocpi/parties";
 import { ocpiResponse, type OcpiContext } from "@/lib/ocpi/server";
-import { sameParty, STATUS } from "@/lib/ocpi/types";
+import { STATUS } from "@/lib/ocpi/types";
 import { ocpiUrls } from "@/lib/server/config";
 import { toOcpiToken } from "./push";
 import { tokenStore } from "./registry";
@@ -53,14 +54,7 @@ function intParam(
  */
 export function requireCpoParty(ctx: OcpiContext) {
   const from = ctx.from;
-  if (
-    !from ||
-    !ctx.peer.roles.some(
-      (r) =>
-        r.role === "CPO" &&
-        sameParty({ countryCode: r.country_code, partyId: r.party_id }, from),
-    )
-  )
+  if (!from || !isCpoParty(ctx.peer, from))
     throw new OcpiProblem(
       403,
       STATUS.CLIENT_ERROR,

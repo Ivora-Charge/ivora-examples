@@ -32,6 +32,7 @@ import {
   type Credentials,
   type Endpoint,
   type Party,
+  type Role,
 } from "@/lib/ocpi/types";
 import {
   cdrForSession,
@@ -71,6 +72,19 @@ export type MockCpoOptions = {
   pageLimit?: number;
   /** Where the sample sites are, their currency and so on. */
   sample?: SampleOptions;
+  /** The role in our credentials. Default CPO; the mock hub (hub.ts) uses HUB. */
+  role?: Role;
+  /** More endpoints in our version details, for example a hub's hubclientinfo. */
+  extraEndpoints?: Endpoint[];
+  /**
+   * Answers an authenticated request to a module (not versions or credentials) in
+   * place of this platform: how the mock hub forwards by the OCPI-to headers.
+   */
+  intercept?: (
+    request: Request,
+    url: URL,
+    token: string,
+  ) => Promise<Response | undefined> | Response | undefined;
 };
 
 export type RecordedRequest = {
@@ -156,7 +170,7 @@ export function createMockCpo(options: MockCpoOptions) {
     url: urls.versions,
     roles: [
       {
-        role: "CPO",
+        role: options.role ?? "CPO",
         business_details: { name },
         party_id: party.partyId,
         country_code: party.countryCode,
@@ -405,10 +419,13 @@ export function createMockCpo(options: MockCpoOptions) {
           { identifier: "commands", role: "RECEIVER", url: urls.commands },
           { identifier: "sessions", role: "SENDER", url: urls.sessions },
           { identifier: "cdrs", role: "SENDER", url: urls.cdrs },
+          ...(options.extraEndpoints ?? []),
         ],
       });
     if (path === "/ocpi/2.2.1/credentials")
       return credentialsModule(request, token);
+    const intercepted = await options.intercept?.(request, url, token);
+    if (intercepted) return intercepted;
     if (path === "/ocpi/2.2.1/locations" && request.method === "GET") {
       if (!state.issued.has(token)) return unauthorized();
       return senderPage(url, urls.locations, state.locations);

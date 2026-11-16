@@ -5,6 +5,7 @@ import { TableWrap } from "../table-wrap";
 import { ActionCard, ErrorHelp } from "../action-card";
 import {
   connectPeerAction,
+  hubPartyAction,
   invitePeerAction,
   listPeersAction,
   managePeerAction,
@@ -90,6 +91,21 @@ function PeerFacts({ peer }: { peer: PeerSummary }) {
         <>
           <dt>Parties</dt>
           <dd>{peer.parties.join(", ")}</dd>
+        </>
+      )}
+      {peer.hub && (
+        <>
+          <dt>Roaming hub</dt>
+          <dd>
+            {peer.hub.parties.length === 0
+              ? "No CPO parties yet: accept the ones you trade with."
+              : peer.hub.parties
+                  .map(
+                    (h) =>
+                      `${h.countryCode}-${h.partyId}${h.name ? ` (${h.name})` : ""}: ${h.status === "trusted" ? "trusted" : "offered, not trusted"}`,
+                  )
+                  .join(", ")}
+          </dd>
         </>
       )}
       {peer.modules.length > 0 && (
@@ -203,6 +219,53 @@ export function PeerAdmin() {
             required
             maxLength={64}
           />
+        </label>
+      </PeerCard>
+
+      <PeerCard
+        id="hub"
+        title="Parties behind a roaming hub"
+        action={hubPartyAction}
+        submit={
+          <>
+            <button type="submit" name="intent" value="accept">
+              Accept party
+            </button>
+            <button type="submit" name="intent" value="offer">
+              Read the hub&apos;s client list
+            </button>
+            <button
+              type="submit"
+              name="intent"
+              value="remove"
+              className="danger"
+            >
+              Remove party
+            </button>
+          </>
+        }
+      >
+        <p className="muted">
+          A roaming hub connects you to CPOs that are not peers themselves. We
+          send to, and accept pushes from, only the parties you accept here. The
+          hub&apos;s own client list can offer parties; an offered party is
+          trusted only after you accept it.
+        </p>
+        <label>
+          Hub peer ID
+          <input name="peerId" required autoComplete="off" />
+        </label>
+        <label>
+          Country code
+          <input name="countryCode" maxLength={2} />
+        </label>
+        <label>
+          Party ID
+          <input name="partyId" maxLength={3} />
+        </label>
+        <label>
+          Name (optional)
+          <input name="name" maxLength={100} />
         </label>
       </PeerCard>
 
