@@ -2,7 +2,7 @@ import "server-only";
 import { randomUUID } from "node:crypto";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { z } from "zod";
-import { atLeast, type Role } from "@/lib/roles";
+import { may, type Member } from "@/lib/hosts";
 import {
   COMMAND_ACTIONS,
   commandBusy,
@@ -172,9 +172,11 @@ export function createDemoLiveStore(cookie: DemoLiveCookie): LiveStore {
     async getCommand(_operatorId, id) {
       return (await cookie.load()).commands.find((c) => c.id === id) ?? null;
     },
-    claim(actor: { role: Role; userId: string }, c) {
+    claim(actor: Member & { userId: string }, c, at) {
       return update((s) => {
-        if (!atLeast(actor.role, "technician")) throw notAllowed();
+        // Like the database: technicians and above, or a host user whose host's
+        // switch for the action is on, on one of the host's sites.
+        if (!may(actor, c.action, at?.siteId ?? null)) throw notAllowed();
         const same = s.commands.find((x) => x.requestId === c.requestId);
         if (same) {
           if (

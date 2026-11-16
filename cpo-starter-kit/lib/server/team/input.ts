@@ -1,6 +1,6 @@
 import "server-only";
 import { z } from "zod";
-import { ROLES } from "@/lib/roles";
+import { HOST_ROLE, ROLES } from "@/lib/roles";
 
 export const emailInput = z
   .string()
@@ -18,6 +18,11 @@ export const passwordInput = z
   });
 
 export const roleInput = z.enum(ROLES, { error: "Choose a role." });
+
+/** An invite's role: an operator role, or a host user (with a host). */
+export const inviteRoleInput = z.enum([...ROLES, HOST_ROLE], {
+  error: "Choose a role.",
+});
 
 export const userIdInput = z.uuid({ error: "Unknown staff member." });
 

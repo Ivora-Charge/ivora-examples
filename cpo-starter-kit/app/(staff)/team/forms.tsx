@@ -12,7 +12,15 @@ import {
 
 type Option = [value: string, label: string];
 
-export function InviteForm({ roles }: { roles: Option[] }) {
+export function InviteForm({
+  roles,
+  hosts = [],
+}: {
+  /** Roles to choose from; none (a host user's form) invites for their own host. */
+  roles: Option[];
+  /** Hosts a host user can be invited for (with the Host role). */
+  hosts?: Option[];
+}) {
   const [state, action, pending] = useActionState(inviteAction, EMPTY);
   const id = useId();
   return (
@@ -30,20 +38,35 @@ export function InviteForm({ roles }: { roles: Option[] }) {
             maxLength={254}
           />
         </div>
-        <div className="field">
-          <label htmlFor={`${id}-role`}>Role</label>
-          <select
-            id={`${id}-role`}
-            name="role"
-            defaultValue={roles.at(-1)?.[0]}
-          >
-            {roles.map(([v, l]) => (
-              <option key={v} value={v}>
-                {l}
-              </option>
-            ))}
-          </select>
-        </div>
+        {roles.length > 0 && (
+          <div className="field">
+            <label htmlFor={`${id}-role`}>Role</label>
+            <select
+              id={`${id}-role`}
+              name="role"
+              defaultValue={roles.find(([v]) => v !== "host")?.[0]}
+            >
+              {roles.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {hosts.length > 0 && (
+          <div className="field">
+            <label htmlFor={`${id}-host`}>Host (for the Host role)</label>
+            <select id={`${id}-host`} name="hostId" defaultValue="">
+              <option value="">Choose a host</option>
+              {hosts.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div>
           <button type="submit" className="button" disabled={pending}>
             {pending ? "Sending…" : "Send invite"}

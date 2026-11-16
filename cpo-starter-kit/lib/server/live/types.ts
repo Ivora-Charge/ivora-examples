@@ -123,13 +123,20 @@ export interface LiveStore {
   ): Promise<LiveCommand[]>;
   getCommand(operatorId: string, id: string): Promise<LiveCommand | null>;
   /**
-   * Claims a command atomically: technicians and above only (LiveError
-   * "not_allowed"), one pending command per charger (LiveError "busy"). The same
+   * Claims a command atomically: technicians and above, or a host user allowed it on
+   * the charger's site (else LiveError "not_allowed"), one pending command per charger
+   * (LiveError "busy"). The same
    * requestId again returns the command it made, with created false.
    */
   claim(
     actor: Staff,
     c: NewCommand,
+    /**
+     * The charger's site, as the server read it from Ivora. A host user's claim needs
+     * it: the store checks it is one of their host's sites, and that the host's switch
+     * for the action is on, in the same statement as the claim.
+     */
+    at?: { siteId: number | null },
   ): Promise<{ command: LiveCommand; created: boolean }>;
   /** Records what Ivora reported; a final command never changes again. */
   record(

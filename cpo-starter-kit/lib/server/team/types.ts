@@ -1,27 +1,39 @@
 import "server-only";
-import type { Role, StaffRef } from "@/lib/roles";
+import type { HostAccess } from "@/lib/hosts";
+import type { MemberRole, Role, StaffRef } from "@/lib/roles";
 
-/** The signed-in staff member, as the server sees them. */
+/** The signed-in staff member (or host user), as the server sees them. */
 export interface Staff {
   userId: string;
   email: string;
-  role: Role;
+  role: MemberRole;
   operatorId: string;
   operatorName: string;
   demo: boolean;
+  /**
+   * A host user's host: its sites and switches, read from the kit's database on every
+   * request. Null for operator staff. A host user whose host is archived has no access
+   * at all (staffForUser answers null). Absent or null for operator staff; the role
+   * decides whether someone is a host user, never this field alone.
+   */
+  host?: HostAccess | null;
 }
 
 export interface Member {
   userId: string;
   email: string;
-  role: Role;
+  role: MemberRole;
+  /** A host user's host; null for operator staff. */
+  hostId: string | null;
   createdAt: string;
 }
 
 export interface PendingInvite {
   id: string;
   email: string;
-  role: Role;
+  role: MemberRole;
+  /** A host user's invite: the host they join. */
+  hostId: string | null;
   expiresAt: string;
 }
 
@@ -37,6 +49,7 @@ export type TeamErrorCode =
   | "not_allowed"
   | "rate_limited"
   | "already_staff"
+  | "invite_refused"
   | "invite_invalid"
   | "last_owner"
   | "changed"
@@ -76,6 +89,16 @@ export const changedMeanwhile = () =>
     "Someone changed this team member, or your own role, in the meantime. Reload the page and try again.",
   );
 
+/**
+ * A host user inviting an email that is on the team or invited outside their host.
+ * The same words in every such case, so the answer never shows which one it is.
+ */
+export const inviteRefused = () =>
+  new TeamError(
+    "invite_refused",
+    "This email can't be invited for your host. Ask the operator for help.",
+  );
+
 export const invalidInvite = () =>
   new TeamError(
     "invite_invalid",
@@ -105,7 +128,9 @@ export interface TeamBackend {
   createInvite(i: {
     operatorId: string;
     email: string;
-    role: Role;
+    role: MemberRole;
+    /** Required for the host role (and only then). */
+    hostId: string | null;
     tokenHash: string;
     invitedBy: string;
     expiresAt: Date;

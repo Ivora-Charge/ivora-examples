@@ -98,6 +98,8 @@ function setup(mode: "demo" | "live", o: { mailer?: Mailer | null } = {}) {
     appUrl: "https://charge.example.com",
     setupSecret: SETUP_SECRET,
     now: () => clock,
+    activeHost: async (_operatorId, hostId) =>
+      hostId === "demo-host-a" ? "Sample Host A: Harbour Shops" : null,
   };
   return { d, store, accounts, sent, mailer };
 }

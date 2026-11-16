@@ -1,4 +1,6 @@
-import { checkRole, currentStaff } from "@/lib/server/auth";
+import { checkNetworkReader, currentStaff } from "@/lib/server/auth";
+import { hostStore } from "@/lib/server/hosts";
+import { loadHostFilter } from "@/lib/server/hosts/filter";
 import {
   csvFileName,
   getReports,
@@ -32,22 +34,29 @@ export async function GET(request: Request) {
   const startedAt = Date.now();
   let staff;
   try {
-    staff = checkRole(await currentStaff(), "viewer");
+    staff = checkNetworkReader(await currentStaff());
   } catch {
     return text("This needs the Viewer role or higher.", 403);
   }
   if (!staff) return text("Sign in first.", 401);
   const d = getReports();
-  const r = await loadReportsContext(
-    d,
+  const params = new URL(request.url).searchParams;
+  // A host user's export is their host's chargers only, whatever the URL says.
+  const hosts = await loadHostFilter(
+    hostStore(),
     staff,
-    new URL(request.url).searchParams,
+    params.get("host") ?? undefined,
   );
+  const r = await loadReportsContext(d, staff, params, {
+    filter: hosts.scope,
+  });
   if (!r.ok) return text(r.error, 502);
   if (r.context.queryError) return text(r.context.queryError, 400);
+  if (r.context.unknownStation && r.context.hostView)
+    return text("Not found.", 404);
   const csv = await sessionsCsv(
     d,
-    reportFilter(staff, r.context.query),
+    reportFilter(staff, r.context),
     r.context.places,
     { startedAt },
   );

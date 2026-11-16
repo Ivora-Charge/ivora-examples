@@ -1,6 +1,13 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
+import { hostFilterParam } from "@/lib/hosts";
 import { formatMinor, mixedCurrenciesNote } from "@/lib/money";
-import { requireRole } from "@/lib/server/auth";
+import { requireNetworkReader } from "@/lib/server/auth";
+import { hostStore } from "@/lib/server/hosts";
+import { loadHostFilter, type HostFilterView } from "@/lib/server/hosts/filter";
+import { narrow } from "@/lib/server/scope";
+import { HOST_ROLE } from "@/lib/roles";
+import { getIvora, IvoraError } from "@/lib/server/ivora";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getOnboarding, loadStripe } from "@/lib/server/onboarding";
 import {
@@ -67,7 +74,7 @@ const STATUS_TONE: Record<ReportStatus, ChipTone> = {
 type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 async function Content({ searchParams }: { searchParams: SearchParams }) {
-  const me = await requireRole("viewer");
+  const me = await requireNetworkReader();
   const raw = await searchParams;
   const params = {
     get: (k: string) => {
@@ -75,8 +82,10 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
       return typeof v === "string" ? v : null;
     },
   };
-  const d = getReports();
-  const r = await loadReportsContext(d, me, params);
+  // A host user's report is their host's chargers only; operator staff may filter.
+  const hosts = await loadHostFilter(hostStore(), me, raw.host);
+  const { d } = narrow(getReports(), me, hosts.scope);
+  const r = await loadReportsContext(d, me, params, { filter: hosts.scope });
   if (!r.ok)
     return (
       <>
@@ -95,24 +104,31 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
       </>
     );
   const c = r.context;
+  // A charger in the URL that is not this user's (another host's): as if it did not
+  // exist.
+  if (c.unknownStation && c.hostView) notFound();
   const q = c.query;
+  // Ivora's period figures (GET /stats) cover the whole project and have no site
+  // filter, so a view limited to some sites leaves them out rather than mislead.
+  const scoped = c.stationIds !== null;
   const cursors = {
     s: cleanCursor(params.get("scursor")),
     b: cleanCursor(params.get("bcursor")),
   };
   const [stats, sessions, ivoraSessions, ivoraBills, stripe] =
     await Promise.all([
-      loadStats(d.ivora, q),
-      loadSessions(d, reportFilter(me, q), q.page, c.places),
+      scoped ? null : loadStats(d.ivora, q),
+      loadSessions(d, reportFilter(me, c), q.page, c.places),
       loadIvoraSessions(d, q, c.places, cursors.s),
       loadIvoraBills(d, q, cursors.b),
-      loadStripe(getOnboarding()),
+      // Payouts are the operator's.
+      me.host ? null : loadStripe(getOnboarding()),
     ]);
   return (
     <>
       <PageHeader
         title="Reports"
-        description={`Sessions, energy and revenue, ${
+        description={`${me.host ? `${me.host.name}. ` : ""}${hosts.label ? `Showing ${hosts.label}. ` : ""}Sessions, energy and revenue, ${
           q.fromDate === q.toDate ? q.fromDate : `${q.fromDate} to ${q.toDate}`
         }, in ${q.timeZone}.`}
         action={
@@ -125,7 +141,7 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
           </a>
         }
       />
-      <Filters q={q} stations={c.stations} zone={q.timeZone}>
+      <Filters q={q} stations={c.stations} zone={q.timeZone} hosts={hosts}>
         Times are in {q.timeZone} ({ZONE_SOURCE[c.timeZoneSource]}). In tables
         they are in each site&apos;s time zone, with UTC below. The CSV has
         both, and applies the charger and status filters.
@@ -141,7 +157,18 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
           sites and chargers.
         </p>
       )}
-      <StatsSection result={stats} demo={c.mode === "demo"} />
+      {stats ? (
+        <StatsSection result={stats} demo={c.mode === "demo"} />
+      ) : (
+        <section className="card" aria-labelledby="figures-heading">
+          <h2 id="figures-heading">Figures</h2>
+          <p className="muted">
+            Ivora&apos;s period figures cover your whole network, so they are
+            not shown for {me.host ? "your sites" : "one host"}. The sessions
+            below are {me.host ? "your chargers'" : "its chargers'"} only.
+          </p>
+        </section>
+      )}
       <Tables
         sessions={sessions}
         ivoraSessions={ivoraSessions}
@@ -149,7 +176,7 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
         q={q}
         cursors={cursors}
       />
-      <Payouts stripe={stripe} />
+      {stripe && <Payouts stripe={stripe} />}
     </>
   );
 }
@@ -158,11 +185,13 @@ function Filters({
   q,
   stations,
   zone,
+  hosts,
   children,
 }: {
   q: ReportQuery;
   stations: { id: number; name: string }[];
   zone: string;
+  hosts: HostFilterView;
   children: React.ReactNode;
 }) {
   return (
@@ -178,6 +207,23 @@ function Filters({
             ))}
           </select>
         </div>
+        {hosts.options.length > 0 && (
+          <div className="field">
+            <label htmlFor="host">Host</label>
+            <select
+              id="host"
+              name="host"
+              defaultValue={hostFilterParam(hosts.filter)}
+            >
+              <option value="">All sites</option>
+              {hosts.options.map(([v, l]) => (
+                <option key={v} value={v}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <div className="field">
           <label htmlFor="station">Charger</label>
           <select
@@ -1178,7 +1224,19 @@ function Payouts({
 
 /** Checks the role first (a real redirect), then the page behind its loading skeleton. */
 export default async function Page(props: Parameters<typeof Content>[0]) {
-  await requireRole("viewer");
+  const me = await requireNetworkReader();
+  // A host user's link to a charger that is not theirs answers 404, before the
+  // skeleton streams (the status is 200 after that).
+  const station = (await props.searchParams).station;
+  if (me.role === HOST_ROLE && typeof station === "string" && station !== "") {
+    const id = Number(station);
+    const ivora = narrow({ ivora: getIvora() }, me).d.ivora;
+    if (!Number.isSafeInteger(id) || id <= 0) notFound();
+    await ivora.getStation(id).catch((e: unknown) => {
+      if (e instanceof IvoraError && e.status === 404) notFound();
+      // Anything else: the page itself shows the read error.
+    });
+  }
   return (
     <Loading shape="stats">
       <Content {...props} />

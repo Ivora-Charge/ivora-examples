@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ActionState } from "@/lib/action-state";
 import { actionError } from "@/lib/server/action-errors";
-import { requireRole } from "@/lib/server/auth";
+import { requireNetworkReader, requireRole } from "@/lib/server/auth";
 import { isDemo } from "@/lib/server/env";
 import {
   discardPendingVersion,
@@ -183,7 +183,9 @@ export async function setStationPricingAction(
   form: FormData,
 ): Promise<ActionState> {
   try {
-    const actor = await requireRole("manager");
+    // Owners and managers, or a host user whose host may edit prices: the pricing
+    // service checks which (and the charger's site), and the database again.
+    const actor = await requireNetworkReader();
     const connectors: Record<string, string> = {};
     for (const [k, v] of form.entries())
       if (k.startsWith("connector.") && typeof v === "string")

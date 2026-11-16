@@ -30,6 +30,7 @@ export function reportStatus(
 export function matchesFilter(c: ReportCheckout, f: ReportFilter): boolean {
   const made = Date.parse(c.createdAt);
   if (!(made >= f.fromMs && made < f.toMs)) return false;
+  if (f.stationIds && !f.stationIds.includes(c.stationId)) return false;
   if (f.stationId !== null && c.stationId !== f.stationId) return false;
   if (f.status === "all") return true;
   if (f.status === "refunded") return (c.refundedMinor ?? 0) > 0;

@@ -1171,7 +1171,7 @@ describe("reports in demo mode", () => {
     expect(stats.ok).toBe(true);
     const sessions = await loadSessions(
       d,
-      reportFilter(demoStaff, q),
+      reportFilter(demoStaff, { query: q, stationIds: null }),
       1,
       r.context.places,
     );
@@ -1187,7 +1187,7 @@ describe("reports in demo mode", () => {
     expect(usd.capturedMinor).toBeLessThan(usd.billedMinor);
     const csv = await sessionsCsv(
       d,
-      reportFilter(demoStaff, q),
+      reportFilter(demoStaff, { query: q, stationIds: null }),
       r.context.places,
       { startedAt: Date.now() },
     );
@@ -1208,10 +1208,10 @@ describe("reports in demo mode", () => {
       own,
       now: () => NOW,
     });
-    const f = reportFilter(
-      demoStaff,
-      parseReportQuery(params({}), "UTC", NOW).query,
-    );
+    const f = reportFilter(demoStaff, {
+      query: parseReportQuery(params({}), "UTC", NOW).query,
+      stationIds: null,
+    });
     const totals = await store.totals(f);
     const rows = await store.list(f, { limit: 500 });
     expect(rows).toHaveLength(Math.min(totals.checkouts, 500));
@@ -1247,7 +1247,12 @@ describe("reports in demo mode", () => {
     const r = await loadStats(d.ivora, query);
     expect(r).toMatchObject({ ok: false, tooLarge: true });
     // The sessions table still works for the same period.
-    const s = await loadSessions(d, reportFilter(demoStaff, query), 1, places);
+    const s = await loadSessions(
+      d,
+      reportFilter(demoStaff, { query, stationIds: null }),
+      1,
+      places,
+    );
     expect(s.ok).toBe(true);
   });
 

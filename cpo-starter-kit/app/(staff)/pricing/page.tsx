@@ -1,5 +1,8 @@
 import Link from "next/link";
-import { requireRole } from "@/lib/server/auth";
+import { notFound } from "next/navigation";
+import { HOST_ROLE } from "@/lib/roles";
+import { requireNetworkReader, requireRole } from "@/lib/server/auth";
+import type { Staff } from "@/lib/server/team";
 import { config } from "@/lib/server/env";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getPricing, loadPricing } from "@/lib/server/pricing";
@@ -19,9 +22,21 @@ import {
 
 export const metadata = { title: "Pricing" };
 
+/**
+ * Owners and managers: prices decide what drivers pay. A host user only while the
+ * operator lets their host edit prices, for the chargers at its own sites; anyone else
+ * on a host gets 404.
+ */
+async function pricingUser(): Promise<Staff> {
+  const me = await requireNetworkReader();
+  if (me.role !== HOST_ROLE) return requireRole("manager");
+  if (!me.host?.permissions.editPrices) notFound();
+  return me;
+}
+
 async function Content() {
-  // Owners and managers only: prices decide what drivers pay.
-  const me = await requireRole("manager");
+  const me = await pricingUser();
+  const hostView = me.role === HOST_ROLE;
   const r = await loadPricing(getPricing(), me);
   const assignable = r.tariffs
     .filter((t) => t.current)
@@ -35,70 +50,85 @@ async function Content() {
             What drivers pay. A change makes a new price from now on; sessions
             already running keep theirs. Each change saves a new version in
             Ivora, and bills keep the price they were made with.
+            {hostView &&
+              ` ${me.host?.name}: choose from the operator's tariffs for the chargers at your sites.`}
             {me.demo && " Sample data."}
           </>
         }
         action={
-          <Link className="button" href="/pricing/new">
-            New tariff
-          </Link>
+          hostView ? undefined : (
+            <Link className="button" href="/pricing/new">
+              New tariff
+            </Link>
+          )
         }
       />
-      <h2 id="tariffs-heading" className="visually-hidden">
-        Tariffs
-      </h2>
-      <DataTable
-        caption="Tariffs"
-        emptyTitle="No prices yet"
-        empty={{
-          text: "Create one so drivers can pay. A free price needs no card.",
-          action: (
-            <Link className="button" href="/pricing/new">
-              Create your first tariff
-            </Link>
-          ),
-        }}
-        columns={[
-          { key: "name", label: "Name" },
-          { key: "type", label: "Type", filter: true, allLabel: "All types" },
-          { key: "energy", label: "Per kWh", numeric: true },
-          { key: "idle", label: "Idle fee", numeric: true },
-          { key: "connectors", label: "Connectors", numeric: true },
-          {
-            key: "state",
-            label: "State",
-            filter: true,
-            allLabel: "All states",
-          },
-        ]}
-        rows={r.tariffs.map((t): DataTableRow => {
-          const chip = tariffState(t);
-          return {
-            id: t.id,
-            values: {
-              name: t.name,
-              type: tariffType(t.definition),
-              energy: tariffEnergy(t.definition),
-              idle: tariffIdle(t.definition),
-              connectors: t.connectors,
-              state: chip.label,
-            },
-            cells: {
-              name: (
-                <span className="cell-stack">
-                  <Link className="name" href={`/pricing/${t.id}`}>
-                    {t.name}
-                  </Link>
-                  {t.current && (
-                    <span className="muted">version {t.current.version}</span>
-                  )}
-                </span>
+      {!hostView && (
+        <>
+          <h2 id="tariffs-heading" className="visually-hidden">
+            Tariffs
+          </h2>
+          <DataTable
+            caption="Tariffs"
+            emptyTitle="No prices yet"
+            empty={{
+              text: "Create one so drivers can pay. A free price needs no card.",
+              action: (
+                <Link className="button" href="/pricing/new">
+                  Create your first tariff
+                </Link>
               ),
-              state: <Chip spec={chip} />,
-            },
-          };
-        })}
-      />
+            }}
+            columns={[
+              { key: "name", label: "Name" },
+              {
+                key: "type",
+                label: "Type",
+                filter: true,
+                allLabel: "All types",
+              },
+              { key: "energy", label: "Per kWh", numeric: true },
+              { key: "idle", label: "Idle fee", numeric: true },
+              { key: "connectors", label: "Connectors", numeric: true },
+              {
+                key: "state",
+                label: "State",
+                filter: true,
+                allLabel: "All states",
+              },
+            ]}
+            rows={r.tariffs.map((t): DataTableRow => {
+              const chip = tariffState(t);
+              return {
+                id: t.id,
+                values: {
+                  name: t.name,
+                  type: tariffType(t.definition),
+                  energy: tariffEnergy(t.definition),
+                  idle: tariffIdle(t.definition),
+                  connectors: t.connectors,
+                  state: chip.label,
+                },
+                cells: {
+                  name: (
+                    <span className="cell-stack">
+                      <Link className="name" href={`/pricing/${t.id}`}>
+                        {t.name}
+                      </Link>
+                      {t.current && (
+                        <span className="muted">
+                          version {t.current.version}
+                        </span>
+                      )}
+                    </span>
+                  ),
+                  state: <Chip spec={chip} />,
+                },
+              };
+            })}
+          />
+        </>
+      )}
 
       <section className="card" aria-labelledby="stations-heading">
         <h2 id="stations-heading">Which tariff each connector uses</h2>
@@ -191,7 +221,7 @@ async function Content() {
           </>
         )}
       </section>
-      {me.demo && (
+      {me.demo && !hostView && (
         <form action={resetDemoPricingAction} className="demo-sim">
           <button type="submit" className="button secondary">
             Demo: reset prices to the samples
@@ -204,7 +234,7 @@ async function Content() {
 
 /** Checks the role first (a real redirect), then the page behind its loading skeleton. */
 export default async function Page() {
-  await requireRole("manager");
+  await pricingUser();
   return (
     <Loading shape="list">
       <Content />

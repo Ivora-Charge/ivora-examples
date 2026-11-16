@@ -77,11 +77,21 @@ export interface ReportQuery {
   status: StatusFilter;
   /** The sessions table's page, from 1. */
   page: number;
+  /**
+   * The host filter's URL value (operator staff: a host's ID or "own"), kept in the
+   * page's links. A display choice; what a user may see is decided on the server.
+   */
+  host?: string;
 }
 
 /** What the kit's records are filtered by: one operator, made in [fromMs, toMs). */
 export interface ReportFilter {
   operatorId: string;
+  /**
+   * The chargers in view (a host user's, or an operator's host filter), derived on the
+   * server from the sites the user may see; null or absent for every charger.
+   */
+  stationIds?: number[] | null;
   fromMs: number;
   toMs: number;
   stationId: number | null;

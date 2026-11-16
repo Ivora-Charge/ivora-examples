@@ -1,3 +1,4 @@
+import { anyCommand, type CommandRights } from "@/lib/hosts";
 import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import {
@@ -24,13 +25,15 @@ export function ChargerPanel({
   live,
   station,
   siteName,
-  canWork,
+  can,
 }: {
   live: LiveSnapshot;
   station: StationView;
   siteName: string;
-  canWork: boolean;
+  /** The commands the signed-in user may send on this charger (from the server). */
+  can: CommandRights;
 }) {
+  const canWork = anyCommand(can);
   const faults = live.faults.filter((f) => f.stationId === station.id);
   // One command at a time per charger: while one waits, the forms make way for it.
   const pending = live.commands.find(
@@ -102,54 +105,63 @@ export function ChargerPanel({
                   .join(" · ")}
               </span>
               <ConnectorPill status={c.status} />
-              {canWork && (
+              {(can.start || can.unlock) && (
                 <span className="actions">
-                  <CommandForm
-                    available={
-                      canSend &&
-                      station.online &&
-                      STARTABLE.has(c.status) &&
-                      !c.session
-                    }
-                    stationId={station.id}
-                    action="start"
-                    connectorId={c.id}
-                    requestId={rid()}
-                    label="Start session…"
-                    sendLabel={`Start connector ${c.number}`}
-                    confirmText={`I understand this switches on connector ${c.number} with our staff token: a vehicle plugged in there starts charging.`}
-                  >
-                    <p className="muted">
-                      Starts a staff/test session on connector {c.number} with
-                      your operator&apos;s staff token. Ivora records it as a
-                      staff session, so it shows in sessions and reports; no
-                      driver payment is taken. Only a free (Available)
-                      connector: a driver who has plugged in starts and pays as
-                      usual. With no vehicle plugged in, the charger waits for
-                      one for a short time.
-                    </p>
-                  </CommandForm>
-                  <CommandForm
-                    available={canSend && station.online}
-                    stationId={station.id}
-                    action="unlock"
-                    connectorId={c.id}
-                    requestId={rid()}
-                    label="Unlock connector…"
-                    sendLabel={`Unlock connector ${c.number}`}
-                    sessions={
-                      c.session
-                        ? [{ id: c.session.id, label: sessionLabel(c.session) }]
-                        : []
-                    }
-                    confirmText={`I understand this unlocks connector ${c.number}.`}
-                  >
-                    <p className="muted">
-                      Releases a cable stuck in the connector.
-                      {c.session &&
-                        " A session running on it ends: the charger stops charging first."}
-                    </p>
-                  </CommandForm>
+                  {can.start && (
+                    <CommandForm
+                      available={
+                        canSend &&
+                        station.online &&
+                        STARTABLE.has(c.status) &&
+                        !c.session
+                      }
+                      stationId={station.id}
+                      action="start"
+                      connectorId={c.id}
+                      requestId={rid()}
+                      label="Start session…"
+                      sendLabel={`Start connector ${c.number}`}
+                      confirmText={`I understand this switches on connector ${c.number} with our staff token: a vehicle plugged in there starts charging.`}
+                    >
+                      <p className="muted">
+                        Starts a staff/test session on connector {c.number} with
+                        your operator&apos;s staff token. Ivora records it as a
+                        staff session, so it shows in sessions and reports; no
+                        driver payment is taken. Only a free (Available)
+                        connector: a driver who has plugged in starts and pays
+                        as usual. With no vehicle plugged in, the charger waits
+                        for one for a short time.
+                      </p>
+                    </CommandForm>
+                  )}
+                  {can.unlock && (
+                    <CommandForm
+                      available={canSend && station.online}
+                      stationId={station.id}
+                      action="unlock"
+                      connectorId={c.id}
+                      requestId={rid()}
+                      label="Unlock connector…"
+                      sendLabel={`Unlock connector ${c.number}`}
+                      sessions={
+                        c.session
+                          ? [
+                              {
+                                id: c.session.id,
+                                label: sessionLabel(c.session),
+                              },
+                            ]
+                          : []
+                      }
+                      confirmText={`I understand this unlocks connector ${c.number}.`}
+                    >
+                      <p className="muted">
+                        Releases a cable stuck in the connector.
+                        {c.session &&
+                          " A session running on it ends: the charger stops charging first."}
+                      </p>
+                    </CommandForm>
+                  )}
                 </span>
               )}
             </li>
@@ -157,7 +169,7 @@ export function ChargerPanel({
         </ul>
       )}
 
-      {canWork ? (
+      {can.reset ? (
         <>
           <h3>Remote actions</h3>
           {!station.online && (
@@ -202,10 +214,11 @@ export function ChargerPanel({
             session, open the charger.
           </p>
         </>
-      ) : (
+      ) : canWork ? null : (
         <p className="muted">
-          Viewers see the live state. Technicians, managers and owners can
-          start, stop, reset and unlock chargers.
+          You see the live state. Starting, stopping, resetting and unlocking
+          chargers is for technicians, managers and owners (and for site hosts
+          the operator allowed it).
         </p>
       )}
       <p>

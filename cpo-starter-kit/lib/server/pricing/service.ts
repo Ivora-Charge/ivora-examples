@@ -8,7 +8,8 @@ import {
   formatMinorDecimal,
   minorToMajorString,
 } from "@/lib/money";
-import { atLeast } from "@/lib/roles";
+import { may } from "@/lib/hosts";
+import { atLeast, HOST_ROLE } from "@/lib/roles";
 import {
   describeError,
   idempotencyKey,
@@ -19,6 +20,7 @@ import {
   type SessionProfile,
 } from "../ivora";
 import type { OnboardingStore } from "../onboarding/types";
+import { narrow } from "../scope";
 import type { Staff } from "../team/types";
 import {
   simulationSchema,
@@ -86,6 +88,16 @@ export const DISCARD_WAIT_SECONDS = 120;
 
 function requireManager(actor: Staff) {
   if (!atLeast(actor.role, "manager")) throw notAllowed();
+}
+
+/**
+ * The station prices: owners and managers, or a host user whose host may edit
+ * prices (for chargers at the host's own sites only; see setStationPricing).
+ */
+function requireStationPricing(actor: Staff) {
+  if (atLeast(actor.role, "manager")) return;
+  if (!(actor.role === HOST_ROLE && actor.host?.permissions.editPrices))
+    throw notAllowed();
 }
 
 function parse<T>(schema: z.ZodType<T>, value: unknown): T {
@@ -375,10 +387,12 @@ async function defaults(d: PricingDeps, operatorId: string) {
 
 /** Every tariff, and every station with which tariff each connector uses. */
 export async function loadPricing(
-  d: PricingDeps,
+  deps: PricingDeps,
   staff: Staff,
 ): Promise<PricingView> {
-  requireManager(staff);
+  requireStationPricing(staff);
+  // A host user's view: only the chargers at their host's sites.
+  const { d } = narrow(deps, staff);
   const [state, base] = await Promise.all([
     d.store.load(staff.operatorId),
     defaults(d, staff.operatorId),
@@ -1019,11 +1033,13 @@ export interface StationPricingForm {
  * must be in Ivora already, so a bill always has a tariff to snapshot.
  */
 export async function setStationPricing(
-  d: PricingDeps,
+  deps: PricingDeps,
   actor: Staff,
   form: StationPricingForm,
 ): Promise<{ stationName: string }> {
-  requireManager(actor);
+  requireStationPricing(actor);
+  // A charger outside a host user's sites answers 404 below, as if it did not exist.
+  const { d } = narrow(deps, actor);
   const stationId = Number(form.stationId);
   if (!Number.isSafeInteger(stationId) || stationId <= 0)
     throw new PricingError("invalid", "Choose a charger.");
@@ -1045,9 +1061,12 @@ export async function setStationPricing(
     station = await d.ivora.getStation(stationId);
   } catch (e) {
     if (!(e instanceof IvoraError)) throw e;
+    if (actor.role === HOST_ROLE && e.status === 404) throw notFound();
     logIvora("pricing station read", e);
     throw new PricingError("invalid", describeError(e));
   }
+  const siteId = station.location_id ?? null;
+  if (!may(actor, "prices", siteId)) throw notAllowed();
   const tariffId = form.tariffId ? ready(form.tariffId) : null;
   const connectors: { connectorId: number; tariffId: string }[] = [];
   for (const [key, value] of Object.entries(form.connectors ?? {})) {
@@ -1060,10 +1079,16 @@ export async function setStationPricing(
       );
     connectors.push({ connectorId: c.id, tariffId: ready(value) });
   }
-  await d.store.setStation(actor, stationId, expected, {
-    tariffId,
-    private: Boolean(form.private),
-    connectors,
-  });
+  await d.store.setStation(
+    actor,
+    stationId,
+    expected,
+    {
+      tariffId,
+      private: Boolean(form.private),
+      connectors,
+    },
+    { siteId },
+  );
   return { stationName: station.name };
 }

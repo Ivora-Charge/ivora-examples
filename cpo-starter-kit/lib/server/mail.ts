@@ -125,3 +125,24 @@ export function signInEmail(o: {
     "If you did not ask to sign in, ignore this email.",
   );
 }
+
+/** A new fault at one of a host's sites, for the host's users (the host's switch). */
+export function faultEmail(o: {
+  to: string;
+  hostName: string;
+  stationName: string;
+  fault: string;
+  link: string;
+}): Email {
+  return linkEmail(
+    o.to,
+    `Fault on ${o.stationName}`,
+    [
+      `${o.stationName}, at a site of ${o.hostName}, reported a fault: ${o.fault}.`,
+      "Live shows its status and fault history.",
+    ],
+    "Open Live",
+    o.link,
+    "You get this because the operator switched on fault emails for your host.",
+  );
+}

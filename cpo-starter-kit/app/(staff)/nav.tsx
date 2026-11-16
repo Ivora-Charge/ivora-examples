@@ -16,7 +16,7 @@ export interface NavItem {
 const GROUPS: [string, string[]][] = [
   ["Run", ["overview", "live", "chargers", "cards"]],
   ["Money", ["pricing", "reports"]],
-  ["Workspace", ["onboarding", "team", "settings"]],
+  ["Workspace", ["onboarding", "team", "hosts", "settings"]],
 ];
 
 /** Main navigation: a grouped sidebar on wide screens, a menu button on phones. */

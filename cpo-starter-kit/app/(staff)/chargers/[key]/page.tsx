@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CrumbName } from "@/app/ui/shell-breadcrumbs";
-import { atLeast } from "@/lib/roles";
-import { requireRole } from "@/lib/server/auth";
+import { atLeast, HOST_ROLE } from "@/lib/roles";
+import { requireNetworkReader } from "@/lib/server/auth";
 import {
   getChargers,
   HEARTBEAT_FRESH_SECONDS,
@@ -49,7 +49,7 @@ export default async function Page({
   params: Promise<{ key: string }>;
   searchParams: Promise<{ tab?: string | string[] }>;
 }) {
-  const me = await requireRole("viewer");
+  const me = await requireNetworkReader();
   const { key } = await params;
   const { tab } = await searchParams;
   const [r, company] = await Promise.all([
@@ -83,6 +83,9 @@ export default async function Page({
   const canWork = atLeast(me.role, "technician");
   const canRemove = atLeast(me.role, "manager") || (canWork && c.pending);
   const registered = !c.pending && !c.missing;
+  // A host user sees how their charger is doing; its connection details, stickers and
+  // tests are the operator's.
+  const hostView = me.role === HOST_ROLE;
   const free = freeConnectorCount(c);
   const initial = TABS.find((t) => t === tab);
   const zone = chargerZone(
@@ -96,7 +99,7 @@ export default async function Page({
       label: "Overview",
       panel: <OverviewPanel c={c} zone={zone} registered={registered} />,
     },
-    ...(registered
+    ...(registered && !hostView
       ? [
           {
             id: "configuration",

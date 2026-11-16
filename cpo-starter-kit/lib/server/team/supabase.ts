@@ -1,10 +1,12 @@
 import "server-only";
-import { isRole } from "@/lib/roles";
+import { HOST_ROLE, isMemberRole } from "@/lib/roles";
+import { loadHostAccess } from "../hosts/supabase";
 import type { RateLimiter } from "../rate-limit";
 import { serviceClient, sessionClient } from "../supabase";
 import {
   changedMeanwhile,
   invalidInvite,
+  inviteRefused,
   lastOwner,
   TeamError,
   type InviteRecord,
@@ -28,7 +30,18 @@ function check<R extends { data: unknown; error: DbError }>(r: R): Ok<R> {
   if (m.includes("cpo_changed_meanwhile")) throw changedMeanwhile();
   if (m.includes("cpo_already_staff"))
     throw new TeamError("already_staff", "This person is already on the team.");
+  if (m.includes("cpo_invite_refused")) throw inviteRefused();
   if (m.includes("cpo_invite_invalid")) throw invalidInvite();
+  if (m.includes("cpo_host_not_found"))
+    throw new TeamError(
+      "not_found",
+      "That host is not in the kit any more (it may have been archived). Reload the page.",
+    );
+  if (m.includes("cpo_not_allowed"))
+    throw new TeamError(
+      "not_allowed",
+      "Your role can't invite for this host. If it just changed, reload the page.",
+    );
   if (m.includes("cpo_setup_done"))
     throw new TeamError(
       "setup_done",
@@ -41,7 +54,7 @@ function check<R extends { data: unknown; error: DbError }>(r: R): Ok<R> {
 }
 
 const role = (v: unknown) => {
-  if (!isRole(v)) throw new Error("Unexpected role in cpo_staff");
+  if (!isMemberRole(v)) throw new Error("Unexpected role in cpo_staff");
   return v;
 };
 
@@ -55,11 +68,18 @@ export function createSupabaseBackend(): TeamBackend {
       const staff = check(
         await svc()
           .from("cpo_staff")
-          .select("operator_id, user_id, email, role")
+          .select("operator_id, user_id, email, role, host_id")
           .eq("user_id", userId)
           .maybeSingle(),
       );
       if (!staff) return null;
+      // A host user's host, its sites and switches, read on every request: a removed
+      // user, an archived host or a switch turned off applies at once.
+      const host =
+        staff.role === HOST_ROLE && staff.host_id
+          ? await loadHostAccess(svc(), staff.operator_id, staff.host_id)
+          : null;
+      if (staff.role === HOST_ROLE && !host) return null;
       const op = check(
         await svc()
           .from("cpo_operators")
@@ -74,6 +94,7 @@ export function createSupabaseBackend(): TeamBackend {
         operatorId: staff.operator_id,
         operatorName: op.name,
         demo: false,
+        host,
       };
     },
     async isStaffEmail(email) {
@@ -106,7 +127,7 @@ export function createSupabaseBackend(): TeamBackend {
           await sessionClient()
         )
           .from("cpo_staff")
-          .select("user_id, email, role, created_at")
+          .select("user_id, email, role, host_id, created_at")
           .eq("operator_id", operatorId)
           .order("created_at"),
       );
@@ -114,6 +135,7 @@ export function createSupabaseBackend(): TeamBackend {
         userId: r.user_id,
         email: r.email,
         role: role(r.role),
+        hostId: r.host_id,
         createdAt: r.created_at,
       }));
     },
@@ -121,7 +143,7 @@ export function createSupabaseBackend(): TeamBackend {
       const rows = check(
         await svc()
           .from("cpo_invites")
-          .select("id, email, role, expires_at")
+          .select("id, email, role, host_id, expires_at")
           .eq("operator_id", operatorId)
           .is("accepted_at", null)
           .is("revoked_at", null)
@@ -132,10 +154,25 @@ export function createSupabaseBackend(): TeamBackend {
         id: r.id,
         email: r.email,
         role: role(r.role),
+        hostId: r.host_id,
         expiresAt: r.expires_at,
       }));
     },
     async createInvite(i) {
+      // A host user's invite: the function checks that the inviter may invite for
+      // this host (an owner or manager, or one of its users while the host's switch
+      // is on) in the same statement as the insert.
+      if (i.role === HOST_ROLE)
+        return check(
+          await svc().rpc("cpo_create_host_invite", {
+            p_operator_id: i.operatorId,
+            p_actor_id: i.invitedBy,
+            p_host_id: i.hostId ?? "",
+            p_email: i.email,
+            p_token_hash: i.tokenHash,
+            p_expires_at: i.expiresAt.toISOString(),
+          }),
+        );
       return check(
         await svc().rpc("cpo_create_invite", {
           p_operator_id: i.operatorId,
@@ -165,7 +202,7 @@ export function createSupabaseBackend(): TeamBackend {
         await svc()
           .from("cpo_invites")
           .select(
-            "id, operator_id, email, role, expires_at, accepted_at, revoked_at",
+            "id, operator_id, email, role, host_id, expires_at, accepted_at, revoked_at",
           )
           .eq("token_hash", tokenHash)
           .maybeSingle(),
@@ -184,6 +221,7 @@ export function createSupabaseBackend(): TeamBackend {
         operatorName: op.name,
         email: r.email,
         role: role(r.role),
+        hostId: r.host_id,
         expiresAt: r.expires_at,
         state: r.accepted_at
           ? "accepted"

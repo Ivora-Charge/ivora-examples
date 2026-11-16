@@ -26,6 +26,7 @@ describe("modules", () => {
       "Reports",
       "Cards",
       "Team",
+      "Hosts",
       "Settings",
     ]);
     expect(new Set(MODULES.map((m) => m.href)).size).toBe(MODULES.length);
