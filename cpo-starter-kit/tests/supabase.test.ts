@@ -114,6 +114,7 @@ describe("Supabase team backend", () => {
     ["cpo_last_owner", "last_owner"],
     ["cpo_changed_meanwhile", "changed"],
     ["cpo_already_staff", "already_staff"],
+    ["cpo_invite_refused", "invite_refused"],
     ["cpo_invite_invalid", "invite_invalid"],
     ["cpo_setup_done", "setup_done"],
   ])("maps the database's %s to %s", async (raised, code) => {

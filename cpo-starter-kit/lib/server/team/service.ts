@@ -191,7 +191,11 @@ export async function inviteStaff(
     d.limiter,
     d.secret,
     "inviteRecipient",
-    `${actor.operatorId}:${email}`,
+    // A host user's count is their host's own, so it shows nothing about invites
+    // sent by the operator or another host.
+    hostId && actor.role === HOST_ROLE
+      ? `${actor.operatorId}:${hostId}:${email}`
+      : `${actor.operatorId}:${email}`,
     "This person was invited several times in the last hour. Try again later.",
   );
   const token = randomBytes(32).toString("base64url");

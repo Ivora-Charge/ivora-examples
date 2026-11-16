@@ -112,6 +112,7 @@ grant select (host_id) on public.cpo_staff to authenticated;
 grant select (id, operator_id, name, contact_name, contact_email, contact_phone,
   can_edit_prices, can_control, can_sessions, can_invite, fault_emails, created_at,
   archived_at) on public.cpo_hosts to authenticated;
+drop policy if exists "Staff read their hosts" on public.cpo_hosts;
 create policy "Staff read their hosts" on public.cpo_hosts
   for select to authenticated using (
     operator_id in (select public.cpo_my_operator_ids())
@@ -119,6 +120,7 @@ create policy "Staff read their hosts" on public.cpo_hosts
   );
 
 grant select (operator_id, location_id, host_id) on public.cpo_host_sites to authenticated;
+drop policy if exists "Staff read their host sites" on public.cpo_host_sites;
 create policy "Staff read their host sites" on public.cpo_host_sites
   for select to authenticated using (
     operator_id in (select public.cpo_my_operator_ids())
@@ -318,15 +320,32 @@ begin
     if v_host is distinct from p_host_id then
       raise exception 'cpo_not_allowed' using errcode = 'P0001';
     end if;
+    -- A host user may not touch, or learn about, anyone outside their own host: an
+    -- email on the team or with a live invite elsewhere gets one generic refusal.
+    if exists (
+      select 1 from public.cpo_staff
+        where operator_id = p_operator_id and email = lower(p_email)
+          and host_id is distinct from v_host
+    ) or exists (
+      select 1 from public.cpo_invites
+        where operator_id = p_operator_id and email = lower(p_email)
+          and accepted_at is null and revoked_at is null and expires_at > now()
+          and host_id is distinct from v_host
+    ) then
+      raise exception 'cpo_invite_refused' using errcode = 'P0001';
+    end if;
   end if;
   if exists (
     select 1 from public.cpo_staff where operator_id = p_operator_id and email = lower(p_email)
   ) then
     raise exception 'cpo_already_staff' using errcode = 'P0001';
   end if;
+  -- Replaces a pending invite for the same email. For a host user only their own
+  -- host's (any other left is expired, and only clears the way for the new one).
   update public.cpo_invites set revoked_at = now()
     where operator_id = p_operator_id and email = lower(p_email)
-      and accepted_at is null and revoked_at is null;
+      and accepted_at is null and revoked_at is null
+      and (v_host is null or host_id = v_host or expires_at <= now());
   insert into public.cpo_invites(operator_id, email, role, host_id, token_hash, invited_by, expires_at)
     values (p_operator_id, lower(p_email), 'host', p_host_id, p_token_hash, p_actor_id, p_expires_at)
     returning id into v_invite;

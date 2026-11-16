@@ -421,6 +421,64 @@ describe("network mode: host users in demo mode", () => {
       ]);
     });
 
+    it("gives a host user one generic refusal for anyone outside their host, and leaves them untouched", async () => {
+      const me = await owner();
+      await inviteStaff(getTeam(), me, {
+        email: "pending-staff@example.com",
+        role: "viewer",
+      });
+      await inviteStaff(getTeam(), me, {
+        email: "pending-b@example.com",
+        role: "host",
+        hostId: DEMO_HOST_B,
+      });
+      await switches(DEMO_HOST_A, { invite: true });
+      const before = await loadTeam(getTeam(), await owner());
+      const a = await hostA();
+      const refusals: unknown[] = [];
+      for (const email of [
+        "pending-staff@example.com", // the owner's pending staff invite
+        "pending-b@example.com", // host B's pending invite
+        "sample-manager@example.com", // an operator member
+        "sample-host-b@example.com", // a host B member
+      ])
+        refusals.push(
+          await inviteStaff(getTeam(), a, { email, role: "host" }).then(
+            () => "invited",
+            (e: { code: string; message: string }) => ({
+              code: e.code,
+              message: e.message,
+            }),
+          ),
+        );
+      // The same answer every time: nothing shows which case it was.
+      expect(new Set(refusals.map((r) => JSON.stringify(r))).size).toBe(1);
+      expect(refusals[0]).toMatchObject({ code: "invite_refused" });
+      expect((refusals[0] as { message: string }).message).not.toMatch(
+        /team|pending|already|elsewhere/i,
+      );
+      // Nothing outside host A changed.
+      const after = await loadTeam(getTeam(), await owner());
+      expect(after.members).toEqual(before.members);
+      expect(after.invites).toEqual(before.invites);
+      // Their own host still works, and re-inviting replaces only that invite.
+      await inviteStaff(getTeam(), await hostA(), {
+        email: "own@example.com",
+        role: "host",
+      });
+      await inviteStaff(getTeam(), await hostA(), {
+        email: "own@example.com",
+        role: "host",
+      });
+      const last = await loadTeam(getTeam(), await owner());
+      expect(last.invites.filter((i) => i.email === "own@example.com")).toEqual(
+        [expect.objectContaining({ hostId: DEMO_HOST_A })],
+      );
+      expect(last.invites.filter((i) => i.email !== "own@example.com")).toEqual(
+        before.invites,
+      );
+    });
+
     it("lets owners invite a host user for an active host only", async () => {
       const me = await owner();
       await expect(

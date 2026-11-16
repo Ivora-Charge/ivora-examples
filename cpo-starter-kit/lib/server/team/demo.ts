@@ -12,6 +12,7 @@ import {
 import {
   changedMeanwhile,
   invalidInvite,
+  inviteRefused,
   lastOwner,
   TeamError,
   type InviteRecord,
@@ -241,12 +242,28 @@ export function createDemoBackend(
     },
     async createInvite(i) {
       const s = await store.load();
+      const actor = s.members.find((m) => m.userId === i.invitedBy);
+      // Like the database: a host user may not touch, or learn about, anyone outside
+      // their own host; one generic refusal for every such case.
+      if (actor?.role === HOST_ROLE) {
+        const own = actor.hostId ?? null;
+        if (
+          s.members.some(
+            (m) => m.email === i.email && (m.hostId ?? null) !== own,
+          ) ||
+          s.invites.some(
+            (x) => live(x) && x.email === i.email && (x.hostId ?? null) !== own,
+          )
+        )
+          throw inviteRefused();
+      }
       if (s.members.some((m) => m.email === i.email))
         throw new TeamError(
           "already_staff",
           "This person is already on the team.",
         );
-      // Like the database: a new invite replaces a pending one for the same email.
+      // Like the database: a new invite replaces a pending one for the same email (for
+      // a host user, any such invite is their own host's: others were refused above).
       s.invites = s.invites.filter((x) => live(x) && x.email !== i.email);
       if (s.invites.length >= MAX_INVITES)
         throw new TeamError(

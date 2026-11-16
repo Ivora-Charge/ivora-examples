@@ -49,6 +49,7 @@ export type TeamErrorCode =
   | "not_allowed"
   | "rate_limited"
   | "already_staff"
+  | "invite_refused"
   | "invite_invalid"
   | "last_owner"
   | "changed"
@@ -86,6 +87,16 @@ export const changedMeanwhile = () =>
   new TeamError(
     "changed",
     "Someone changed this team member, or your own role, in the meantime. Reload the page and try again.",
+  );
+
+/**
+ * A host user inviting an email that is on the team or invited outside their host.
+ * The same words in every such case, so the answer never shows which one it is.
+ */
+export const inviteRefused = () =>
+  new TeamError(
+    "invite_refused",
+    "This email can't be invited for your host. Ask the operator for help.",
   );
 
 export const invalidInvite = () =>

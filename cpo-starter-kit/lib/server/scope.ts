@@ -153,6 +153,7 @@ export function scopedIvora(
       const ok = await stations();
       return {
         ...page,
+        unfiltered: page.unfiltered ?? page.data.length,
         data: page.data.filter(
           (t) => t.station_id != null && ok.has(t.station_id),
         ),

@@ -358,6 +358,11 @@ export interface SessionListItem extends Transaction {
 export interface CursorPage<T> {
   data: T[];
   next_cursor: string | null;
+  /**
+   * Kit only, set by a host-scoped client (lib/server/scope.ts): how many rows Ivora
+   * returned before the host filter, so a filtered page is not taken for the last one.
+   */
+  unfiltered?: number;
 }
 
 /** Query of the filtered session list (`GET /transactions`). Dates are ISO 8601. */

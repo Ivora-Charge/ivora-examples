@@ -2777,6 +2777,89 @@ describe("network mode: hosts", () => {
     expect(late.rows[0].revoked_at).not.toBeNull();
   });
 
+  it("gives a host user one generic refusal for anyone outside their host, and leaves them untouched", async () => {
+    /** Two-digit token hashes no other test uses. */
+    const H2 = (k: string) => `9${"1".repeat(61)}${k}`;
+    await saveHost(hostA, "Sample Host A", { invite: true });
+    const invite = (actor: string, host: string, email: string, h: string) =>
+      svc<{ id: string }>(
+        `select cpo_create_host_invite($1,$2,$3,$4,'${H2(h)}',now()+interval '1 day') as id`,
+        [operatorA, actor, host, email],
+      );
+    // An owner's pending staff invite and host B's pending invite.
+    await svc(
+      `select cpo_create_invite($1,'pending-staff@example.com','viewer','${H2("a1")}',$2,now()+interval '1 day')`,
+      [operatorA, OWNER_A],
+    );
+    await invite(OWNER_A, hostB, "pending-b@example.com", "a2");
+    const pending = () =>
+      pg
+        .query<{ email: string; host_id: string | null }>(
+          "select email, host_id from cpo_invites where operator_id=$1 and accepted_at is null and revoked_at is null and email in ('pending-staff@example.com','pending-b@example.com') order by email",
+          [operatorA],
+        )
+        .then((r) => r.rows);
+    const team = () =>
+      pg
+        .query<{ email: string; role: string; host_id: string | null }>(
+          "select email, role, host_id from cpo_staff where operator_id=$1 order by email",
+          [operatorA],
+        )
+        .then((r) => r.rows);
+    const pendingBefore = await pending();
+    expect(pendingBefore).toEqual([
+      { email: "pending-b@example.com", host_id: hostB },
+      { email: "pending-staff@example.com", host_id: null },
+    ]);
+    const teamBefore = await team();
+    const errors: string[] = [];
+    for (const [i, email] of [
+      "pending-staff@example.com", // owner's pending invite
+      "pending-b@example.com", // host B's pending invite
+      "tech-a@example.com", // operator member
+      "owner-a@example.com", // operator member (owner)
+      "host-b1@example.com", // host B member
+    ].entries())
+      errors.push(
+        await invite(HOST_A1, hostA, email, `b${i}`).then(
+          () => "invited",
+          (e: Error) => e.message,
+        ),
+      );
+    // The same words every time: nothing shows which case it was.
+    expect(new Set(errors)).toEqual(new Set(["cpo_invite_refused"]));
+    expect(await pending()).toEqual(pendingBefore);
+    expect(await team()).toEqual(teamBefore);
+    const made = await pg.query(
+      "select 1 from cpo_invites where invited_by=$1 and email in ('pending-staff@example.com','pending-b@example.com','tech-a@example.com','owner-a@example.com','host-b1@example.com')",
+      [HOST_A1],
+    );
+    expect(made.rows).toEqual([]);
+    // Their own host's pending invite is still theirs to replace.
+    const first = await invite(HOST_A1, hostA, "own@example.com", "c1");
+    const second = await invite(HOST_A1, hostA, "own@example.com", "c2");
+    const own = await pg.query<{ id: string; revoked: boolean }>(
+      "select id, revoked_at is not null as revoked from cpo_invites where email='own@example.com'",
+    );
+    expect(own.rows).toEqual(
+      expect.arrayContaining([
+        { id: first.rows[0].id, revoked: true },
+        { id: second.rows[0].id, revoked: false },
+      ]),
+    );
+    // Operator staff are unchanged: an owner's host invite still replaces any pending one.
+    await invite(OWNER_A, hostA, "pending-b@example.com", "c3");
+    const moved = await pg.query<{ host_id: string }>(
+      "select host_id from cpo_invites where email='pending-b@example.com' and accepted_at is null and revoked_at is null",
+    );
+    expect(moved.rows).toEqual([{ host_id: hostA }]);
+    // Clean up for the tests below.
+    await pg.query(
+      "update cpo_invites set revoked_at=now() where email in ('pending-staff@example.com','pending-b@example.com','own@example.com') and revoked_at is null",
+    );
+    await saveHost(hostA, "Sample Host A");
+  });
+
   it("limits report figures to the given chargers", async () => {
     for (const [station, minor] of [
       [7010, 1000],
@@ -2907,5 +2990,22 @@ describe("network mode: hosts", () => {
         hostA,
       ]);
     }
+  });
+
+  it("can run the hosts migration again without errors or lost data", async () => {
+    const count = () =>
+      pg
+        .query<{ n: number }>(
+          "select (select count(*) from cpo_hosts)::int + (select count(*) from cpo_host_sites)::int + (select count(*) from cpo_staff where host_id is not null)::int as n",
+        )
+        .then((r) => r.rows[0].n);
+    const before = await count();
+    await pg.exec(readFileSync(`${MIGRATIONS}/202611160001_hosts.sql`, "utf8"));
+    expect(await count()).toBe(before);
+    // The policies are back in place.
+    await as("authenticated", HOST_A1, async () => {
+      const hosts = await pg.query<{ id: string }>("select id from cpo_hosts");
+      expect(hosts.rows.map((r) => r.id)).toEqual([hostA]);
+    });
   });
 });

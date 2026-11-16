@@ -308,7 +308,12 @@ export async function syncActiveSessions(
           if (item.station_id != null && wanted.has(item.station_id))
             await trackTransaction(d, item);
         }
-        if (!res.next_cursor || res.data.length < LIST_PAGE_SIZE) {
+        // A host user's page is filtered to their sites: its size before the filter
+        // tells whether it was the last one.
+        if (
+          !res.next_cursor ||
+          (res.unfiltered ?? res.data.length) < LIST_PAGE_SIZE
+        ) {
           listed = true;
           break;
         }

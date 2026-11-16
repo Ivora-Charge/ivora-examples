@@ -40,6 +40,7 @@ import type {
   TrackedSession,
   TrackerMark,
 } from "@/lib/server/live/types";
+import { scopedIvora, sitesScope } from "@/lib/server/scope";
 import type { Staff } from "@/lib/server/team/types";
 
 // The Live view's running sessions against an API-shaped fake of Ivora: GET
@@ -353,6 +354,34 @@ describe("running sessions with a long history", () => {
     expect(a.sessions.mock.calls[1][0].cursor).toBe(
       txCursor(1000 + rows.length - LIST_PAGE_SIZE),
     );
+  });
+
+  it("pages on for a host user too, though their filtered page looks short", async () => {
+    // 150 running sessions at another site (newest), then the host's own one.
+    const stations = [
+      station(STATION, "HOST-01"),
+      { ...station(71, "OTHER-01"), location_id: 6 },
+    ];
+    const rows = [
+      running(900),
+      ...Array.from({ length: 150 }, (_, i) =>
+        running(1000 + i, { station_id: 71 }),
+      ),
+    ];
+    const a = api(rows, stations);
+    const ivora = scopedIvora(a.ivora, sitesScope([5]), true);
+    const d: LiveDeps = {
+      store: bigStore(),
+      ivora,
+      now: () => NOW,
+      sleep: async () => {},
+    };
+    const s = await syncActiveSessions(d, [STATION]);
+    expect(s.sessions.map((x) => x.transactionId)).toEqual([900]);
+    expect(s.complete).toBe(true);
+    // Both pages read from the list; the host's session needs no read of its own.
+    expect(a.sessions).toHaveBeenCalledTimes(2);
+    expect(a.read).not.toHaveBeenCalled();
   });
 
   it("ends a tracked session the list no longer shows, by reading it once", async () => {

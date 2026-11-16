@@ -6,6 +6,7 @@ import { serviceClient, sessionClient } from "../supabase";
 import {
   changedMeanwhile,
   invalidInvite,
+  inviteRefused,
   lastOwner,
   TeamError,
   type InviteRecord,
@@ -29,6 +30,7 @@ function check<R extends { data: unknown; error: DbError }>(r: R): Ok<R> {
   if (m.includes("cpo_changed_meanwhile")) throw changedMeanwhile();
   if (m.includes("cpo_already_staff"))
     throw new TeamError("already_staff", "This person is already on the team.");
+  if (m.includes("cpo_invite_refused")) throw inviteRefused();
   if (m.includes("cpo_invite_invalid")) throw invalidInvite();
   if (m.includes("cpo_host_not_found"))
     throw new TeamError(
