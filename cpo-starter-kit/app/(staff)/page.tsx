@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { cookies } from "next/headers";
-import { visibleModules } from "@/lib/modules";
+import { modulesFor } from "@/lib/modules";
 import { atLeast } from "@/lib/roles";
-import { requireRole } from "@/lib/server/auth";
+import { requireNetworkReader } from "@/lib/server/auth";
 import { config } from "@/lib/server/env";
 import {
   getOnboarding,
@@ -35,10 +35,12 @@ function sessionsNote(o: { staffSessions: number; freeSessions: number }) {
 }
 
 async function Content() {
-  const me = await requireRole("viewer");
+  const me = await requireNetworkReader();
+  // A host user's overview counts only their host's sites. The 30-day chart is Ivora's
+  // project-wide figures (GET /stats has no site filter), so a host user does not get it.
   const [r, trend] = await Promise.all([
     loadOverview(me),
-    loadTrend(getReports(), me),
+    me.host ? null : loadTrend(getReports(), me),
   ]);
   const hidden = (await cookies()).get(SETUP_HIDDEN_COOKIE)?.value === "1";
   // The setup checklist is for the people who can act on it: owners and managers.
@@ -68,7 +70,11 @@ async function Content() {
     <>
       <PageHeader
         title="Overview"
-        description="Your network now, and the last 30 days."
+        description={
+          me.host
+            ? `${me.host.name}: your sites now.`
+            : "Your network now, and the last 30 days."
+        }
       />
       {setupOpen && setup}
       {r.ok ? (
@@ -99,7 +105,7 @@ async function Content() {
               They are on the next load, or on <Link href="/live">Live</Link>.
             </p>
           )}
-          <Trend trend={trend} />
+          {trend && <Trend trend={trend} />}
           <section className="card" aria-labelledby="chargers-heading">
             <h2 id="chargers-heading">
               Chargers
@@ -136,7 +142,7 @@ async function Content() {
       <section className="card" aria-labelledby="next-heading">
         <h2 id="next-heading">Sections</h2>
         <ul className="rows">
-          {visibleModules({ fleet: config.fleetModule })
+          {modulesFor(me, { fleet: config.fleetModule })
             .filter((m) => m.slug !== "overview")
             .map((m) => (
               <li key={m.slug}>
@@ -280,7 +286,7 @@ function Stat({
 
 /** Checks the role first (a real redirect), then the page behind its loading skeleton. */
 export default async function Page() {
-  await requireRole("viewer");
+  await requireNetworkReader();
   return (
     <Loading shape="stats">
       <Content />

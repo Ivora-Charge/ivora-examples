@@ -169,7 +169,10 @@ export function scopedIvora(
     },
     async getTransaction(transactionId, limits) {
       const t = await inner.getTransaction(transactionId, limits);
-      if (!(await inScope(t.station_id))) throw outOfScope();
+      // Not a 404: session tracking reads a 404 as "Ivora no longer has it" and
+      // forgets the session (lib/server/live/active.ts), which must never follow from
+      // a host user's view.
+      if (!(await inScope(t.station_id))) throw refused("getTransaction");
       return t;
     },
   };

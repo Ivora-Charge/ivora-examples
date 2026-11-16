@@ -34,6 +34,7 @@ import {
   sitesScope,
   staffScope,
 } from "@/lib/server/scope";
+import { trackTransactionById } from "@/lib/server/live/active";
 import type { Staff } from "@/lib/server/team/types";
 
 // Network mode: the rules for host users (lib/hosts.ts, lib/roles.ts) and the scoped
@@ -345,14 +346,29 @@ describe("the scoped Ivora client (host users)", () => {
       await expect(c.listBills({ station_id: id })).rejects.toMatchObject({
         status: 404,
       });
+      // 403, not 404: a 404 would make session tracking forget the session.
       await expect(c.getTransaction(id * 100)).rejects.toMatchObject({
-        status: 404,
+        status: 403,
       });
     }
     expect(inner.sendCommand).not.toHaveBeenCalled();
     expect(inner.listFaults).not.toHaveBeenCalled();
     await c.sendCommand(2, { action: "reset", mode: "soft" } as never, "k");
     expect(inner.sendCommand).toHaveBeenCalledTimes(1);
+  });
+
+  it("never makes session tracking forget another host's session", async () => {
+    const { client } = fakeIvora();
+    const c = scopedIvora(client, scope, true);
+    const store = {
+      trackSession: vi.fn(async () => undefined),
+      forgetSession: vi.fn(async () => undefined),
+    };
+    await expect(
+      trackTransactionById({ store, ivora: c }, 300),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(store.forgetSession).not.toHaveBeenCalled();
+    expect(store.trackSession).not.toHaveBeenCalled();
   });
 
   it("filters the project-wide lists to the host's chargers", async () => {

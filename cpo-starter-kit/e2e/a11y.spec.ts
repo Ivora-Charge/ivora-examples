@@ -14,6 +14,7 @@ const PAGES = [
   "/pricing",
   "/reports",
   "/team",
+  "/hosts",
   "/settings",
   "/settings/roaming",
   "/chargers/station-9101",

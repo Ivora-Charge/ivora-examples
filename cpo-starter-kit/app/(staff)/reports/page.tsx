@@ -6,6 +6,8 @@ import { requireNetworkReader } from "@/lib/server/auth";
 import { hostStore } from "@/lib/server/hosts";
 import { loadHostFilter, type HostFilterView } from "@/lib/server/hosts/filter";
 import { narrow } from "@/lib/server/scope";
+import { HOST_ROLE } from "@/lib/roles";
+import { getIvora, IvoraError } from "@/lib/server/ivora";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { getOnboarding, loadStripe } from "@/lib/server/onboarding";
 import {
@@ -1222,7 +1224,19 @@ function Payouts({
 
 /** Checks the role first (a real redirect), then the page behind its loading skeleton. */
 export default async function Page(props: Parameters<typeof Content>[0]) {
-  await requireNetworkReader();
+  const me = await requireNetworkReader();
+  // A host user's link to a charger that is not theirs answers 404, before the
+  // skeleton streams (the status is 200 after that).
+  const station = (await props.searchParams).station;
+  if (me.role === HOST_ROLE && typeof station === "string" && station !== "") {
+    const id = Number(station);
+    const ivora = narrow({ ivora: getIvora() }, me).d.ivora;
+    if (!Number.isSafeInteger(id) || id <= 0) notFound();
+    await ivora.getStation(id).catch((e: unknown) => {
+      if (e instanceof IvoraError && e.status === 404) notFound();
+      // Anything else: the page itself shows the read error.
+    });
+  }
   return (
     <Loading shape="stats">
       <Content {...props} />
