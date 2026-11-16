@@ -63,9 +63,23 @@ export const isPartyOfPeer = (
       trustedParties(peer).some((c) => sameParty(c, p))
     : peer.roles.some((r) => sameParty(party(r), p));
 
+/** Most `offered` parties kept for one hub (trusted ones are not counted). */
+export const MAX_OFFERED = 500;
+
+/**
+ * The list with at most `max` offered parties: the oldest offered ones (the earliest in
+ * the list) go first. A trusted party is never dropped, and keeps its place.
+ */
+export function capOffered(list: HubParty[], max = MAX_OFFERED): HubParty[] {
+  let drop = list.filter((h) => h.status === "offered").length - max;
+  if (drop <= 0) return list;
+  return list.filter((h) => h.status !== "offered" || drop-- <= 0);
+}
+
 /**
  * The CPO roles a hub declares in its credentials, added to its list as `offered` (new
- * ones only: a party already in the list keeps its status). Never trusted by this.
+ * ones only: a party already in the list keeps its status). Never trusted by this. The
+ * list keeps at most MAX_OFFERED offered parties (capOffered).
  */
 export function offerDeclaredParties(
   list: HubParty[],
@@ -86,7 +100,7 @@ export function offerDeclaredParties(
       }),
     });
   }
-  return out;
+  return capOffered(out);
 }
 
 /** How often editHubParties re-reads after someone else changed the peer. */
@@ -95,7 +109,7 @@ const EDIT_TRIES = 5;
 /**
  * Changes a peer's hub party list without losing a concurrent change: reads the peer,
  * applies `edit` to its current list, and writes only if nobody changed the peer in
- * between (compare-and-set on updatedAt); otherwise reads again. `edit` returns null to
+ * between (compare-and-set on rev); otherwise reads again. `edit` returns null to
  * leave the peer as it is. Returns the updated peer, or null if the peer is gone, not
  * registered (with `ifStatus`), or kept changing.
  */
@@ -114,7 +128,7 @@ export async function editHubParties<T>(
       peerId,
       { hubParties: next.hubParties },
       ifStatus,
-      peer.updatedAt,
+      peer.rev,
     );
     if (updated) return { peer: updated, result: next.result };
   }

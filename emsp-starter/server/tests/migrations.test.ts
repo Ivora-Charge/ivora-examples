@@ -376,6 +376,31 @@ describe("OCPI locations and tariffs tables", () => {
   });
 });
 
+describe("peer version counter (202611160002_peer_rev)", () => {
+  it("raises rev on every update, starting at 0, and cannot be called by Data API roles", async () => {
+    const { rows } = await db.query<{ id: string }>(
+      `insert into public.emsp_ocpi_peers (label, direction) values ('P', 'outbound') returning id`,
+    );
+    const id = rows[0].id;
+    const rev = async () =>
+      Number(
+        (
+          await db.query<{ rev: string }>(
+            `select rev from public.emsp_ocpi_peers where id = '${id}'`,
+          )
+        ).rows[0].rev,
+      );
+    expect(await rev()).toBe(0);
+    await db.query(
+      `update public.emsp_ocpi_peers set label = 'Q' where id = '${id}'`,
+    );
+    await db.query(
+      `update public.emsp_ocpi_peers set label = 'Q' where id = '${id}'`,
+    );
+    expect(await rev()).toBe(2);
+  });
+});
+
 describe("roaming hub parties (202611160001_hub_parties)", () => {
   const peer = async () =>
     (
