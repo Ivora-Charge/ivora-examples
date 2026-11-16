@@ -117,9 +117,10 @@ function summary(p: Peer): PeerSummary {
     direction: p.direction,
     status: p.status,
     versionsUrl: p.versionsUrl,
+    // A hub's own CPO roles are only offers (see the hub's party list).
     parties: p.roles.map(
       (r) =>
-        `${r.role} ${r.country_code}-${r.party_id} (${r.business_details.name})`,
+        `${r.role} ${r.country_code}-${r.party_id} (${r.business_details.name})${isHubPeer(p) && r.role === "CPO" ? " declared by the hub, not trusted" : ""}`,
     ),
     ...(isHubPeer(p) && { hub: { parties: p.hubParties } }),
     modules: [...new Set(p.endpoints.map((e) => e.identifier))].sort(),

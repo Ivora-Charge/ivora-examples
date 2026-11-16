@@ -3,9 +3,12 @@
 -- its grants (service_role only); nothing new is granted to anon or authenticated.
 begin;
 
--- The parties behind a hub peer: [{country_code, party_id, status, source, name?}].
--- status 'offered': the hub lists it (hubclientinfo), the operator has not accepted it.
+-- The parties behind a hub peer: [{countryCode, partyId, status, source, name?}]
+-- (camelCase keys, as the server writes them).
+-- status 'offered': the hub lists it (hubclientinfo) or declares it as a CPO role in its
+-- own credentials, and the operator has not accepted it.
 -- status 'trusted': the operator accepted it; only trusted parties are called or served.
+-- source: 'admin', 'hubclientinfo' or 'credentials' (who added it).
 -- Empty for a direct CPO peer, which behaves as before.
 alter table public.emsp_ocpi_peers
   add column hub_parties jsonb not null default '[]'::jsonb

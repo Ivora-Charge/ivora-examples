@@ -119,13 +119,21 @@ export class SupabasePeerStore implements PeerStore {
     return rows.map(toPeer);
   }
 
-  async updatePeer(id: string, patch: PeerPatch, ifStatus?: PeerStatus) {
+  async updatePeer(
+    id: string,
+    patch: PeerPatch,
+    ifStatus?: PeerStatus,
+    ifUpdatedAt?: string,
+  ) {
     const body: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
     for (const [k, v] of Object.entries(patch))
       body[COLUMNS[k as keyof PeerPatch]] = v;
-    const filter = `id=${eq(id)}${ifStatus ? `&status=${eq(ifStatus)}` : ""}`;
+    const filter =
+      `id=${eq(id)}` +
+      (ifStatus ? `&status=${eq(ifStatus)}` : "") +
+      (ifUpdatedAt !== undefined ? `&updated_at=${eq(ifUpdatedAt)}` : "");
     const rows = await this.rest<PeerRow[]>(
       "PATCH",
       `emsp_ocpi_peers?${filter}`,

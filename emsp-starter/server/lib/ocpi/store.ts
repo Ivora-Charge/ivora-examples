@@ -22,8 +22,11 @@ export type HubParty = {
   countryCode: string;
   partyId: string;
   status: "offered" | "trusted";
-  /** Who added it: the operator, or the hub's client list (hubclientinfo). */
-  source: "admin" | "hubclientinfo";
+  /**
+   * Who added it: the operator, the hub's client list (hubclientinfo), or a CPO role
+   * in the hub's own credentials. Only the operator makes a party trusted.
+   */
+  source: "admin" | "hubclientinfo" | "credentials";
   name?: string;
 };
 
@@ -111,12 +114,14 @@ export interface PeerStore {
   listPeers(): Promise<Peer[]>;
   /**
    * Changes a peer. With `ifStatus`, only when the peer still has that status: returns
-   * null otherwise, so two concurrent handshakes cannot both win.
+   * null otherwise, so two concurrent handshakes cannot both win. With `ifUpdatedAt`,
+   * only when nobody changed the peer since it was read (compare-and-set).
    */
   updatePeer(
     id: string,
     patch: PeerPatch,
     ifStatus?: PeerStatus,
+    ifUpdatedAt?: string,
   ): Promise<Peer | null>;
   issueToken(token: NewToken): Promise<void>;
   /** An active (not revoked, not expired) token by its hash. */
@@ -172,11 +177,21 @@ export class MemoryPeerStore implements PeerStore {
       .map((p) => structuredClone(p));
   }
 
-  async updatePeer(id: string, patch: PeerPatch, ifStatus?: PeerStatus) {
+  async updatePeer(
+    id: string,
+    patch: PeerPatch,
+    ifStatus?: PeerStatus,
+    ifUpdatedAt?: string,
+  ) {
     const p = this.peers.get(id);
     if (!p || (ifStatus && p.status !== ifStatus)) return null;
+    if (ifUpdatedAt !== undefined && p.updatedAt !== ifUpdatedAt) return null;
+    // Every change gets a later timestamp, even within one millisecond, so a
+    // compare-and-set on updatedAt always sees it.
+    const now = Date.now();
+    const last = Date.parse(p.updatedAt);
     Object.assign(p, structuredClone(patch), {
-      updatedAt: new Date().toISOString(),
+      updatedAt: new Date(now > last ? now : last + 1).toISOString(),
     });
     return structuredClone(p);
   }

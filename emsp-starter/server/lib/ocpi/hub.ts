@@ -5,7 +5,7 @@ import { ocpiPages, type ClientOptions } from "./client";
 import { OcpiError } from "./errors";
 import { HandshakeError } from "./handshake";
 import { ourParty } from "./identity";
-import { isHubPeer } from "./parties";
+import { editHubParties, isHubPeer, isPartyOfPeer } from "./parties";
 import type { HubParty, Peer, PeerStore } from "./store";
 import { decryptToken } from "./tokens";
 import { sameParty, type Party } from "./types";
@@ -65,20 +65,22 @@ async function conflict(
 ): Promise<string | null> {
   if (sameParty(party, ourParty()))
     return "That is this eMSP's own country code and party ID";
+  // Another peer's party: a direct peer's role, another hub's HUB role or a party it
+  // trusts. A CPO role another hub merely declares is only an offer and does not count.
   for (const other of await store.listPeers()) {
     if (other.id === hub.id || other.status !== "registered") continue;
-    const p = (r: { country_code: string; party_id: string }) => ({
-      countryCode: r.country_code,
-      partyId: r.party_id,
-    });
-    if (other.roles.some((r) => sameParty(p(r), party)))
-      return `${idOf(party)} is already registered as ${other.label}`;
-    if (
-      other.hubParties.some(
-        (h) => h.status === "trusted" && sameParty(h, party),
+    if (!isPartyOfPeer(other, party)) continue;
+    return isHubPeer(other) &&
+      !other.roles.some(
+        (r) =>
+          r.role === "HUB" &&
+          sameParty(
+            { countryCode: r.country_code, partyId: r.party_id },
+            party,
+          ),
       )
-    )
-      return `${idOf(party)} is already trusted through ${other.label}`;
+      ? `${idOf(party)} is already trusted through ${other.label}`
+      : `${idOf(party)} is already registered as ${other.label}`;
   }
   return null;
 }
@@ -97,23 +99,29 @@ export async function acceptParty(
   const name = input.name?.trim().slice(0, 100) || undefined;
   const why = await conflict(deps.store, peer, party);
   if (why) throw new HandshakeError(why);
-  const held = peer.hubParties.find((h) => sameParty(h, party));
-  const next: HubParty = {
-    ...party,
-    status: "trusted",
-    source: held?.source ?? "admin",
-    ...((name ?? held?.name) && { name: name ?? held?.name }),
-  };
-  const hubParties = [
-    ...peer.hubParties.filter((h) => !sameParty(h, party)),
-    next,
-  ];
-  const updated = await deps.store.updatePeer(
+  const done = await editHubParties(
+    deps.store,
     peerId,
-    { hubParties },
+    (current) => {
+      const held = current.hubParties.find((h) => sameParty(h, party));
+      const next: HubParty = {
+        ...party,
+        status: "trusted",
+        source: held?.source ?? "admin",
+        ...((name ?? held?.name) && { name: name ?? held?.name }),
+      };
+      return {
+        hubParties: [
+          ...current.hubParties.filter((h) => !sameParty(h, party)),
+          next,
+        ],
+        result: held,
+      };
+    },
     "registered",
   );
-  if (!updated) throw new HandshakeError("The peer changed; try again");
+  if (!done) throw new HandshakeError("The peer changed; try again");
+  const { peer: updated, result: held } = done;
   await deps.store.audit({
     actor: deps.actor ?? "admin",
     action: "ocpi.hub.party_trusted",
@@ -136,12 +144,18 @@ export async function removeParty(
   const peer = await deps.store.getPeer(peerId);
   if (!peer || !isHubPeer(peer)) throw new HandshakeError("No such hub");
   const party = partyInput(input);
-  const held = peer.hubParties.find((h) => sameParty(h, party));
-  if (!held) throw new HandshakeError(`${idOf(party)} is not in the list`);
-  const updated = await deps.store.updatePeer(peerId, {
-    hubParties: peer.hubParties.filter((h) => !sameParty(h, party)),
+  if (!peer.hubParties.some((h) => sameParty(h, party)))
+    throw new HandshakeError(`${idOf(party)} is not in the list`);
+  const done = await editHubParties(deps.store, peerId, (current) => {
+    const held = current.hubParties.find((h) => sameParty(h, party));
+    if (!held) return null;
+    return {
+      hubParties: current.hubParties.filter((h) => !sameParty(h, party)),
+      result: held,
+    };
   });
-  if (!updated) throw new HandshakeError("The peer changed; try again");
+  if (!done) throw new HandshakeError("The peer changed; try again");
+  const { peer: updated, result: held } = done;
   if (held.status === "trusted") await deps.purge?.(peerId, party);
   await deps.store.audit({
     actor: deps.actor ?? "admin",
@@ -183,9 +197,9 @@ export function cpoPartiesOfClientInfo(
 
 /**
  * Reads the hub's client list (hubclientinfo Sender) and offers its CPO parties. New
- * ones are `offered`; trusted ones stay trusted; offered ones the hub no longer lists
- * are dropped. Returns the peer and how many parties are newly offered. Refused in demo
- * mode.
+ * ones are `offered`; trusted ones stay trusted; offered ones the list no longer has
+ * are dropped (offers from the hub's credentials stay). Never changes trust. Returns
+ * the peer and how many parties are newly offered. Refused in demo mode.
  */
 export async function offerFromHub(
   peerId: string,
@@ -227,26 +241,45 @@ export async function offerFromHub(
         : `Reading the client list of ${peer.label} failed`,
     );
   }
-  const trusted = peer.hubParties.filter((h) => h.status === "trusted");
-  const known = peer.hubParties.filter((h) => h.status === "offered");
-  const offers: HubParty[] = [];
-  let offered = 0;
-  for (const { party } of listed.slice(0, MAX_OFFERED)) {
-    if (
-      trusted.some((h) => sameParty(h, party)) ||
-      offers.some((h) => sameParty(h, party)) ||
-      sameParty(party, ourParty())
-    )
-      continue;
-    if (!known.some((h) => sameParty(h, party))) offered++;
-    offers.push({ ...party, status: "offered", source: "hubclientinfo" });
-  }
-  const updated = await deps.store.updatePeer(
+  // The fetch can take a while, and the operator may accept or remove parties in the
+  // meantime: merge into the list as it is now, not as it was before the fetch, and
+  // write only if it did not change since (editHubParties). Offers never change trust.
+  const done = await editHubParties(
+    deps.store,
     peerId,
-    { hubParties: [...trusted, ...offers] },
+    (current) => {
+      const trusted = current.hubParties.filter((h) => h.status === "trusted");
+      const known = current.hubParties.filter((h) => h.status === "offered");
+      const offers: HubParty[] = [];
+      let offered = 0;
+      for (const { party } of listed.slice(0, MAX_OFFERED)) {
+        if (
+          trusted.some((h) => sameParty(h, party)) ||
+          offers.some((h) => sameParty(h, party)) ||
+          sameParty(party, ourParty())
+        )
+          continue;
+        const held = known.find((h) => sameParty(h, party));
+        if (!held) offered++;
+        offers.push(
+          held ?? { ...party, status: "offered", source: "hubclientinfo" },
+        );
+      }
+      // Offers from elsewhere (the hub's own credentials) stay; earlier client-list
+      // offers the hub no longer lists go.
+      const kept = known.filter(
+        (h) =>
+          h.source !== "hubclientinfo" && !offers.some((o) => sameParty(o, h)),
+      );
+      return {
+        hubParties: [...trusted, ...kept, ...offers],
+        result: offered,
+      };
+    },
     "registered",
   );
-  if (!updated) throw new HandshakeError("The peer changed; try again");
+  if (!done) throw new HandshakeError("The peer changed; try again");
+  const { peer: updated, result: offered } = done;
   await deps.store.audit({
     actor: deps.actor ?? "admin",
     action: "ocpi.hub.parties_offered",

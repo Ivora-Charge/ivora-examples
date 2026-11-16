@@ -21,11 +21,21 @@ import { SyncError, syncAllPeers, syncPeer } from "@/lib/locations/sync";
 import { createMockCpo, type MockCpo } from "@/lib/mock-cpo";
 import { createMockHub, type MockHub } from "@/lib/mock-cpo/hub";
 import { ocpiRequest, type ClientOptions } from "@/lib/ocpi/client";
-import { connectToCpo, HandshakeError } from "@/lib/ocpi/handshake";
+import {
+  connectToCpo,
+  HandshakeError,
+  invitePeer,
+  rotateCredentials,
+} from "@/lib/ocpi/handshake";
 import { acceptParty, offerFromHub, removeParty } from "@/lib/ocpi/hub";
-import { cpoParties, isCpoParty, trustedParties } from "@/lib/ocpi/parties";
+import {
+  cpoParties,
+  isCpoParty,
+  isPartyOfPeer,
+  trustedParties,
+} from "@/lib/ocpi/parties";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
-import { MemoryPeerStore, type Peer } from "@/lib/ocpi/store";
+import { MemoryPeerStore, type Peer, type PeerStore } from "@/lib/ocpi/store";
 import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 import {
   pullAllSessions,
@@ -226,6 +236,209 @@ describe("handshake with a roaming hub", () => {
   });
 });
 
+/** A CPO role a hub declares in its own credentials. */
+const cpoRole = (p: Party) => ({
+  role: "CPO" as const,
+  country_code: p.countryCode,
+  party_id: p.partyId,
+  business_details: { name: `Declared ${p.partyId}` },
+});
+
+/**
+ * Every kind of push from `p` through the hub is refused (403, OCPI 2000): a location,
+ * a session, a CDR, a command result, and a token authorization request.
+ */
+async function allRefusedFrom(p: Party) {
+  const err = { httpStatus: 403, statusCode: 2000 };
+  const cpo = hub.cpo(p);
+  const { token } = await createAppToken(
+    { driverRef: DRIVER },
+    { tokens, peers, client, actor: "t" },
+  );
+  await expect(
+    cpo.putLocation(cpo.state.locations[0], { push: true }),
+  ).rejects.toMatchObject(err);
+  await expect(
+    cpo.push("sessions", "PUT", [p.countryCode, p.partyId, "S1"], {}),
+  ).rejects.toMatchObject(err);
+  await expect(
+    rawPush(p, "cdrs", {}, { method: "POST" }),
+  ).rejects.toMatchObject(err);
+  await expect(
+    rawPush(
+      p,
+      "commands/START_SESSION/00000000-0000-4000-8000-000000000000",
+      { result: "ACCEPTED" },
+      { method: "POST" },
+    ),
+  ).rejects.toMatchObject(err);
+  await expect(
+    cpo.authorize(token.uid, { type: "APP_USER" }),
+  ).rejects.toMatchObject(err);
+  expect(locations.locations.size).toBe(0);
+  expect(sessions.sessions.size).toBe(0);
+  expect(sessions.cdrs.size).toBe(0);
+}
+
+/** After the operator accepts `p`, its pushes go through. */
+async function acceptedAfterAccepting(p: Party) {
+  await acceptParty(hubPeer.id, p, { store: peers });
+  await hub.cpo(p).putLocation(hub.cpo(p).state.locations[0], { push: true });
+  expect(locations.locations.size).toBe(1);
+}
+
+describe("CPO roles a hub declares itself are offers, never trusted", () => {
+  it("at registration: [HUB, CPO A] leaves A offered and refused until accepted", async () => {
+    hub = createMockHub({
+      transport: net.transport,
+      party: { countryCode: "ZZ", partyId: "HB2" },
+      parties: [{ party: A }, { party: B }],
+    });
+    hub.state.extraRoles.push(cpoRole(A));
+    hubPeer = await connectToCpo(
+      {
+        label: "Declaring Hub",
+        versionsUrl: hub.urls.versions,
+        tokenA: hub.issueTokenA(),
+      },
+      { store: peers, client },
+    );
+    hub.connect();
+    expect(hubPeer.roles.map((r) => r.role)).toEqual(["HUB", "CPO"]);
+    expect(hubPeer.hubParties).toEqual([
+      {
+        ...A,
+        status: "offered",
+        source: "credentials",
+        name: "Declared AAA",
+      },
+    ]);
+    expect(trustedParties(hubPeer)).toEqual([]);
+    expect(cpoParties(hubPeer)).toEqual([]);
+    expect(isCpoParty(hubPeer, A)).toBe(false);
+    expect(isPartyOfPeer(hubPeer, A)).toBe(false);
+    await allRefusedFrom(A);
+    await acceptedAfterAccepting(A);
+    // Accepting keeps where the offer came from.
+    expect((await refreshHub()).hubParties[0]).toMatchObject({
+      status: "trusted",
+      source: "credentials",
+    });
+  });
+
+  it("at registration by the hub (credentials POST to us): the same", async () => {
+    hub = createMockHub({
+      transport: net.transport,
+      party: { countryCode: "ZZ", partyId: "HB2" },
+      parties: [{ party: A }, { party: B }],
+    });
+    hub.state.extraRoles.push(cpoRole(A));
+    const invited = await invitePeer(
+      { label: "Inbound Hub" },
+      { store: peers, client },
+    );
+    await hub.registerWith(invited.versionsUrl, invited.tokenA);
+    hub.connect();
+    hubPeer = (await peers.getPeer(invited.peer.id))!;
+    expect(hubPeer.status).toBe("registered");
+    expect(hubPeer.hubParties).toMatchObject([
+      { ...A, status: "offered", source: "credentials" },
+    ]);
+    await allRefusedFrom(A);
+    await acceptedAfterAccepting(A);
+  });
+
+  it("at a credentials PUT from the hub that adds CPO A", async () => {
+    hub.state.extraRoles.push(cpoRole(A));
+    await hub.updateCredentials();
+    hub.connect();
+    await refreshHub();
+    expect(hubPeer.roles.map((r) => r.role)).toEqual(["HUB", "CPO"]);
+    expect(hubPeer.hubParties).toMatchObject([
+      { ...A, status: "offered", source: "credentials" },
+    ]);
+    await allRefusedFrom(A);
+    await acceptedAfterAccepting(A);
+  });
+
+  it("at a rotation we start, when the hub answers with CPO A", async () => {
+    hub.state.extraRoles.push(cpoRole(A));
+    hubPeer = await rotateCredentials(hubPeer.id, { store: peers, client });
+    hub.connect();
+    expect(hubPeer.roles.map((r) => r.role)).toEqual(["HUB", "CPO"]);
+    expect(hubPeer.hubParties).toMatchObject([
+      { ...A, status: "offered", source: "credentials" },
+    ]);
+    await allRefusedFrom(A);
+    await acceptedAfterAccepting(A);
+  });
+
+  it("a declared role never undoes the operator's choice: a removed party stays out, a trusted one stays trusted", async () => {
+    await accept(B);
+    hub.state.extraRoles.push(cpoRole(A), cpoRole(B));
+    await hub.updateCredentials();
+    hub.connect();
+    await refreshHub();
+    expect(hubPeer.hubParties.map((h) => [h.partyId, h.status])).toEqual([
+      ["BBB", "trusted"],
+      ["AAA", "offered"],
+    ]);
+    await removeParty(hubPeer.id, B, { store: peers });
+    await hub.updateCredentials();
+    hub.connect();
+    await refreshHub();
+    expect(trustedParties(hubPeer)).toEqual([]);
+    expect(hubPeer.hubParties.find((h) => h.partyId === "BBB")).toMatchObject({
+      status: "offered",
+    });
+    await allRefusedFrom(B);
+  });
+
+  it("a hub cannot drop its HUB role to become a direct CPO, by PUT or by rotation", async () => {
+    hub.state.role = "CPO";
+    await expect(hub.updateCredentials()).rejects.toThrow(/HUB role/);
+    expect((await refreshHub()).roles.map((r) => r.role)).toEqual(["HUB"]);
+    await expect(
+      rotateCredentials(hubPeer.id, { store: peers, client }),
+    ).rejects.toThrow(/roles were refused/);
+    expect((await refreshHub()).roles.map((r) => r.role)).toEqual(["HUB"]);
+    expect(isCpoParty(hubPeer, hub.hubParty)).toBe(false);
+  });
+
+  it("a direct CPO cannot add a HUB role", async () => {
+    const dp = await connectToCpo(
+      {
+        label: "Mock CPO",
+        versionsUrl: direct.urls.versions,
+        tokenA: direct.issueTokenA(),
+      },
+      { store: peers, client },
+    );
+    direct.state.role = "HUB";
+    await expect(direct.updateCredentials()).rejects.toThrow(/HUB role/);
+    expect((await peers.getPeer(dp.id))!.roles.map((r) => r.role)).toEqual([
+      "CPO",
+    ]);
+  });
+
+  it("another hub's declared CPO role does not stop a direct CPO or another hub's operator", async () => {
+    hub.state.extraRoles.push(cpoRole(direct.party));
+    await hub.updateCredentials();
+    hub.connect();
+    const dp = await connectToCpo(
+      {
+        label: "Mock CPO",
+        versionsUrl: direct.urls.versions,
+        tokenA: direct.issueTokenA(),
+      },
+      { store: peers, client },
+    );
+    expect(dp.status).toBe("registered");
+    // And the hub cannot then be made to trust it.
+    await expect(accept(direct.party)).rejects.toThrow(/already registered/);
+  });
+});
+
 describe("trusted parties of a hub", () => {
   it("accepts a party by hand; nothing is built in", async () => {
     const peer = await accept({ countryCode: "zz", partyId: "aaa" });
@@ -380,6 +593,66 @@ describe("trusted parties of a hub", () => {
     await expect(removeParty(hubPeer.id, B, { store: peers })).rejects.toThrow(
       /not in the list/,
     );
+  });
+
+  it("a party removed while the hub's list is being read stays untrusted", async () => {
+    await accept(A);
+    await accept(B);
+    // The hub is slow; the operator removes A while the list is on its way.
+    const slow: ClientOptions = {
+      ...client,
+      async transport(url, init) {
+        if (url.includes("/hubclientinfo"))
+          await removeParty(hubPeer.id, A, { store: peers });
+        return net.transport(url, init);
+      },
+    };
+    const { peer } = await offerFromHub(hubPeer.id, {
+      store: peers,
+      client: slow,
+    });
+    expect(peer.hubParties.map((h) => [h.partyId, h.status])).toEqual([
+      ["BBB", "trusted"],
+      ["AAA", "offered"],
+    ]);
+    expect(isCpoParty(peer, A)).toBe(false);
+    await expect(
+      hub.cpo(A).putLocation(hub.cpo(A).state.locations[0], { push: true }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+  });
+
+  it("a change between reading and writing the list is not lost (compare-and-set)", async () => {
+    await accept(A);
+    let once = true;
+    const racy = Object.create(peers) as PeerStore;
+    racy.updatePeer = async (...args) => {
+      if (once) {
+        once = false;
+        // Someone else writes between our read and our write.
+        await removeParty(hubPeer.id, A, { store: peers });
+      }
+      return peers.updatePeer(...args);
+    };
+    const { peer } = await offerFromHub(hubPeer.id, { store: racy, client });
+    expect(trustedParties(peer)).toEqual([]);
+    expect(peer.hubParties.find((h) => h.partyId === "AAA")).toMatchObject({
+      status: "offered",
+    });
+  });
+
+  it("a party accepted while the hub's list is being read stays trusted", async () => {
+    const slow: ClientOptions = {
+      ...client,
+      async transport(url, init) {
+        if (url.includes("/hubclientinfo")) await accept(A);
+        return net.transport(url, init);
+      },
+    };
+    const { peer } = await offerFromHub(hubPeer.id, {
+      store: peers,
+      client: slow,
+    });
+    expect(trustedParties(peer)).toEqual([A]);
   });
 
   it("works from the admin actions (accept, offer, remove, list)", async () => {
@@ -879,6 +1152,60 @@ describe("commands, sessions and CDRs through a hub", () => {
         cdrId: cdr.id,
       }),
     ).toBeTruthy();
+  });
+
+  it("once the operator removes the party, its sessions, CDRs and command results are refused", async () => {
+    const { command } = await begin(A);
+    const sent = hub.cpo(A).state.commands[0];
+    const session = hub.cpo(A).sessionForCommand({ id: "SESSION-1", at: T0 });
+    await removeParty(hubPeer.id, A, { store: peers });
+    const err = { httpStatus: 403, statusCode: 2000 };
+    await expect(
+      hub.cpo(A).sendCommandResult("ACCEPTED", { command: sent }),
+    ).rejects.toMatchObject(err);
+    await expect(
+      hub.cpo(A).putSession(session, { push: true }),
+    ).rejects.toMatchObject(err);
+    await expect(
+      rawPush(A, "cdrs", hub.cpo(A).cdrFor("SESSION-1"), { method: "POST" }),
+    ).rejects.toMatchObject(err);
+    expect(sessions.sessions.size).toBe(0);
+    expect(sessions.cdrs.size).toBe(0);
+    expect((await getCommand(command.id, DRIVER, cmdDeps()))!.pending).toBe(
+      true,
+    );
+  });
+
+  it("party B's session with party A's authorization_reference is not linked to A's start", async () => {
+    const { command } = await begin(A);
+    await hub.cpo(A).sendCommandResult("ACCEPTED");
+    const aSession = hub.cpo(A).sessionForCommand({ id: "SESSION-1", at: T0 });
+    // B's own session (its party, its path), carrying A's start reference.
+    const bSession = {
+      ...aSession,
+      country_code: "ZZ",
+      party_id: "BBB",
+      id: "SESSION-B",
+    };
+    await rawPush(B, "sessions/ZZ/BBB/SESSION-B", bSession);
+    const held = (await sessions.getSession({
+      peerId: hubPeer.id,
+      countryCode: "ZZ",
+      partyId: "BBB",
+      sessionId: "SESSION-B",
+    }))!;
+    expect(held.commandId).toBeNull();
+    expect((await commands.get(command.id))!.sessionId).toBeFalsy();
+    // A's own session still links to it.
+    await hub.cpo(A).putSession(aSession, { push: true });
+    expect(
+      (await sessions.getSession({
+        peerId: hubPeer.id,
+        countryCode: "ZZ",
+        partyId: "AAA",
+        sessionId: "SESSION-1",
+      }))!.commandId,
+    ).toBe(command.id);
   });
 
   it("a session pushed in the name of the other trusted party is refused", async () => {

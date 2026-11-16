@@ -84,6 +84,25 @@ describe("Supabase peer store (PostgREST)", () => {
     });
   });
 
+  it("updates only if unchanged since read, with ifUpdatedAt (compare-and-set)", async () => {
+    replies.push(Response.json([]));
+    const at = "2026-11-16T10:00:00.123+00:00";
+    const res = await store.updatePeer(
+      ROW.id,
+      { hubParties: [] },
+      "registered",
+      at,
+    );
+    expect(res).toBeNull();
+    expect(new URL(requests[0].url).searchParams.get("updated_at")).toBe(
+      `eq.${at}`,
+    );
+    expect(new URL(requests[0].url).searchParams.get("status")).toBe(
+      "eq.registered",
+    );
+    expect(await requests[0].json()).toMatchObject({ hub_parties: [] });
+  });
+
   it("finds only active tokens and revokes all but one", async () => {
     const hash = "a".repeat(64);
     await store.findToken(hash);

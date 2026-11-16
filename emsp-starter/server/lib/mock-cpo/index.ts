@@ -30,6 +30,7 @@ import {
   ocpiTimestamp,
   STATUS,
   type Credentials,
+  type CredentialsRole,
   type Endpoint,
   type Party,
   type Role,
@@ -131,6 +132,13 @@ export function createMockCpo(options: MockCpoOptions) {
   const pageLimit = options.pageLimit ?? 2;
 
   const state = {
+    /** The role in our credentials (options.role). Tests may change it. */
+    role: (options.role ?? "CPO") as Role,
+    /**
+     * More roles our credentials declare after the first, at registration, credentials
+     * PUT and rotation. Tests use it to make a hub declare CPO roles of its own.
+     */
+    extraRoles: [] as CredentialsRole[],
     /** Tokens A we handed out for an eMSP to register with. */
     tokensA: new Set<string>(),
     /** Tokens we issued that an eMSP calls us with (B or C, depending on direction). */
@@ -170,11 +178,12 @@ export function createMockCpo(options: MockCpoOptions) {
     url: urls.versions,
     roles: [
       {
-        role: options.role ?? "CPO",
+        role: state.role,
         business_details: { name },
         party_id: party.partyId,
         country_code: party.countryCode,
       },
+      ...state.extraRoles,
     ],
   });
 
