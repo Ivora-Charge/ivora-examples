@@ -65,7 +65,30 @@ describe("/welcome", () => {
     expect(touched).not.toHaveBeenCalled();
   });
 
-  it("lists only the modules turned on", () => {
-    expect(render()).not.toContain("RFID cards");
+  it("says what the app is, with one sign-in action and three plain cards", () => {
+    const html = render();
+    expect(html).toContain("Run your chargers without a developer.");
+    expect(html.match(/>Sign in</g)).toHaveLength(2); // header and hero: the same link
+    for (const t of ["Chargers", "Pricing", "Reports"])
+      expect(html).toContain(`<h2>${t}</h2>`);
+    expect(html).toContain("Sample data");
+    expect(html).not.toContain("RFID cards");
+  });
+});
+
+describe("error state", () => {
+  it("says what happened, that nothing was changed, and offers a retry", async () => {
+    const { ErrorState } = await import("@/app/states");
+    const html = renderToStaticMarkup(
+      createElement(ErrorState, {
+        error: Object.assign(new Error("secret detail"), { digest: "abc123" }),
+        reset: () => {},
+      }),
+    );
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("abc123");
+    expect(html).toContain("did not start, stop, charge or save anything");
+    expect(html).toContain("Try again");
+    expect(html).not.toContain("secret detail");
   });
 });

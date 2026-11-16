@@ -1558,6 +1558,9 @@ main.public-main {
   margin: 0 auto;
 }
 .state-code {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
   font-family: var(--font-display);
   font-size: var(--font-size-xl);
@@ -1595,111 +1598,6 @@ main.public-main {
   font-size: var(--font-size-lg);
   color: var(--color-text-muted);
 }
-.shot {
-  margin: 0;
-  min-width: 0;
-}
-.shot figcaption {
-  margin-top: var(--space-2);
-  font-size: var(--font-size-sm);
-}
-.shot-frame {
-  display: flex;
-  overflow: hidden;
-  background: var(--color-bg);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius);
-  box-shadow: var(--shadow);
-}
-.shot-side {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3) var(--space-2);
-  background: var(--color-surface);
-  border-right: var(--border-width) solid var(--color-border);
-}
-.shot-side span {
-  display: grid;
-  place-items: center;
-  padding: var(--space-1);
-  color: var(--color-text-muted);
-  border-radius: var(--leaf-sm);
-}
-.shot-side .current {
-  color: var(--color-on-accent);
-  background: var(--color-accent);
-}
-.shot-body {
-  display: grid;
-  flex: 1;
-  gap: var(--space-3);
-  min-width: 0;
-  padding: var(--space-4);
-}
-.shot-title {
-  margin: 0;
-  font-family: var(--font-display);
-  font-size: var(--font-size-brand);
-}
-.shot-kpis {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--space-2);
-}
-.shot-kpis p,
-.shot-chart,
-.shot-rows {
-  margin: 0;
-  padding: var(--space-2) var(--space-3);
-  background: var(--color-surface);
-  border: var(--border-width) solid var(--color-border);
-  border-radius: var(--radius-sm);
-}
-.shot-kpis p {
-  font-family: var(--font-display);
-  font-size: var(--font-size-lg);
-  overflow-wrap: anywhere;
-}
-.shot-kpis span {
-  display: block;
-  font-family: var(--font-sans);
-  font-size: var(--font-size-xs);
-  color: var(--color-text-muted);
-}
-.shot-chart {
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-2);
-  height: calc(var(--space-6) * 3);
-}
-.shot-chart span {
-  flex: 1;
-  background: color-mix(in srgb, var(--color-primary) 30%, var(--s));
-  border-radius: var(--space-1) var(--space-1) 0 0;
-}
-.shot-chart .peak {
-  background: var(--color-primary);
-}
-.shot-rows {
-  list-style: none;
-  font-size: var(--font-size-sm);
-}
-.shot-rows li {
-  display: flex;
-  align-items: center;
-  padding: var(--space-1) 0;
-}
-.shot-rows li + li {
-  border-top: var(--border-width) solid var(--color-border);
-}
-.section-title {
-  margin-bottom: var(--space-4);
-  font-family: var(--font-display);
-  font-size: var(--font-size-brand);
-  font-weight: var(--font-weight-medium);
-}
 .feature-grid {
   display: grid;
   gap: var(--space-3);
@@ -1710,7 +1608,7 @@ main.public-main {
 .feature-grid .card {
   margin: 0;
 }
-.feature h3 {
+.feature h2 {
   margin-top: var(--space-3);
 }
 .feature p {
@@ -1725,46 +1623,6 @@ main.public-main {
   color: var(--color-primary);
   background: var(--color-surface-hover);
   border-radius: var(--leaf);
-}
-.landing-pair {
-  display: grid;
-  align-items: start;
-  gap: 0 var(--space-4);
-}
-.who-list {
-  margin: 0;
-}
-.who-list div {
-  padding: var(--space-3) 0;
-  border-top: var(--border-width) solid var(--color-border);
-}
-.who-list div:first-child {
-  border-top: 0;
-}
-.who-list dt {
-  font-weight: var(--font-weight-bold);
-}
-.who-list dd {
-  margin: 0;
-  color: var(--color-text-muted);
-}
-.module-list {
-  display: grid;
-  gap: var(--space-3);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-.module-list li {
-  display: flex;
-  gap: var(--space-3);
-}
-.module-list .icon {
-  color: var(--color-primary);
-}
-.module-list .muted {
-  display: block;
-  font-size: var(--font-size-sm);
 }
 .landing-foot {
   display: flex;
@@ -1781,9 +1639,6 @@ main.public-main {
 @media (min-width: 52rem) {
   .feature-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-  .landing-pair {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 @media (min-width: 64rem) {
@@ -1858,15 +1713,6 @@ main.public-main {
   margin-top: var(--space-1);
   font-family: var(--font-sans);
 }
-@media (max-width: 40rem) {
-  .shot-kpis {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-  .shot-kpis p:nth-child(3) {
-    display: none;
-  }
-}
-
 /* Shared UI pieces (app/ui): breadcrumbs, page header, summary strip, tabs, forms,
    empty states and the data table. Colours, sizes and spacing are all tokens. */
 .crumbs {

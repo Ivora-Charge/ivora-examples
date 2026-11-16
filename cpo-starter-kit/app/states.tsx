@@ -1,3 +1,5 @@
+import { Icon } from "@/brand/icons";
+
 // Rendered on the server (404) and inside the client error boundaries (error.tsx).
 
 /** A page that is not here: says so and offers the way back. */
@@ -31,7 +33,9 @@ export function ErrorState({
 }) {
   return (
     <section className="card state" aria-labelledby="error-heading">
-      <p className="state-code">Error</p>
+      <p className="state-code">
+        <Icon name="alert" /> Error
+      </p>
       <h1 id="error-heading">This page could not load</h1>
       <p className="error" role="alert">
         Something went wrong on our side
@@ -44,8 +48,10 @@ export function ErrorState({
         .
       </p>
       <p>
-        Try again. If it keeps happening, check that your deployment&apos;s
-        settings are complete and quote the reference to your administrator.
+        This error did not start, stop, charge or save anything, and a payment
+        already made is not affected. Try again. If it keeps happening, check
+        that your deployment&apos;s settings are complete and quote the
+        reference to your administrator.
       </p>
       <div className="actions">
         <button type="button" className="button" onClick={reset}>
