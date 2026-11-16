@@ -29,13 +29,22 @@ import {
 } from "@/lib/ocpi/handshake";
 import { acceptParty, offerFromHub, removeParty } from "@/lib/ocpi/hub";
 import {
+  capOffered,
   cpoParties,
   isCpoParty,
   isPartyOfPeer,
+  MAX_OFFERED,
+  offerDeclaredParties,
   trustedParties,
 } from "@/lib/ocpi/parties";
+import { MAX_CREDENTIALS_ROLES, parseCredentials } from "@/lib/ocpi/schema";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
-import { MemoryPeerStore, type Peer, type PeerStore } from "@/lib/ocpi/store";
+import {
+  MemoryPeerStore,
+  type HubParty,
+  type Peer,
+  type PeerStore,
+} from "@/lib/ocpi/store";
 import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 import {
   pullAllSessions,
@@ -1285,5 +1294,254 @@ describe("direct CPO peers behave as before", () => {
         token: direct.state.emsp!.token,
       }),
     ).rejects.toMatchObject({ httpStatus: 403 });
+  });
+});
+
+const idN = (n: number): Party => ({
+  countryCode: String.fromCharCode(65 + Math.floor(n / 676) + 0) + "Q",
+  partyId: `${String.fromCharCode(65 + (Math.floor(n / 26) % 26))}${String.fromCharCode(65 + (n % 26))}X`,
+});
+const offered = (p: Party, source: HubParty["source"] = "credentials") =>
+  ({ ...p, status: "offered", source }) satisfies HubParty;
+
+describe("the offered parties of a hub are capped", () => {
+  it("capOffered drops the oldest offered parties and never a trusted one", () => {
+    const trusted = (p: Party) =>
+      ({ ...p, status: "trusted", source: "admin" }) satisfies HubParty;
+    const list: HubParty[] = [
+      trusted(idN(0)),
+      offered(idN(1)),
+      offered(idN(2)),
+      trusted(idN(3)),
+      offered(idN(4)),
+    ];
+    expect(capOffered(list, 5)).toEqual(list);
+    expect(capOffered(list, 2)).toEqual([
+      trusted(idN(0)),
+      offered(idN(2)),
+      trusted(idN(3)),
+      offered(idN(4)),
+    ]);
+    // Even a cap of 0 keeps what the operator trusts.
+    expect(capOffered(list, 0).map((h) => h.status)).toEqual([
+      "trusted",
+      "trusted",
+    ]);
+  });
+
+  it("declared roles past the cap push out the oldest offers, not trusted parties", () => {
+    const list: HubParty[] = [
+      { ...idN(0), status: "trusted", source: "admin" },
+      ...Array.from({ length: MAX_OFFERED }, (_, i) => offered(idN(i + 1))),
+    ];
+    const roles = [idN(MAX_OFFERED + 1), idN(MAX_OFFERED + 2)].map(cpoRole);
+    const next = offerDeclaredParties(list, roles);
+    const of = next.filter((h) => h.status === "offered");
+    expect(of).toHaveLength(MAX_OFFERED);
+    expect(next[0]).toMatchObject({ ...idN(0), status: "trusted" });
+    // The two oldest offers went; the two new ones are in.
+    expect(of.some((h) => h.partyId === idN(1).partyId)).toBe(false);
+    expect(of.some((h) => h.partyId === idN(2).partyId)).toBe(false);
+    expect(of.at(-1)).toMatchObject(idN(MAX_OFFERED + 2));
+    expect(of.at(-2)).toMatchObject(idN(MAX_OFFERED + 1));
+  });
+
+  it("repeated credentials PUTs cannot grow the list past the cap", async () => {
+    // Seed the stored list at the cap, with one trusted party, then PUT more roles.
+    const seed: HubParty[] = [
+      { ...idN(0), status: "trusted", source: "admin" },
+      ...Array.from({ length: MAX_OFFERED }, (_, i) => offered(idN(i + 1))),
+    ];
+    await peers.updatePeer(hubPeer.id, { hubParties: seed });
+    for (let round = 0; round < 3; round++) {
+      hub.state.extraRoles.length = 0;
+      for (let i = 0; i < 20; i++)
+        hub.state.extraRoles.push(cpoRole(idN(1000 + round * 20 + i)));
+      await hub.updateCredentials();
+      hub.connect();
+    }
+    await refreshHub();
+    const of = hubPeer.hubParties.filter((h) => h.status === "offered");
+    expect(of).toHaveLength(MAX_OFFERED);
+    expect(hubPeer.hubParties.filter((h) => h.status === "trusted")).toEqual([
+      { ...idN(0), status: "trusted", source: "admin" },
+    ]);
+    expect(of.at(-1)).toMatchObject(idN(1059));
+  });
+
+  it("a client list read keeps the cap and the trusted parties", async () => {
+    const seed: HubParty[] = [
+      { ...A, status: "trusted", source: "admin" },
+      ...Array.from({ length: MAX_OFFERED }, (_, i) => offered(idN(i + 1))),
+    ];
+    await peers.updatePeer(hubPeer.id, { hubParties: seed });
+    hub.listed.push(
+      { party: B, status: "CONNECTED", role: "CPO" },
+      { party: idN(9000), status: "CONNECTED", role: "CPO" },
+    );
+    const { peer } = await offerFromHub(hubPeer.id, { store: peers, client });
+    expect(peer.hubParties.filter((h) => h.status === "offered")).toHaveLength(
+      MAX_OFFERED,
+    );
+    expect(trustedParties(peer)).toEqual([A]);
+    expect(peer.hubParties.some((h) => sameId(h, B))).toBe(true);
+  });
+
+  it("refuses credentials with more roles than the limit, as an OCPI client error", async () => {
+    const role = (n: number) => ({
+      ...cpoRole(idN(n)),
+    });
+    const body = (n: number) => ({
+      token: "t".repeat(20),
+      url: "https://mock-hub.example.test/ocpi/versions",
+      roles: Array.from({ length: n }, (_, i) => role(i)),
+    });
+    expect(parseCredentials(body(MAX_CREDENTIALS_ROLES)).ok).toBe(true);
+    expect(parseCredentials(body(MAX_CREDENTIALS_ROLES + 1)).ok).toBe(false);
+    // The hub's own PUT with too many roles is refused and changes nothing.
+    for (let i = 0; i < MAX_CREDENTIALS_ROLES; i++)
+      hub.state.extraRoles.push(cpoRole(idN(i)));
+    await expect(hub.updateCredentials()).rejects.toMatchObject({
+      httpStatus: 400,
+    });
+    await refreshHub();
+    expect(hubPeer.hubParties).toEqual([]);
+  });
+});
+
+const sameId = (a: Party, b: Party) =>
+  a.countryCode === b.countryCode && a.partyId === b.partyId;
+
+describe("conflicts between peers cannot both pass at the same time", () => {
+  const hub2Roles = [
+    {
+      role: "HUB" as const,
+      business_details: { name: "Hub 2" },
+      country_code: "ZZ",
+      party_id: "HB2",
+    },
+  ];
+  const secondHub = async () => {
+    const other = await peers.createPeer({
+      label: "Hub 2",
+      direction: "outbound",
+    });
+    await peers.updatePeer(other.id, {
+      status: "registered",
+      roles: hub2Roles,
+      tokenCiphertext: "v1:x",
+      registeredAt: new Date().toISOString(),
+    });
+    return other;
+  };
+  /** A store that runs `during` once, when the first write of a hub's party list comes. */
+  const racyOnParties = (during: () => Promise<unknown>) => {
+    let once = true;
+    const racy = Object.create(peers) as PeerStore;
+    racy.updatePeer = async (id, patch, ...rest) => {
+      if (once && patch.hubParties) {
+        once = false;
+        await during();
+      }
+      return peers.updatePeer(id, patch, ...rest);
+    };
+    return racy;
+  };
+
+  it("two hubs accepting one party: one stays, the other backs out", async () => {
+    const other = await secondHub();
+    const racy = racyOnParties(() =>
+      acceptParty(other.id, B, { store: peers }),
+    );
+    await expect(acceptParty(hubPeer.id, B, { store: racy })).rejects.toThrow(
+      /already trusted through Hub 2/,
+    );
+    expect(trustedParties((await peers.getPeer(other.id))!)).toEqual([B]);
+    expect(trustedParties((await peers.getPeer(hubPeer.id))!)).toEqual([]);
+  });
+
+  it("backing out restores what the hub had offered", async () => {
+    const other = await secondHub();
+    await peers.updatePeer(hubPeer.id, {
+      hubParties: [offered(B, "hubclientinfo")],
+    });
+    const racy = racyOnParties(() =>
+      acceptParty(other.id, B, { store: peers }),
+    );
+    await expect(acceptParty(hubPeer.id, B, { store: racy })).rejects.toThrow();
+    expect((await peers.getPeer(hubPeer.id))!.hubParties).toMatchObject([
+      { ...B, status: "offered", source: "hubclientinfo" },
+    ]);
+  });
+
+  it("a hub accepting a party while a direct CPO registers it: only one stays", async () => {
+    const racy = racyOnParties(() =>
+      connectToCpo(
+        {
+          label: "Mock CPO",
+          versionsUrl: direct.urls.versions,
+          tokenA: direct.issueTokenA(),
+        },
+        { store: peers, client },
+      ),
+    );
+    await expect(
+      acceptParty(hubPeer.id, direct.party, { store: racy }),
+    ).rejects.toThrow(/already registered as/);
+    expect(trustedParties((await peers.getPeer(hubPeer.id))!)).toEqual([]);
+    const registered = (await peers.listPeers()).filter(
+      (p) =>
+        p.status === "registered" && !p.roles.some((r) => r.role === "HUB"),
+    );
+    expect(registered).toHaveLength(1);
+  });
+
+  it("a direct CPO registering a party a hub accepts meanwhile: the registration backs out", async () => {
+    const racy = Object.create(peers) as PeerStore;
+    let once = true;
+    racy.updatePeer = async (id, patch, ...rest) => {
+      if (once && patch.status === "registered" && !patch.hubParties) {
+        once = false;
+        await acceptParty(hubPeer.id, direct.party, { store: peers });
+      }
+      return peers.updatePeer(id, patch, ...rest);
+    };
+    await expect(
+      connectToCpo(
+        {
+          label: "Mock CPO",
+          versionsUrl: direct.urls.versions,
+          tokenA: direct.issueTokenA(),
+        },
+        { store: racy, client },
+      ),
+    ).rejects.toThrow(/already reached through a roaming hub/);
+    const cpo = (await peers.listPeers()).find((p) => p.label === "Mock CPO")!;
+    expect(cpo.status).toBe("unregistered");
+    expect(trustedParties((await peers.getPeer(hubPeer.id))!)).toEqual([
+      direct.party,
+    ]);
+  });
+});
+
+describe("compare-and-set on the peer's version counter", () => {
+  it("rev rises on every update, and a stale rev is refused even within one millisecond", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      const p = await peers.createPeer({ label: "X", direction: "outbound" });
+      expect(p.rev).toBe(0);
+      const a = await peers.updatePeer(p.id, { label: "A" }, undefined, 0);
+      expect(a?.rev).toBe(1);
+      // Same millisecond, stale rev: refused. Current rev: accepted.
+      expect(await peers.updatePeer(p.id, { label: "B" }, undefined, 0)).toBe(
+        null,
+      );
+      expect((await peers.getPeer(p.id))!.label).toBe("A");
+      expect(
+        (await peers.updatePeer(p.id, { label: "B" }, undefined, 1))?.rev,
+      ).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

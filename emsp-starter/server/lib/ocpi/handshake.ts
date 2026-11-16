@@ -195,6 +195,25 @@ async function checkRoles(
 }
 
 /**
+ * The same check again, after the roles were written. checkRoles reads the other peers
+ * and the write follows, so two peers claiming one party at the same time can both pass
+ * it. Each then looks again at what is stored: whoever sees the other's claim backs out,
+ * so both cannot stay (at worst both back out, and retry). Returns why, or null.
+ */
+async function claimLost(
+  store: PeerStore,
+  roles: CredentialsRole[],
+  peerId: string,
+): Promise<HandshakeError | null> {
+  try {
+    await checkRoles(store, roles, peerId);
+    return null;
+  } catch (e) {
+    return asHandshakeError(e, "The peer's roles were refused");
+  }
+}
+
+/**
  * The CPO roles a hub declares in its credentials go to its party list as offered,
  * never trusted (parties.ts). Merged into the list as it is now, so an operator's
  * concurrent accept or removal is kept.
@@ -207,9 +226,11 @@ async function offerDeclared(
   if (!isHubRoles(roles) || !roles.some((r) => r.role === "CPO")) return null;
   const done = await editHubParties(store, peerId, (peer) => {
     const hubParties = offerDeclaredParties(peer.hubParties, roles);
-    return hubParties.length === peer.hubParties.length
-      ? null
-      : { hubParties, result: null };
+    // Nothing new offered: leave the peer alone. (Not a length check: at the cap a new
+    // offer pushes an old one out and the length stays.)
+    return hubParties.some((h) => !peer.hubParties.includes(h))
+      ? { hubParties, result: null }
+      : null;
   });
   return done?.peer ?? null;
 }
@@ -317,6 +338,11 @@ export async function connectToCpo(
     );
     if (!registered)
       throw new HandshakeError("The peer changed during registration");
+    const lost = await claimLost(store, theirs.roles, peer.id);
+    if (lost) {
+      await markUnregistered(store, peer.id, "registered").catch(() => {});
+      throw lost;
+    }
     await store.audit({
       actor,
       action: "ocpi.peer.registered",
@@ -515,6 +541,11 @@ export async function postCredentials(ctx: OcpiContext): Promise<Response> {
     await store.revokeToken(hashC);
     throw notAllowed("Already registered");
   }
+  const lost = await claimLost(store, theirs.roles, peer.id);
+  if (lost) {
+    await markUnregistered(store, peer.id, "registered").catch(() => {});
+    toProblem(lost);
+  }
   // Token A is single-use.
   await store.revokePeerTokens(peer.id, hashC);
   await store.audit({
@@ -558,6 +589,13 @@ export async function putCredentials(ctx: OcpiContext): Promise<Response> {
   if (!updated) {
     await store.revokeToken(hashC);
     throw notAllowed("Not registered");
+  }
+  const lost = await claimLost(store, theirs.roles, peer.id);
+  if (lost) {
+    // Back to the roles it had; its new token stays valid.
+    await store.updatePeer(peer.id, { roles: peer.roles }, "registered");
+    await store.revokePeerTokens(peer.id, hashC);
+    toProblem(lost);
   }
   // The token this request came with, and any older one, stop working now.
   await store.revokePeerTokens(peer.id, hashC);
@@ -686,6 +724,14 @@ export async function rotateCredentials(
     },
     "registered",
   );
+  if (updated && !refused) {
+    const lost = await claimLost(store, roles, peerId);
+    if (lost) {
+      refused = lost;
+      roles = peer.roles;
+      await store.updatePeer(peerId, { roles }, "registered");
+    }
+  }
   await store.revokePeerTokens(peerId, hashB);
   await store.audit({
     actor: deps.actor ?? "admin",

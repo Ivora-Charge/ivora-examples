@@ -5,7 +5,13 @@ import { ocpiPages, type ClientOptions } from "./client";
 import { OcpiError } from "./errors";
 import { HandshakeError } from "./handshake";
 import { ourParty } from "./identity";
-import { editHubParties, isHubPeer, isPartyOfPeer } from "./parties";
+import {
+  capOffered,
+  editHubParties,
+  isHubPeer,
+  isPartyOfPeer,
+  MAX_OFFERED,
+} from "./parties";
 import type { HubParty, Peer, PeerStore } from "./store";
 import { decryptToken } from "./tokens";
 import { sameParty, type Party } from "./types";
@@ -29,8 +35,6 @@ export type HubDeps = {
 
 const COUNTRY = /^[A-Za-z]{2}$/;
 const PARTY_ID = /^[A-Za-z0-9]{3}$/;
-/** Most parties offered from one hub list; the rest is ignored. */
-export const MAX_OFFERED = 500;
 
 async function hubPeer(store: PeerStore, peerId: string): Promise<Peer> {
   const peer = await store.getPeer(peerId);
@@ -122,6 +126,20 @@ export async function acceptParty(
   );
   if (!done) throw new HandshakeError("The peer changed; try again");
   const { peer: updated, result: held } = done;
+  // conflict() read the other peers before the write: look again now. Another peer
+  // that claimed the party meanwhile makes this accept back out (the other peer does
+  // the same on its side), so the two cannot both stay.
+  const lost = await conflict(deps.store, peer, party);
+  if (lost) {
+    await editHubParties(deps.store, peerId, (current) => ({
+      hubParties: [
+        ...current.hubParties.filter((h) => !sameParty(h, party)),
+        ...(held ? [held] : []),
+      ],
+      result: null,
+    }));
+    throw new HandshakeError(lost);
+  }
   await deps.store.audit({
     actor: deps.actor ?? "admin",
     action: "ocpi.hub.party_trusted",
@@ -272,7 +290,7 @@ export async function offerFromHub(
           h.source !== "hubclientinfo" && !offers.some((o) => sameParty(o, h)),
       );
       return {
-        hubParties: [...trusted, ...kept, ...offers],
+        hubParties: capOffered([...trusted, ...kept, ...offers]),
         result: offered,
       };
     },

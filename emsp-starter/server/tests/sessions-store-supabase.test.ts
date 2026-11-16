@@ -56,6 +56,7 @@ const peer = (id: string, countryCode: string, partyId: string): Peer => ({
   ],
   endpoints: [],
   tokenCiphertext: null,
+  rev: 0,
   createdAt: "2026-10-01T00:00:00.000Z",
   updatedAt: "2026-10-01T00:00:00.000Z",
   registeredAt: "2026-10-01T00:00:00.000Z",

@@ -45,6 +45,11 @@ export type Peer = {
   hubParties: HubParty[];
   /** The token we send to the peer, encrypted (tokens.ts). Never leaves the server. */
   tokenCiphertext: string | null;
+  /**
+   * Raised by one on every update: the version for compare-and-set (`ifRev`). Not the
+   * OCPI `version` above.
+   */
+  rev: number;
   createdAt: string;
   updatedAt: string;
   registeredAt: string | null;
@@ -114,14 +119,15 @@ export interface PeerStore {
   listPeers(): Promise<Peer[]>;
   /**
    * Changes a peer. With `ifStatus`, only when the peer still has that status: returns
-   * null otherwise, so two concurrent handshakes cannot both win. With `ifUpdatedAt`,
-   * only when nobody changed the peer since it was read (compare-and-set).
+   * null otherwise, so two concurrent handshakes cannot both win. With `ifRev`,
+   * only when the peer still has that `rev` (nobody changed it since it was read:
+   * compare-and-set).
    */
   updatePeer(
     id: string,
     patch: PeerPatch,
     ifStatus?: PeerStatus,
-    ifUpdatedAt?: string,
+    ifRev?: number,
   ): Promise<Peer | null>;
   issueToken(token: NewToken): Promise<void>;
   /** An active (not revoked, not expired) token by its hash. */
@@ -157,6 +163,7 @@ export class MemoryPeerStore implements PeerStore {
       endpoints: [],
       hubParties: [],
       tokenCiphertext: null,
+      rev: 0,
       createdAt: now,
       updatedAt: now,
       registeredAt: null,
@@ -181,17 +188,14 @@ export class MemoryPeerStore implements PeerStore {
     id: string,
     patch: PeerPatch,
     ifStatus?: PeerStatus,
-    ifUpdatedAt?: string,
+    ifRev?: number,
   ) {
     const p = this.peers.get(id);
     if (!p || (ifStatus && p.status !== ifStatus)) return null;
-    if (ifUpdatedAt !== undefined && p.updatedAt !== ifUpdatedAt) return null;
-    // Every change gets a later timestamp, even within one millisecond, so a
-    // compare-and-set on updatedAt always sees it.
-    const now = Date.now();
-    const last = Date.parse(p.updatedAt);
+    if (ifRev !== undefined && p.rev !== ifRev) return null;
     Object.assign(p, structuredClone(patch), {
-      updatedAt: new Date(now > last ? now : last + 1).toISOString(),
+      rev: p.rev + 1,
+      updatedAt: new Date().toISOString(),
     });
     return structuredClone(p);
   }

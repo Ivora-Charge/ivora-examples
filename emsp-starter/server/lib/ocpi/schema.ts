@@ -193,6 +193,9 @@ function credentialsRole(
   };
 }
 
+/** Most roles in a credentials object; more is refused as invalid parameters. */
+export const MAX_CREDENTIALS_ROLES = 50;
+
 /** The credentials object a peer POSTs or PUTs to us, or returns to our POST or PUT. */
 export function parseCredentials(v: unknown): Parsed<Credentials> {
   const ctx: Ctx = { errors: [] };
@@ -205,7 +208,7 @@ export function parseCredentials(v: unknown): Parsed<Credentials> {
     o.roles,
     "credentials.roles",
     (x, p) => credentialsRole(ctx, x, p),
-    { min: 1, max: 50 },
+    { min: 1, max: MAX_CREDENTIALS_ROLES },
   );
   const seen = new Set<string>();
   for (const r of roles ?? []) {

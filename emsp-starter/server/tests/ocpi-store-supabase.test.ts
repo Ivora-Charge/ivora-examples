@@ -14,6 +14,7 @@ const ROW = {
   roles: [],
   endpoints: [],
   token_ciphertext: "v1:a:b:c",
+  rev: 3,
   created_at: "2026-10-21T00:00:00Z",
   updated_at: "2026-10-21T00:00:00Z",
   registered_at: "2026-10-21T00:00:00Z",
@@ -84,19 +85,16 @@ describe("Supabase peer store (PostgREST)", () => {
     });
   });
 
-  it("updates only if unchanged since read, with ifUpdatedAt (compare-and-set)", async () => {
+  it("updates only if unchanged since read, with ifRev (compare-and-set)", async () => {
     replies.push(Response.json([]));
-    const at = "2026-11-16T10:00:00.123+00:00";
     const res = await store.updatePeer(
       ROW.id,
       { hubParties: [] },
       "registered",
-      at,
+      3,
     );
     expect(res).toBeNull();
-    expect(new URL(requests[0].url).searchParams.get("updated_at")).toBe(
-      `eq.${at}`,
-    );
+    expect(new URL(requests[0].url).searchParams.get("rev")).toBe("eq.3");
     expect(new URL(requests[0].url).searchParams.get("status")).toBe(
       "eq.registered",
     );
