@@ -901,12 +901,21 @@ h2 .muted {
 @media print {
   .no-print,
   .topbar,
+  .nav,
+  .crumbs,
   .demo-banner,
   .skip {
     display: none !important;
   }
   main {
     padding: 0;
+  }
+  /* A host statement prints as one page-wide document, without the menus. */
+  .shell {
+    display: block !important;
+  }
+  .statement .table-scroll {
+    overflow: visible;
   }
 }
 

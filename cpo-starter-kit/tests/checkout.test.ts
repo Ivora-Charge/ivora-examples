@@ -2689,3 +2689,106 @@ describe("a return_url checkout without the session page", () => {
     expect(api.getPayment).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("network mode: card payment at a host's site", () => {
+  const HOST = "20000000-0000-4000-8000-0000000000b1";
+  const OTHER_HOST = "20000000-0000-4000-8000-0000000000b2";
+  const SITE = 7001;
+
+  /** A network where station 9101 sits at SITE, which belongs to HOST. */
+  function hostDeps(
+    gate: "ready" | "action_needed" | "none" | "live_unavailable",
+  ) {
+    const x = deps();
+    x.station.location_id = SITE;
+    const snapshots: [string, string, number][] = [];
+    const snapshotHost = {
+      hostId: HOST,
+      account: "acct_sample_host" as string | null,
+    };
+    x.d.network = {
+      gate: vi.fn(async (_op: string, locationId: number | null) =>
+        locationId !== SITE
+          ? { ok: true as const, hostId: null }
+          : gate === "ready"
+            ? { ok: true as const, hostId: HOST }
+            : { ok: false as const, hostId: HOST, reason: gate },
+      ),
+      snapshot: vi.fn(async (op: string, id: string, locationId: number) => {
+        snapshots.push([op, id, locationId]);
+        return {
+          checkoutId: id,
+          hostId: snapshotHost.hostId,
+          locationId,
+          payoutAccountId: snapshotHost.account,
+          feePlanId: null,
+        };
+      }),
+    };
+    return { ...x, snapshots, snapshotHost };
+  }
+
+  it("goes ahead at a ready host's site and records the host before any bill", async () => {
+    const { d, api, snapshots, cookie } = hostDeps("ready");
+    const r = await pay(d);
+    expect(r.url).toBe(CHECKOUT_URL);
+    // The snapshot is taken on the server with the site Ivora reported for the
+    // station, for this checkout, before the bill was created.
+    expect(snapshots).toEqual([[OP, only(cookie).id, SITE]]);
+    const snapOrder = (d.network!.snapshot as ReturnType<typeof vi.fn>).mock
+      .invocationCallOrder[0];
+    expect(snapOrder).toBeLessThan(api.createBill.mock.invocationCallOrder[0]);
+  });
+
+  for (const reason of ["action_needed", "none", "live_unavailable"] as const)
+    it(`refuses at a host's site whose payouts are ${reason}, before any bill`, async () => {
+      const { d, api, cookie } = hostDeps(reason);
+      const page = await loadChargePage(d, CODE, OPERATOR);
+      expect(page.closed?.code).toBe("host_not_ready");
+      expect(page.closed?.message).toMatch(/Nothing was charged/);
+      const e = await pay(d).catch((x: unknown) => x);
+      expect(e).toBeInstanceOf(CheckoutError);
+      expect((e as CheckoutError).code).toBe("host_not_ready");
+      expect(api.createBill).not.toHaveBeenCalled();
+      expect(api.createPayment).not.toHaveBeenCalled();
+      // The connector is free again for the next driver.
+      expect(only(cookie).phase).toBe("failed");
+    });
+
+  it("refuses when the recorded host is not the one just checked (the site moved)", async () => {
+    const { d, api, snapshotHost, cookie } = hostDeps("ready");
+    snapshotHost.hostId = OTHER_HOST;
+    const e = await pay(d).catch((x: unknown) => x);
+    expect((e as CheckoutError).code).toBe("host_not_ready");
+    expect(api.createBill).not.toHaveBeenCalled();
+    expect(only(cookie).phase).toBe("failed");
+  });
+
+  it("refuses when no payout account was recorded for the host", async () => {
+    const { d, api, snapshotHost } = hostDeps("ready");
+    snapshotHost.account = null;
+    const e = await pay(d).catch((x: unknown) => x);
+    expect((e as CheckoutError).code).toBe("host_not_ready");
+    expect(api.createBill).not.toHaveBeenCalled();
+  });
+
+  it("a site with no host keeps today's flow, with no snapshot", async () => {
+    const { d, api, snapshots } = hostDeps("none");
+    d.network!.gate = vi.fn(async () => ({ ok: true as const, hostId: null }));
+    await pay(d);
+    expect(snapshots).toEqual([]);
+    expect(api.createBill).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unreadable payout check stops before Ivora is asked for anything", async () => {
+    const { d, api, cookie } = hostDeps("ready");
+    d.network!.gate = vi.fn(async () => {
+      throw new Error("database down");
+    });
+    const e = await pay(d).catch((x: unknown) => x);
+    expect((e as CheckoutError).code).toBe("unavailable");
+    expect(api.createBill).not.toHaveBeenCalled();
+    // Still creating: the same tap tries again.
+    expect(only(cookie).phase).toBe("creating");
+  });
+});
