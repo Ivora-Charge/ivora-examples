@@ -77,7 +77,7 @@ describe("/welcome", () => {
 });
 
 describe("error state", () => {
-  it("says what happened, that nothing was changed, and offers a retry", async () => {
+  it("says what happened, how to check a change, and offers a retry", async () => {
     const { ErrorState } = await import("@/app/states");
     const html = renderToStaticMarkup(
       createElement(ErrorState, {
@@ -87,7 +87,11 @@ describe("error state", () => {
     );
     expect(html).toContain('role="alert"');
     expect(html).toContain("abc123");
-    expect(html).toContain("did not start, stop, charge or save anything");
+    expect(html).toContain(
+      "If you had just saved or sent something, reload and check before",
+    );
+    expect(html).not.toContain("did not start");
+    expect(html).not.toContain("payment");
     expect(html).toContain("Try again");
     expect(html).not.toContain("secret detail");
   });

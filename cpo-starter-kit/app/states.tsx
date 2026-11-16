@@ -48,10 +48,9 @@ export function ErrorState({
         .
       </p>
       <p>
-        This error did not start, stop, charge or save anything, and a payment
-        already made is not affected. Try again. If it keeps happening, check
-        that your deployment&apos;s settings are complete and quote the
-        reference to your administrator.
+        If you had just saved or sent something, reload and check before trying
+        again. If it keeps happening, check that your deployment&apos;s settings
+        are complete and quote the reference to your administrator.
       </p>
       <div className="actions">
         <button type="button" className="button" onClick={reset}>
