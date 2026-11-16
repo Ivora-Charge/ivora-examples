@@ -25,6 +25,7 @@ export type Database = {
           user_id: string;
           email: string;
           role: string;
+          host_id: string | null;
           created_at: Timestamp;
         };
         Insert: {
@@ -32,6 +33,7 @@ export type Database = {
           user_id: string;
           email: string;
           role: string;
+          host_id?: string | null;
           created_at?: Timestamp;
         };
         Update: {
@@ -49,6 +51,7 @@ export type Database = {
           operator_id: string;
           email: string;
           role: string;
+          host_id: string | null;
           token_hash: string;
           invited_by: string | null;
           expires_at: Timestamp;
@@ -461,6 +464,42 @@ export type Database = {
         Update: { [_ in never]: never };
         Relationships: [];
       };
+      cpo_hosts: {
+        Row: {
+          id: string;
+          operator_id: string;
+          name: string;
+          contact_name: string | null;
+          contact_email: string | null;
+          contact_phone: string | null;
+          can_edit_prices: boolean;
+          can_control: boolean;
+          can_sessions: boolean;
+          can_invite: boolean;
+          fault_emails: boolean;
+          created_by: string | null;
+          created_at: Timestamp;
+          updated_at: Timestamp;
+          archived_at: Timestamp | null;
+        };
+        // Written only through cpo_save_host and cpo_archive_host.
+        Insert: { operator_id: string; name: string };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
+      cpo_host_sites: {
+        Row: {
+          operator_id: string;
+          location_id: number;
+          host_id: string;
+          assigned_by: string | null;
+          assigned_at: Timestamp;
+        };
+        // Written only through cpo_assign_site and cpo_archive_host.
+        Insert: { operator_id: string; location_id: number; host_id: string };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -488,6 +527,112 @@ export type Database = {
         Returns: boolean;
       };
       cpo_my_operator_ids: { Args: Record<string, never>; Returns: string[] };
+      cpo_my_host_id: { Args: Record<string, never>; Returns: string | null };
+      cpo_save_host: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_id: string | null;
+          p_name: string;
+          p_contact_name: string | null;
+          p_contact_email: string | null;
+          p_contact_phone: string | null;
+          p_can_edit_prices: boolean;
+          p_can_control: boolean;
+          p_can_sessions: boolean;
+          p_can_invite: boolean;
+          p_fault_emails: boolean;
+        };
+        Returns: string;
+      };
+      cpo_archive_host: {
+        Args: { p_operator_id: string; p_actor_id: string; p_id: string };
+        Returns: string[];
+      };
+      cpo_assign_site: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_location_id: number;
+          p_host_id: string | null;
+        };
+        Returns: undefined;
+      };
+      cpo_create_host_invite: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_host_id: string;
+          p_email: string;
+          p_token_hash: string;
+          p_expires_at: Timestamp;
+        };
+        Returns: string;
+      };
+      cpo_claim_host_command: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_location_id: number;
+          p_request_id: string;
+          p_station_id: number;
+          p_action: string;
+          p_connector_id: number | null;
+          p_transaction_id: number | null;
+          p_mode: string | null;
+          p_confirmed_sessions: number[];
+        };
+        Returns: Json;
+      };
+      cpo_set_host_station_pricing: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_location_id: number;
+          p_station_id: number;
+          p_expected_revision: number;
+          p_tariff_id: string | null;
+          p_private: boolean;
+          p_connectors: Json;
+        };
+        Returns: undefined;
+      };
+      cpo_report_checkouts_at: {
+        Args: {
+          p_operator_id: string;
+          p_station_ids: number[];
+          p_from: Timestamp;
+          p_to: Timestamp;
+          p_station_id: number | null;
+          p_status: string;
+          p_limit: number;
+          p_offset: number;
+          p_after_created_at: Timestamp | null;
+          p_after_id: string | null;
+        };
+        Returns: Database["public"]["Tables"]["cpo_checkouts"]["Row"][];
+      };
+      cpo_report_totals_at: {
+        Args: {
+          p_operator_id: string;
+          p_station_ids: number[];
+          p_from: Timestamp;
+          p_to: Timestamp;
+          p_station_id: number | null;
+          p_status: string;
+        };
+        Returns: Json;
+      };
+      cpo_host_fault_recipients: {
+        Args: { p_location_id: number };
+        Returns: {
+          operator_id: string;
+          host_id: string;
+          host_name: string;
+          user_id: string;
+          email: string;
+        }[];
+      };
       cpo_set_staff_role: {
         Args: {
           p_operator_id: string;

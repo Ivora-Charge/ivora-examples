@@ -2619,3 +2619,75 @@ section.card[id] {
   flex-direction: column;
   gap: 0;
 }
+
+/* Network mode: the Hosts page, host filters and the demo's "view as" note. */
+.rows li.host {
+  display: block;
+}
+.host > details > summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-3);
+  min-height: var(--tap-target);
+  cursor: pointer;
+}
+.host-switches {
+  flex-basis: 100%;
+  font-size: var(--font-size-sm);
+}
+.host-body {
+  display: grid;
+  gap: var(--space-4);
+  padding-top: var(--space-3);
+  min-width: 0;
+}
+.host-body .muted {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.site-row .cell-stack {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+.site-host {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.site-host select {
+  width: auto;
+  max-width: 100%;
+  min-height: var(--tap-target);
+  flex: 1 1 12rem;
+}
+.site-host .error {
+  flex-basis: 100%;
+  margin: 0;
+}
+.host-filter {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+}
+.host-filter .field {
+  margin: 0;
+  min-width: 0;
+  flex: 0 1 20rem;
+}
+.host-filter select {
+  min-height: var(--tap-target);
+  max-width: 100%;
+}
+.workspace .workspace-host {
+  margin-top: var(--space-1);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text);
+}
+.view-as {
+  overflow-wrap: anywhere;
+}

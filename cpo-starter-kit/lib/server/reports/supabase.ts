@@ -108,19 +108,32 @@ export function createSupabaseReportsStore(
   return {
     mode: "live",
     async list(f, page) {
+      const args = {
+        ...range(f),
+        p_limit: page.limit,
+        p_offset: page.offset ?? 0,
+        p_after_created_at: page.after?.at ?? null,
+        p_after_id: page.after?.id ?? null,
+      };
       const { data } = check(
-        await svc().rpc("cpo_report_checkouts", {
-          ...range(f),
-          p_limit: page.limit,
-          p_offset: page.offset ?? 0,
-          p_after_created_at: page.after?.at ?? null,
-          p_after_id: page.after?.id ?? null,
-        }),
+        f.stationIds
+          ? await svc().rpc("cpo_report_checkouts_at", {
+              ...args,
+              p_station_ids: f.stationIds,
+            })
+          : await svc().rpc("cpo_report_checkouts", args),
       );
       return ((data ?? []) as Row[]).map(toReportCheckout);
     },
     async totals(f) {
-      const { data } = check(await svc().rpc("cpo_report_totals", range(f)));
+      const { data } = check(
+        f.stationIds
+          ? await svc().rpc("cpo_report_totals_at", {
+              ...range(f),
+              p_station_ids: f.stationIds,
+            })
+          : await svc().rpc("cpo_report_totals", range(f)),
+      );
       return toReportTotals(data);
     },
     async detailsDue(limit) {

@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
 import { actionError } from "@/lib/server/action-errors";
-import { requireRole } from "@/lib/server/auth";
+import { requireNetworkReader, requireRole } from "@/lib/server/auth";
 import { isDemo } from "@/lib/server/env";
 import { resetDemoFleet } from "@/lib/server/ivora/demo-cookie";
 import {
@@ -15,10 +15,11 @@ import {
 } from "@/lib/server/live";
 import { resetDemoLive } from "@/lib/server/live/demo-cookie";
 
-// Technicians and above send, re-check and send again charger commands. Every action checks the
-// signed-in staff member's role on the server first (requireRole), the live service
-// checks it again, and the database checks it in the same statement that claims the
-// command.
+// Technicians and above send, re-check and send again charger commands, and so do host
+// users whose host the operator allowed it, on the host's own sites. Every action
+// checks the signed-in user on the server first, the live service checks the role (or
+// the host's switch and the charger's site) again, and the database checks it in the
+// same statement that claims the command.
 
 const str = (form: FormData, name: string) => {
   const v = form.get(name);
@@ -68,7 +69,7 @@ export async function sendCommandAction(
 ): Promise<ActionState> {
   const stationId = str(form, "stationId");
   try {
-    const actor = await requireRole("technician");
+    const actor = await requireNetworkReader();
     const c = await sendCommand(getLive(), actor, {
       requestId: str(form, "requestId"),
       stationId,
@@ -92,7 +93,7 @@ export async function recheckCommandAction(
   form: FormData,
 ): Promise<ActionState> {
   try {
-    const actor = await requireRole("technician");
+    const actor = await requireNetworkReader();
     const c = await recheckCommand(getLive(), actor, str(form, "id") ?? "");
     refresh(c.stationId);
     return describe(c);
@@ -108,7 +109,7 @@ export async function resendCommandAction(
   form: FormData,
 ): Promise<ActionState> {
   try {
-    const actor = await requireRole("technician");
+    const actor = await requireNetworkReader();
     if (str(form, "confirm") !== "on")
       return { error: "Tick the box to send the same command again." };
     const c = await resendCommand(getLive(), actor, str(form, "id") ?? "");

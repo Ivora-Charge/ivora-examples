@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 import { config } from "@/lib/server/env";
 import { currentStaff } from "@/lib/server/auth";
-import { visibleModules } from "@/lib/modules";
+import { modulesFor } from "@/lib/modules";
 import { ROLE_LABELS } from "@/lib/roles";
 import { brandThemeCss } from "@/lib/brand-colors";
 import { getOnboarding } from "@/lib/server/onboarding";
@@ -9,6 +9,7 @@ import type { Staff } from "@/lib/server/team";
 import { brand } from "@/brand/brand";
 import { Logo } from "@/brand/Logo";
 import { signOutAction } from "./auth-actions";
+import { stopViewingAsHostAction } from "./hosts/actions";
 import Nav from "./nav";
 import ThemeToggle from "../theme-toggle";
 import ShellBreadcrumbs from "../ui/shell-breadcrumbs";
@@ -30,6 +31,7 @@ async function signedInStaff() {
  * text readable (see lib/brand-colors.ts). Null keeps the kit's own colours.
  */
 async function brandCss(staff: Staff | null) {
+  // A host user's view keeps the operator's brand too.
   if (!staff) return null;
   try {
     const p = await getOnboarding().store.load(staff.operatorId);
@@ -50,6 +52,9 @@ export default async function StaffLayout({
 }) {
   const staff = await signedInStaff();
   const themeCss = await brandCss(staff);
+  const sections = staff
+    ? modulesFor(staff, { fleet: config.fleetModule })
+    : [];
   return (
     <div className={staff ? "shell" : "shell signed-out"}>
       {/* Built only from a validated #rrggbb colour; React hoists it into <head>. */}
@@ -69,22 +74,29 @@ export default async function StaffLayout({
             <p className="workspace">
               <span>Workspace</span>
               {config.operatorName}
+              {staff.host && (
+                <span className="workspace-host">{staff.host.name}</span>
+              )}
             </p>
             <Nav
-              items={visibleModules({ fleet: config.fleetModule }).map(
-                ({ slug, href, label, status }) => ({
-                  slug,
-                  href,
-                  label,
-                  soon: status === "coming-soon",
-                }),
-              )}
+              items={sections.map(({ slug, href, label, status }) => ({
+                slug,
+                href,
+                label,
+                soon: status === "coming-soon",
+              }))}
               account={
                 <div className="who">
                   <span>
                     {staff.email} · {ROLE_LABELS[staff.role]}
                   </span>
-                  {staff.demo ? (
+                  {staff.demo && staff.host ? (
+                    <form action={stopViewingAsHostAction}>
+                      <button type="submit" className="button secondary">
+                        Back to the demo owner
+                      </button>
+                    </form>
+                  ) : staff.demo ? (
                     <span className="badge">Sample</span>
                   ) : (
                     <form action={signOutAction}>
@@ -102,11 +114,15 @@ export default async function StaffLayout({
       </header>
       <main id="main" tabIndex={-1}>
         <div className="page">
+          {staff?.demo && staff.host && (
+            <p className="notice view-as" role="note">
+              Demo: you are viewing the app as a user of {staff.host.name}. They
+              see only its sites, and change only what the operator switched on.
+            </p>
+          )}
           {staff ? (
             <ShellBreadcrumbs
-              sections={visibleModules({ fleet: config.fleetModule }).map(
-                ({ href, label }) => ({ href, label }),
-              )}
+              sections={sections.map(({ href, label }) => ({ href, label }))}
             >
               {children}
             </ShellBreadcrumbs>

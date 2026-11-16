@@ -1,4 +1,5 @@
 import "server-only";
+import { HOST_ROLE } from "@/lib/roles";
 import type { Database, Json } from "../database.types";
 import { serviceClient } from "../supabase";
 import {
@@ -187,19 +188,27 @@ export function createSupabaseLiveStore(): LiveStore {
       return ((data ?? []) as Row[]).map(toCommand);
     },
     getCommand,
-    async claim(actor, c) {
+    async claim(actor, c, at) {
+      const args = {
+        p_operator_id: actor.operatorId,
+        p_actor_id: actor.userId,
+        p_request_id: c.requestId,
+        p_station_id: c.stationId,
+        p_action: c.action,
+        p_connector_id: c.connectorId,
+        p_transaction_id: c.transactionId,
+        p_mode: c.mode,
+        p_confirmed_sessions: c.confirmedSessions,
+      };
+      // A host user's claim: the function checks the site is their host's and the
+      // host's switch for the action is on, in the same statement as the insert.
       const { data } = check(
-        await svc().rpc("cpo_claim_live_command", {
-          p_operator_id: actor.operatorId,
-          p_actor_id: actor.userId,
-          p_request_id: c.requestId,
-          p_station_id: c.stationId,
-          p_action: c.action,
-          p_connector_id: c.connectorId,
-          p_transaction_id: c.transactionId,
-          p_mode: c.mode,
-          p_confirmed_sessions: c.confirmedSessions,
-        }),
+        actor.role === HOST_ROLE
+          ? await svc().rpc("cpo_claim_host_command", {
+              ...args,
+              p_location_id: at?.siteId ?? 0,
+            })
+          : await svc().rpc("cpo_claim_live_command", args),
       );
       const r = data as { id: string; created: boolean };
       const command = await getCommand(actor.operatorId, r.id);

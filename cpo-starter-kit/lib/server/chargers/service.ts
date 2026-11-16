@@ -18,6 +18,7 @@ import {
   isStaffSession,
   type LiveDeps,
 } from "../live/service";
+import { narrow, type SiteScope } from "../scope";
 import type { Staff } from "../team/types";
 import { addChargerInput, connectorNumber, editChargerInput } from "./input";
 import { generatePassword } from "./password";
@@ -219,9 +220,12 @@ function view(
  * hidden (Ivora keeps a station with charging history).
  */
 export async function loadChargers(
-  d: ChargerDeps,
+  deps: ChargerDeps,
   staff: Staff,
+  o: { filter?: SiteScope | null } = {},
 ): Promise<ChargersResult> {
+  // A host user sees only their host's sites (strictly); operator staff may filter.
+  const { d, scope } = narrow(deps, staff, o.filter ?? null);
   let stations, locations, records;
   try {
     [stations, locations, records] = await Promise.all([
@@ -235,7 +239,14 @@ export async function loadChargers(
     return { ok: false, error: describeError(e) };
   }
   const sites = new Map(locations.data.map((l) => [l.id, l.name]));
-  const active = records.filter((r) => !r.removedAt);
+  const listed = new Set(stations.data.map((s) => s.id));
+  // In a scope, only the records of its chargers (and of chargers still being added
+  // at its sites): a record whose station is outside it is not "missing", just not
+  // this view's.
+  const inView = (r: ChargerRecord) =>
+    !scope ||
+    (r.stationId ? listed.has(r.stationId) : scope.allows(r.locationId));
+  const active = records.filter((r) => !r.removedAt && inView(r));
   const byStation = new Map(
     active.filter((r) => r.stationId).map((r) => [r.stationId!, r]),
   );

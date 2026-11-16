@@ -1,7 +1,14 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import { canInvite, leavesNoOwner, ROLES, type Role } from "@/lib/roles";
+import type { HostAccess } from "@/lib/hosts";
+import {
+  canInvite,
+  HOST_ROLE,
+  leavesNoOwner,
+  ROLES,
+  type MemberRole,
+} from "@/lib/roles";
 import {
   changedMeanwhile,
   invalidInvite,
@@ -20,11 +27,15 @@ import {
 
 export const DEMO_OPERATOR_ID = "demo-operator";
 export const DEMO_OWNER_ID = "00000000-0000-4000-8000-00000000d000";
+/** The sample host users, one per sample host (lib/server/hosts/demo.ts). */
+export const DEMO_HOST_USER_A = "00000000-0000-4000-8000-00000000d0a1";
+export const DEMO_HOST_USER_B = "00000000-0000-4000-8000-00000000d0b1";
 const MAX_MEMBERS = 12;
 const MAX_INVITES = 8;
 const MAX_COOKIE_CHARS = 3800;
 
-const role = z.enum(ROLES);
+const role = z.enum([...ROLES, HOST_ROLE]);
+const hostId = z.string().max(64).nullable().optional();
 const stateSchema = z.object({
   v: z.literal(1),
   members: z
@@ -33,6 +44,7 @@ const stateSchema = z.object({
         userId: z.string().max(64),
         email: z.string().max(254),
         role,
+        hostId,
         createdAt: z.string().max(40),
       }),
     )
@@ -43,6 +55,7 @@ const stateSchema = z.object({
         id: z.string().max(64),
         email: z.string().max(254),
         role,
+        hostId,
         tokenHash: z.string().regex(/^[0-9a-f]{64}$/),
         invitedBy: z.string().max(64).optional(),
         expiresAt: z.string().max(40),
@@ -81,6 +94,20 @@ export function demoSeed(): DemoTeamState {
         userId: "00000000-0000-4000-8000-00000000d003",
         email: "sample-viewer@example.com",
         role: "viewer",
+        createdAt: SEEDED,
+      },
+      {
+        userId: DEMO_HOST_USER_A,
+        email: "sample-host-a@example.com",
+        role: "host",
+        hostId: "demo-host-a",
+        createdAt: SEEDED,
+      },
+      {
+        userId: DEMO_HOST_USER_B,
+        email: "sample-host-b@example.com",
+        role: "host",
+        hostId: "demo-host-b",
         createdAt: SEEDED,
       },
     ],
@@ -125,10 +152,15 @@ export function memoryDemoStore(initial = demoSeed()): DemoStore & {
   return store;
 }
 
+/**
+ * The demo team. `hostAccess` resolves a sample host user's host (null when the host
+ * is gone or archived: no access), from the visitor's demo hosts.
+ */
 export function createDemoBackend(
   store: DemoStore,
   operatorName: string,
   now = () => new Date(),
+  hostAccess: (hostId: string) => Promise<HostAccess | null> = async () => null,
 ): TeamBackend {
   const live = (i: DemoTeamState["invites"][number]) =>
     i.state === "pending" && Date.parse(i.expiresAt) > now().getTime();
@@ -139,9 +171,15 @@ export function createDemoBackend(
         throw changedMeanwhile();
   };
   /** Pending invites `userId` sent that their new role (null: removed) may not send. */
-  const dropInvitesBy = (s: DemoTeamState, userId: string, to: Role | null) => {
+  const dropInvitesBy = (
+    s: DemoTeamState,
+    userId: string,
+    to: MemberRole | null,
+  ) => {
     s.invites = s.invites.filter(
-      (i) => i.invitedBy !== userId || (to !== null && canInvite(to, i.role)),
+      (i) =>
+        i.invitedBy !== userId ||
+        (to !== null && i.role !== HOST_ROLE && canInvite(to, i.role)),
     );
   };
   const save = async (s: DemoTeamState) => {
@@ -159,6 +197,12 @@ export function createDemoBackend(
     async staffForUser(userId) {
       const m = (await store.load()).members.find((x) => x.userId === userId);
       if (!m) return null;
+      let host: HostAccess | null = null;
+      if (m.role === HOST_ROLE) {
+        host = m.hostId ? await hostAccess(m.hostId) : null;
+        // Like the database: a host user of an archived host has no access.
+        if (!host) return null;
+      }
       const staff: Staff = {
         userId: m.userId,
         email: m.email,
@@ -166,6 +210,7 @@ export function createDemoBackend(
         operatorId: DEMO_OPERATOR_ID,
         operatorName,
         demo: true,
+        host,
       };
       return staff;
     },
@@ -178,15 +223,19 @@ export function createDemoBackend(
       );
     },
     async members() {
-      return (await store.load()).members.map((m): Member => ({ ...m }));
+      return (await store.load()).members.map((m): Member => ({
+        ...m,
+        hostId: m.hostId ?? null,
+      }));
     },
     async pendingInvites() {
       return (await store.load()).invites
         .filter(live)
-        .map(({ id, email, role, expiresAt }) => ({
+        .map(({ id, email, role, hostId, expiresAt }) => ({
           id,
           email,
           role,
+          hostId: hostId ?? null,
           expiresAt,
         }));
     },
@@ -209,6 +258,7 @@ export function createDemoBackend(
         id,
         email: i.email,
         role: i.role,
+        hostId: i.hostId,
         tokenHash: i.tokenHash,
         invitedBy: i.invitedBy,
         expiresAt: i.expiresAt.toISOString(),
@@ -234,6 +284,7 @@ export function createDemoBackend(
         id: inv.id,
         email: inv.email,
         role: inv.role,
+        hostId: inv.hostId ?? null,
         expiresAt: inv.expiresAt,
         state: inv.state,
         operatorId: DEMO_OPERATOR_ID,
@@ -257,6 +308,7 @@ export function createDemoBackend(
         userId,
         email,
         role: inv.role,
+        hostId: inv.hostId ?? null,
         createdAt: now().toISOString(),
       });
       await save(s);

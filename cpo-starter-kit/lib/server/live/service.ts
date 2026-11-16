@@ -1,7 +1,8 @@
 import "server-only";
 import { randomInt } from "node:crypto";
 import { z } from "zod";
-import { atLeast } from "@/lib/roles";
+import { may } from "@/lib/hosts";
+import { HOST_ROLE } from "@/lib/roles";
 import { whToKwh } from "@/lib/units";
 import {
   describeError,
@@ -16,6 +17,7 @@ import {
   type TokenRecord,
   type Transaction,
 } from "../ivora";
+import { narrow, type SiteScope } from "../scope";
 import type { Staff } from "../team/types";
 import {
   asTransaction,
@@ -502,7 +504,13 @@ const stalledOf = (list: TrackedSession[]) =>
   new Set(list.filter(stalled).map((t) => t.transactionId));
 
 /** Everything the Live page shows. Reads only (it re-reads pending operations). */
-export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
+export async function loadLive(
+  deps: LiveDeps,
+  staff: Staff,
+  o: { filter?: SiteScope | null } = {},
+): Promise<LiveResult> {
+  // A host user sees only their host's sites (strictly); operator staff may filter.
+  const { d, scope } = narrow(deps, staff, o.filter ?? null);
   let locations, stations, txs: Transaction[], commands, token, free;
   let sync: ActiveSync;
   try {
@@ -513,7 +521,8 @@ export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
       d.store.getStaffToken(staff.operatorId),
       d.store.getFreeToken(staff.operatorId),
     ]);
-    if (!stations.truncated) await forgetRemoved(d, stations.data);
+    // Only the whole list says which stations are gone.
+    if (!stations.truncated && !scope) await forgetRemoved(d, stations.data);
     sync = await syncActiveSessions(
       d,
       stations.data.map((s) => s.id),
@@ -530,6 +539,8 @@ export async function loadLive(d: LiveDeps, staff: Staff): Promise<LiveResult> {
   const now = nowOf(d);
   const staffToken = token?.idToken ?? null;
   const byId = new Map(stations.data.map((s) => [s.id, s]));
+  // The operator's commands, limited to the chargers in view.
+  if (scope) commands = commands.filter((c) => byId.has(c.stationId));
   const stalledIds = stalledOf(sync.sessions);
   const sessions = txs
     .filter(running)
@@ -642,11 +653,14 @@ export interface StationDetail {
 
 /** One charger's live detail: status, sessions, faults and recent commands. */
 export async function loadStation(
-  d: LiveDeps,
+  deps: LiveDeps,
   staff: Staff,
   stationId: number,
   o: { endedBefore?: number } = {},
 ): Promise<{ ok: true; detail: StationDetail | null } | LiveFailure> {
+  // A charger outside a host user's sites answers 404 (detail null), like one that
+  // does not exist.
+  const { d } = narrow(deps, staff);
   let s: Station,
     sync: ActiveSync,
     ended: TrackedSession[],
@@ -1043,6 +1057,26 @@ async function reload(
 }
 
 /**
+ * May the actor send commands at all? Technicians and above; a host user only with at
+ * least one of the host's command switches on (each command then checks its own).
+ */
+function mayCommand(actor: Staff): boolean {
+  if (actor.role !== HOST_ROLE) return may(actor, "reset");
+  const p = actor.host?.permissions;
+  return Boolean(p && (p.control || p.sessions));
+}
+
+/**
+ * A host user's command must be on one of their chargers, and of a kind their host's
+ * switches still allow; otherwise it answers 404 (not theirs) or not allowed.
+ */
+async function commandInScope(d: LiveDeps, actor: Staff, c: LiveCommand) {
+  if (actor.role !== HOST_ROLE) return;
+  const s = await d.ivora.getStation(c.stationId);
+  if (!may(actor, c.action, s.location_id ?? null)) throw notAllowed();
+}
+
+/**
  * Sends one charger command from the Live view, once the staff member has confirmed
  * it. Technicians and above only. The station is read first: a remote start goes only
  * to a free connector (or one with a vehicle waiting), and a stop, reset or unlock that
@@ -1051,13 +1085,17 @@ async function reload(
  * sent with an Idempotency-Key derived from its record.
  */
 export async function sendCommand(
-  d: LiveDeps,
+  deps: LiveDeps,
   actor: Staff,
   raw: unknown,
 ): Promise<LiveCommand> {
-  if (!atLeast(actor.role, "technician")) throw notAllowed();
+  if (!mayCommand(actor)) throw notAllowed();
+  const { d } = narrow(deps, actor);
   const input = parse(raw);
+  // A station outside a host user's sites answers 404 here, before anything is sent.
   const s = await d.ivora.getStation(input.stationId);
+  // The switch for this action, on this charger's own site (as Ivora reports it now).
+  if (!may(actor, input.action, s.location_id ?? null)) throw notAllowed();
   const txs = await runningAt(d, s.id);
   const connector = input.connectorId
     ? s.connectors.find((c) => c.id === input.connectorId)
@@ -1120,18 +1158,23 @@ export async function sendCommand(
     input.action === "start"
       ? await ensureStaffToken(d, actor.operatorId)
       : null;
-  const { command, created } = await d.store.claim(actor, {
-    requestId: input.requestId,
-    stationId: s.id,
-    action: input.action,
-    connectorId:
-      input.action === "start" || input.action === "unlock"
-        ? connector!.id
-        : null,
-    transactionId: input.action === "stop" ? input.transactionId! : null,
-    mode: input.action === "reset" ? input.mode! : null,
-    confirmedSessions: ends.map((t) => t.id),
-  });
+  const { command, created } = await d.store.claim(
+    actor,
+    {
+      requestId: input.requestId,
+      stationId: s.id,
+      action: input.action,
+      connectorId:
+        input.action === "start" || input.action === "unlock"
+          ? connector!.id
+          : null,
+      transactionId: input.action === "stop" ? input.transactionId! : null,
+      mode: input.action === "reset" ? input.mode! : null,
+      confirmedSessions: ends.map((t) => t.id),
+    },
+    // A host user's claim names the site, which the database checks is theirs.
+    { siteId: s.location_id ?? null },
+  );
   // The same tap again (a double click, a resubmitted form): show the command it
   // already made. Read-only: the first request is still sending it.
   if (!created) return command;
@@ -1183,12 +1226,14 @@ async function closeUnknown(
  * after 15 minutes, as the database does.
  */
 export async function recheckCommand(
-  d: LiveDeps,
+  deps: LiveDeps,
   actor: Staff,
   id: string,
 ): Promise<LiveCommand> {
-  if (!atLeast(actor.role, "technician")) throw notAllowed();
+  if (!mayCommand(actor)) throw notAllowed();
+  const { d } = narrow(deps, actor);
   const c = await reload(d, actor.operatorId, id);
+  await commandInScope(d, actor, c);
   if (c.phase !== "pending") return c;
   const age = ageOf(d, c);
   if (!c.operationId)
@@ -1223,12 +1268,14 @@ export async function recheckCommand(
  * so staff review the charger and confirm a new command. Technicians and above only.
  */
 export async function resendCommand(
-  d: LiveDeps,
+  deps: LiveDeps,
   actor: Staff,
   id: string,
 ): Promise<LiveCommand> {
-  if (!atLeast(actor.role, "technician")) throw notAllowed();
+  if (!mayCommand(actor)) throw notAllowed();
+  const { d } = narrow(deps, actor);
   const c = await reload(d, actor.operatorId, id);
+  await commandInScope(d, actor, c);
   if (c.phase !== "pending") return c;
   // It reached Ivora: there is an answer to read, nothing to send.
   if (c.operationId) return recheckCommand(d, actor, id);

@@ -14,6 +14,9 @@ import {
   type TransactionDetail,
 } from "../ivora";
 import type { OnboardingStore } from "../onboarding/types";
+import { hostFilterParam, parseHostFilter } from "../../hosts";
+import { HOST_ROLE } from "../../roles";
+import { narrow, type SiteScope } from "../scope";
 import type { Staff } from "../team/types";
 import { reportStatus } from "./records";
 import {
@@ -158,6 +161,7 @@ export function parseReportQuery(
         station && /^[1-9]\d{0,11}$/.test(station) ? Number(station) : null,
       status,
       page: page && /^[1-9]\d{0,5}$/.test(page) ? Number(page) : 1,
+      host: hostFilterParam(parseHostFilter(params.get("host"))) || undefined,
     },
     error,
   };
@@ -176,6 +180,7 @@ export function reportSearch(q: ReportQuery, page?: number): string {
   }
   if (q.stationId !== null) p.set("station", String(q.stationId));
   if (q.status !== "all") p.set("status", q.status);
+  if (q.host) p.set("host", q.host);
   if (page !== undefined && page > 1) p.set("page", String(page));
   return p.toString();
 }
@@ -288,9 +293,21 @@ export function stationContext(
   };
 }
 
-/** What the kit's records are filtered by, for the signed-in operator. */
-export const reportFilter = (staff: Staff, q: ReportQuery): ReportFilter => ({
+/**
+ * What the kit's records are filtered by: the signed-in user's operator and the
+ * chargers in their view (`context.stationIds`, from loadReportsContext). A host user
+ * always gets their own chargers only, even if a caller passed no scope.
+ */
+export const reportFilter = (
+  staff: Staff,
+  context: Pick<ReportsContext, "query" | "stationIds">,
+): ReportFilter => ({
   operatorId: staff.operatorId,
+  stationIds: context.stationIds ?? (staff.role === HOST_ROLE ? [] : null),
+  ...queryFilter(context.query),
+});
+
+const queryFilter = (q: ReportQuery) => ({
   fromMs: q.fromMs,
   toMs: q.toMs,
   stationId: q.stationId,
@@ -494,6 +511,16 @@ export async function loadIvoraBills(
 export interface ReportsContext {
   mode: "live" | "demo";
   query: ReportQuery;
+  /**
+   * The chargers in view, when the view is limited (a host user's sites, or an
+   * operator's host filter); null for every charger. Derived on the server from the
+   * sites the user may see, never from the URL.
+   */
+  stationIds: number[] | null;
+  /** The URL named a charger that is not in view (another host's, or none): 404. */
+  unknownStation: boolean;
+  /** A host user's view: no project-wide figures (GET /stats has no site filter). */
+  hostView: boolean;
   /** A filter that could not be read (the page then shows the default period). */
   queryError: string | null;
   timeZoneSource: "company" | "sites" | "utc";
@@ -508,12 +535,15 @@ export interface ReportsContext {
  * period and the stations (names, sites, the station filter).
  */
 export async function loadReportsContext(
-  d: ReportsDeps,
+  deps: ReportsDeps,
   staff: Staff,
   params: Params,
+  o: { filter?: SiteScope | null } = {},
 ): Promise<
   { ok: true; context: ReportsContext } | { ok: false; error: string }
 > {
+  // A host user sees only their host's sites (strictly); operator staff may filter.
+  const { d, scope } = narrow(deps, staff, o.filter ?? null);
   try {
     const [profile, stations, locations] = await Promise.all([
       d.company.load(staff.operatorId).catch(() => null),
@@ -527,6 +557,11 @@ export async function loadReportsContext(
       context: {
         mode: d.ivora.mode,
         query,
+        stationIds: scope ? stations.data.map((s) => s.id) : null,
+        unknownStation:
+          query.stationId !== null &&
+          !stations.data.some((s) => s.id === query.stationId),
+        hostView: staff.role === HOST_ROLE,
         queryError: error,
         timeZoneSource: tz.source,
         stations: stations.data

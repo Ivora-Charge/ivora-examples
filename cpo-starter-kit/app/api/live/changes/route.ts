@@ -1,4 +1,4 @@
-import { checkRole, currentStaff } from "@/lib/server/auth";
+import { checkNetworkReader, currentStaff } from "@/lib/server/auth";
 import { getLive } from "@/lib/server/live";
 
 export const dynamic = "force-dynamic";
@@ -12,7 +12,7 @@ export const dynamic = "force-dynamic";
 export async function GET() {
   let staff;
   try {
-    staff = checkRole(await currentStaff(), "viewer");
+    staff = checkNetworkReader(await currentStaff());
   } catch {
     staff = null;
   }

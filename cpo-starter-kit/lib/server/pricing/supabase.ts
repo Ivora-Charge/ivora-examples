@@ -1,4 +1,5 @@
 import "server-only";
+import { HOST_ROLE } from "@/lib/roles";
 import type { Json } from "../database.types";
 import { serviceClient } from "../supabase";
 import {
@@ -173,8 +174,8 @@ export function createSupabasePricingStore(): PricingStore {
         p_version: version,
       });
     },
-    async setStation(actor, stationId, expectedRevision, input) {
-      await rpc("cpo_set_station_pricing", {
+    async setStation(actor, stationId, expectedRevision, input, at) {
+      const args = {
         p_operator_id: actor.operatorId,
         p_actor_id: actor.userId,
         p_station_id: stationId,
@@ -185,7 +186,15 @@ export function createSupabasePricingStore(): PricingStore {
           connector_id: c.connectorId,
           tariff_id: c.tariffId,
         })),
-      });
+      };
+      // A host user's save: the function checks the site is their host's and the
+      // host's "edit prices" switch is on, in the same statement as the write.
+      if (actor.role === HOST_ROLE)
+        await rpc("cpo_set_host_station_pricing", {
+          ...args,
+          p_location_id: at?.siteId ?? 0,
+        });
+      else await rpc("cpo_set_station_pricing", args);
     },
   };
 }

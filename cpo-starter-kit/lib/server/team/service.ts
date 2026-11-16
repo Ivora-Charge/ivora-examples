@@ -6,14 +6,16 @@ import {
   timingSafeEqual,
 } from "node:crypto";
 import type { z } from "zod";
+import { isHostId, may } from "@/lib/hosts";
 import {
   atLeast,
   canChangeRole,
   canInvite,
   canRemove,
+  HOST_ROLE,
   leavesNoOwner,
   ROLE_LABELS,
-  type Role,
+  type MemberRole,
 } from "@/lib/roles";
 import { inviteEmail, MailerError, type Email, type Mailer } from "../mail";
 import { limit, type RateLimiter } from "../rate-limit";
@@ -25,6 +27,7 @@ import {
   operatorNameInput,
   passwordInput,
   idInput,
+  inviteRoleInput,
   roleInput,
   userIdInput,
 } from "./input";
@@ -59,6 +62,11 @@ export interface TeamDeps {
   appUrl: string;
   setupSecret: string;
   now: () => Date;
+  /**
+   * The name of the operator's host with this ID, while it is not archived; else null.
+   * For host invites (the database checks it again in the same statement).
+   */
+  activeHost: (operatorId: string, hostId: string) => Promise<string | null>;
 }
 
 export const hashToken = (token: string) =>
@@ -98,6 +106,11 @@ async function memberOf(d: TeamDeps, actor: Staff, userId: string) {
   return { team, target };
 }
 
+/**
+ * The team as `actor` may see it. Operator staff: everyone (invites for managers and
+ * owners). A host user: only their own host's users, and its pending invites while
+ * they may invite (in live mode RLS limits the members read too).
+ */
 export async function loadTeam(
   d: TeamDeps,
   actor: Staff,
@@ -105,18 +118,23 @@ export async function loadTeam(
   members: Member[];
   invites: Awaited<ReturnType<TeamBackend["pendingInvites"]>>;
 }> {
+  const hostId = actor.role === HOST_ROLE ? (actor.host?.id ?? "") : null;
   const [members, invites] = await Promise.all([
     d.backend.members(actor.operatorId),
-    atLeast(actor.role, "manager")
+    may(actor, "invite")
       ? d.backend.pendingInvites(actor.operatorId)
       : Promise.resolve([]),
   ]);
-  return { members, invites };
+  if (hostId === null) return { members, invites };
+  return {
+    members: members.filter((m) => m.hostId === hostId),
+    invites: invites.filter((i) => i.hostId === hostId),
+  };
 }
 
 export interface InviteOutcome {
   email: string;
-  role: Role;
+  role: MemberRole;
   /** True when the provider accepted the email. */
   emailed: boolean;
   /** The link to share by hand: demo mode, or live mode without an email provider. */
@@ -128,16 +146,40 @@ export interface InviteOutcome {
 export async function inviteStaff(
   d: TeamDeps,
   actor: Staff,
-  raw: { email: unknown; role: unknown },
+  raw: { email: unknown; role: unknown; hostId?: unknown },
 ): Promise<InviteOutcome> {
   const email = parse(emailInput, raw.email);
-  const role = parse(roleInput, raw.role);
-  allow(
-    canInvite(actor.role, role),
-    actor.role === "manager"
-      ? "Managers can invite technicians and viewers. Ask an owner to invite managers and owners."
-      : "Only owners and managers can invite staff.",
-  );
+  // A host user invites only for their own host, whatever the form says.
+  const role =
+    actor.role === HOST_ROLE ? HOST_ROLE : parse(inviteRoleInput, raw.role);
+  let hostId: string | null = null;
+  let hostName: string | null = null;
+  if (role === HOST_ROLE) {
+    allow(
+      may(actor, "invite"),
+      actor.role === HOST_ROLE
+        ? "Your host can't invite further users. Ask the operator to switch it on."
+        : "Only owners and managers can invite host users.",
+    );
+    hostId =
+      actor.role === HOST_ROLE
+        ? actor.host!.id
+        : ((raw.hostId ?? null) as string | null);
+    if (!isHostId(hostId))
+      throw new TeamError("invalid", "Choose the host they belong to.");
+    hostName = await d.activeHost(actor.operatorId, hostId);
+    if (!hostName)
+      throw new TeamError(
+        "not_found",
+        "That host is not in the kit any more (it may have been archived). Reload the page.",
+      );
+  } else
+    allow(
+      canInvite(actor.role, role),
+      actor.role === "manager"
+        ? "Managers can invite technicians and viewers. Ask an owner to invite managers and owners."
+        : "Only owners and managers can invite staff.",
+    );
   await limit(
     d.limiter,
     d.secret,
@@ -157,6 +199,7 @@ export async function inviteStaff(
     operatorId: actor.operatorId,
     email,
     role,
+    hostId,
     tokenHash: hashToken(token),
     invitedBy: actor.userId,
     expiresAt: new Date(d.now().getTime() + INVITE_TTL_HOURS * 3_600_000),
@@ -166,7 +209,9 @@ export async function inviteStaff(
   const mail = inviteEmail({
     to: email,
     operatorName: actor.operatorName,
-    roleLabel: ROLE_LABELS[role],
+    roleLabel: hostName
+      ? `a user of ${hostName} (site host)`
+      : ROLE_LABELS[role],
     link,
     expiresHours: INVITE_TTL_HOURS,
   });
@@ -196,13 +241,13 @@ export async function revokeStaffInvite(
   actor: Staff,
   rawId: unknown,
 ): Promise<void> {
-  allow(
-    atLeast(actor.role, "manager"),
-    "Only owners and managers can revoke invites.",
-  );
+  allow(may(actor, "invite"), "Only owners and managers can revoke invites.");
   const id = parse(idInput, rawId);
   const invite = (await d.backend.pendingInvites(actor.operatorId)).find(
-    (i) => i.id === id,
+    (i) =>
+      i.id === id &&
+      // A host user: only their own host's invites (others are not theirs to see).
+      (actor.role !== HOST_ROLE || i.hostId === actor.host?.id),
   );
   if (!invite)
     throw new TeamError(
@@ -210,7 +255,7 @@ export async function revokeStaffInvite(
       "This invite was already used or revoked.",
     );
   allow(
-    canInvite(actor.role, invite.role),
+    invite.role === HOST_ROLE || canInvite(actor.role, invite.role),
     "Only an owner can revoke this invite.",
   );
   await d.backend.revokeInvite(actor.operatorId, id);
@@ -276,7 +321,7 @@ export async function removeStaff(
 
 export interface InviteView {
   email: string;
-  role: Role;
+  role: MemberRole;
   operatorName: string;
   expiresAt: string;
   /** Already signed in with the invited email: joins with this login, no password. */

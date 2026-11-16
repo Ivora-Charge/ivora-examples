@@ -1,6 +1,9 @@
 import Link from "next/link";
 import { atLeast } from "@/lib/roles";
-import { requireRole } from "@/lib/server/auth";
+import { requireNetworkReader } from "@/lib/server/auth";
+import { hostStore } from "@/lib/server/hosts";
+import { loadHostFilter } from "@/lib/server/hosts/filter";
+import { HostFilterForm } from "@/app/ui/host-filter";
 import { getChargers, loadChargers } from "@/lib/server/chargers";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
 import { resetDemoChargersAction } from "./actions";
@@ -132,20 +135,33 @@ function ChargersTable({
 async function Content({
   searchParams,
 }: {
-  searchParams: Promise<{ removed?: string | string[] }>;
+  searchParams: Promise<{
+    removed?: string | string[];
+    host?: string | string[];
+  }>;
 }) {
-  const me = await requireRole("viewer");
+  const me = await requireNetworkReader();
   const canWork = atLeast(me.role, "technician");
+  const sp = await searchParams;
+  const hosts = await loadHostFilter(hostStore(), me, sp.host);
   const [r, company] = await Promise.all([
-    loadChargers(getChargers(), me),
+    loadChargers(getChargers(), me, { filter: hosts.scope }),
     companyZone(me.operatorId),
   ]);
-  const removed = (await searchParams).removed;
+  const removed = sp.removed;
   return (
     <>
       <PageHeader
         title="Chargers"
-        description={description(r, me.demo)}
+        description={
+          [
+            me.host && `${me.host.name}.`,
+            hosts.label && `Showing ${hosts.label}.`,
+            description(r, me.demo),
+          ]
+            .filter(Boolean)
+            .join(" ") || undefined
+        }
         action={
           canWork && r.ok ? (
             <a className="button" href="#add-heading">
@@ -192,6 +208,7 @@ async function Content({
               sites and chargers.
             </p>
           )}
+          <HostFilterForm view={hosts} action="/chargers" />
           <ChargersTable r={r} canWork={canWork} company={company} />
           {canWork ? (
             <section className="card" aria-labelledby="add-heading">
@@ -200,6 +217,11 @@ async function Content({
                 sites={r.sites.map((s) => ({ id: s.id, name: s.name }))}
               />
             </section>
+          ) : me.host ? (
+            <p className="muted">
+              These are the chargers at your sites. The operator adds, tests and
+              removes chargers.
+            </p>
           ) : (
             <p className="muted">
               Viewers can see chargers. Technicians, managers and owners add and
@@ -221,7 +243,7 @@ async function Content({
 
 /** Checks the role first (a real redirect), then the page behind its loading skeleton. */
 export default async function Page(props: Parameters<typeof Content>[0]) {
-  await requireRole("viewer");
+  await requireNetworkReader();
   return (
     <Loading shape="list">
       <Content {...props} />

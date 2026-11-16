@@ -6,11 +6,12 @@ import { commandTitle, PhasePill, when } from "./status";
 /** Recent commands with what Ivora answered and what the view has seen since. */
 export function CommandsCard({
   commands,
-  canWork,
+  canAct,
   showStation = true,
 }: {
   commands: CommandView[];
-  canWork: boolean;
+  /** May the signed-in user check or resend this command (its action, its charger)? */
+  canAct: (c: CommandView) => boolean;
   showStation?: boolean;
 }) {
   return (
@@ -41,8 +42,8 @@ export function CommandsCard({
                   {c.error && <span className="error-text"> {c.error}</span>}
                 </span>
               )}
-              {canWork && c.phase === "pending" && <RecheckForm id={c.id} />}
-              {canWork && c.resendUntil && (
+              {canAct(c) && c.phase === "pending" && <RecheckForm id={c.id} />}
+              {canAct(c) && c.resendUntil && (
                 <ResendForm id={c.id} until={c.resendUntil} />
               )}
             </li>

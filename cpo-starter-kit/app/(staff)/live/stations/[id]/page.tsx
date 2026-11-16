@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { atLeast } from "@/lib/roles";
-import { requireRole } from "@/lib/server/auth";
+import { commandRights, may } from "@/lib/hosts";
+import { requireNetworkReader } from "@/lib/server/auth";
 import { config } from "@/lib/server/env";
 import { getLive, loadStation, STARTABLE } from "@/lib/server/live";
 import { formatKwh } from "@/lib/units";
@@ -26,7 +26,7 @@ export default async function Page({
   params: Promise<{ id: string }>;
   searchParams: Promise<{ ended_before?: string | string[] }>;
 }) {
-  const me = await requireRole("viewer");
+  const me = await requireNetworkReader();
   const { id } = await params;
   if (!/^\d{1,15}$/.test(id)) notFound();
   // The next page of ended sessions, if asked for.
@@ -59,8 +59,12 @@ export default async function Page({
   const s = d.station;
   const demo = d.mode === "demo";
   // One command at a time per charger: while one waits, the forms make way for it.
-  const canWork = atLeast(me.role, "technician");
-  const canSend = canWork && !d.pending;
+  // What the signed-in user may send here: their role, or (a host user) the host's
+  // switches on this charger's site. The server checks each command again.
+  const can = commandRights(me, s.siteId);
+  const canSend = !d.pending;
+  const canAct = (c: { action: Parameters<typeof may>[1] }) =>
+    may(me, c.action, s.siteId);
   const rid = () => randomUUID();
   return (
     <>
@@ -109,8 +113,8 @@ export default async function Page({
             No other command is sent to this charger until it is answered.
             Checking again only reads its status; it never sends anything.
           </p>
-          {canWork && <RecheckForm id={d.pending.id} />}
-          {canWork && d.pending.resendUntil && (
+          {canAct(d.pending) && <RecheckForm id={d.pending.id} />}
+          {canAct(d.pending) && d.pending.resendUntil && (
             <ResendForm id={d.pending.id} until={d.pending.resendUntil} />
           )}
         </div>
@@ -139,59 +143,63 @@ export default async function Page({
                     .join(" · ")}
                 </span>
                 <ConnectorPill status={c.status} />
-                {canWork && (
+                {(can.start || can.unlock) && (
                   <span className="actions">
-                    <CommandForm
-                      available={
-                        canSend &&
-                        s.online &&
-                        STARTABLE.has(c.status) &&
-                        !c.session
-                      }
-                      stationId={s.id}
-                      action="start"
-                      connectorId={c.id}
-                      requestId={rid()}
-                      label="Remote start…"
-                      sendLabel={`Start connector ${c.number}`}
-                      confirmText={`I understand this switches on connector ${c.number} with our staff token: a vehicle plugged in there starts charging.`}
-                    >
-                      <p className="muted">
-                        Starts a staff/test session on connector {c.number} with
-                        your operator&apos;s staff token. Ivora records it as a
-                        staff session, so it shows in sessions and reports; no
-                        driver payment is taken. Only a free (Available)
-                        connector: a driver who has plugged in starts and pays
-                        as usual. With no vehicle plugged in, the charger waits
-                        for one for a short time.
-                      </p>
-                    </CommandForm>
-                    <CommandForm
-                      available={canSend && s.online}
-                      stationId={s.id}
-                      action="unlock"
-                      connectorId={c.id}
-                      requestId={rid()}
-                      label="Unlock…"
-                      sendLabel={`Unlock connector ${c.number}`}
-                      sessions={
-                        c.session
-                          ? [
-                              {
-                                id: c.session.id,
-                                label: sessionLabel(c.session),
-                              },
-                            ]
-                          : []
-                      }
-                      confirmText={`I understand this unlocks connector ${c.number}.`}
-                    >
-                      <p className="muted">
-                        Releases a cable stuck in the connector.
-                        {c.session &&
-                          " A session running on it ends: the charger stops charging first."}
-                      </p>
-                    </CommandForm>
+                    {can.start && (
+                      <CommandForm
+                        available={
+                          canSend &&
+                          s.online &&
+                          STARTABLE.has(c.status) &&
+                          !c.session
+                        }
+                        stationId={s.id}
+                        action="start"
+                        connectorId={c.id}
+                        requestId={rid()}
+                        label="Remote start…"
+                        sendLabel={`Start connector ${c.number}`}
+                        confirmText={`I understand this switches on connector ${c.number} with our staff token: a vehicle plugged in there starts charging.`}
+                      >
+                        <p className="muted">
+                          Starts a staff/test session on connector {c.number}{" "}
+                          with your operator&apos;s staff token. Ivora records
+                          it as a staff session, so it shows in sessions and
+                          reports; no driver payment is taken. Only a free
+                          (Available) connector: a driver who has plugged in
+                          starts and pays as usual. With no vehicle plugged in,
+                          the charger waits for one for a short time.
+                        </p>
+                      </CommandForm>
+                    )}
+                    {can.unlock && (
+                      <CommandForm
+                        available={canSend && s.online}
+                        stationId={s.id}
+                        action="unlock"
+                        connectorId={c.id}
+                        requestId={rid()}
+                        label="Unlock…"
+                        sendLabel={`Unlock connector ${c.number}`}
+                        sessions={
+                          c.session
+                            ? [
+                                {
+                                  id: c.session.id,
+                                  label: sessionLabel(c.session),
+                                },
+                              ]
+                            : []
+                        }
+                        confirmText={`I understand this unlocks connector ${c.number}.`}
+                      >
+                        <p className="muted">
+                          Releases a cable stuck in the connector.
+                          {c.session &&
+                            " A session running on it ends: the charger stops charging first."}
+                        </p>
+                      </CommandForm>
+                    )}
                   </span>
                 )}
               </li>
@@ -235,7 +243,7 @@ export default async function Page({
                 <span className={x.active ? "pill busy" : "pill ok"}>
                   {x.active ? "Charging" : "Ended"}
                 </span>
-                {canWork && (
+                {can.stop && (
                   <CommandForm
                     available={canSend && x.active}
                     stationId={s.id}
@@ -261,7 +269,7 @@ export default async function Page({
         )}
       </section>
 
-      {canWork && (
+      {can.reset && (
         <section className="card" aria-labelledby="reset-heading">
           <h2 id="reset-heading">Reset</h2>
           <p className="muted">
@@ -334,11 +342,7 @@ export default async function Page({
         )}
       </section>
 
-      <CommandsCard
-        commands={d.commands}
-        canWork={canWork}
-        showStation={false}
-      />
+      <CommandsCard commands={d.commands} canAct={canAct} showStation={false} />
     </>
   );
 }

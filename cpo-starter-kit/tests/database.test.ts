@@ -233,7 +233,7 @@ describe("row level security", () => {
       });
   });
 
-  it("leaves browser roles only the one function the RLS policies need", async () => {
+  it("leaves browser roles only the two functions the RLS policies need", async () => {
     const { rows } = await pg.query<{ fn: string; role: string }>(`
       select p.proname as fn, r.role from pg_proc p
         join pg_namespace n on n.oid = p.pronamespace
@@ -241,6 +241,7 @@ describe("row level security", () => {
         where n.nspname = 'public' and has_function_privilege(r.role, p.oid, 'execute')
         order by 1, 2`);
     expect(rows).toEqual([
+      { fn: "cpo_my_host_id", role: "authenticated" },
       { fn: "cpo_my_operator_ids", role: "authenticated" },
     ]);
   });
@@ -2433,5 +2434,478 @@ describe("card sessions", () => {
         ])
           await expect(pg.query(q)).rejects.toThrow(/permission denied/);
       });
+  });
+});
+
+describe("network mode: hosts", () => {
+  const HOST_A1 = "10000000-0000-4000-8000-0000000000e1";
+  const HOST_A2 = "10000000-0000-4000-8000-0000000000e2";
+  const HOST_B1 = "10000000-0000-4000-8000-0000000000e3";
+  const svc = <T>(sql: string, params: unknown[] = []) =>
+    as("service_role", null, () =>
+      pg.query<T & Record<string, unknown>>(sql, params),
+    );
+  /** Token hashes no other test uses. */
+  const H = (k: string) => `9${"0".repeat(62)}${k}`;
+  const fail = (p: Promise<unknown>, what: RegExp = /cpo_not_allowed/) =>
+    expect(p).rejects.toThrow(what);
+  let hostA: string;
+  let hostB: string;
+  let hostOtherOp: string;
+  const SWITCHES = {
+    prices: false,
+    control: false,
+    sessions: false,
+    invite: false,
+    faults: false,
+  };
+  /** cpo_save_host as owner A; unnamed switches stay off. */
+  const saveHost = (
+    id: string | null,
+    name: string,
+    on: Partial<typeof SWITCHES> = {},
+    actor = OWNER_A,
+    operator = operatorA,
+  ) => {
+    const s = { ...SWITCHES, ...on };
+    return svc<{ id: string }>(
+      "select cpo_save_host($1,$2,$3,$4,null,null,null,$5,$6,$7,$8,$9) as id",
+      [
+        operator,
+        actor,
+        id,
+        name,
+        s.prices,
+        s.control,
+        s.sessions,
+        s.invite,
+        s.faults,
+      ],
+    ).then((r) => r.rows[0].id);
+  };
+  const assign = (site: number, host: string | null, actor = OWNER_A) =>
+    svc("select cpo_assign_site($1,$2,$3,$4)", [operatorA, actor, site, host]);
+  let n = 0;
+  const rid = () => `40000000-0000-4000-8000-${String(++n).padStart(12, "0")}`;
+  const hostClaim = (
+    actor: string,
+    site: number | null,
+    station: number,
+    action = "reset",
+  ) =>
+    svc<{ r: { id: string } }>(
+      "select cpo_claim_host_command($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) as r",
+      [
+        operatorA,
+        actor,
+        site,
+        rid(),
+        station,
+        action,
+        action === "start" || action === "unlock" ? station * 10 + 1 : null,
+        action === "stop" ? 1 : null,
+        action === "reset" ? "soft" : null,
+        [],
+      ],
+    ).then((r) => r.rows[0].r);
+  const hostPrice = (actor: string, site: number | null, station: number) =>
+    svc("select cpo_set_host_station_pricing($1,$2,$3,$4,$5,null,true,'[]')", [
+      operatorA,
+      actor,
+      site,
+      station,
+      // The station's current revision (0 before its first save).
+      0,
+    ]);
+
+  beforeAll(async () => {
+    await pg.query(
+      "insert into auth.users(id,email) values ($1,'host-a1@example.com'),($2,'host-a2@example.com'),($3,'host-b1@example.com')",
+      [HOST_A1, HOST_A2, HOST_B1],
+    );
+    hostA = await saveHost(null, "Sample Host A");
+    hostB = await saveHost(null, "Sample Host B");
+    hostOtherOp = await saveHost(
+      null,
+      "Sample Host of B",
+      {},
+      OWNER_B,
+      operatorB,
+    );
+    await assign(701, hostA);
+    await assign(711, hostA);
+    await assign(702, hostB);
+    // 703 is the operator's own site.
+    await pg.query(
+      "insert into cpo_staff(operator_id,user_id,email,role,host_id) values ($1,$2,'host-a1@example.com','host',$3),($1,$4,'host-b1@example.com','host',$5)",
+      [operatorA, HOST_A1, hostA, HOST_B1, hostB],
+    );
+  });
+
+  it("keeps every switch off for a new host, and only owners and managers manage hosts", async () => {
+    const { rows } = await pg.query<Record<string, boolean>>(
+      "select can_edit_prices, can_control, can_sessions, can_invite, fault_emails from cpo_hosts where id=$1",
+      [hostA],
+    );
+    expect(Object.values(rows[0])).toEqual([false, false, false, false, false]);
+    await fail(saveHost(null, "Nope", {}, TECH_A));
+    await fail(saveHost(null, "Nope", {}, HOST_A1));
+    await fail(saveHost(hostA, "Renamed", { prices: true }, HOST_A1));
+    await fail(assign(703, hostA, TECH_A));
+    await fail(assign(703, hostA, HOST_A1));
+    // Another operator's host can't be given this operator's sites.
+    await fail(assign(703, hostOtherOp), /cpo_host_not_found/);
+  });
+
+  it("ties a host user to exactly one host of the same operator", async () => {
+    await expect(
+      pg.query(
+        "insert into cpo_staff(operator_id,user_id,email,role) values ($1,$2,'host-a2@example.com','host')",
+        [operatorA, HOST_A2],
+      ),
+    ).rejects.toThrow(/cpo_staff_host_link/);
+    await expect(
+      pg.query(
+        "insert into cpo_staff(operator_id,user_id,email,role,host_id) values ($1,$2,'host-a2@example.com','viewer',$3)",
+        [operatorA, HOST_A2, hostA],
+      ),
+    ).rejects.toThrow(/cpo_staff_host_link/);
+    await expect(
+      pg.query(
+        "insert into cpo_staff(operator_id,user_id,email,role,host_id) values ($1,$2,'host-a2@example.com','host',$3)",
+        [operatorA, HOST_A2, hostOtherOp],
+      ),
+    ).rejects.toThrow(/cpo_staff_host_fk/);
+    // The old invite function can't make a host invite (no host).
+    await fail(
+      svc(
+        `select cpo_create_invite($1,'x@example.com','host','${H("c")}',null,now()+interval '1 day')`,
+        [operatorA],
+      ),
+      /cpo_invites_host_link/,
+    );
+  });
+
+  it("lets a host user read only their own host, its sites and its users (RLS)", async () => {
+    await as("authenticated", HOST_A1, async () => {
+      const hosts = await pg.query<{ id: string }>("select id from cpo_hosts");
+      expect(hosts.rows.map((r) => r.id)).toEqual([hostA]);
+      const sites = await pg.query<{ location_id: string }>(
+        "select location_id from cpo_host_sites order by location_id",
+      );
+      expect(sites.rows.map((r) => Number(r.location_id))).toEqual([701, 711]);
+      const staff = await pg.query<{ email: string }>(
+        "select email from cpo_staff order by email",
+      );
+      expect(staff.rows.map((r) => r.email)).toEqual(["host-a1@example.com"]);
+    });
+    // Operator staff see every host, site and user of their operator.
+    await as("authenticated", TECH_A, async () => {
+      const hosts = await pg.query("select id from cpo_hosts");
+      expect(hosts.rows).toHaveLength(2);
+      const sites = await pg.query("select location_id from cpo_host_sites");
+      expect(sites.rows).toHaveLength(3);
+      const staff = await pg.query<{ role: string }>(
+        "select role from cpo_staff where role='host'",
+      );
+      expect(staff.rows).toHaveLength(2);
+    });
+    // Another operator and outsiders see none of them.
+    for (const user of [OWNER_B, OUTSIDER])
+      await as("authenticated", user, async () => {
+        const hosts = await pg.query<{ id: string }>(
+          "select id from cpo_hosts",
+        );
+        expect(hosts.rows.map((r) => r.id)).not.toContain(hostA);
+        const sites = await pg.query(
+          "select 1 from cpo_host_sites where operator_id=$1",
+          [operatorA],
+        );
+        expect(sites.rows).toEqual([]);
+      });
+  });
+
+  it("is not writable from the browser, and anon reads nothing", async () => {
+    for (const user of [OWNER_A, HOST_A1])
+      await as("authenticated", user, async () => {
+        for (const q of [
+          `update cpo_hosts set can_edit_prices=true where id='${hostA}'`,
+          `insert into cpo_hosts(operator_id,name) values ('${operatorA}','X')`,
+          `insert into cpo_host_sites(operator_id,location_id,host_id) values ('${operatorA}',703,'${hostA}')`,
+          `delete from cpo_host_sites where host_id='${hostA}'`,
+          `update cpo_staff set host_id='${hostB}' where user_id='${HOST_A1}'`,
+          "select created_by from cpo_hosts",
+        ])
+          await expect(pg.query(q)).rejects.toThrow(/permission denied/);
+      });
+    await as("anon", null, async () => {
+      await expect(pg.query("select id from cpo_hosts")).rejects.toThrow(
+        /permission denied/,
+      );
+      await expect(
+        pg.query("select location_id from cpo_host_sites"),
+      ).rejects.toThrow(/permission denied/);
+    });
+  });
+
+  it("does not let browser roles run the host functions", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, HOST_A1, async () => {
+        for (const q of [
+          `select cpo_save_host('${operatorA}','${HOST_A1}',null,'X',null,null,null,true,true,true,true,true)`,
+          `select * from cpo_archive_host('${operatorA}','${HOST_A1}','${hostA}')`,
+          `select cpo_assign_site('${operatorA}','${HOST_A1}',703,'${hostA}')`,
+          `select cpo_create_host_invite('${operatorA}','${HOST_A1}','${hostA}','x@example.com','${H("d")}',now())`,
+          `select cpo_claim_host_command('${operatorA}','${HOST_A1}',701,'${HOST_A1}',7010,'reset',null,null,'soft','{}')`,
+          `select cpo_set_host_station_pricing('${operatorA}','${HOST_A1}',701,7010,0,null,true,'[]')`,
+          `select cpo_lock_host_actor('${operatorA}','${HOST_A1}','control',701)`,
+          `select cpo_lock_host_admin('${operatorA}','${OWNER_A}')`,
+          `select cpo_put_live_command('${operatorA}','${HOST_A1}','${HOST_A1}',7010,'reset',null,null,'soft','{}')`,
+          `select cpo_put_station_pricing('${operatorA}','${HOST_A1}',7010,0,null,true,'[]')`,
+          `select * from cpo_report_checkouts_at('${operatorA}','{7010}',now()-interval '1 day',now(),null,'all',50,0,null,null)`,
+          `select cpo_report_totals_at('${operatorA}','{7010}',now()-interval '1 day',now(),null,'all')`,
+          "select * from cpo_host_fault_recipients(701)",
+        ])
+          await expect(pg.query(q)).rejects.toThrow(/permission denied/);
+      });
+  });
+
+  it("refuses every host write with every switch off", async () => {
+    for (const action of ["reset", "unlock", "start", "stop"])
+      await fail(hostClaim(HOST_A1, 701, 7010, action));
+    await fail(hostPrice(HOST_A1, 701, 7010));
+    await fail(
+      svc(
+        `select cpo_create_host_invite($1,$2,$3,'x@example.com','${H("e")}',now()+interval '1 day')`,
+        [operatorA, HOST_A1, hostA],
+      ),
+    );
+    const { rows } = await pg.query(
+      "select 1 from cpo_live_commands where requested_by=$1",
+      [HOST_A1],
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it("allows a switched-on command only on the host's own sites, and only that switch's actions", async () => {
+    await saveHost(hostA, "Sample Host A", { control: true });
+    const c = await hostClaim(HOST_A1, 701, 7010, "reset");
+    expect(c.id).toBeTruthy();
+    await hostClaim(HOST_A1, 711, 7110, "unlock");
+    // Start and stop need the other switch.
+    await fail(hostClaim(HOST_A1, 701, 7011, "start"));
+    // Another host's site, the operator's own, no site: refused.
+    await fail(hostClaim(HOST_A1, 702, 7020));
+    await fail(hostClaim(HOST_A1, 703, 7030));
+    await fail(hostClaim(HOST_A1, null, 7040));
+    // Not through the staff claim either, and staff can't use the host claim.
+    await fail(
+      svc(
+        "select cpo_claim_live_command($1,$2,$3,7012,'reset',null,null,'soft','{}')",
+        [operatorA, HOST_A1, rid()],
+      ),
+    );
+    await fail(hostClaim(TECH_A, 701, 7013));
+    // Host B (all off) can't act on host A's site either.
+    await fail(hostClaim(HOST_B1, 701, 7014));
+    // Switched off again: refused at once.
+    await saveHost(hostA, "Sample Host A");
+    await fail(hostClaim(HOST_A1, 701, 7015));
+  });
+
+  it("sets prices only with the switch, on the host's own sites", async () => {
+    await saveHost(hostA, "Sample Host A", { prices: true });
+    await hostPrice(HOST_A1, 701, 7016);
+    const { rows } = await pg.query<{ private: boolean; updated_by: string }>(
+      "select private, updated_by from cpo_station_pricing where station_id=7016",
+    );
+    expect(rows).toEqual([{ private: true, updated_by: HOST_A1 }]);
+    await fail(hostPrice(HOST_A1, 702, 7017));
+    await fail(hostPrice(HOST_A1, null, 7018));
+    await fail(
+      svc("select cpo_set_station_pricing($1,$2,7019,0,null,true,'[]')", [
+        operatorA,
+        HOST_A1,
+      ]),
+    );
+    // Owners and managers keep the staff save.
+    await svc("select cpo_set_station_pricing($1,$2,7019,0,null,true,'[]')", [
+      operatorA,
+      OWNER_A,
+    ]);
+    await saveHost(hostA, "Sample Host A");
+    await fail(hostPrice(HOST_A1, 701, 7020));
+  });
+
+  it("invites host users for their own host only; the invite carries the host into the team", async () => {
+    await saveHost(hostA, "Sample Host A", { invite: true });
+    const invite = (actor: string, host: string, email: string, h: string) =>
+      svc<{ id: string }>(
+        `select cpo_create_host_invite($1,$2,$3,$4,'${H(h)}',now()+interval '1 day') as id`,
+        [operatorA, actor, host, email],
+      );
+    await fail(invite(HOST_A1, hostB, "b-colleague@example.com", "1"));
+    await fail(invite(TECH_A, hostA, "t@example.com", "2"));
+    await invite(HOST_A1, hostA, "host-a2@example.com", "3");
+    await invite(OWNER_A, hostB, "b-new@example.com", "4");
+    const { rows } = await pg.query<{
+      email: string;
+      role: string;
+      host_id: string;
+    }>(
+      "select email, role, host_id from cpo_invites where email in ('host-a2@example.com','b-new@example.com') order by email",
+    );
+    expect(rows).toEqual([
+      { email: "b-new@example.com", role: "host", host_id: hostB },
+      { email: "host-a2@example.com", role: "host", host_id: hostA },
+    ]);
+    await svc(
+      `select cpo_accept_invite('${H("3")}',$1,'host-a2@example.com')`,
+      [HOST_A2],
+    );
+    const staff = await pg.query<{ role: string; host_id: string }>(
+      "select role, host_id from cpo_staff where user_id=$1",
+      [HOST_A2],
+    );
+    expect(staff.rows).toEqual([{ role: "host", host_id: hostA }]);
+    // Switching invites off revokes what its users sent and is still pending.
+    await invite(HOST_A1, hostA, "late@example.com", "5");
+    await saveHost(hostA, "Sample Host A");
+    const late = await pg.query<{ revoked_at: string | null }>(
+      "select revoked_at from cpo_invites where email='late@example.com'",
+    );
+    expect(late.rows[0].revoked_at).not.toBeNull();
+  });
+
+  it("limits report figures to the given chargers", async () => {
+    for (const [station, minor] of [
+      [7010, 1000],
+      [7020, 2000],
+      [7030, 2400],
+    ])
+      await pg.query(
+        `insert into cpo_checkouts(operator_id,request_id,kind,sticker_code,station_id,connector_id,tariff_id,hold_minor,currency,phase,created_at,captured_minor,final_minor)
+         values ($1,$2,'paid','ABCD2345',$3,$4,9401,2500,'USD','settled','2025-10-10T12:00:00Z',$5,$5)`,
+        [operatorA, rid(), station, station * 10 + 1, minor],
+      );
+    const totals = (ids: number[]) =>
+      svc<{
+        t: { checkouts: number; currencies: { captured_minor: number }[] };
+      }>(
+        "select cpo_report_totals_at($1,$2,'2025-10-01','2025-11-01',null,'all') as t",
+        [operatorA, ids],
+      ).then((r) => r.rows[0].t);
+    expect(await totals([7010])).toMatchObject({
+      checkouts: 1,
+      currencies: [{ captured_minor: 1000 }],
+    });
+    expect((await totals([])).checkouts).toBe(0);
+    const list = await svc<{ station_id: string }>(
+      "select station_id from cpo_report_checkouts_at($1,$2,'2025-10-01','2025-11-01',null,'all',50,0,null,null)",
+      [operatorA, [7010, 7020]],
+    );
+    expect(list.rows.map((r) => Number(r.station_id)).sort()).toEqual([
+      7010, 7020,
+    ]);
+    // A station filter outside the given chargers finds nothing.
+    const outside = await svc(
+      "select * from cpo_report_checkouts_at($1,$2,'2025-10-01','2025-11-01',7030,'all',50,0,null,null)",
+      [operatorA, [7010]],
+    );
+    expect(outside.rows).toEqual([]);
+  });
+
+  it("emails fault news only to users of a site's host with fault emails on", async () => {
+    const recipients = (site: number) =>
+      svc<{ email: string }>(
+        "select email from cpo_host_fault_recipients($1)",
+        [site],
+      ).then((r) => r.rows.map((x) => x.email));
+    expect(await recipients(701)).toEqual([]);
+    await saveHost(hostA, "Sample Host A", { faults: true });
+    expect(await recipients(701)).toEqual([
+      "host-a1@example.com",
+      "host-a2@example.com",
+    ]);
+    expect(await recipients(702)).toEqual([]);
+    expect(await recipients(703)).toEqual([]);
+  });
+
+  it("ends a removed host user's access at once", async () => {
+    await svc("select cpo_remove_staff($1,$2,'owner',$3,'host')", [
+      operatorA,
+      OWNER_A,
+      HOST_A2,
+    ]);
+    await as("authenticated", HOST_A2, async () => {
+      expect((await pg.query("select 1 from cpo_hosts")).rows).toEqual([]);
+      expect((await pg.query("select 1 from cpo_staff")).rows).toEqual([]);
+    });
+  });
+
+  it("ends a host's access at once when it is archived, and gives its sites back", async () => {
+    await saveHost(hostB, "Sample Host B", { control: true });
+    await hostClaim(HOST_B1, 702, 7021);
+    const removed = await svc<{ id: string }>(
+      "select id from cpo_archive_host($1,$2,$3) as id",
+      [operatorA, OWNER_A, hostB],
+    );
+    expect(removed.rows.map((r) => r.id)).toEqual([HOST_B1]);
+    expect(
+      (await pg.query("select 1 from cpo_host_sites where host_id=$1", [hostB]))
+        .rows,
+    ).toEqual([]);
+    expect(
+      (
+        await pg.query(
+          "select 1 from cpo_invites where host_id=$1 and revoked_at is null and accepted_at is null",
+          [hostB],
+        )
+      ).rows,
+    ).toEqual([]);
+    await fail(hostClaim(HOST_B1, 702, 7022));
+    await as("authenticated", HOST_B1, async () => {
+      expect((await pg.query("select 1 from cpo_hosts")).rows).toEqual([]);
+      expect((await pg.query("select 1 from cpo_operators")).rows).toEqual([]);
+    });
+    // An archived host can't be changed, given sites or invited to.
+    await fail(saveHost(hostB, "Back"), /cpo_host_not_found/);
+    await fail(assign(702, hostB), /cpo_host_not_found/);
+    await fail(
+      svc(
+        `select cpo_create_host_invite($1,$2,$3,'again@example.com','${H("6")}',now()+interval '1 day')`,
+        [operatorA, OWNER_A, hostB],
+      ),
+      /cpo_host_not_found/,
+    );
+    await fail(
+      svc("select * from cpo_archive_host($1,$2,$3)", [
+        operatorA,
+        OWNER_A,
+        hostB,
+      ]),
+      /cpo_host_not_found/,
+    );
+  });
+
+  it("treats a host user of an archived host as on no team, even if their row is still there", async () => {
+    await pg.query("update cpo_hosts set archived_at=now() where id=$1", [
+      hostA,
+    ]);
+    try {
+      await as("authenticated", HOST_A1, async () => {
+        expect((await pg.query("select 1 from cpo_operators")).rows).toEqual(
+          [],
+        );
+        expect((await pg.query("select 1 from cpo_host_sites")).rows).toEqual(
+          [],
+        );
+      });
+      await fail(hostPrice(HOST_A1, 701, 7023));
+    } finally {
+      await pg.query("update cpo_hosts set archived_at=null where id=$1", [
+        hostA,
+      ]);
+    }
   });
 });

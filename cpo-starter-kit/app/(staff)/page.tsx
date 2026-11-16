@@ -37,7 +37,7 @@ function sessionsNote(o: { staffSessions: number; freeSessions: number }) {
 async function Content() {
   const me = await requireRole("viewer");
   const [r, trend] = await Promise.all([
-    loadOverview(me.operatorId),
+    loadOverview(me),
     loadTrend(getReports(), me),
   ]);
   const hidden = (await cookies()).get(SETUP_HIDDEN_COOKIE)?.value === "1";

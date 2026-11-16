@@ -101,6 +101,19 @@ const SAMPLE_LOCATIONS: Location[] = [
     time_zone: "America/Toronto",
     external_reference: "cpo-demo-site-3",
   },
+  {
+    // Network mode: the second sample host's other site (lib/server/hosts/demo.ts).
+    id: 9004,
+    name: "Sample Site: Riverside Hotel",
+    address: "4 Example Lane",
+    city: "Sampleton",
+    postal_code: "00004",
+    country: "USA",
+    latitude: 0.003,
+    longitude: 0.009,
+    time_zone: "America/New_York",
+    external_reference: "cpo-demo-site-4",
+  },
 ];
 
 /** Clearly not a real OCPP endpoint: demo chargers never connect anywhere. */
@@ -176,6 +189,21 @@ SAMPLE_STATIONS.push({
   model: "Sample AC 22",
   last_seen: "2026-01-01T00:00:00Z",
   connectors: connectors(9104, 2, 22_000),
+});
+
+/** The sample hotel's charger (network mode: the second sample host's site). */
+SAMPLE_STATIONS.push({
+  id: 9105,
+  name: "DEMO-RIVERSIDE-01",
+  connection_url: demoConnectionUrl("DEMO-RIVERSIDE-01"),
+  username: "DEMO-RIVERSIDE-01",
+  online: true,
+  location_id: 9004,
+  protocol: "ocpp1.6",
+  vendor: "Sample Vendor",
+  model: "Sample AC 11",
+  last_seen: "2026-01-01T00:00:00Z",
+  connectors: connectors(9105, 1, 11_000),
 });
 
 /** Sample faults: one open on DEMO-HARBOUR-02 connector 2, one cleared at the market. */

@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import type { ActionState } from "@/lib/action-state";
 import { ROLE_LABELS, isRole } from "@/lib/roles";
 import { actionError } from "@/lib/server/action-errors";
-import { requireRole } from "@/lib/server/auth";
+import { requireNetworkReader, requireRole } from "@/lib/server/auth";
 import { isDemo } from "@/lib/server/env";
 import {
   changeStaffRole,
@@ -16,17 +16,20 @@ import {
 import { resetDemoTeam } from "@/lib/server/team/demo-cookie";
 
 // Every action checks the signed-in staff member's role on the server first
-// (requireRole), and the team service checks what that role may do to whom.
+// (requireRole), and the team service checks what that role may do to whom. Inviting
+// (and revoking invites) is also open to host users whose host may invite further
+// users: the service limits them to their own host, and the database checks it again.
 
 export async function inviteAction(
   _prev: ActionState,
   form: FormData,
 ): Promise<ActionState> {
   try {
-    const actor = await requireRole("manager");
+    const actor = await requireNetworkReader();
     const r = await inviteStaff(getTeam(), actor, {
       email: form.get("email"),
       role: form.get("role"),
+      hostId: form.get("hostId"),
     });
     revalidatePath("/team");
     const who = `${r.email} (${ROLE_LABELS[r.role]})`;
@@ -87,7 +90,7 @@ export async function revokeInviteAction(
   form: FormData,
 ): Promise<ActionState> {
   try {
-    const actor = await requireRole("manager");
+    const actor = await requireNetworkReader();
     await revokeStaffInvite(getTeam(), actor, form.get("inviteId"));
     revalidatePath("/team");
     return { ok: "Invite revoked. Its link no longer works." };

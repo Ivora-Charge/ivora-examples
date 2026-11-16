@@ -1,3 +1,6 @@
+import { hostStore } from "@/lib/server/hosts";
+import { notifyFault } from "@/lib/server/hosts/faults";
+import { getTeam } from "@/lib/server/team";
 import { after } from "next/server";
 import { getCheckout, settleOpenCheckouts } from "@/lib/server/checkout";
 import { config, isDemo } from "@/lib/server/env";
@@ -73,6 +76,22 @@ export async function POST(req: Request) {
         await settleOpenCheckouts(getCheckout(), {
           stationId: station,
           transactionId: eventTransaction(evt) ?? undefined,
+        });
+      // A new fault: email the site's host users, if their host has fault emails on.
+      // Best effort, and never in the way of the settlement above.
+      if (evt.type === "station.fault_opened")
+        await notifyFault(
+          {
+            store: hostStore(),
+            ivora: d.ivora,
+            mailer: getTeam().mailer,
+            appUrl: config.appUrl,
+          },
+          evt,
+        ).catch((e: unknown) => {
+          console.error("cpo-starter-kit: fault emails failed:", {
+            error: e instanceof Error ? e.name : "error",
+          });
         });
     } catch (e) {
       // The next page load or check re-reads the API anyway.

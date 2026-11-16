@@ -2,7 +2,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { deflateRawSync, inflateRawSync } from "node:zlib";
 import { z } from "zod";
-import { atLeast, type Role } from "@/lib/roles";
+import { atLeast, type MemberRole } from "@/lib/roles";
 import { DEMO_OPERATOR_ID } from "../team/demo";
 import {
   ChargerError,
@@ -152,7 +152,7 @@ export function createDemoChargerStore(
   // state only after the previous one has saved it.
   let queue: Promise<unknown> = Promise.resolve();
   const update = <T>(
-    actor: { role: Role },
+    actor: { role: MemberRole },
     change: (s: DemoChargersState) => T,
   ): Promise<T> => {
     const run = queue.then(async () => {

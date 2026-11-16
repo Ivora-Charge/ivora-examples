@@ -71,6 +71,7 @@ describe("Supabase team backend", () => {
       operatorId: "op-1",
       email: "a@example.com",
       role: "viewer",
+      hostId: null,
       tokenHash: "f".repeat(64),
       invitedBy: "user-1",
       expiresAt: new Date("2026-03-04T12:00:00Z"),

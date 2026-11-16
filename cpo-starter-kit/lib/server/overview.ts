@@ -1,5 +1,7 @@
 import "server-only";
 import { describeError, getIvora, IvoraError } from "./ivora";
+import { narrow } from "./scope";
+import type { Staff } from "./team/types";
 import { getLive, isFreeSession, isStaffSession, running } from "./live";
 import { asTransaction, syncActiveSessions } from "./live/active";
 import { whToKwh } from "../units";
@@ -28,17 +30,21 @@ export type OverviewResult =
   | { ok: true; overview: Overview }
   | { ok: false; mode: "live" | "demo"; error: string };
 
-/** What the Overview page shows. Reads only; works the same in demo and live mode. */
-export async function loadOverview(
-  operatorId?: string,
-): Promise<OverviewResult> {
-  const ivora = getIvora();
+/**
+ * What the Overview page shows. Reads only; works the same in demo and live mode. A
+ * host user's overview counts only their host's sites (see lib/server/scope.ts).
+ */
+export async function loadOverview(staff?: Staff): Promise<OverviewResult> {
+  const operatorId = staff?.operatorId;
+  const ivora = staff
+    ? narrow({ ivora: getIvora() }, staff).d.ivora
+    : getIvora();
   try {
     const [sites, chargers] = await Promise.all([
       ivora.listAllLocations(),
       ivora.listAllStations(),
     ]);
-    const live = getLive();
+    const live = { ...getLive(), ivora };
     const store = live.store;
     // Ivora lists transactions oldest first, so the newest page is not "now": the
     // running sessions come from Live's tracker (see lib/server/live/active.ts), which

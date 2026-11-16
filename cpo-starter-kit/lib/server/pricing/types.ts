@@ -157,6 +157,12 @@ export interface PricingStore {
     stationId: number,
     expectedRevision: number,
     input: StationPricingInput,
+    /**
+     * The charger's site, as the server read it from Ivora. A host user's save needs
+     * it: the store checks it is one of their host's sites, and that the host may edit
+     * prices, in the same statement as the write.
+     */
+    at?: { siteId: number | null },
   ): Promise<void>;
 }
 

@@ -1,6 +1,10 @@
 import Link from "next/link";
+import { commandRights, hostFilterParam, may } from "@/lib/hosts";
 import { atLeast } from "@/lib/roles";
-import { requireRole } from "@/lib/server/auth";
+import { requireNetworkReader } from "@/lib/server/auth";
+import { hostStore } from "@/lib/server/hosts";
+import { loadHostFilter } from "@/lib/server/hosts/filter";
+import { HostFilterForm } from "@/app/ui/host-filter";
 import { checkoutAlerts, getCheckout } from "@/lib/server/checkout";
 import { config } from "@/lib/server/env";
 import { MAX_LIST_PAGES } from "@/lib/server/ivora/live";
@@ -33,6 +37,7 @@ type Search = {
   status?: string | string[];
   charger?: string | string[];
   site?: string | string[];
+  host?: string | string[];
 };
 
 const TITLE = "Live";
@@ -40,10 +45,11 @@ const DESCRIPTION =
   "Chargers, connectors and faults right now. Updates as they happen.";
 
 async function Content({ search }: { search: Search }) {
-  const me = await requireRole("viewer");
+  const me = await requireNetworkReader();
   const canWork = atLeast(me.role, "technician");
+  const hosts = await loadHostFilter(hostStore(), me, search.host);
   const [r, zone] = await Promise.all([
-    loadLive(getLive(), me),
+    loadLive(getLive(), me, { filter: hosts.scope }),
     companyZone(me.operatorId),
   ]);
   if (!r.ok)
@@ -76,10 +82,11 @@ async function Content({ search }: { search: Search }) {
       </>
     );
   const live = r.live;
-  // Driver checkouts that need the operator. A failed read doesn't hide the rest.
-  const alerts = await checkoutAlerts(getCheckout(), me.operatorId).catch(
-    () => null,
-  );
+  // Driver checkouts that need the operator (operator staff only: a host user does
+  // not see the operator's payment follow-ups). A failed read doesn't hide the rest.
+  const alerts = me.host
+    ? null
+    : await checkoutAlerts(getCheckout(), me.operatorId).catch(() => null);
   const stationName = (id: number) =>
     live.sites.flatMap((s) => s.stations).find((s) => s.id === id)?.name ??
     `Charger ${id}`;
@@ -92,6 +99,8 @@ async function Content({ search }: { search: Search }) {
   const all = live.sites.flatMap((s) =>
     s.stations.map((st) => ({ st, site: s.name })),
   );
+  const siteOf = new Map(all.map((x) => [x.st.id, x.st.siteId]));
+  const hostParam = hostFilterParam(hosts.filter);
   const chargerId = parseLiveId(search.charger);
   // A map marker narrows the table to its site.
   const site =
@@ -150,7 +159,7 @@ async function Content({ search }: { search: Search }) {
           select: (
             <Link
               className="button secondary"
-              href={`${liveHref(filter, st.id, siteId)}#charger-panel`}
+              href={`${liveHref(filter, st.id, siteId, hostParam)}#charger-panel`}
               aria-label={`Remote actions for ${st.name}`}
               aria-current={st.id === chargerId ? "true" : undefined}
             >
@@ -187,13 +196,23 @@ async function Content({ search }: { search: Search }) {
     label: x.label,
     value: x.value,
     unit: x.unit,
-    href: liveHref(x.filter, chargerId, siteId),
+    href: liveHref(x.filter, chargerId, siteId, hostParam),
     active: filter === x.filter,
   }));
 
   return (
     <>
-      <PageHeader title={TITLE} description={DESCRIPTION} />
+      <PageHeader
+        title={TITLE}
+        description={[
+          me.host && `${me.host.name}.`,
+          hosts.label && `Showing ${hosts.label}.`,
+          DESCRIPTION,
+        ]
+          .filter(Boolean)
+          .join(" ")}
+      />
+      <HostFilterForm view={hosts} action="/live" />
       <Refresher
         readAt={live.readAt}
         zone={zone}
@@ -221,7 +240,7 @@ async function Content({ search }: { search: Search }) {
           </span>
           <Link
             className="button"
-            href={`${liveHref(filter, needAttention[0].st.id, siteId)}#charger-panel`}
+            href={`${liveHref(filter, needAttention[0].st.id, siteId, hostParam)}#charger-panel`}
           >
             Open {needAttention[0].st.name}
           </Link>
@@ -295,7 +314,9 @@ async function Content({ search }: { search: Search }) {
                 <span>
                   Showing chargers at <strong>{site.name}</strong>.
                 </span>
-                <Link href={`${liveHref(filter, chargerId)}#chargers`}>
+                <Link
+                  href={`${liveHref(filter, chargerId, null, hostParam)}#chargers`}
+                >
                   Show all sites
                 </Link>
               </p>
@@ -367,7 +388,7 @@ async function Content({ search }: { search: Search }) {
                 <LiveMap
                   sites={live.points.map((p) => ({
                     ...p,
-                    href: `${liveHref(filter, chargerId, p.id)}#chargers`,
+                    href: `${liveHref(filter, chargerId, p.id, hostParam)}#chargers`,
                   }))}
                   tiles={tiles}
                   sample={demo}
@@ -390,7 +411,7 @@ async function Content({ search }: { search: Search }) {
                 live={live}
                 station={selected.st}
                 siteName={selected.site}
-                canWork={canWork}
+                can={commandRights(me, selected.st.siteId)}
               />
             ) : (
               <section
@@ -463,7 +484,10 @@ async function Content({ search }: { search: Search }) {
         </p>
       </section>
 
-      <CommandsCard commands={live.commands} canWork={canWork} />
+      <CommandsCard
+        commands={live.commands}
+        canAct={(c) => may(me, c.action, siteOf.get(c.stationId))}
+      />
 
       {demo && canWork && (
         <form action={resetDemoLiveAction} className="demo-sim">
@@ -482,7 +506,7 @@ export default async function Page({
 }: {
   searchParams: Promise<Search>;
 }) {
-  await requireRole("viewer");
+  await requireNetworkReader();
   const search = await searchParams;
   return (
     <Loading shape="stats">

@@ -44,8 +44,11 @@ export function liveHref(
   f: LiveFilter,
   charger?: number | null,
   site?: number | null,
+  /** The host filter's URL value (operator staff), kept across Live's own links. */
+  host?: string,
 ): string {
   const q = new URLSearchParams();
+  if (host) q.set("host", host);
   if (f !== "all") q.set("status", f);
   if (site != null) q.set("site", String(site));
   if (charger != null) q.set("charger", String(charger));

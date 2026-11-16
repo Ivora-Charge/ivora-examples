@@ -1,6 +1,7 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import { may } from "@/lib/hosts";
 import { atLeast } from "@/lib/roles";
 import { SAMPLE_TARIFF_IDS } from "../ivora/demo";
 import type { Staff } from "../team/types";
@@ -289,6 +290,13 @@ export function createDemoPricingStore(
     await cookie.save(s);
     return r;
   };
+  /** A change checked by the caller (station prices: see setStation). */
+  const change = async <T>(apply: (s: DemoPricingState) => T): Promise<T> => {
+    const s = await cookie.load();
+    const r = apply(s);
+    await cookie.save(s);
+    return r;
+  };
   const tariff = (s: DemoPricingState, id: string) => {
     const t = s.tariffs.find((x) => x.id === id);
     if (!t) throw notFound();
@@ -400,8 +408,11 @@ export function createDemoPricingStore(
         if (v) v.archivedAt ??= now();
       });
     },
-    setStation(actor, stationId, expectedRevision, input) {
-      return update(actor, (s) => {
+    setStation(actor, stationId, expectedRevision, input, at) {
+      // Like the database: owners and managers, or a host user whose host may edit
+      // prices, on one of the host's sites.
+      if (!may(actor, "prices", at?.siteId ?? null)) throw notAllowed();
+      return change((s) => {
         for (const id of [
           input.tariffId,
           ...input.connectors.map((c) => c.tariffId),
