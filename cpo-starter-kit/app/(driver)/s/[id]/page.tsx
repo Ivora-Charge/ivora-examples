@@ -5,6 +5,8 @@ import { getCheckout, loadReturnedSession } from "@/lib/server/checkout";
 import type { ReturnedSession } from "@/lib/server/checkout";
 import { config, isDemo } from "@/lib/server/env";
 import { Loading } from "@/app/loading-skeleton";
+import { StatusChip } from "@/app/ui/status-chip";
+import type { ChipTone } from "@/lib/status-chips";
 import { AutoRefresh } from "../../c/[code]/refresh";
 import { StartSession, StopSession } from "./forms";
 
@@ -19,6 +21,14 @@ const STEPS = [
   ["finished", "Finished"],
 ] as const;
 
+const STAGE_TONE: Record<string, ChipTone> = {
+  starting: "busy",
+  charging: "live",
+  stopping: "busy",
+  finished: "ok",
+  not_charged: "idle",
+};
+
 function Session({ s, demo }: { s: ReturnedSession; demo: boolean }) {
   const step =
     s.stage === "not_charged" ? -1 : STEPS.findIndex(([k]) => k === s.stage);
@@ -31,8 +41,13 @@ function Session({ s, demo }: { s: ReturnedSession; demo: boolean }) {
           and no charger was contacted.
         </p>
       )}
-      <header className="charge-board">
-        <h1 id="session-heading">{s.label}</h1>
+      <header className="card charge-board">
+        <div className="chead">
+          <h1 id="session-heading">{s.label}</h1>
+          <StatusChip tone={STAGE_TONE[s.stage] ?? "idle"}>
+            {s.label}
+          </StatusChip>
+        </div>
         {s.place && <p className="muted">{s.place}</p>}
       </header>
       {step >= 0 && (
@@ -53,9 +68,9 @@ function Session({ s, demo }: { s: ReturnedSession; demo: boolean }) {
       <section className="card stack" aria-labelledby="session-heading">
         <p>{s.detail}</p>
         {(s.energyKwh || s.cost) && (
-          <dl className="facts" aria-label="Session so far">
+          <dl className="facts session-facts" aria-label="Session so far">
             {s.energyKwh && (
-              <div>
+              <div className="big-figure">
                 <dt>Energy</dt>
                 <dd data-testid="session-energy">{s.energyKwh} kWh</dd>
               </div>

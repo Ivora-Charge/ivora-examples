@@ -2730,3 +2730,46 @@ section.card[id] {
 .card > .chead h2 {
   margin: 0;
 }
+
+/* Driver checkout and session (Ampleaf): the charger and its status, the price first,
+   one button; the session's energy as the big figure. Tokens only. */
+.driver-operator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.charge-board .chead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+.charge-board .chead h1 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.charge-board .chead .pill {
+  margin-left: 0;
+}
+.charge-board .chead + p {
+  margin-top: var(--space-2);
+}
+.price-big {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-display);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  overflow-wrap: anywhere;
+}
+.session-facts .big-figure dd {
+  font-family: var(--font-display);
+  font-size: var(--font-size-stat);
+  line-height: 1.1;
+  font-weight: var(--font-weight-bold);
+}
+.session-facts .big-figure {
+  flex-direction: column;
+  gap: 0;
+}
