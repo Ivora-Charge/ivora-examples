@@ -67,6 +67,9 @@ const TABLES = [
   "cpo_card_sessions",
   "cpo_card_marks",
   "cpo_settlement_sweeps",
+  "cpo_host_fee_plans",
+  "cpo_host_payout_accounts",
+  "cpo_checkout_hosts",
 ] as const;
 
 beforeAll(async () => {
@@ -3007,5 +3010,225 @@ describe("network mode: hosts", () => {
       const hosts = await pg.query<{ id: string }>("select id from cpo_hosts");
       expect(hosts.rows.map((r) => r.id)).toEqual([hostA]);
     });
+  });
+});
+
+describe("network mode: host fees, payout accounts and checkout snapshots", () => {
+  const HOST_USER = "10000000-0000-4000-8000-0000000000f1";
+  const svc = <T>(sql: string, params: unknown[] = []) =>
+    as("service_role", null, () =>
+      pg.query<T & Record<string, unknown>>(sql, params),
+    );
+  const NEW = [
+    "cpo_host_fee_plans",
+    "cpo_host_payout_accounts",
+    "cpo_checkout_hosts",
+  ];
+  let host: string;
+  let other: string;
+  let r = 900;
+  const nextReq = () =>
+    `21000000-0000-4000-8000-${String(++r).padStart(12, "0")}`;
+  const claim = (connector: number) =>
+    svc<{ r: { id: string } }>(
+      "select cpo_claim_checkout($1,$2,'paid','ABCD2345',9101,$3,9401,2500,'USD') as r",
+      [operatorA, nextReq(), connector],
+    ).then((x) => x.rows[0].r.id);
+  const setFee = (
+    actor: string,
+    hostId: string,
+    mode = "percent",
+    bps = 1000,
+    kwh = 0,
+    monthly = 0,
+  ) =>
+    svc<{ p: { id: string; effective_from: string } }>(
+      "select to_jsonb(cpo_set_host_fee_plan($1,$2,$3,$4,$5,$6,$7,'USD')) as p",
+      [operatorA, actor, hostId, mode, bps, kwh, monthly],
+    ).then((x) => x.rows[0].p);
+  const snapshot = (checkout: string, site: number, operator = operatorA) =>
+    svc<{
+      host_id: string;
+      payout_account_id: string | null;
+      fee_plan_id: string | null;
+    }>("select * from cpo_snapshot_checkout_host($1,$2,$3)", [
+      operator,
+      checkout,
+      site,
+    ]).then((x) => x.rows);
+
+  beforeAll(async () => {
+    host = (
+      await svc<{ id: string }>(
+        "select cpo_save_host($1,$2,null,'Fee Host',null,null,null,false,false,false,false,false) as id",
+        [operatorA, OWNER_A],
+      )
+    ).rows[0].id;
+    other = (
+      await svc<{ id: string }>(
+        "select cpo_save_host($1,$2,null,'Other Fee Host',null,null,null,false,false,false,false,false) as id",
+        [operatorA, OWNER_A],
+      )
+    ).rows[0].id;
+    await svc("select cpo_assign_site($1,$2,801,$3)", [
+      operatorA,
+      OWNER_A,
+      host,
+    ]);
+    await pg.query(
+      "insert into auth.users(id,email) values ($1,'fee-host@example.com')",
+      [HOST_USER],
+    );
+    await pg.query(
+      "insert into cpo_staff(operator_id,user_id,email,role,host_id) values ($1,$2,'fee-host@example.com','host',$3)",
+      [operatorA, HOST_USER, host],
+    );
+  });
+
+  it("keeps the new tables closed to the browser roles", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await as(role, role === "anon" ? null : OWNER_A, async () => {
+        for (const t of NEW)
+          await expect(pg.query(`select * from ${t}`)).rejects.toThrow(
+            /permission denied/,
+          );
+      });
+    for (const f of [
+      "cpo_set_host_fee_plan(null,null,null,null,null,null,null,null)",
+      "cpo_snapshot_checkout_host(null,null,null)",
+      "cpo_host_statement(null,null,null,null,null)",
+      "cpo_site_payout(null,null)",
+    ])
+      await as("authenticated", OWNER_A, () =>
+        expect(pg.query(`select ${f}`)).rejects.toThrow(/permission denied/),
+      );
+  });
+
+  it("only owners and managers set a fee, for an active host of their operator", async () => {
+    await expect(setFee(TECH_A, host)).rejects.toThrow(/cpo_not_allowed/);
+    await expect(setFee(HOST_USER, host)).rejects.toThrow(/cpo_not_allowed/);
+    await expect(
+      setFee(OWNER_A, "10000000-0000-4000-8000-0000000000ff"),
+    ).rejects.toThrow(/cpo_host_not_found/);
+    // Out-of-range terms are refused by the table itself.
+    await expect(setFee(OWNER_A, host, "percent", 10_001)).rejects.toThrow();
+    await expect(setFee(OWNER_A, host, "flat")).rejects.toThrow();
+  });
+
+  it("makes each change a new version, strictly after the last one", async () => {
+    const a = await setFee(OWNER_A, host, "percent", 1000);
+    const b = await setFee(OWNER_A, host, "per_kwh", 0, 5, 1500);
+    expect(Date.parse(b.effective_from)).toBeGreaterThan(
+      Date.parse(a.effective_from),
+    );
+    const { rows } = await pg.query<{ n: number }>(
+      "select count(*)::int as n from cpo_host_fee_plans where host_id=$1",
+      [host],
+    );
+    expect(rows[0].n).toBe(2);
+  });
+
+  it("records the host, payout account and fee at the start, once", async () => {
+    await pg.query(
+      "insert into cpo_host_payout_accounts(operator_id,host_id,stripe_account_id,status) values ($1,$2,'acct_sampleHostA','ready')",
+      [operatorA, host],
+    );
+    const latest = (
+      await pg.query<{ id: string }>(
+        "select id from cpo_host_fee_plans where host_id=$1 order by effective_from desc limit 1",
+        [host],
+      )
+    ).rows[0].id;
+    const id = await claim(80101);
+    const [first] = await snapshot(id, 801);
+    expect(first).toMatchObject({
+      host_id: host,
+      payout_account_id: "acct_sampleHostA",
+      fee_plan_id: latest,
+    });
+    // Later changes (site moved, new account, new fee) never change the record.
+    await svc("select cpo_assign_site($1,$2,801,$3)", [
+      operatorA,
+      OWNER_A,
+      other,
+    ]);
+    await pg.query(
+      "update cpo_host_payout_accounts set stripe_account_id='acct_sampleOther' where host_id=$1",
+      [host],
+    );
+    await setFee(OWNER_A, host, "percent", 2000);
+    expect(await snapshot(id, 801)).toEqual([first]);
+    await svc("select cpo_assign_site($1,$2,801,$3)", [
+      operatorA,
+      OWNER_A,
+      host,
+    ]);
+  });
+
+  it("tells the anonymous driver's checkout a site's host and payout status (service role)", async () => {
+    const read = (site: number, operator = operatorA) =>
+      svc<{ host_id: string; status: string }>(
+        "select * from cpo_site_payout($1,$2)",
+        [operator, site],
+      ).then((x) => x.rows);
+    expect(await read(801)).toEqual([{ host_id: host, status: "ready" }]);
+    // A host with no payout account row reads as not connected.
+    await svc("select cpo_assign_site($1,$2,802,$3)", [
+      operatorA,
+      OWNER_A,
+      other,
+    ]);
+    expect(await read(802)).toEqual([{ host_id: other, status: "none" }]);
+    // No host, or another operator's view of the same site: no row.
+    expect(await read(899)).toEqual([]);
+    expect(await read(801, operatorB)).toEqual([]);
+    // The anon role (a driver's browser) can't call it at all.
+    await as("anon", null, () =>
+      expect(
+        pg.query("select * from cpo_site_payout(null,null)"),
+      ).rejects.toThrow(/permission denied/),
+    );
+  });
+
+  it("records nothing at a site with no host, or for another operator's checkout", async () => {
+    const id = await claim(80102);
+    expect(await snapshot(id, 899)).toEqual([]);
+    await expect(snapshot(id, 801, operatorB)).rejects.toThrow(/cpo_not_found/);
+  });
+
+  it("reads a host's statement by the host recorded at the start", async () => {
+    const id = await claim(80103);
+    await snapshot(id, 801);
+    // The site then moves to another host: the session stays on the first host's.
+    await svc("select cpo_assign_site($1,$2,801,$3)", [
+      operatorA,
+      OWNER_A,
+      other,
+    ]);
+    const read = (h: string) =>
+      svc<{ checkout: { id: string }; mode: string | null }>(
+        "select * from cpo_host_statement($1,$2,now() - interval '1 day',now() + interval '1 day',100)",
+        [operatorA, h],
+      ).then((x) => x.rows);
+    const rows = await read(host);
+    expect(rows.map((x) => x.checkout.id)).toContain(id);
+    expect(rows.every((x) => x.mode !== null)).toBe(true);
+    expect((await read(other)).map((x) => x.checkout.id)).not.toContain(id);
+    const fees = await svc<{ checkout_id: string; host_id: string }>(
+      "select * from cpo_checkout_host_fees($1,$2)",
+      [operatorA, [id]],
+    );
+    expect(fees.rows).toEqual([
+      expect.objectContaining({ checkout_id: id, host_id: host }),
+    ]);
+    // Another operator reads none of it.
+    expect(
+      (
+        await svc("select * from cpo_checkout_host_fees($1,$2)", [
+          operatorB,
+          [id],
+        ])
+      ).rows,
+    ).toEqual([]);
   });
 });

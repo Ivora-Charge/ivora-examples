@@ -217,6 +217,7 @@ export type CheckoutErrorCode =
   | "in_use"
   | "out_of_order"
   | "stripe_not_ready"
+  | "host_not_ready"
   | "free_not_ready"
   | "expired"
   | "rate_limited"

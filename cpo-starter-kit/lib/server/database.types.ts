@@ -500,6 +500,55 @@ export type Database = {
         Update: { [_ in never]: never };
         Relationships: [];
       };
+      cpo_host_fee_plans: {
+        Row: {
+          id: string;
+          operator_id: string;
+          host_id: string;
+          mode: string;
+          percent_bps: number;
+          per_kwh_minor: number;
+          monthly_charger_fee_minor: number;
+          currency: string;
+          effective_from: Timestamp;
+          created_by: string | null;
+          created_at: Timestamp;
+        };
+        // Written only through cpo_set_host_fee_plan.
+        Insert: { [_ in never]: never };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
+      cpo_host_payout_accounts: {
+        Row: {
+          operator_id: string;
+          host_id: string;
+          stripe_account_id: string | null;
+          status: string;
+          requirements: string[];
+          checked_at: Timestamp | null;
+          updated_at: Timestamp;
+        };
+        // Written by the host payout setup (live mode pending review).
+        Insert: { [_ in never]: never };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
+      cpo_checkout_hosts: {
+        Row: {
+          checkout_id: string;
+          operator_id: string;
+          location_id: number;
+          host_id: string;
+          payout_account_id: string | null;
+          fee_plan_id: string | null;
+          recorded_at: Timestamp;
+        };
+        // Written only through cpo_snapshot_checkout_host.
+        Insert: { [_ in never]: never };
+        Update: { [_ in never]: never };
+        Relationships: [];
+      };
     };
     Views: { [_ in never]: never };
     Functions: {
@@ -985,6 +1034,60 @@ export type Database = {
           p_limit: number;
         };
         Returns: Database["public"]["Tables"]["cpo_card_sessions"]["Row"][];
+      };
+      cpo_set_host_fee_plan: {
+        Args: {
+          p_operator_id: string;
+          p_actor_id: string;
+          p_host_id: string;
+          p_mode: string;
+          p_percent_bps: number;
+          p_per_kwh_minor: number;
+          p_monthly_charger_fee_minor: number;
+          p_currency: string;
+        };
+        Returns: Database["public"]["Tables"]["cpo_host_fee_plans"]["Row"];
+      };
+      cpo_snapshot_checkout_host: {
+        Args: {
+          p_operator_id: string;
+          p_checkout_id: string;
+          p_location_id: number;
+        };
+        Returns: Database["public"]["Tables"]["cpo_checkout_hosts"]["Row"][];
+      };
+      cpo_site_payout: {
+        Args: { p_operator_id: string; p_location_id: number };
+        Returns: { host_id: string; status: string }[];
+      };
+      cpo_checkout_host_fees: {
+        Args: { p_operator_id: string; p_checkout_ids: string[] };
+        Returns: {
+          checkout_id: string;
+          host_id: string;
+          mode: string | null;
+          percent_bps: number | null;
+          per_kwh_minor: number | null;
+          monthly_charger_fee_minor: number | null;
+          currency: string | null;
+        }[];
+      };
+      cpo_host_statement: {
+        Args: {
+          p_operator_id: string;
+          p_host_id: string;
+          p_from: Timestamp;
+          p_to: Timestamp;
+          p_limit: number;
+        };
+        Returns: {
+          checkout: Json;
+          mode: string | null;
+          percent_bps: number | null;
+          per_kwh_minor: number | null;
+          monthly_charger_fee_minor: number | null;
+          currency: string | null;
+        }[];
       };
     };
     Enums: { [_ in never]: never };

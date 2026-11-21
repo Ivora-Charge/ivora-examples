@@ -5,6 +5,7 @@ import { AccessDeniedError } from "./auth";
 import { ChargerError } from "./chargers/types";
 import { FleetError } from "./fleet/types";
 import { LiveError } from "./live/types";
+import { NetworkError } from "./network/types";
 import { describeError, IvoraError } from "./ivora";
 import { OnboardingError } from "./onboarding/types";
 import { PricingError } from "./pricing/types";
@@ -13,7 +14,7 @@ import { TeamError } from "./team/types";
 
 /**
  * Turns an error from a server action into a message for the form. Errors staff can
- * act on (TeamError, OnboardingError, ChargerError, LiveError, PricingError, RoamingError, FleetError, AccessDeniedError) are shown as they are, Ivora
+ * act on (TeamError, OnboardingError, ChargerError, LiveError, NetworkError, PricingError, RoamingError, FleetError, AccessDeniedError) are shown as they are, Ivora
  * API errors with their code and request ID; anything else is logged by name only and
  * shown as a setup problem, never with its details.
  */
@@ -36,6 +37,7 @@ export function actionError(e: unknown, what: string): ActionState {
     e instanceof TeamError ||
     e instanceof ChargerError ||
     e instanceof LiveError ||
+    e instanceof NetworkError ||
     e instanceof AccessDeniedError
   )
     return { error: e.message };

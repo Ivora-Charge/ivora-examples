@@ -278,4 +278,15 @@ export interface SessionRow {
   netMinor: number | null;
   refundCheckedAt: string | null;
   detailsPending: boolean;
+  /**
+   * Network mode: a session at a host's site, with the network fee (after refunds)
+   * and the host's share, as on the host's statement. Absent at the operator's own
+   * sites.
+   */
+  network?: {
+    hostName: string;
+    feeMinor: number | null;
+    hostShareMinor: number | null;
+    note: string | null;
+  } | null;
 }

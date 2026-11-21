@@ -3,12 +3,35 @@ import { HOST_PERMISSIONS, PERMISSION_LABELS } from "@/lib/hosts";
 import { atLeast, HOST_ROLE } from "@/lib/roles";
 import { requireRole } from "@/lib/server/auth";
 import { getHosts, loadHosts, type HostRecord } from "@/lib/server/hosts";
+import { formatMinor } from "@/lib/money";
+import { amountField, describeTerms, type FeeTerms } from "@/lib/network-fee";
+import {
+  getNetwork,
+  hostPaymentsAvailable,
+  loadHostMoney,
+  PAYOUT_LABELS,
+  payoutGateMessage,
+  type HostMoney,
+} from "@/lib/server/network";
+import type { ChipTone } from "@/lib/status-chips";
+import { StatusChip } from "@/app/ui/status-chip";
 import { getTeam } from "@/lib/server/team";
 import { EmptyState } from "@/app/ui/empty-state";
 import { PageHeader } from "@/app/ui/page-header";
 import { Loading } from "@/app/loading-skeleton";
-import { resetDemoHostsAction, viewAsHostAction } from "./actions";
-import { ArchiveHost, HostForm, NEW_HOST, SiteHostForm } from "./forms";
+import {
+  resetDemoHostsAction,
+  simulatePayoutAction,
+  viewAsHostAction,
+} from "./actions";
+import {
+  ArchiveHost,
+  FeeForm,
+  HostForm,
+  NEW_HOST,
+  SiteHostForm,
+  type FeeFormValues,
+} from "./forms";
 
 export const metadata = { title: "Hosts" };
 
@@ -18,6 +41,119 @@ const permissionSummary = (h: HostRecord) => {
   );
   return on.length ? on.join("; ") : "View only: every switch is off";
 };
+
+const PAYOUT_TONE: Record<HostMoney["payout"]["status"], ChipTone> = {
+  none: "off",
+  action_needed: "warn",
+  ready: "ok",
+};
+
+const feeFields = (
+  t: FeeTerms | undefined,
+  currency: string,
+): FeeFormValues => ({
+  mode: t?.mode ?? "percent",
+  percent: t && t.mode === "percent" ? String(t.percentBps / 100) : "",
+  perKwh:
+    t && t.mode === "per_kwh" ? amountField(t.perKwhMinor, t.currency) : "",
+  monthly: t ? amountField(t.monthlyChargerFeeMinor, t.currency) : "",
+});
+
+/** A host's payout account and network fee: status, the fee and its versions. */
+function HostMoneyPanel(p: {
+  hostId: string;
+  hostName: string;
+  money: HostMoney | undefined;
+  currency: string;
+  live: boolean;
+  demo: boolean;
+}) {
+  const m = p.money;
+  const status = m?.payout.status ?? "none";
+  const blocked =
+    status !== "ready"
+      ? payoutGateMessage(status)
+      : !hostPaymentsAvailable(p.live ? "live" : "demo")
+        ? payoutGateMessage("live_unavailable")
+        : null;
+  return (
+    <section
+      className="host-money"
+      aria-label={`Payouts and network fee for ${p.hostName}`}
+    >
+      <h3>Payouts</h3>
+      <p>
+        <StatusChip tone={PAYOUT_TONE[status]}>
+          {PAYOUT_LABELS[status]}
+        </StatusChip>{" "}
+        <span className="muted">
+          Driver payments at this host&apos;s sites are paid to the host&apos;s
+          own Stripe account; your network fee is taken from each payment.
+        </span>
+      </p>
+      {blocked && (
+        <p className="notice" role="note">
+          {blocked}
+        </p>
+      )}
+      {m && m.payout.requirements.length > 0 && (
+        <p className="muted">
+          Stripe asks for: {m.payout.requirements.join(", ")}.
+        </p>
+      )}
+      {p.live && (
+        <p className="muted">
+          Connecting a host&apos;s Stripe account from here is designed and
+          waits for review (README: Host payouts).
+        </p>
+      )}
+      {p.demo && (
+        <form action={simulatePayoutAction} className="demo-sim">
+          <input type="hidden" name="hostId" value={p.hostId} />
+          <label htmlFor={`payout-${p.hostId}`}>
+            Demo: simulate payouts
+          </label>{" "}
+          <select id={`payout-${p.hostId}`} name="status" defaultValue={status}>
+            <option value="ready">Ready</option>
+            <option value="action_needed">Action needed</option>
+            <option value="none">Not connected</option>
+          </select>{" "}
+          <button type="submit" className="button secondary">
+            Simulate
+          </button>
+        </form>
+      )}
+      <h3>Network fee</h3>
+      <p>
+        {m?.current
+          ? describeTerms(m.current.terms, formatMinor)
+          : "No fee set: the host keeps every session's amount."}{" "}
+        <a href={`/reports/statements?host=${p.hostId}`}>Monthly statements</a>
+      </p>
+      {m && m.history.length > 1 && (
+        <>
+          <p className="muted">
+            Earlier fees (sessions started then keep them):
+          </p>
+          <ul className="muted">
+            {m.history.slice(1).map((h) => (
+              <li key={h.id}>
+                From {h.effectiveFrom.slice(0, 16).replace("T", " ")} UTC:{" "}
+                {describeTerms(h.terms, formatMinor)}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      <FeeForm
+        hostId={p.hostId}
+        hostName={p.hostName}
+        currency={p.currency}
+        current={feeFields(m?.current?.terms, p.currency)}
+      />
+    </section>
+  );
+}
 
 async function Content() {
   const me = await requireRole("viewer");
@@ -34,9 +170,10 @@ async function Content() {
         </section>
       </>
     );
-  const [r, members] = await Promise.all([
+  const [r, members, money] = await Promise.all([
     loadHosts(await getHosts(), me),
     getTeam().backend.members(me.operatorId),
+    loadHostMoney(getNetwork(), me),
   ]);
   const active = r.hosts.filter((h) => !h.archivedAt);
   const archived = r.hosts.filter((h) => h.archivedAt);
@@ -97,6 +234,14 @@ async function Content() {
                       <span className="muted host-switches">
                         {permissionSummary(h)}
                       </span>
+                      <span className="muted">
+                        Payouts:{" "}
+                        {
+                          PAYOUT_LABELS[
+                            money.byHost.get(h.id)?.payout.status ?? "none"
+                          ]
+                        }
+                      </span>
                     </summary>
                     <div className="host-body">
                       {(h.contactName || h.contactEmail || h.contactPhone) && (
@@ -134,6 +279,14 @@ async function Content() {
                           contactPhone: h.contactPhone ?? "",
                           permissions: h.permissions,
                         }}
+                      />
+                      <HostMoneyPanel
+                        hostId={h.id}
+                        hostName={h.name}
+                        money={money.byHost.get(h.id)}
+                        currency={money.currency}
+                        live={money.live}
+                        demo={me.demo}
                       />
                       <ArchiveHost hostId={h.id} name={h.name} />
                     </div>

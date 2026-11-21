@@ -11,6 +11,7 @@ const SEGMENT_LABELS: Record<string, string> = {
   new: "New",
   stickers: "Stickers",
   roaming: "Roaming",
+  statements: "Statements",
 };
 
 function decode(value: string): string {
