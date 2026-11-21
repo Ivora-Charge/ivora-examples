@@ -576,6 +576,7 @@ So the kit's key needs `stations:read`, `stations:write`, `stations:control` (th
 
 ### Next steps
 
+- **A fixed core plus switchable modules:** the design for turning optional features (site hosts, cards, roaming, status emails, remote commands and firmware, promotions) on and off in Settings is in [docs/modules.md](docs/modules.md), for review before it is built.
 - **OCPI roaming payments:** the Roaming page only publishes your sites. Settling roaming sessions with partners comes later as a separate add-on.
 - **Payouts in the kit:** Reports links to your Stripe dashboard's payouts and holds no Stripe keys. A payouts view in the kit needs Ivora to expose payouts through its API.
 - **Refunds and checkouts that need you** resolved in the kit; today they are done in the Ivora and Stripe dashboards.
