@@ -857,6 +857,31 @@ describe("CDRs and the driver's start", () => {
   });
 });
 
+describe("a CDR that names no session", () => {
+  it("takes a start only from the same CPO party as the start", async () => {
+    const { commandId, session } = await started();
+    await cpo.putSession(session); // the CPO's session, not pushed to us
+    const deps = { sessions, commands, tokens, peers };
+    const noSession = (id: string, partyId?: string) => {
+      const cdr = { ...cpo.cdrFor("SESSION-1"), id };
+      delete cdr.session_id;
+      return partyId ? { ...cdr, party_id: partyId } : cdr;
+    };
+    // Same authorization_reference and peer, but another party's CDR: not this start's.
+    const other = await recordCdr(
+      one,
+      noSession("CDR-OTHER", "OTH"),
+      "push",
+      deps,
+    );
+    expect(other.cdr).toMatchObject({ commandId: null });
+    expect((await commands.get(commandId))!.sessionId).toBeFalsy();
+    // The start's own party does take it, while it has no session.
+    const own = await recordCdr(one, noSession("CDR-OWN"), "push", deps);
+    expect(own.cdr).toMatchObject({ commandId });
+  });
+});
+
 describe("sessions and CDRs pulled from a CPO", () => {
   // A pull asks for changes since the peer was added (the real clock), so these are
   // dated from now on.

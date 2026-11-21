@@ -1,6 +1,7 @@
 import "server-only";
 import {
   pullModule,
+  pullTargets,
   SyncError,
   type PeerSyncOutcome,
   type PullTarget,
@@ -10,7 +11,7 @@ import {
 } from "@/lib/locations/sync";
 import type { ClientOptions } from "@/lib/ocpi/client";
 import { OcpiError, OcpiProblem } from "@/lib/ocpi/errors";
-import { sameId } from "@/lib/ocpi/locations";
+import { isCpoParty } from "@/lib/ocpi/parties";
 import {
   parseCdr,
   parseSession,
@@ -18,6 +19,7 @@ import {
   type Session,
 } from "@/lib/ocpi/session-objects";
 import type { Peer } from "@/lib/ocpi/store";
+import { sameParty, type Party } from "@/lib/ocpi/types";
 import { assertLive } from "@/lib/server/demo";
 import { recordCdr, recordSession, type SessionDeps } from "./record";
 
@@ -45,27 +47,26 @@ export type SessionPullDeps = SessionDeps & {
 
 export type SessionModule = "sessions" | "cdrs";
 
+/** Of one of the peer's CPO parties (a hub's trusted ones), or just of `only`. */
 const ofCpoParty = (
   peer: Peer,
   o: { country_code: string; party_id: string },
-) =>
-  peer.roles.some(
-    (r) =>
-      r.role === "CPO" &&
-      sameId(r.country_code, o.country_code) &&
-      sameId(r.party_id, o.party_id),
-  );
+  only?: Party,
+) => {
+  const p = { countryCode: o.country_code, partyId: o.party_id };
+  return isCpoParty(peer, p) && (!only || sameParty(only, p));
+};
 
 function target(module: SessionModule, deps: SessionPullDeps): PullTarget {
   return {
     module,
     since: (peer) => peer.createdAt,
-    async storePage(peer, raw) {
+    async storePage(peer, raw, _seenAt, only) {
       let items = 0;
       // One by one, in order: a session and its changes on one page land in order.
       for (const x of raw) {
         const parsed = module === "sessions" ? parseSession(x) : parseCdr(x);
-        if (!parsed.ok || !ofCpoParty(peer, parsed.value)) continue;
+        if (!parsed.ok || !ofCpoParty(peer, parsed.value, only)) continue;
         try {
           if (module === "sessions")
             await recordSession(peer, parsed.value as Session, deps);
@@ -127,26 +128,33 @@ export async function pullAllSessions(
         )
       )
         continue;
-      try {
-        const r = await pullSessions(peer.id, module, deps, options);
-        out.push({
-          peerId: peer.id,
-          module,
-          ok: true,
-          complete: r.complete,
-          items: r.items,
-          invalid: r.invalid,
-        });
-      } catch (e) {
-        out.push({
-          peerId: peer.id,
-          module,
-          ok: false,
-          error:
-            e instanceof SyncError || e instanceof OcpiError
-              ? e.message
-              : "unexpected error",
-        });
+      for (const party of pullTargets(peer)) {
+        try {
+          const r = await pullSessions(peer.id, module, deps, {
+            ...options,
+            party,
+          });
+          out.push({
+            peerId: peer.id,
+            module,
+            ...(party && { party }),
+            ok: true,
+            complete: r.complete,
+            items: r.items,
+            invalid: r.invalid,
+          });
+        } catch (e) {
+          out.push({
+            peerId: peer.id,
+            module,
+            ...(party && { party }),
+            ok: false,
+            error:
+              e instanceof SyncError || e instanceof OcpiError
+                ? e.message
+                : "unexpected error",
+          });
+        }
       }
     }
   }

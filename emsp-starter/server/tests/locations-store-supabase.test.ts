@@ -260,3 +260,30 @@ describe("location store selection", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("pruning one party's objects (behind a roaming hub)", () => {
+  it("adds the party to the delete filter, and leaves it out for a direct peer", async () => {
+    replies.push(Response.json([{ location_id: "a" }]));
+    expect(
+      await store.pruneLocations(PEER, "2026-10-21T10:00:00Z", {
+        countryCode: "zz",
+        partyId: "aaa",
+      }),
+    ).toBe(1);
+    replies.push(Response.json([]));
+    await store.pruneTariffs(PEER, "2026-10-21T10:00:00Z", PARTY);
+    replies.push(Response.json([]));
+    await store.pruneTariffs(PEER, "2026-10-21T10:00:00Z");
+    expect(query(requests[0])).toContain(
+      "&country_code=eq.ZZ&party_id=eq.AAA&select=location_id",
+    );
+    expect(query(requests[1])).toContain("&country_code=eq.ZZ&party_id=eq.MCK");
+    expect(query(requests[2])).not.toContain("country_code");
+  });
+
+  it("keeps a party's pull state under its own key", async () => {
+    replies.push(Response.json([]));
+    await store.getSyncState(PEER, "locations@ZZ-AAA");
+    expect(query(requests[0])).toContain("module=eq.locations@ZZ-AAA");
+  });
+});

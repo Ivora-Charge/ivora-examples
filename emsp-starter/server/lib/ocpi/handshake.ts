@@ -4,6 +4,12 @@ import { config, OCPI_VERSION, ocpiUrls } from "@/lib/server/config";
 import { assertLive } from "@/lib/server/demo";
 import { ocpiRequest, type ClientOptions } from "./client";
 import { OcpiError, OcpiProblem, OcpiUnauthorizedError } from "./errors";
+import {
+  editHubParties,
+  isHubRoles,
+  isPartyOfPeer,
+  offerDeclaredParties,
+} from "./parties";
 import { ourCredentials, ourParty } from "./identity";
 import {
   parseCredentials,
@@ -142,17 +148,27 @@ export function credentialsEndpoint(endpoints: Endpoint[]): string | undefined {
 }
 
 /**
- * A peer's roles must include a CPO, must not be this eMSP, and must not belong to
- * another peer that is registered or registering.
+ * A peer's roles must include a CPO or a roaming hub, must not be this eMSP, and must
+ * not be a party of another registered peer (a direct peer's roles, a hub's own HUB
+ * role, or a party another hub's operator trusts). A registered peer cannot switch
+ * between hub and direct CPO (`current`: its roles now): it registers again instead.
  */
 async function checkRoles(
   store: PeerStore,
   roles: CredentialsRole[],
   peerId: string,
+  current?: CredentialsRole[],
 ): Promise<void> {
-  if (!roles.some((r) => r.role === "CPO"))
+  if (!roles.some((r) => r.role === "CPO" || r.role === "HUB"))
     throw new HandshakeError(
-      "The peer has no CPO role: this eMSP connects to CPOs",
+      "The peer has no CPO or HUB role: this eMSP connects to CPOs and roaming hubs",
+      STATUS.CLIENT_ERROR,
+    );
+  if (current?.length && isHubRoles(current) !== isHubRoles(roles))
+    throw new HandshakeError(
+      isHubRoles(current)
+        ? "A roaming hub cannot drop its HUB role: unregister and register again"
+        : "A CPO cannot add a HUB role: unregister and register again",
       STATUS.CLIENT_ERROR,
     );
   const party = (r: CredentialsRole) => ({
@@ -169,11 +185,54 @@ async function checkRoles(
   );
   for (const r of roles)
     for (const other of others)
-      if (other.roles.some((o) => sameParty(party(o), party(r))))
+      if (isPartyOfPeer(other, party(r)))
         throw new HandshakeError(
-          `Party ${r.country_code}-${r.party_id} is already registered by another peer`,
+          other.roles.some((o) => sameParty(party(o), party(r)))
+            ? `Party ${r.country_code}-${r.party_id} is already registered by another peer`
+            : `Party ${r.country_code}-${r.party_id} is already reached through a roaming hub`,
           STATUS.CLIENT_ERROR,
         );
+}
+
+/**
+ * The same check again, after the roles were written. checkRoles reads the other peers
+ * and the write follows, so two peers claiming one party at the same time can both pass
+ * it. Each then looks again at what is stored: whoever sees the other's claim backs out,
+ * so both cannot stay (at worst both back out, and retry). Returns why, or null.
+ */
+async function claimLost(
+  store: PeerStore,
+  roles: CredentialsRole[],
+  peerId: string,
+): Promise<HandshakeError | null> {
+  try {
+    await checkRoles(store, roles, peerId);
+    return null;
+  } catch (e) {
+    return asHandshakeError(e, "The peer's roles were refused");
+  }
+}
+
+/**
+ * The CPO roles a hub declares in its credentials go to its party list as offered,
+ * never trusted (parties.ts). Merged into the list as it is now, so an operator's
+ * concurrent accept or removal is kept.
+ */
+async function offerDeclared(
+  store: PeerStore,
+  peerId: string,
+  roles: CredentialsRole[],
+): Promise<Peer | null> {
+  if (!isHubRoles(roles) || !roles.some((r) => r.role === "CPO")) return null;
+  const done = await editHubParties(store, peerId, (peer) => {
+    const hubParties = offerDeclaredParties(peer.hubParties, roles);
+    // Nothing new offered: leave the peer alone. (Not a length check: at the cap a new
+    // offer pushes an old one out and the length stays.)
+    return hubParties.some((h) => !peer.hubParties.includes(h))
+      ? { hubParties, result: null }
+      : null;
+  });
+  return done?.peer ?? null;
 }
 
 /** For the audit log and the admin web: who the peer is, no secrets. */
@@ -279,6 +338,11 @@ export async function connectToCpo(
     );
     if (!registered)
       throw new HandshakeError("The peer changed during registration");
+    const lost = await claimLost(store, theirs.roles, peer.id);
+    if (lost) {
+      await markUnregistered(store, peer.id, "registered").catch(() => {});
+      throw lost;
+    }
     await store.audit({
       actor,
       action: "ocpi.peer.registered",
@@ -286,7 +350,12 @@ export async function connectToCpo(
       requestId: correlationId,
       details: { direction: "outbound", parties: partiesOf(theirs.roles) },
     });
-    return registered;
+    // Offers are a convenience for the operator: failing to note them is not a reason
+    // to undo the registration.
+    return (
+      (await offerDeclared(store, peer.id, theirs.roles).catch(() => null)) ??
+      registered
+    );
   } catch (e) {
     const endpoint = credentialsEndpoint(first.endpoints)!;
     await ocpiRequest(
@@ -472,6 +541,11 @@ export async function postCredentials(ctx: OcpiContext): Promise<Response> {
     await store.revokeToken(hashC);
     throw notAllowed("Already registered");
   }
+  const lost = await claimLost(store, theirs.roles, peer.id);
+  if (lost) {
+    await markUnregistered(store, peer.id, "registered").catch(() => {});
+    toProblem(lost);
+  }
   // Token A is single-use.
   await store.revokePeerTokens(peer.id, hashC);
   await store.audit({
@@ -481,6 +555,7 @@ export async function postCredentials(ctx: OcpiContext): Promise<Response> {
     requestId: ctx.requestId,
     details: { direction: "inbound", parties: partiesOf(theirs.roles) },
   });
+  await offerDeclared(store, peer.id, theirs.roles).catch(() => null);
   return ocpiResponse(ourCredentials(tokenC), ctx);
 }
 
@@ -491,7 +566,7 @@ export async function putCredentials(ctx: OcpiContext): Promise<Response> {
     throw notAllowed("Not registered: use POST to register");
   const theirs = await incomingCredentials(ctx);
   try {
-    await checkRoles(store, theirs.roles, peer.id);
+    await checkRoles(store, theirs.roles, peer.id, peer.roles);
   } catch (e) {
     toProblem(e);
   }
@@ -515,6 +590,13 @@ export async function putCredentials(ctx: OcpiContext): Promise<Response> {
     await store.revokeToken(hashC);
     throw notAllowed("Not registered");
   }
+  const lost = await claimLost(store, theirs.roles, peer.id);
+  if (lost) {
+    // Back to the roles it had; its new token stays valid.
+    await store.updatePeer(peer.id, { roles: peer.roles }, "registered");
+    await store.revokePeerTokens(peer.id, hashC);
+    toProblem(lost);
+  }
   // The token this request came with, and any older one, stop working now.
   await store.revokePeerTokens(peer.id, hashC);
   await store.audit({
@@ -524,6 +606,7 @@ export async function putCredentials(ctx: OcpiContext): Promise<Response> {
     requestId: ctx.requestId,
     details: { parties: partiesOf(theirs.roles) },
   });
+  await offerDeclared(store, peer.id, theirs.roles).catch(() => null);
   return ocpiResponse(ourCredentials(tokenC), ctx);
 }
 
@@ -612,7 +695,7 @@ export async function rotateCredentials(
   let roles = theirs.roles;
   let refused: HandshakeError | undefined;
   try {
-    await checkRoles(store, theirs.roles, peerId);
+    await checkRoles(store, theirs.roles, peerId, peer.roles);
   } catch (e) {
     refused = asHandshakeError(e, "The CPO's new roles were refused");
     roles = peer.roles;
@@ -641,6 +724,14 @@ export async function rotateCredentials(
     },
     "registered",
   );
+  if (updated && !refused) {
+    const lost = await claimLost(store, roles, peerId);
+    if (lost) {
+      refused = lost;
+      roles = peer.roles;
+      await store.updatePeer(peerId, { roles }, "registered");
+    }
+  }
   await store.revokePeerTokens(peerId, hashB);
   await store.audit({
     actor: deps.actor ?? "admin",
@@ -650,11 +741,14 @@ export async function rotateCredentials(
     details: { parties: partiesOf(roles), rolesRefused: !!refused },
   });
   if (!updated) throw new HandshakeError("The peer changed during the update");
+  const offered = refused
+    ? null
+    : await offerDeclared(store, peerId, roles).catch(() => null);
   if (refused)
     throw new HandshakeError(
       `Tokens rotated with ${updated.label}, but its new roles were refused and the old ones kept: ${refused.message}`,
     );
-  return updated;
+  return offered ?? updated;
 }
 
 /**

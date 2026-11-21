@@ -3,6 +3,7 @@ import { locationStore } from "@/lib/locations/registry";
 import { parseCommandResult } from "@/lib/ocpi/command-objects";
 import { OcpiProblem } from "@/lib/ocpi/errors";
 import { ocpiResponse, readJson, type OcpiContext } from "@/lib/ocpi/server";
+import { isCpoParty } from "@/lib/ocpi/parties";
 import { sameParty, STATUS } from "@/lib/ocpi/types";
 import { tokenStore } from "@/lib/tokens/registry";
 import { applyCommandResult, type CommandDeps } from "./manage";
@@ -42,14 +43,7 @@ export async function commandResultReceiver(
   if (ctx.request.method !== "POST")
     throw new OcpiProblem(405, STATUS.CLIENT_ERROR, "Method not allowed");
   const from = ctx.from;
-  if (
-    !from ||
-    !ctx.peer.roles.some(
-      (r) =>
-        r.role === "CPO" &&
-        sameParty({ countryCode: r.country_code, partyId: r.party_id }, from),
-    )
-  )
+  if (!from || !isCpoParty(ctx.peer, from))
     throw new OcpiProblem(
       403,
       STATUS.CLIENT_ERROR,

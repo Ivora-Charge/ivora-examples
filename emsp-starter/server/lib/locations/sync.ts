@@ -4,13 +4,15 @@ import { ocpiPages, type ClientOptions } from "@/lib/ocpi/client";
 import { OcpiError } from "@/lib/ocpi/errors";
 import { ourParty } from "@/lib/ocpi/identity";
 import { parseLocation, sameId } from "@/lib/ocpi/locations";
+import { isCpoParty, isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import type { Peer, PeerStore } from "@/lib/ocpi/store";
 import { parseTariff } from "@/lib/ocpi/tariffs";
 import { decryptToken } from "@/lib/ocpi/tokens";
-import { ocpiTimestamp } from "@/lib/ocpi/types";
+import { ocpiTimestamp, sameParty, type Party } from "@/lib/ocpi/types";
 import { assertLive } from "@/lib/server/demo";
 import type {
   LocationStore,
+  SyncKey,
   SyncMode,
   SyncModule,
   SyncResult,
@@ -88,9 +90,14 @@ export type PullTarget = {
     peer: Peer,
     raw: unknown[],
     seenAt: string,
+    /** Behind a hub: the one party being pulled; objects of any other are skipped. */
+    only?: Party,
   ): Promise<{ items: number; invalid: number }>;
-  /** After a full pull: removes the peer's objects not seen since `before`. */
-  prune?(peerId: string, before: string): Promise<number>;
+  /**
+   * After a full pull: removes the peer's objects not seen since `before` (of `party`
+   * only, behind a hub).
+   */
+  prune?(peerId: string, before: string, party?: Party): Promise<number>;
   /** date_from of a full pull. Default: none, everything. */
   since?(peer: Peer): string;
 };
@@ -99,11 +106,18 @@ export type SyncOptions = {
   /** "auto": full the first time, then incremental. Default "auto". */
   mode?: "auto" | SyncMode;
   maxPages?: number;
+  /**
+   * Behind a roaming hub: the trusted party to pull (every pull is of one party, with
+   * its own state). Required for a hub peer; ignored for a direct CPO.
+   */
+  party?: Party;
 };
 
 export type SyncReport = {
   peerId: string;
   module: SyncModule;
+  /** The party pulled, behind a hub. */
+  party?: Party;
   mode: SyncMode;
   /** False when the pull stopped at maxPages; the next call resumes it. */
   complete: boolean;
@@ -130,11 +144,49 @@ const message = (e: unknown) =>
       ? e.message
       : "unexpected error";
 
-const ofPeer = (peer: Peer, o: { country_code: string; party_id: string }) =>
-  peer.roles.some(
-    (r) =>
-      sameId(r.country_code, o.country_code) && sameId(r.party_id, o.party_id),
-  );
+const ofPeer = (
+  peer: Peer,
+  o: { country_code: string; party_id: string },
+  only?: Party,
+) =>
+  only
+    ? isCpoParty(peer, { countryCode: o.country_code, partyId: o.party_id }) &&
+      sameId(only.countryCode, o.country_code) &&
+      sameId(only.partyId, o.party_id)
+    : peer.roles.some(
+        (r) =>
+          sameId(r.country_code, o.country_code) &&
+          sameId(r.party_id, o.party_id),
+      );
+
+/** The state key of a pull: the module, and behind a hub the party too. */
+export const syncKey = (module: SyncModule, party?: Party): SyncKey =>
+  party ? `${module}@${party.countryCode}-${party.partyId}` : module;
+
+/**
+ * Who a pull asks, and what it keeps. A direct CPO: its CPO party (or its first role),
+ * everything of the peer. Behind a hub: the chosen party, which must be trusted now.
+ */
+function pullScope(
+  peer: Peer,
+  module: SyncModule,
+  chosen?: Party,
+): { to: Party; only?: Party } {
+  if (isHubPeer(peer)) {
+    const party = trustedParties(peer).find(
+      (p) => chosen && sameParty(p, chosen),
+    );
+    if (!party)
+      throw new SyncError(
+        chosen
+          ? `${chosen.countryCode}-${chosen.partyId} is not a trusted party of ${peer.label}`
+          : `${peer.label} is a roaming hub: choose a trusted party to pull ${module} from`,
+      );
+    return { to: party, only: party };
+  }
+  const cpo = peer.roles.find((r) => r.role === "CPO") ?? peer.roles[0];
+  return { to: { countryCode: cpo.country_code, partyId: cpo.party_id } };
+}
 
 /**
  * Locations or tariffs: every object is validated and must be of the peer's parties.
@@ -147,24 +199,26 @@ function locationTarget(
 ): PullTarget {
   return {
     module,
-    async storePage(peer, raw, seenAt) {
+    async storePage(peer, raw, seenAt, only) {
       if (module === "locations") {
         const pulled = raw
           .map((x) => parseLocation(x))
-          .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
+          .flatMap((p) =>
+            p.ok && ofPeer(peer, p.value, only) ? [p.value] : [],
+          );
         await store.saveLocations(peer.id, pulled, seenAt);
         return { items: pulled.length, invalid: raw.length - pulled.length };
       }
       const pulled = raw
         .map((x) => parseTariff(x))
-        .flatMap((p) => (p.ok && ofPeer(peer, p.value) ? [p.value] : []));
+        .flatMap((p) => (p.ok && ofPeer(peer, p.value, only) ? [p.value] : []));
       await store.saveTariffs(peer.id, pulled, seenAt);
       return { items: pulled.length, invalid: raw.length - pulled.length };
     },
-    prune: (peerId, before) =>
+    prune: (peerId, before, party) =>
       module === "locations"
-        ? store.pruneLocations(peerId, before)
-        : store.pruneTariffs(peerId, before),
+        ? store.pruneLocations(peerId, before, party)
+        : store.pruneTariffs(peerId, before, party),
   };
 }
 
@@ -205,11 +259,12 @@ export async function pullModule(
     throw new SyncError(`${peer.label} is ${peer.status}, not registered`);
   const endpoint = senderEndpoint(peer, module);
   const token = decryptToken(peer.tokenCiphertext, peer.id);
-  const cpo = peer.roles.find((r) => r.role === "CPO") ?? peer.roles[0];
+  const { to, only } = pullScope(peer, module, options.party);
+  const key = syncKey(module, only);
 
-  const held: SyncState = (await store.getSyncState(peerId, module)) ?? {
+  const held: SyncState = (await store.getSyncState(peerId, key)) ?? {
     peerId,
-    module,
+    module: key,
     lastFullSyncAt: null,
     cursor: null,
     run: null,
@@ -273,6 +328,7 @@ export async function pullModule(
   const report = (complete: boolean, r: SyncRun, removed = 0): SyncReport => ({
     peerId,
     module,
+    ...(only && { party: only }),
     mode: r.mode,
     complete,
     resumed: resumable,
@@ -297,10 +353,7 @@ export async function pullModule(
         // A saved next link carries its own offset, limit and date filters.
         limit: run.nextUrl ? undefined : PAGE_LIMIT,
         dateFrom: run.nextUrl ? undefined : (run.dateFrom ?? undefined),
-        routing: {
-          from: ourParty(),
-          to: { countryCode: cpo.country_code, partyId: cpo.party_id },
-        },
+        routing: { from: ourParty(), to },
       },
       deps.client,
     );
@@ -309,6 +362,7 @@ export async function pullModule(
         peer,
         page.items,
         now().toISOString(),
+        only,
       );
       pagesThisCall++;
       const r = state.run!;
@@ -330,7 +384,7 @@ export async function pullModule(
     const r = state.run!;
     const removed =
       r.mode === "full" && target.prune
-        ? await target.prune(peerId, r.startedAt)
+        ? await target.prune(peerId, r.startedAt, only)
         : 0;
     const result: SyncResult = {
       ok: true,
@@ -387,9 +441,14 @@ export async function pullModule(
   }
 }
 
+/** What a round pulls from a peer: itself, or each trusted party behind a hub. */
+export const pullTargets = (peer: Peer): (Party | undefined)[] =>
+  isHubPeer(peer) ? trustedParties(peer) : [undefined];
+
 export type PeerSyncOutcome = {
   peerId: string;
   module: SyncModule;
+  party?: Party;
   ok: boolean;
   complete?: boolean;
   items?: number;
@@ -419,19 +478,31 @@ export async function syncAllPeers(
         )
       )
         continue;
-      try {
-        const r = await syncPeer(peer.id, module, deps, options);
-        out.push({
-          peerId: peer.id,
-          module,
-          ok: true,
-          complete: r.complete,
-          items: r.items,
-          invalid: r.invalid,
-          removed: r.removed,
-        });
-      } catch (e) {
-        out.push({ peerId: peer.id, module, ok: false, error: message(e) });
+      for (const party of pullTargets(peer)) {
+        try {
+          const r = await syncPeer(peer.id, module, deps, {
+            ...options,
+            party,
+          });
+          out.push({
+            peerId: peer.id,
+            module,
+            ...(party && { party }),
+            ok: true,
+            complete: r.complete,
+            items: r.items,
+            invalid: r.invalid,
+            removed: r.removed,
+          });
+        } catch (e) {
+          out.push({
+            peerId: peer.id,
+            module,
+            ...(party && { party }),
+            ok: false,
+            error: message(e),
+          });
+        }
       }
     }
   }

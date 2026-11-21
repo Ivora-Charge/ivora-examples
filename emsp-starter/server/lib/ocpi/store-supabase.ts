@@ -25,7 +25,9 @@ type PeerRow = {
   version: string | null;
   roles: Peer["roles"];
   endpoints: Peer["endpoints"];
+  hub_parties: Peer["hubParties"];
   token_ciphertext: string | null;
+  rev: number;
   created_at: string;
   updated_at: string;
   registered_at: string | null;
@@ -41,7 +43,9 @@ const toPeer = (r: PeerRow): Peer => ({
   version: r.version,
   roles: r.roles,
   endpoints: r.endpoints,
+  hubParties: r.hub_parties ?? [],
   tokenCiphertext: r.token_ciphertext,
+  rev: Number(r.rev),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   registeredAt: r.registered_at,
@@ -55,6 +59,7 @@ const COLUMNS: Record<keyof PeerPatch, keyof PeerRow> = {
   version: "version",
   roles: "roles",
   endpoints: "endpoints",
+  hubParties: "hub_parties",
   tokenCiphertext: "token_ciphertext",
   registeredAt: "registered_at",
   unregisteredAt: "unregistered_at",
@@ -116,13 +121,21 @@ export class SupabasePeerStore implements PeerStore {
     return rows.map(toPeer);
   }
 
-  async updatePeer(id: string, patch: PeerPatch, ifStatus?: PeerStatus) {
+  async updatePeer(
+    id: string,
+    patch: PeerPatch,
+    ifStatus?: PeerStatus,
+    ifRev?: number,
+  ) {
     const body: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
     };
     for (const [k, v] of Object.entries(patch))
       body[COLUMNS[k as keyof PeerPatch]] = v;
-    const filter = `id=${eq(id)}${ifStatus ? `&status=${eq(ifStatus)}` : ""}`;
+    const filter =
+      `id=${eq(id)}` +
+      (ifStatus ? `&status=${eq(ifStatus)}` : "") +
+      (ifRev !== undefined ? `&rev=eq.${Math.trunc(ifRev)}` : "");
     const rows = await this.rest<PeerRow[]>(
       "PATCH",
       `emsp_ocpi_peers?${filter}`,

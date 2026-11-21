@@ -16,7 +16,8 @@ import {
   type ObjectKey,
   type StoredLocation,
   type StoredTariff,
-  type SyncModule,
+  type PartyKey,
+  type SyncKey,
   type SyncState,
 } from "./store";
 
@@ -34,7 +35,7 @@ type TariffRow = {
 };
 type SyncRow = {
   peer_id: string;
-  module: SyncModule;
+  module: SyncKey;
   last_full_sync_at: string | null;
   cursor: string | null;
   run_id: string | null;
@@ -103,6 +104,12 @@ function newestPerKey<
   }
   return [...out.values()];
 }
+
+/** PostgREST filter for one party's rows; empty for all of the peer's. */
+const partyFilter = (p?: PartyKey) =>
+  p
+    ? `&country_code=${eq(p.countryCode.toUpperCase())}&party_id=${eq(p.partyId.toUpperCase())}`
+    : "";
 
 /**
  * The locations and tariffs cache in Supabase Postgres (emsp_ocpi_locations,
@@ -198,10 +205,10 @@ export class SupabaseLocationStore implements LocationStore {
     return written.length > 0;
   }
 
-  async pruneLocations(peerId: string, before: string) {
+  async pruneLocations(peerId: string, before: string, party?: PartyKey) {
     const rows = await this.rest<unknown[]>(
       "DELETE",
-      `emsp_ocpi_locations?peer_id=${eq(peerId)}&seen_at=lt.${encodeURIComponent(before)}&select=location_id`,
+      `emsp_ocpi_locations?peer_id=${eq(peerId)}&seen_at=lt.${encodeURIComponent(before)}${partyFilter(party)}&select=location_id`,
       undefined,
       "return=representation",
     );
@@ -281,10 +288,10 @@ export class SupabaseLocationStore implements LocationStore {
     return rows.length > 0;
   }
 
-  async pruneTariffs(peerId: string, before: string) {
+  async pruneTariffs(peerId: string, before: string, party?: PartyKey) {
     const rows = await this.rest<unknown[]>(
       "DELETE",
-      `emsp_ocpi_tariffs?peer_id=${eq(peerId)}&seen_at=lt.${encodeURIComponent(before)}&select=tariff_id`,
+      `emsp_ocpi_tariffs?peer_id=${eq(peerId)}&seen_at=lt.${encodeURIComponent(before)}${partyFilter(party)}&select=tariff_id`,
       undefined,
       "return=representation",
     );
@@ -302,7 +309,7 @@ export class SupabaseLocationStore implements LocationStore {
 
   async getSyncState(
     peerId: string,
-    module: SyncModule,
+    module: SyncKey,
   ): Promise<SyncState | null> {
     const [row] = await this.rest<SyncRow[]>(
       "GET",

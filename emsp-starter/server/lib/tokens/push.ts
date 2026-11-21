@@ -2,10 +2,11 @@ import "server-only";
 import { ocpiRequest, type ClientOptions } from "@/lib/ocpi/client";
 import { OcpiError } from "@/lib/ocpi/errors";
 import { ourParty } from "@/lib/ocpi/identity";
+import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import type { Peer, PeerStore } from "@/lib/ocpi/store";
 import type { Token } from "@/lib/ocpi/token-objects";
 import { decryptToken } from "@/lib/ocpi/tokens";
-import { ocpiTimestamp } from "@/lib/ocpi/types";
+import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 import { isDemo } from "@/lib/server/demo";
 import type { DriverToken, TokenStore } from "./store";
 
@@ -92,8 +93,23 @@ export function tokensReceiver(peer: Peer): string | undefined {
 /** Registered peers with a tokens Receiver. */
 export async function tokenReceivers(peers: PeerStore): Promise<Peer[]> {
   return (await peers.listPeers()).filter(
-    (p) => p.status === "registered" && p.tokenCiphertext && tokensReceiver(p),
+    (p) =>
+      p.status === "registered" &&
+      p.tokenCiphertext &&
+      tokensReceiver(p) &&
+      // A hub with no trusted party has nobody to send to.
+      (!isHubPeer(p) || trustedParties(p).length > 0),
   );
+}
+
+/**
+ * Who a token goes to at this peer: its CPO party (a peer with only other roles gets
+ * its first one), or, behind a hub, every trusted party, one request each.
+ */
+function recipients(peer: Peer): Party[] {
+  if (isHubPeer(peer)) return trustedParties(peer);
+  const to = peer.roles.find((r) => r.role === "CPO") ?? peer.roles[0];
+  return [{ countryCode: to.country_code, partyId: to.party_id }];
 }
 
 const errorText = (e: unknown) =>
@@ -112,9 +128,6 @@ async function send(
   now: Date,
 ) {
   const url = tokensReceiver(peer)!;
-  // The peer's CPO party is who the token is for; a peer with only other roles gets
-  // its first one.
-  const to = peer.roles.find((r) => r.role === "CPO") ?? peer.roles[0];
   const full = toOcpiToken(t, now);
   const body =
     change.method === "PUT"
@@ -122,22 +135,21 @@ async function send(
       : Object.fromEntries(
           [...change.fields, "last_updated" as const].map((f) => [f, full[f]]),
         );
-  await ocpiRequest(
-    {
-      method: change.method,
-      url: `${url.replace(/\/+$/, "")}/${[t.countryCode, t.partyId, t.uid].map(encodeURIComponent).join("/")}`,
-      query: { type: t.type },
-      token: decryptToken(peer.tokenCiphertext!, peer.id),
-      body,
-      routing: {
-        from: ourParty(),
-        to: { countryCode: to.country_code, partyId: to.party_id },
+  // One request per recipient; the first failure fails the push and it is all retried.
+  for (const to of recipients(peer))
+    await ocpiRequest(
+      {
+        method: change.method,
+        url: `${url.replace(/\/+$/, "")}/${[t.countryCode, t.partyId, t.uid].map(encodeURIComponent).join("/")}`,
+        query: { type: t.type },
+        token: decryptToken(peer.tokenCiphertext!, peer.id),
+        body,
+        routing: { from: ourParty(), to },
+        // The same PUT or PATCH again changes nothing: safe to repeat.
+        retry: true,
       },
-      // The same PUT or PATCH again changes nothing: safe to repeat.
-      retry: true,
-    },
-    deps.client ?? PUSH_CLIENT,
-  );
+      deps.client ?? PUSH_CLIENT,
+    );
 }
 
 async function pushTo(
