@@ -16,8 +16,6 @@ export type Who = { email: string; role: "admin" | "viewer" } | null;
 
 type AdminContext = {
   admin: Who;
-  /** ADMIN_SECRET is set on this deployment, so the sign-in page offers it. */
-  secretEnabled: boolean;
   demo: boolean;
   /** The admin secret was typed on the sign-in page in this tab. */
   hasSecret: boolean;
@@ -50,12 +48,10 @@ const Ctx = createContext<AdminContext | null>(null);
  */
 export function AdminProvider({
   admin,
-  secretEnabled,
   demo,
   children,
 }: {
   admin: Who;
-  secretEnabled: boolean;
   demo: boolean;
   children: ReactNode;
 }) {
@@ -95,7 +91,6 @@ export function AdminProvider({
   const value = useMemo<AdminContext>(
     () => ({
       admin,
-      secretEnabled,
       demo,
       hasSecret,
       signedIn: (admin !== null || hasSecret) && !ended,
@@ -109,7 +104,6 @@ export function AdminProvider({
     }),
     [
       admin,
-      secretEnabled,
       demo,
       hasSecret,
       ended,

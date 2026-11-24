@@ -202,9 +202,15 @@ function Account() {
   );
 }
 
-export function SignIn({ codesPerHour }: { codesPerHour: number }) {
-  const { signedIn, secretEnabled, demo, setSecret, renew, ...ctx } =
-    useAdmin();
+export function SignIn({
+  codesPerHour,
+  secretEnabled,
+}: {
+  codesPerHour: number;
+  /** ADMIN_SECRET is set on this deployment, so this page offers it. */
+  secretEnabled: boolean;
+}) {
+  const { signedIn, demo, setSecret, renew, ...ctx } = useAdmin();
   const router = useRouter();
   const id = useId();
   const [step, setStep] = useState<Step>("email");

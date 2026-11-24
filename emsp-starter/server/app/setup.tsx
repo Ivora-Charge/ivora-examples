@@ -10,30 +10,36 @@ import { Copy, Gate, Later } from "./admin/ui/parts";
 import { useList } from "./admin/ui/use-action";
 
 /**
- * What the server knows without the database: names of settings, never values. This
- * part is what the public overview page always showed: the mode, the OCPI identity
- * and the names of the unset or malformed live-mode settings. The page shows none of
- * it until an admin is signed in.
+ * What every visitor's page carries: the mode and the OCPI identity, which
+ * `GET /api/v1/status` answers to anyone, and two constants of the code (how many
+ * live-mode settings there are, the sign-in code limit). Nothing here says which
+ * setting is set, unset or malformed. The page shows none of it until an admin is
+ * signed in.
  */
 export type SetupFacts = {
   demo: boolean;
+  /** How many live-mode settings there are: a constant, not this deployment's state. */
   required: number;
-  missing: string[];
-  errors: string[];
-  malformed: number;
   version: string;
   party: string;
   codesPerHour: number;
   /**
    * Read by the server only for an admin signed in by email (the session cookie), and
-   * null for everyone else: a visitor's page never carries whether the payment or
-   * job secrets are set. An admin-secret sign-in lives in the page's memory, which
-   * the server cannot see when it renders, so those stops say "cannot check".
+   * null for everyone else: a visitor's page never carries the name of an unset or
+   * malformed setting, nor whether the payment or job secrets are set. An admin-secret
+   * sign-in lives in the page's memory, which the server cannot see when it renders,
+   * so the stops that need these say "cannot check".
    */
   settings: SetupSettings | null;
 };
 
 export type SetupSettings = {
+  /** Names of the unset live-mode settings. */
+  missing: string[];
+  /** What is wrong with a set value, live-mode or optional: "<NAME> must ...". */
+  errors: string[];
+  /** How many live-mode settings are set but malformed. */
+  malformed: number;
   /** PUBLIC_BASE_URL, when it is set. */
   baseUrl: string | null;
   stripeKey: boolean;
@@ -151,14 +157,69 @@ const Fix = ({
   </>
 );
 
-function environment(f: SetupFacts): Stop {
-  const good = f.required - f.missing.length - f.malformed;
+const KEY_COMMAND = "openssl rand -base64 32";
+
+function environment(facts: SetupFacts): Stop {
+  const f = facts.settings;
+  // Live mode means every setting is right: the server is in demo mode otherwise.
+  if (!f && !facts.demo)
+    return {
+      kind: "ok",
+      big: String(facts.required),
+      small: `of ${facts.required}`,
+      title: "Environment complete",
+      text: "This server is out of demo mode, so all live-mode settings are present and well formed.",
+    };
+  if (!f)
+    return {
+      kind: "unknown",
+      big: "?",
+      small: `of ${facts.required}`,
+      title: "Environment",
+      text: (
+        <>
+          This server runs in demo mode with sample data and stores nothing:
+          either <code>DEMO_MODE</code> is set, or a setting is unset or
+          malformed. Which one, this page says only to an admin signed in by
+          email, not for the admin secret, and demo mode has no admin accounts.
+        </>
+      ),
+      fix: (
+        <Fix label="Check by hand">
+          <ol className="steps">
+            <li>
+              <p>
+                Compare your hosting project&apos;s environment variables with
+                the list in the server README (Connect real services): every
+                live-mode setting set and well formed, no malformed optional
+                one, and <code>DEMO_MODE</code> removed.
+              </p>
+            </li>
+            <li>
+              <p>
+                No <code>OCPI_TOKEN_ENCRYPTION_KEY</code> yet? Make the key on
+                your machine. Keep it: losing or changing it later locks out
+                every stored peer token.
+              </p>
+              <Copy text={KEY_COMMAND} label="Command" />
+            </li>
+            <li>
+              <p>
+                Redeploy, then open this page again. A changed variable only
+                reaches a new deployment.
+              </p>
+            </li>
+          </ol>
+        </Fix>
+      ),
+    };
+  const good = facts.required - f.missing.length - f.malformed;
   if (!f.missing.length && !f.errors.length)
-    return f.demo
+    return facts.demo
       ? {
           kind: "todo",
-          big: String(f.required),
-          small: `of ${f.required}`,
+          big: String(facts.required),
+          small: `of ${facts.required}`,
           title: "Demo mode is switched on",
           text: (
             <>
@@ -187,8 +248,8 @@ function environment(f: SetupFacts): Stop {
         }
       : {
           kind: "ok",
-          big: String(f.required),
-          small: `of ${f.required}`,
+          big: String(facts.required),
+          small: `of ${facts.required}`,
           title: "Environment complete",
           text: "All live-mode settings are present and well formed. This page only ever shows their names, never their values.",
         };
@@ -199,7 +260,7 @@ function environment(f: SetupFacts): Stop {
   return {
     kind: "todo",
     big: String(Math.max(0, good)),
-    small: `of ${f.required}`,
+    small: `of ${facts.required}`,
     title: count === 1 ? "One setting needs you" : `${count} settings need you`,
     text: "Until every live-mode setting is right, this server runs in demo mode with sample data and stores nothing. Names only are shown here, never values.",
     fix: (
@@ -234,7 +295,7 @@ function environment(f: SetupFacts): Stop {
                   your machine. Keep it: losing or changing it later locks out
                   every stored peer token.
                 </p>
-                <Copy text="openssl rand -base64 32" label="Command" />
+                <Copy text={KEY_COMMAND} label="Command" />
               </li>
             )}
             <li>
@@ -447,7 +508,7 @@ export function firstAdmin(
   f: SetupFacts,
   admin: ReturnType<typeof useAdmin>["admin"],
   lastEmail: string | null,
-  secretEnabled: boolean,
+  hasSecret: boolean,
 ): Stop {
   if (admin)
     return {
@@ -462,8 +523,8 @@ export function firstAdmin(
       kind: "off",
       big: "–",
       title: "No admin accounts in demo mode",
-      // The admin secret is named only on a deployment that has one.
-      text: secretEnabled
+      // The admin secret is named only to whoever signed in with it.
+      text: hasSecret
         ? "Waits for the environment. Demo mode has no admin list; the admin pages take the admin secret instead."
         : "Waits for the environment. Demo mode has no admin list.",
     };
@@ -638,14 +699,14 @@ export function Setup({ facts }: { facts: SetupFacts }) {
 }
 
 function Stops({ facts: f }: { facts: SetupFacts }) {
-  const { admin, lastEmail, secretEnabled } = useAdmin();
+  const { admin, lastEmail, hasSecret } = useAdmin();
   const peers = useList(listPeersAction);
   const stops = [
     environment(f),
     database,
     webhook(f),
     job(f),
-    firstAdmin(f, admin, lastEmail, secretEnabled),
+    firstAdmin(f, admin, lastEmail, hasSecret),
     firstPeer(f, peers),
   ];
   const done = stops.filter((s) => s.kind === "ok").length;

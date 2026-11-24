@@ -3,7 +3,6 @@ import type { ReactNode } from "react";
 import { brand, cssVariables } from "@/brand";
 import { fontFamilies } from "@/brand/fonts";
 import { requestAdmin } from "./admin/ui/current-admin";
-import { adminEnabled } from "@/lib/server/admin";
 import { isDemo } from "@/lib/server/demo";
 import { AdminProvider } from "./admin/ui/admin-context";
 import { Shell } from "./admin/ui/shell";
@@ -59,7 +58,6 @@ export default async function RootLayout({
         )}
         <AdminProvider
           admin={admin && { email: admin.email, role: admin.role }}
-          secretEnabled={adminEnabled()}
           demo={demo}
         >
           <Shell name={brand.name}>{children}</Shell>

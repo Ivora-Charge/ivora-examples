@@ -31,8 +31,9 @@ test("demo: Setup shows a visitor the sign-in prompt only", async ({
   await expect(main).not.toContainText(/STRIPE|CRON_SECRET|is not set|ZZ-DMO/);
   await expect(page.getByLabel("Admin secret")).toHaveCount(0);
   // Nor does the page's own data say whether the payment or job secrets are set.
+  // (e2e/signed-out.spec.ts reads the same from a wrongly set up deployment.)
   expect(await page.content()).not.toMatch(
-    /stripeKey|webhookSecret|cronSecret|STRIPE_|CRON_SECRET/,
+    /stripeKey|webhookSecret|cronSecret|secretEnabled|STRIPE_|CRON_SECRET|ADMIN_SECRET/,
   );
   for (const colorScheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme });
@@ -53,9 +54,13 @@ test("demo: Setup shows a signed-in admin the six stops and the OCPI identity", 
 
   const lane = page.getByRole("list", { name: "Setup checklist" });
   await expect(lane.locator("> li")).toHaveCount(6);
-  // Stop 1 knows its state today: the missing settings, by name only.
-  await expect(lane.locator("#stop-1")).toContainText("Needs you");
-  await expect(lane.locator("#stop-1")).toContainText("is not set");
+  // The settings are read for an email sign-in only. With the admin secret stop 1
+  // cannot check which setting keeps the server in demo mode, and says so.
+  await expect(lane.locator("#stop-1")).toContainText("Cannot check from here");
+  await expect(lane.locator("#stop-1")).toContainText(
+    "only to an admin signed in by email",
+  );
+  await expect(lane.locator("#stop-1")).not.toContainText("is not set");
   // A stop that needs a server read that does not exist yet says so, with its fix.
   const database = lane.locator("#stop-2");
   await expect(database).toContainText("Cannot check from here");

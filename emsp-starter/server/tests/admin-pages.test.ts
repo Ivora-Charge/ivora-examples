@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaymentSummary } from "@/app/admin/payments/actions";
 import { PaymentPanel } from "@/app/admin/payments/payment-admin";
 import {
@@ -32,7 +32,21 @@ import {
   SIGN_IN_LIMITS,
   SignInError,
 } from "@/lib/accounts/sign-in";
+import type { AdminIdentity } from "@/lib/accounts/admin-session";
 import { explainMessage } from "@/lib/admin/errors";
+import {
+  configErrors,
+  LIVE_REQUIRED,
+  missingForLive,
+} from "@/lib/server/config";
+
+// Who the server finds signed in by email: nobody, unless a test says otherwise.
+const signedInAdmin = vi.hoisted(() => ({
+  current: null as AdminIdentity | null,
+}));
+vi.mock("@/app/admin/ui/current-admin", () => ({
+  requestAdmin: async () => signedInAdmin.current,
+}));
 
 /**
  * The admin pages add no server behaviour: they read today's answers. These tests hold
@@ -269,7 +283,6 @@ const page = (admin: Who, part: ReturnType<typeof createElement>) =>
   renderToStaticMarkup(
     createElement(AdminProvider, {
       admin,
-      secretEnabled: false,
       demo: false,
       children: part,
     }),
@@ -404,35 +417,113 @@ describe("peer page: one action at a time", () => {
 });
 
 describe("setup: nothing for a visitor who is not signed in", () => {
-  const facts = (settings: SetupFacts["settings"]): SetupFacts => ({
-    demo: false,
-    required: 6,
-    missing: [],
-    errors: [],
+  const read = {
+    missing: [] as string[],
+    errors: [] as string[],
     malformed: 0,
-    version: "2.2.1",
-    party: "NL-EXA",
-    codesPerHour: 5,
-    settings,
-  });
-  const unset = {
     baseUrl: "https://emsp.example.com",
     stripeKey: false,
     webhookSecret: false,
     cronSecret: false,
     holds: ["€25.00"],
   };
+  const facts = (
+    settings: SetupFacts["settings"],
+    demo = false,
+  ): SetupFacts => ({
+    demo,
+    required: 6,
+    version: "2.2.1",
+    party: "NL-EXA",
+    codesPerHour: 5,
+    settings,
+  });
 
-  it("the server reads the payment and job settings for a signed-in admin only", async () => {
-    // Outside a request nobody is signed in: the same answer as a visitor's.
+  // A deployment with unset live-mode settings and malformed optional ones.
+  const MALFORMED = {
+    STRIPE_SECRET_KEY: "bad",
+    STRIPE_WEBHOOK_SECRET: "bad",
+    HOLD_AMOUNTS: "bad",
+    RESEND_API_KEY: "bad",
+    ADMIN_SECRET: "e2e-only-admin-secret-0123456789abcdef",
+  };
+  const saved = { ...process.env };
+  afterEach(() => {
+    signedInAdmin.current = null;
+    process.env = { ...saved };
+  });
+
+  it("the server sends a visitor no setting's name, no config error and no secret flag", async () => {
+    for (const name of LIVE_REQUIRED) delete process.env[name];
+    Object.assign(process.env, MALFORMED);
+    // The deployment does have something to say, to an admin.
+    expect(missingForLive().length).toBeGreaterThan(0);
+    const errors = configErrors();
+    for (const name of [
+      "STRIPE_SECRET_KEY",
+      "STRIPE_WEBHOOK_SECRET",
+      "HOLD_AMOUNTS",
+      "RESEND_API_KEY",
+    ])
+      expect(errors.some((e) => e.startsWith(`${name} `))).toBe(true);
+
+    // Nobody is signed in: everything the page hands to the browser (its RSC data).
     const element = await SetupPage();
     const sent = (element.props as { facts: SetupFacts }).facts;
     expect(sent.settings).toBeNull();
-    expect(JSON.stringify(sent)).not.toMatch(/stripe|webhook|cron|hold/i);
+    expect(Object.keys(sent).sort()).toEqual([
+      "codesPerHour",
+      "demo",
+      "party",
+      "required",
+      "settings",
+      "version",
+    ]);
+    const data = JSON.stringify(element.props);
+    // No environment variable's name, whatever it is called.
+    expect(data).not.toMatch(/[A-Z][A-Z0-9]+_[A-Z0-9_]+/);
+    for (const e of errors) expect(data).not.toContain(e);
+    expect(data).not.toMatch(
+      /must |missing|errors|malformed|stripe|webhook|cron|hold|secret/i,
+    );
+    // And the page as rendered for them.
+    const html = page(null, element);
+    expect(html).toContain("Sign in as an admin to see this deployment");
+    expect(html).not.toMatch(/[A-Z][A-Z0-9]+_[A-Z0-9_]+/);
+    expect(html).not.toMatch(/must |is not set|Malformed|Missing|secret/i);
+  });
+
+  it("the server reads the settings for an admin signed in by email", async () => {
+    for (const name of LIVE_REQUIRED) delete process.env[name];
+    Object.assign(process.env, MALFORMED);
+    signedInAdmin.current = { userId: "u1", ...ana! };
+    const element = await SetupPage();
+    const sent = (element.props as { facts: SetupFacts }).facts;
+    expect(sent.settings?.missing).toEqual([...LIVE_REQUIRED]);
+    expect(sent.settings?.errors.join(" ")).toContain("STRIPE_SECRET_KEY");
+    expect(sent.settings?.stripeKey).toBe(false);
+    const html = page(ana, element);
+    expect(html).toContain("<code>PUBLIC_BASE_URL</code> is not set");
+    expect(html).toContain("<code>HOLD_AMOUNTS</code>");
+    // Names only: no value reaches the page.
+    expect(JSON.stringify(element.props)).not.toContain(MALFORMED.ADMIN_SECRET);
+  });
+
+  it("no page's shared data says whether the admin secret is set", () => {
+    // Only the sign-in page is told (it offers the secret); the layout is not.
+    const layout = readFileSync(join(__dirname, "../app/layout.tsx"), "utf8");
+    expect(layout).not.toMatch(/adminEnabled|secretEnabled|ADMIN_SECRET/);
+    const users = files(join(__dirname, "../app")).filter((f) =>
+      /secretEnabled|adminEnabled\(/.test(readFileSync(f, "utf8")),
+    );
+    expect(users.map((f) => f.split("/app/")[1]).sort()).toEqual([
+      "admin/sign-in/page.tsx",
+      "admin/sign-in/sign-in-form.tsx",
+    ]);
   });
 
   it("shows the sign-in prompt only, even if the page were given the settings", () => {
-    const html = page(null, createElement(Setup, { facts: facts(unset) }));
+    const html = page(null, createElement(Setup, { facts: facts(read) }));
     expect(html).toContain("Sign in as an admin to see this deployment");
     expect(html).toContain('href="/admin/sign-in"');
     expect(html).not.toMatch(/STRIPE|CRON_SECRET|Setup checklist|NL-EXA/);
@@ -440,8 +531,9 @@ describe("setup: nothing for a visitor who is not signed in", () => {
   });
 
   it("shows a signed-in admin the stops, with the unset settings by name", () => {
-    const html = page(ana, createElement(Setup, { facts: facts(unset) }));
+    const html = page(ana, createElement(Setup, { facts: facts(read) }));
     expect(html).toContain("Setup checklist");
+    expect(html).toContain("Environment complete");
     expect(html).toContain("<code>STRIPE_SECRET_KEY</code>");
     expect(html).toContain("<code>CRON_SECRET</code> is not set");
   });
@@ -452,10 +544,22 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     expect(html).not.toContain("is not set, so the job never runs");
     expect(html).not.toContain("Payments are not set up");
     expect(html.match(/Cannot check from here/g)?.length).toBeGreaterThan(2);
+    // Out of demo mode the environment is known to be complete without reading it.
+    expect(html).toContain("Environment complete");
   });
 
-  it("names the admin secret at stop 5 only on a deployment that has one", () => {
-    const demo = { ...facts(null), demo: true };
+  it("cannot check the environment in demo mode without the settings", () => {
+    const html = page(ana, createElement(Setup, { facts: facts(null, true) }));
+    expect(html).toContain("1 · ENVIRONMENT");
+    expect(html).not.toContain("Environment complete");
+    expect(html).not.toMatch(/settings? needs? you/);
+    expect(html).toContain("only to an admin signed in by");
+    expect(html).toContain("openssl rand -base64 32");
+    expect(html.match(/Cannot check from here/g)?.length).toBeGreaterThan(3);
+  });
+
+  it("names the admin secret at stop 5 only to whoever signed in with it", () => {
+    const demo = facts(null, true);
     const without = firstAdmin(demo, null, null, false);
     expect(String(without.text)).not.toMatch(/secret/i);
     expect(String(firstAdmin(demo, null, null, true).text)).toContain(
