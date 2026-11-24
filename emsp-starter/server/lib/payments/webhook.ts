@@ -1,5 +1,6 @@
 import "server-only";
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { logText } from "@/lib/server/log-error";
 import type { PaymentDeps } from "./registry";
 import { audit, cancelHold, holdKey, nowOf, settleCdr } from "./settle";
 import { refundStatusOf, type Payment } from "./store";
@@ -266,7 +267,7 @@ export async function handleEvent(
     // Not recorded: Stripe delivers it again. Every step above is a compare-and-swap,
     // so handling it twice changes nothing twice.
     console.error(
-      `Stripe event ${event.id} (${event.type}) failed: ${e instanceof Error ? e.name : "unknown error"}`,
+      `Stripe event ${event.id} (${event.type}) failed: ${logText(e)}`,
     );
     throw e;
   }
