@@ -229,7 +229,11 @@ export class SupabasePeerStore implements PeerStore {
     });
   }
 
-  async listAudit(subjectId: string, limit: number): Promise<AuditRecord[]> {
+  async listAudit(
+    subjectId: string,
+    limit: number,
+    action?: string,
+  ): Promise<AuditRecord[]> {
     const rows = await this.rest<
       {
         occurred_at: string;
@@ -243,7 +247,7 @@ export class SupabasePeerStore implements PeerStore {
       "GET",
       // Setup's entries are asked for with their type too, the leading column of the
       // index on (subject_type, subject_id, occurred_at).
-      `emsp_audit_log?${isSetupSubject(subjectId) ? "subject_type=eq.setup&" : ""}subject_id=${eq(subjectId)}&order=occurred_at.desc,id.desc&limit=${Math.max(1, Math.floor(limit))}&select=occurred_at,actor,action,subject_id,request_id,details`,
+      `emsp_audit_log?${isSetupSubject(subjectId) ? "subject_type=eq.setup&" : ""}subject_id=${eq(subjectId)}${action === undefined ? "" : `&action=${eq(action)}`}&order=occurred_at.desc,id.desc&limit=${Math.max(1, Math.floor(limit))}&select=occurred_at,actor,action,subject_id,request_id,details`,
     );
     return rows.map((r) => ({
       at: new Date(r.occurred_at).toISOString(),

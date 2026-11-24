@@ -609,7 +609,7 @@ Authorization: Bearer <CRON_SECRET>`;
   const last = s.job.runs[0];
   const pace =
     every === null
-      ? "How often it runs is not known yet: that shows after its next recorded run."
+      ? "How often it runs is not known yet: that shows after its second run."
       : `It runs about ${intervalWords(every)}.`;
   if (age === null && !last)
     return {
@@ -626,7 +626,7 @@ Authorization: Bearer <CRON_SECRET>`;
       kind: "bad",
       big: "!",
       title: "The job runs, but a part of it fails",
-      text: `The run ${when(last.at, now)} did not get through everything, and none since is recorded as good. The server log names the part that failed. ${
+      text: `The run ${when(last.at, now)} did not get through everything, and none since is recorded as good (a recovery shows here within 10 minutes). The server log names the part that failed. ${
         age === null
           ? "The payment sweep has never finished."
           : `The payment sweep last finished ${span(age)} ago.`
@@ -678,8 +678,8 @@ Authorization: Bearer <CRON_SECRET>`;
     title:
       every === null ? "The job runs" : `The job runs ${intervalWords(every)}`,
     text: `The payment sweep finished ${span(age)} ago${
-      last ? `; the last recorded run was ${when(last.at, now)}` : ""
-    }. ${every === null ? pace : "Runs are recorded once an hour, and whenever one ends differently from the last."}`,
+      last ? `; its outcome last changed ${when(last.at, now)}` : ""
+    }. ${every === null ? pace : "A run is recorded only when the job starts or stops failing, and every 10 minutes while it fails."}`,
   };
 }
 

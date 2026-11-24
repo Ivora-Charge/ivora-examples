@@ -150,8 +150,15 @@ export interface PeerStore {
   /** Revokes every active token of the peer, except `keepHash`. */
   revokePeerTokens(peerId: string, keepHash?: string): Promise<void>;
   audit(entry: AuditEntry): Promise<void>;
-  /** The audit log of one subject (a payment, a token, a peer), newest first. */
-  listAudit(subjectId: string, limit: number): Promise<AuditRecord[]>;
+  /**
+   * The audit log of one subject (a payment, a token, a peer), newest first; with
+   * `action`, its entries of that action only.
+   */
+  listAudit(
+    subjectId: string,
+    limit: number,
+    action?: string,
+  ): Promise<AuditRecord[]>;
 }
 
 /** Peers in memory: for demo mode (nothing persists) and for tests. */
@@ -254,9 +261,13 @@ export class MemoryPeerStore implements PeerStore {
     });
   }
 
-  async listAudit(subjectId: string, limit: number) {
+  async listAudit(subjectId: string, limit: number, action?: string) {
     return this.auditLog
-      .filter((e) => e.subjectId === subjectId)
+      .filter(
+        (e) =>
+          e.subjectId === subjectId &&
+          (action === undefined || e.action === action),
+      )
       .reverse()
       .slice(0, limit)
       .map((e) => structuredClone(e));

@@ -17,7 +17,10 @@ export const STOP_NAMES = [
   "First peer",
 ] as const;
 
-/** A recorded run of the scheduled job (lib/setup/log.ts says which runs are kept). */
+/**
+ * A recorded run of the scheduled job. Few are: one when the job's outcome changes,
+ * and one per 10 minutes while it fails (lib/setup/log.ts).
+ */
 export type JobRun = {
   at: string;
   /** Every part of the run got through. */
@@ -82,16 +85,12 @@ export type SetupStatus = {
 export const HOLD_SWEEP_MAX_AGE_MS = 5 * 60_000;
 
 /**
- * How often the job really runs, in seconds: the middle one of the waits recorded with
- * its last few good runs. Null: not known yet.
+ * How often the job really runs, in seconds: the wait recorded with its newest good
+ * entry. Entries are written when the job's outcome changes (lib/setup/log.ts), so the
+ * newest one is how it runs now. Null: not known yet.
  */
 export function jobInterval(runs: JobRun[]): number | null {
-  const waits = runs
-    .filter((r) => r.ok && r.sinceLastS !== null)
-    .slice(0, 5)
-    .map((r) => r.sinceLastS!)
-    .sort((a, b) => a - b);
-  return waits.length ? waits[Math.floor((waits.length - 1) / 2)] : null;
+  return runs.find((r) => r.ok && r.sinceLastS !== null)?.sinceLastS ?? null;
 }
 
 /** "every minute", "every 10 minutes", "once a day". */
@@ -118,9 +117,9 @@ export function sweepAge(s: SetupStatus, now: number): number | null {
  * - Database: every shipped migration is applied.
  * - Payments webhook: both payment secrets are set and the newest signed event was
  *   handled. A refused request alone does not fail it: anyone can send one.
- * - Scheduled job: its secret is set, its newest recorded run was good, the payment
- *   sweep is fresh enough for card holds, and the job is not known to come less often
- *   than holds need.
+ * - Scheduled job: its secret is set, its newest recorded run was good (a recovery
+ *   shows at most 10 minutes late), the payment sweep is fresh enough for card holds,
+ *   and the job is not known to come less often than holds need.
  * - First admin: at least one user is on the admin list.
  * - First peer: at least one peer is registered.
  */

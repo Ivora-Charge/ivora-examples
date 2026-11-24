@@ -57,7 +57,9 @@ import {
   type DatabaseCheck,
 } from "@/lib/setup/database";
 import {
+  FAILED_SAMPLE_MS,
   JOB_SAMPLE_MS,
+  MAX_SETUP_ROWS_PER_DAY,
   JOB_SUBJECT,
   listJobRuns,
   flushWebhookNotesForTests,
@@ -65,6 +67,7 @@ import {
   recordJobRun,
   REFUSED_SAMPLE_MS,
   resetWebhookNotesForTests,
+  WEBHOOK_FAILED,
   WEBHOOK_REFUSED,
   WEBHOOK_SUBJECT,
 } from "@/lib/setup/log";
@@ -602,7 +605,7 @@ describe("the six checks", () => {
     }
   });
 
-  it("reads how often the job runs from the waits recorded with its runs", () => {
+  it("reads how often the job runs from the wait recorded with its newest good run", () => {
     const run = (sinceLastS: number | null, ok = true) => ({
       at: "2026-11-24T12:00:00.000Z",
       ok,
@@ -610,10 +613,14 @@ describe("the six checks", () => {
     });
     expect(jobInterval([])).toBeNull();
     expect(jobInterval([run(null)])).toBeNull();
-    expect(jobInterval([run(61), run(60), run(59)])).toBe(60);
-    // One late run does not make an every-minute job a slow one.
-    expect(jobInterval([run(3600), run(60), run(61)])).toBe(61);
-    expect(jobInterval([run(86_400), run(86_400, false)])).toBe(86_400);
+    expect(jobInterval([run(61), run(60), run(59)])).toBe(61);
+    // Entries are written on a change, so the newest says how the job runs now: a
+    // job that was slow and now comes every minute is an every-minute job.
+    expect(jobInterval([run(60), run(86_400), run(86_400)])).toBe(60);
+    expect(jobInterval([run(3600), run(60), run(61)])).toBe(3600);
+    // A failed run's wait is no pace: its sweep may not have finished.
+    expect(jobInterval([run(900, false), run(86_400)])).toBe(86_400);
+    expect(jobInterval([run(null), run(60)])).toBe(60);
     expect(intervalWords(60)).toBe("every minute");
     expect(intervalWords(600)).toBe("every 10 minutes");
     expect(intervalWords(7200)).toBe("every 2 hours");
@@ -621,63 +628,144 @@ describe("the six checks", () => {
   });
 });
 
+const MINUTE = 60_000;
+const DAY = 24 * 60 * MINUTE;
+const TEN_MINUTES = 10 * MINUTE;
+
 describe("recording job runs", () => {
-  const swept = (ago: number) => new Date(now - ago).toISOString();
-  const record = (ok = true, away = 60_000) =>
+  /** Moves the clock: the test's own, and the one the audit log stamps entries with. */
+  const at = (ms: number) => {
+    now = ms;
+    vi.setSystemTime(ms);
+  };
+  const record = (ok = true, away: number | null = MINUTE) =>
     recordJobRun(
       { peers, now: () => new Date(now) },
-      { ok, startedAt: new Date(now), sweptBefore: swept(away) },
+      {
+        ok,
+        startedAt: new Date(now),
+        sweptBefore: away === null ? null : new Date(now - away).toISOString(),
+      },
     );
-
-  it("records the first run, then one an hour, and any change of outcome", async () => {
+  const times = () => peers.auditLog.map((e) => Date.parse(e.at));
+  beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(T0);
-    expect(await record()).toBe(true);
-    for (let minute = 1; minute < 60; minute++) {
-      now = T0 + minute * 60_000;
-      vi.setSystemTime(now);
+    at(T0);
+  });
+
+  it("the window is 10 minutes: a run just inside it is not recorded, one just outside is", async () => {
+    expect(JOB_SAMPLE_MS).toBe(TEN_MINUTES);
+    expect(await record(false)).toBe(true);
+    at(T0 + TEN_MINUTES - 1);
+    expect(await record(false)).toBe(false);
+    // Not a change of outcome either, inside the window.
+    expect(await record(true)).toBe(false);
+    at(T0 + TEN_MINUTES);
+    expect(await record(false)).toBe(true);
+    expect(times()).toEqual([T0, T0 + TEN_MINUTES]);
+  });
+
+  it("a healthy job that runs every minute adds one entry on its first day, and none after", async () => {
+    // A new deployment: no sweep has finished before the first run.
+    expect(await record(true, null)).toBe(false);
+    for (let minute = 1; minute < 1440; minute++) {
+      at(T0 + minute * MINUTE);
+      expect(await record(), `minute ${minute}`).toBe(minute === 1);
+    }
+    expect(peers.auditLog).toHaveLength(1);
+    expect(peers.auditLog[0]).toMatchObject({
+      actor: "cron",
+      action: "job.run",
+      subjectId: JOB_SUBJECT,
+      details: { ok: true, since_last_s: 60 },
+    });
+    // The day after, and any steady day: nothing.
+    for (let minute = 1440; minute < 2880; minute++) {
+      at(T0 + minute * MINUTE);
+      await record();
+    }
+    expect(peers.auditLog).toHaveLength(1);
+    expect(jobInterval(await listJobRuns({ peers }))).toBe(60);
+  });
+
+  it("a job that fails all day adds one entry per window, never one per run", async () => {
+    for (let minute = 0; minute < 1440; minute++) {
+      at(T0 + minute * MINUTE);
+      await record(false);
+    }
+    expect(peers.auditLog).toHaveLength(DAY / JOB_SAMPLE_MS);
+    expect(peers.auditLog).toHaveLength(144);
+    const t = times();
+    for (let i = 1; i < t.length; i++)
+      expect(t[i] - t[i - 1]).toBeGreaterThanOrEqual(TEN_MINUTES);
+  });
+
+  it("a job whose outcome alternates adds one entry per window too", async () => {
+    for (let minute = 0; minute < 1440; minute++) {
+      at(T0 + minute * MINUTE);
+      await record(minute % 2 === 1);
+    }
+    expect(peers.auditLog.length).toBeLessThanOrEqual(144);
+    const t = times();
+    for (let i = 1; i < t.length; i++)
+      expect(t[i] - t[i - 1]).toBeGreaterThanOrEqual(TEN_MINUTES);
+  });
+
+  it("records a change after a quiet window at once, and the recovery when the window ends", async () => {
+    await record();
+    expect(peers.auditLog).toHaveLength(1);
+    // Hours later the job fails: the first change after a quiet window.
+    at(T0 + 5 * 60 * MINUTE);
+    expect(await record(false)).toBe(true);
+    // It recovers a minute later; that is recorded once the window has passed.
+    for (let minute = 1; minute < 10; minute++) {
+      at(T0 + (5 * 60 + minute) * MINUTE);
       expect(await record(), `minute ${minute}`).toBe(false);
     }
-    now = T0 + JOB_SAMPLE_MS;
-    vi.setSystemTime(now);
+    at(T0 + (5 * 60 + 10) * MINUTE);
     expect(await record()).toBe(true);
-    // A failure is recorded at once, and so is the recovery.
-    now += 60_000;
-    vi.setSystemTime(now);
-    expect(await record(false)).toBe(true);
-    now += 60_000;
-    vi.setSystemTime(now);
-    expect(await record(false)).toBe(false);
-    now += 60_000;
-    vi.setSystemTime(now);
-    expect(await record(true)).toBe(true);
+    at(T0 + (5 * 60 + 30) * MINUTE);
+    expect(await record()).toBe(false);
     const runs = await listJobRuns({ peers });
-    expect(runs.map((r) => r.ok)).toEqual([true, false, true, true]);
-    expect(runs.every((r) => r.sinceLastS === 60)).toBe(true);
-    // A day of every-minute runs leaves a few dozen entries, not 1,440.
-    expect(peers.auditLog.length).toBe(4);
+    expect(runs.map((r) => r.ok)).toEqual([true, false, true]);
+    // A good run with no sweep before it says nothing new after a good entry, but it
+    // does end a failure.
+    at(T0 + 7 * 60 * MINUTE);
+    expect(await record(true, null)).toBe(false);
+    expect(await record(false)).toBe(true);
+    at(T0 + 8 * 60 * MINUTE);
+    expect(await record(true, null)).toBe(true);
+    expect((await listJobRuns({ peers }))[0]).toMatchObject({
+      ok: true,
+      sinceLastS: null,
+    });
   });
 
   it("records every run of a once-a-day job, with how long it was away", async () => {
-    vi.useFakeTimers();
     for (let day = 0; day < 3; day++) {
-      now = T0 + day * 86_400_000;
-      vi.setSystemTime(now);
-      expect(await record(true, 86_400_000)).toBe(true);
+      at(T0 + day * DAY);
+      expect(await record(true, DAY)).toBe(true);
     }
     const runs = await listJobRuns({ peers });
     expect(runs).toHaveLength(3);
     expect(jobInterval(runs)).toBe(86_400);
     // The entry holds a time and an outcome, and nothing else.
-    expect(peers.auditLog[0]).toMatchObject({
+    expect(peers.auditLog[0]).toEqual({
       actor: "cron",
       action: "job.run",
       subjectId: JOB_SUBJECT,
       details: { ok: true, since_last_s: 86_400 },
+      at: expect.any(String),
     });
+    // Moved to every minute, it is an every-minute job from the next entry on.
+    at(T0 + 2 * DAY + MINUTE);
+    expect(await record()).toBe(false);
+    at(T0 + 2 * DAY + TEN_MINUTES);
+    expect(await record()).toBe(true);
+    expect(jobInterval(await listJobRuns({ peers }))).toBe(60);
   });
 
-  it("never throws, and the first run has no wait to report", async () => {
+  it("never throws", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     const broken = {
       listAudit: async () => {
@@ -687,17 +775,14 @@ describe("recording job runs", () => {
     expect(
       await recordJobRun(
         { peers: broken },
-        { ok: true, startedAt: new Date(), sweptBefore: null },
+        { ok: false, startedAt: new Date(), sweptBefore: null },
       ),
     ).toBe(false);
     log.mockRestore();
-    await recordJobRun(
-      { peers },
-      { ok: true, startedAt: new Date(), sweptBefore: null },
-    );
-    expect((await listJobRuns({ peers }))[0].sinceLastS).toBeNull();
   });
+});
 
+describe("the scheduled job's route", () => {
   it("the cron route records its run, and the status then knows the job", async () => {
     const call = () =>
       cronRoute.GET(
@@ -763,12 +848,16 @@ describe("recording refused webhook requests", () => {
   });
 
   it("a flood of unsigned requests leaves one entry, with nothing of the request in it", async () => {
+    const reads = vi.spyOn(peers, "listAudit");
     for (let i = 0; i < 50; i++)
       expect((await post(payload, sign(payload, "whsec_wrong"))).status).toBe(
         400,
       );
     await flushWebhookNotesForTests();
     expect(peers.auditLog).toHaveLength(1);
+    // And one read of the audit log: the rest are stopped by the process's own memory.
+    expect(reads).toHaveBeenCalledTimes(1);
+    reads.mockRestore();
     expect(peers.auditLog[0]).toEqual({
       actor: "stripe-webhook",
       action: WEBHOOK_REFUSED,
@@ -793,6 +882,70 @@ describe("recording refused webhook requests", () => {
     vi.setSystemTime(Date.now() + REFUSED_SAMPLE_MS + 1_000);
     expect(await noteWebhook({ peers }, WEBHOOK_REFUSED)).toBe(true);
     expect(peers.auditLog).toHaveLength(2);
+  });
+
+  for (const [action, sample] of [
+    [WEBHOOK_REFUSED, REFUSED_SAMPLE_MS],
+    [WEBHOOK_FAILED, FAILED_SAMPLE_MS],
+  ] as const) {
+    it(`${action}: the window is 10 minutes, in one server process and across them`, async () => {
+      expect(sample).toBe(TEN_MINUTES);
+      vi.useFakeTimers();
+      const set = (ms: number) => {
+        now = ms;
+        vi.setSystemTime(ms);
+      };
+      const note = () =>
+        noteWebhook({ peers, now: () => new Date(now) }, action);
+      // One process, by its own memory.
+      set(T0);
+      expect(await note()).toBe(true);
+      set(T0 + TEN_MINUTES - 1);
+      expect(await note()).toBe(false);
+      set(T0 + TEN_MINUTES);
+      expect(await note()).toBe(true);
+      // A new process each time, by the newest entry of the kind.
+      set(T0 + 2 * TEN_MINUTES - 1);
+      resetWebhookNotesForTests();
+      expect(await note()).toBe(false);
+      set(T0 + 2 * TEN_MINUTES);
+      resetWebhookNotesForTests();
+      expect(await note()).toBe(true);
+      expect(peers.auditLog.map((e) => Date.parse(e.at) - T0)).toEqual([
+        0,
+        TEN_MINUTES,
+        2 * TEN_MINUTES,
+      ]);
+      // Time and kind only: nothing of a request.
+      for (const entry of peers.auditLog)
+        expect(entry).toEqual({
+          actor: "stripe-webhook",
+          action,
+          subjectId: WEBHOOK_SUBJECT,
+          at: expect.any(String),
+        });
+    });
+  }
+
+  it("entries of the other kind do not hide the newest refused one from another process", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(T0);
+    expect(await noteWebhook({ peers }, WEBHOOK_REFUSED)).toBe(true);
+    // More failed entries than any read of "the newest few" would look through.
+    for (let i = 1; i <= 25; i++) {
+      vi.setSystemTime(T0 + i * 1_000);
+      await peers.audit({
+        actor: "stripe-webhook",
+        action: WEBHOOK_FAILED,
+        subjectId: WEBHOOK_SUBJECT,
+      });
+    }
+    vi.setSystemTime(T0 + 5 * MINUTE);
+    resetWebhookNotesForTests();
+    expect(await noteWebhook({ peers }, WEBHOOK_REFUSED)).toBe(false);
+    expect(
+      peers.auditLog.filter((e) => e.action === WEBHOOK_REFUSED),
+    ).toHaveLength(1);
   });
 
   it("a signed event is the last signed one, handled", async () => {
@@ -845,6 +998,72 @@ describe("recording refused webhook requests", () => {
     await flushWebhookNotesForTests();
     expect(peers.auditLog).toEqual([]);
     log.mockRestore();
+  });
+});
+
+describe("what the checks add to the audit log in a day", () => {
+  const set = (ms: number) => {
+    now = ms;
+    vi.setSystemTime(ms);
+  };
+  const clock = { now: () => new Date(now) };
+  const run = (ok: boolean) =>
+    recordJobRun(
+      { peers, ...clock },
+      {
+        ok,
+        startedAt: new Date(now),
+        sweptBefore: new Date(now - MINUTE).toISOString(),
+      },
+    );
+  const count = (action: string) =>
+    peers.auditLog.filter((e) => e.action === action).length;
+
+  it("at worst 432 entries: 144 of each kind", () => {
+    expect(MAX_SETUP_ROWS_PER_DAY).toBe(432);
+    expect(MAX_SETUP_ROWS_PER_DAY).toBe(
+      DAY / JOB_SAMPLE_MS + DAY / REFUSED_SAMPLE_MS + DAY / FAILED_SAMPLE_MS,
+    );
+  });
+
+  it("the worst day stays within it: the job flaps, every event fails, unsigned requests never stop, servers restart", async () => {
+    vi.useFakeTimers();
+    for (let step = 0; step < DAY / 20_000; step++) {
+      set(T0 + step * 20_000);
+      // A new server process every few minutes: no memory of its own.
+      if (step % 7 === 0) resetWebhookNotesForTests();
+      if (step % 3 === 0) await run(step % 2 === 0);
+      await noteWebhook({ peers, ...clock }, WEBHOOK_REFUSED);
+      await noteWebhook({ peers, ...clock }, WEBHOOK_FAILED);
+    }
+    expect(count("job.run")).toBeLessThanOrEqual(144);
+    expect(count(WEBHOOK_REFUSED)).toBe(144);
+    expect(count(WEBHOOK_FAILED)).toBe(144);
+    expect(peers.auditLog.length).toBeLessThanOrEqual(MAX_SETUP_ROWS_PER_DAY);
+    expect(peers.auditLog.length).toBeGreaterThan(400);
+  });
+
+  it("a healthy day adds nothing: the job runs every minute and signed events are handled", async () => {
+    vi.useFakeTimers();
+    set(T0);
+    await run(true);
+    expect(peers.auditLog).toHaveLength(1);
+    for (let minute = 1; minute <= 1440; minute++) {
+      set(T0 + minute * MINUTE);
+      await run(true);
+    }
+    expect(peers.auditLog).toHaveLength(1);
+  });
+
+  it("a steadily failing deployment adds one entry per kind per window", async () => {
+    vi.useFakeTimers();
+    for (let minute = 0; minute < 60; minute++) {
+      set(T0 + minute * MINUTE);
+      await run(false);
+      await noteWebhook({ peers, ...clock }, WEBHOOK_FAILED);
+    }
+    expect(count("job.run")).toBe(6);
+    expect(count(WEBHOOK_FAILED)).toBe(6);
   });
 });
 
@@ -1161,6 +1380,11 @@ describe("what the reads ask the database for", () => {
     );
     // Any other subject is asked for as before.
     expect(asked[1]).toMatch(/^emsp_audit_log\?subject_id=eq\.1111/);
+    // The newest entry of one kind is asked for by kind.
+    await store.listAudit("setup:stripe-webhook", 1, "webhook.refused");
+    expect(asked[2]).toMatch(
+      /^emsp_audit_log\?subject_type=eq\.setup&subject_id=eq\.setup%3Astripe-webhook&action=eq\.webhook\.refused&order=occurred_at\.desc,id\.desc&limit=1&/,
+    );
   });
 
   it("one row to know whether there is an admin, or a registered peer", async () => {
