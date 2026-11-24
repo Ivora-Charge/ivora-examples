@@ -401,6 +401,41 @@ describe("peer version counter (202611160002_peer_rev)", () => {
   });
 });
 
+describe("hub push mode (202611240001_hub_push_mode)", () => {
+  it("adds hub_push_mode to peers, 'hub' by default, and only a known mode", async () => {
+    const {
+      rows: [{ id }],
+    } = await db.query<{ id: string }>(
+      `insert into public.emsp_ocpi_peers (label, direction) values ('Hub', 'outbound') returning id`,
+    );
+    const read = async () =>
+      (
+        await db.query<{ hub_push_mode: string }>(
+          `select hub_push_mode from public.emsp_ocpi_peers where id = '${id}'`,
+        )
+      ).rows[0].hub_push_mode;
+    expect(await read()).toBe("hub");
+    await db.query(
+      `update public.emsp_ocpi_peers set hub_push_mode = 'per_party' where id = '${id}'`,
+    );
+    expect(await read()).toBe("per_party");
+    await expect(
+      db.query(
+        `update public.emsp_ocpi_peers set hub_push_mode = 'all' where id = '${id}'`,
+      ),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  it("keeps the column closed to anon and authenticated", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await asRole(db, role, async () => {
+        await expect(
+          db.query("select hub_push_mode from public.emsp_ocpi_peers"),
+        ).rejects.toThrow(/permission denied/);
+      });
+  });
+});
+
 describe("roaming hub parties (202611160001_hub_parties)", () => {
   const peer = async () =>
     (

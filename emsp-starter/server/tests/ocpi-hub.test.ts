@@ -27,7 +27,12 @@ import {
   invitePeer,
   rotateCredentials,
 } from "@/lib/ocpi/handshake";
-import { acceptParty, offerFromHub, removeParty } from "@/lib/ocpi/hub";
+import {
+  acceptParty,
+  offerFromHub,
+  removeParty,
+  setHubPushMode,
+} from "@/lib/ocpi/hub";
 import {
   capOffered,
   cpoParties,
@@ -866,8 +871,11 @@ describe("pulls through a hub", () => {
   });
 });
 
-describe("token pushes through a hub", () => {
+describe("token pushes through a hub, one per party", () => {
   const uidOf = async () => (await tokens.listByDriver(DRIVER))[0].uid;
+  beforeEach(async () => {
+    await setHubPushMode(hubPeer.id, "per_party", { store: peers });
+  });
 
   it("go only to trusted parties, one request each, addressed by OCPI-to", async () => {
     await accept(A);
@@ -938,6 +946,67 @@ describe("token pushes through a hub", () => {
     ).rejects.toMatchObject({
       httpStatus: 403,
     });
+  });
+});
+
+describe("token pushes through a hub, to the hub's own party", () => {
+  const deps = () => ({ tokens, peers, client, actor: "t" });
+  const hubPuts = () =>
+    hub.hub.state.requests.filter(
+      (r) => r.method === "PUT" && r.path.includes("/tokens/"),
+    );
+
+  it("is the default for a hub, and sends exactly one request per change", async () => {
+    expect(hubPeer.hubPushMode).toBe("hub");
+    await accept(A);
+    await accept(B);
+    const { token } = await createAppToken({ driverRef: DRIVER }, deps());
+    const puts = hubPuts();
+    expect(puts).toHaveLength(1);
+    expect(puts[0].path).toContain(`/tokens/ZZ/HUB/${token.uid}`);
+    expect(puts[0].headers).toMatchObject({
+      "ocpi-to-country-code": "ZZ",
+      "ocpi-to-party-id": "HUB",
+      "ocpi-from-country-code": "NL",
+      "ocpi-from-party-id": "ABC",
+    });
+    // Nothing went to the parties behind it.
+    expect(hubRequests(A)).toEqual([]);
+    expect(hubRequests(B)).toEqual([]);
+
+    await blockToken(token.uid, "APP_USER", deps());
+    const patches = hub.hub.state.requests.filter(
+      (r) => r.method === "PATCH" && r.path.includes("/tokens/"),
+    );
+    expect(patches).toHaveLength(1);
+    expect(patches[0].path).toContain(`/tokens/ZZ/HUB/${token.uid}`);
+  });
+
+  it("still pushes when the hub has no trusted party, and a retry resends", async () => {
+    await createAppToken({ driverRef: DRIVER }, deps());
+    expect(hubPuts()).toHaveLength(1);
+    expect(await retryPendingPushes({ tokens, peers, client })).toMatchObject({
+      sent: 0,
+      failed: 0,
+    });
+  });
+
+  it("can be switched to per party, and the setting is validated and audited", async () => {
+    await setHubPushMode(hubPeer.id, "per_party", { store: peers });
+    expect((await peers.getPeer(hubPeer.id))!.hubPushMode).toBe("per_party");
+    await createAppToken({ driverRef: DRIVER }, deps());
+    expect(hubPuts()).toHaveLength(0);
+    await expect(
+      setHubPushMode(hubPeer.id, "everyone" as never, { store: peers }),
+    ).rejects.toThrow(/hub or per_party/);
+    await expect(
+      setHubPushMode("00000000-0000-4000-8000-000000000000", "hub", {
+        store: peers,
+      }),
+    ).rejects.toThrow(/No such peer/);
+    expect(
+      peers.auditLog.some((a) => a.action === "ocpi.hub.push_mode_set"),
+    ).toBe(true);
   });
 });
 

@@ -30,6 +30,12 @@ export type HubParty = {
   name?: string;
 };
 
+/**
+ * `hub`: one push to the hub's own HUB party, which distributes it. `per_party`: one
+ * push per trusted CPO party behind the hub.
+ */
+export type HubPushMode = "hub" | "per_party";
+
 export type Peer = {
   id: string;
   label: string;
@@ -43,6 +49,8 @@ export type Peer = {
   endpoints: Endpoint[];
   /** For a hub peer: the parties behind it (parties.ts). Empty for a direct CPO. */
   hubParties: HubParty[];
+  /** For a hub peer: how our token pushes are addressed (parties.ts). */
+  hubPushMode: HubPushMode;
   /** The token we send to the peer, encrypted (tokens.ts). Never leaves the server. */
   tokenCiphertext: string | null;
   /**
@@ -66,6 +74,7 @@ export type PeerPatch = Partial<
     | "roles"
     | "endpoints"
     | "hubParties"
+    | "hubPushMode"
     | "tokenCiphertext"
     | "registeredAt"
     | "unregisteredAt"
@@ -162,6 +171,7 @@ export class MemoryPeerStore implements PeerStore {
       roles: [],
       endpoints: [],
       hubParties: [],
+      hubPushMode: "hub",
       tokenCiphertext: null,
       rev: 0,
       createdAt: now,

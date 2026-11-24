@@ -45,6 +45,41 @@ const SOURCE: Record<HubParty["source"], string> = {
   credentials: "Declared by the hub when it registered.",
 };
 
+/** How our token pushes reach the hub: one push to its own party, or one per party. */
+function PushMode({ peer, send }: { peer: PeerSummary; send: Send }) {
+  const id = useId();
+  const mode = peer.hub?.pushMode ?? "hub";
+  return (
+    <section className="card stack" aria-labelledby={`${id}-h`}>
+      <h2 className="h3" id={`${id}-h`}>
+        Token pushes
+      </h2>
+      <p className="small muted">
+        Some hubs expect our tokens addressed to the hub itself and hand them on
+        to the CPOs; others want one push for each CPO party. Use the one your
+        hub documents.
+      </p>
+      <div className="field">
+        <label htmlFor={`${id}-mode`}>Send tokens</label>
+        <select
+          id={`${id}-mode`}
+          value={mode}
+          onChange={(e) =>
+            send(hubPartyAction, {
+              peerId: peer.id,
+              intent: "push_mode",
+              mode: e.target.value,
+            })
+          }
+        >
+          <option value="hub">One push to the hub&apos;s own party</option>
+          <option value="per_party">One push per trusted party</option>
+        </select>
+      </div>
+    </section>
+  );
+}
+
 /** The parties behind a hub: trusted and offered, with Accept and Remove on each row. */
 export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
   const id = useId();
@@ -76,7 +111,7 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
           </h3>
           <p className="meta">
             {p.status === "trusted"
-              ? `Trusted: pulled from, and tokens pushed to. ${SOURCE[p.source]}`
+              ? `Trusted: pulled from, and tokens pushed to when pushing per party. ${SOURCE[p.source]}`
               : `${SOURCE[p.source]} Not trusted: nothing is sent or accepted.`}
           </p>
         </div>
@@ -108,7 +143,7 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
         <Message
           kind="wait"
           title="Connected, but idle: no party is trusted yet."
-          nextStep="Accept the CPOs you have an agreement with. Pulls and token pushes start with the first one."
+          nextStep="Accept the CPOs you have an agreement with. Pulls start with the first one; token pushes go to the hub itself unless you chose one push per party."
         />
       )}
       {trusted.length > 0 && (
@@ -437,7 +472,10 @@ function PeerBody({
           />
         )}
         {peer.hub ? (
-          <HubParties peer={peer} send={send} />
+          <>
+            <PushMode peer={peer} send={send} />
+            <HubParties peer={peer} send={send} />
+          </>
         ) : (
           !peer.demo &&
           registered && (

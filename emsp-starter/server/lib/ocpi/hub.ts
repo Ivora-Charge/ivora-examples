@@ -12,7 +12,7 @@ import {
   isPartyOfPeer,
   MAX_OFFERED,
 } from "./parties";
-import type { HubParty, Peer, PeerStore } from "./store";
+import type { HubParty, HubPushMode, Peer, PeerStore } from "./store";
 import { decryptToken } from "./tokens";
 import { sameParty, type Party } from "./types";
 
@@ -305,4 +305,32 @@ export async function offerFromHub(
     details: { listed: listed.length, newlyOffered: offered },
   });
   return { peer: updated, offered };
+}
+
+/**
+ * How token pushes to a hub are addressed: to the hub's own party (`hub`) or to each
+ * trusted party behind it (`per_party`). Pushes already owed are sent the new way on
+ * their next try.
+ */
+export async function setHubPushMode(
+  peerId: string,
+  mode: HubPushMode,
+  deps: HubDeps,
+): Promise<Peer> {
+  if (mode !== "hub" && mode !== "per_party")
+    throw new HandshakeError("Push mode must be hub or per_party");
+  await hubPeer(deps.store, peerId);
+  const updated = await deps.store.updatePeer(
+    peerId,
+    { hubPushMode: mode },
+    "registered",
+  );
+  if (!updated) throw new HandshakeError("The peer changed; try again");
+  await deps.store.audit({
+    actor: deps.actor ?? "admin",
+    action: "ocpi.hub.push_mode_set",
+    subjectId: peerId,
+    details: { mode },
+  });
+  return updated;
 }

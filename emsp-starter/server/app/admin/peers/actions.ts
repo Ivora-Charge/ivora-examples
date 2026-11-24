@@ -17,10 +17,15 @@ import {
   SyncError,
   type SyncReport,
 } from "@/lib/locations/sync";
-import { acceptParty, offerFromHub, removeParty } from "@/lib/ocpi/hub";
+import {
+  acceptParty,
+  offerFromHub,
+  removeParty,
+  setHubPushMode,
+} from "@/lib/ocpi/hub";
 import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import { peerStore } from "@/lib/ocpi/registry";
-import type { HubParty, Peer } from "@/lib/ocpi/store";
+import type { HubParty, HubPushMode, Peer } from "@/lib/ocpi/store";
 import { assertLive, isDemo } from "@/lib/server/demo";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
@@ -50,7 +55,7 @@ export type PeerSummary = {
   versionsUrl: string | null;
   parties: string[];
   /** A roaming hub: the parties behind it and whether the operator trusts them. */
-  hub?: { parties: HubParty[] };
+  hub?: { parties: HubParty[]; pushMode: HubPushMode };
   modules: string[];
   registeredAt: string | null;
   /** Per module this server pulls; only in the peer list. */
@@ -122,7 +127,9 @@ function summary(p: Peer): PeerSummary {
       (r) =>
         `${r.role} ${r.country_code}-${r.party_id} (${r.business_details.name})${isHubPeer(p) && r.role === "CPO" ? " declared by the hub, not trusted" : ""}`,
     ),
-    ...(isHubPeer(p) && { hub: { parties: p.hubParties } }),
+    ...(isHubPeer(p) && {
+      hub: { parties: p.hubParties, pushMode: p.hubPushMode },
+    }),
     modules: [...new Set(p.endpoints.map((e) => e.identifier))].sort(),
     registeredAt: p.registeredAt,
   };
@@ -315,6 +322,18 @@ export async function hubPartyAction(
       return { ok: false, message: "Peer ID must be a UUID." };
     const deps = { store: peerStore(), actor: "admin" };
     const intent = field(form, "intent");
+    if (intent === "push_mode") {
+      const mode = field(form, "mode") as HubPushMode;
+      const peer = await setHubPushMode(id, mode, deps);
+      return {
+        ok: true,
+        message:
+          mode === "hub"
+            ? `Tokens now go to ${peer.label}'s own party, in one push.`
+            : `Tokens now go to each trusted party behind ${peer.label}.`,
+        peer: summary(peer),
+      };
+    }
     if (intent === "offer") {
       const { peer, offered } = await offerFromHub(id, deps);
       return {

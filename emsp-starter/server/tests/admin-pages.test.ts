@@ -187,6 +187,7 @@ describe("connect flow: a refused one-time token", () => {
 describe("peers: a row and a hub's page, from the peer list", () => {
   const hub = peer({
     hub: {
+      pushMode: "hub",
       parties: [
         {
           countryCode: "DE",
@@ -274,7 +275,7 @@ describe("peers: a row and a hub's page, from the peer list", () => {
   it("says a hub is idle until a party is trusted", () => {
     const html = renderToStaticMarkup(
       createElement(HubParties, {
-        peer: peer({ hub: { parties: [] } }),
+        peer: peer({ hub: { parties: [], pushMode: "hub" } }),
         send: async () => ({}),
       }),
     );

@@ -26,6 +26,7 @@ type PeerRow = {
   roles: Peer["roles"];
   endpoints: Peer["endpoints"];
   hub_parties: Peer["hubParties"];
+  hub_push_mode: Peer["hubPushMode"];
   token_ciphertext: string | null;
   rev: number;
   created_at: string;
@@ -44,6 +45,7 @@ const toPeer = (r: PeerRow): Peer => ({
   roles: r.roles,
   endpoints: r.endpoints,
   hubParties: r.hub_parties ?? [],
+  hubPushMode: r.hub_push_mode ?? "hub",
   tokenCiphertext: r.token_ciphertext,
   rev: Number(r.rev),
   createdAt: r.created_at,
@@ -60,6 +62,7 @@ const COLUMNS: Record<keyof PeerPatch, keyof PeerRow> = {
   roles: "roles",
   endpoints: "endpoints",
   hubParties: "hub_parties",
+  hubPushMode: "hub_push_mode",
   tokenCiphertext: "token_ciphertext",
   registeredAt: "registered_at",
   unregisteredAt: "unregistered_at",
