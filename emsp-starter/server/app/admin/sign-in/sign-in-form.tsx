@@ -18,6 +18,7 @@ import {
 import { ActionForm, Copy } from "../ui/parts";
 import {
   adminSecretSignInAction,
+  dropStaleSecretSessionAction,
   requestAdminCodeAction,
   signOutAdminAction,
   verifyAdminCodeAction,
@@ -409,6 +410,7 @@ export function SignIn({
   limits,
   secretEnabled,
   link = null,
+  staleSession = false,
 }: {
   /** The code's own limits, for the sentences that explain one. */
   limits: Limits;
@@ -416,6 +418,8 @@ export function SignIn({
   secretEnabled: boolean;
   /** The token hash of the emailed link that opened this page, if one did. */
   link?: string | null;
+  /** The browser holds an admin-secret session cookie that no longer works. */
+  staleSession?: boolean;
 }) {
   const { signedIn, demo, renew, ...ctx } = useAdmin();
   const router = useRouter();
@@ -435,6 +439,10 @@ export function SignIn({
   const [noAdmins, setNoAdmins] = useState<boolean | undefined>(undefined);
   const [byLink, setByLink] = useState(false);
   const limitLeft = useSecondsLeft(limited?.until ?? null);
+  // A page cannot delete a cookie while it renders, so an action does it, once.
+  useEffect(() => {
+    if (staleSession) void dropStaleSecretSessionAction().catch(() => {});
+  }, [staleSession]);
 
   // `signedIn`, not `admin`: once the server stops accepting the session (it ran
   // out), the cookie's admin is stale and this page asks to sign in again.

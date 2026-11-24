@@ -13,6 +13,7 @@ import type { AccountStore } from "@/lib/accounts/store";
 import { checkAdminSecret } from "@/lib/server/admin";
 import { field } from "@/lib/server/admin-action";
 import {
+  dropDeadSecretSession,
   endSecretSession,
   startSecretSession,
 } from "@/lib/server/admin-secret-session";
@@ -74,6 +75,7 @@ export async function requestAdminCodeAction(
   form: FormData,
 ): Promise<SignInState> {
   const email = field(form, "email");
+  await dropDeadSecretSession();
   try {
     const { resendAfter } = await requestCode(
       { email },
@@ -119,6 +121,7 @@ async function adminListEmpty(
 async function signIn(
   proof: { email: string; code: string } | { tokenHash: string },
 ): Promise<SignInState> {
+  await dropDeadSecretSession();
   try {
     const auth = authProvider();
     const session = await verifyProof(proof, await client(), { auth });
@@ -166,14 +169,26 @@ export async function verifyAdminLinkAction(
 }
 
 /**
+ * Drops an admin-secret session cookie that no longer works (expired, or from before
+ * ADMIN_SECRET was changed). The sign-in page calls it when it opens with such a
+ * cookie, because a page cannot change cookies while it renders. It checks no secret,
+ * counts nothing and answers nothing; a working session is left alone.
+ */
+export async function dropStaleSecretSessionAction(): Promise<void> {
+  await dropDeadSecretSession();
+}
+
+/**
  * Exchanges ADMIN_SECRET for an admin-secret session cookie (an hour, httpOnly). The
- * only place that takes the secret: wrong ones are counted and limited as before. On a
- * server without ADMIN_SECRET every value is a wrong one.
+ * only place that takes the secret, and the only thing the lockout counts: wrong
+ * secrets submitted here. On a server without ADMIN_SECRET every value is a wrong one.
+ * A cookie that no longer works is dropped whatever the answer, while limited too.
  */
 export async function adminSecretSignInAction(
   _prev: SignInState,
   form: FormData,
 ): Promise<SignInState> {
+  await dropDeadSecretSession();
   const check = checkAdminSecret(field(form, "secret"), await client());
   if (check === "limited")
     return {

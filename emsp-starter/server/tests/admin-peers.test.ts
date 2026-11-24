@@ -121,8 +121,16 @@ describe("admin secret (temporary admin gate)", () => {
   });
 
   it("without a client address, only the total cap applies", async () => {
-    // A session signed with another secret is a wrong guess, counted like a wrong
-    // secret. The request has no trusted address here, so no per-client key.
+    process.env.ADMIN_SECRET = SECRET;
+    for (let i = 0; i < ADMIN_LIMIT.total - 1; i++)
+      expect(checkAdminSecret("wrong", null)).toBe("wrong");
+    // No per-client count: 49 wrong secrets from nowhere in particular lock nobody.
+    expect(checkAdminSecret(SECRET, null)).toBe("ok");
+    expect(checkAdminSecret("wrong", null)).toBe("wrong");
+    expect(checkAdminSecret(SECRET, null)).toBe("limited");
+  });
+
+  it("never counts a session of another secret: the gate refuses it and nobody is locked out", async () => {
     const forged = () => {
       process.env.ADMIN_SECRET = "x".repeat(32);
       signInWithSecret();
@@ -132,11 +140,9 @@ describe("admin secret (temporary admin gate)", () => {
       forged();
       expect((await listPeersAction({}, form({}))).code).toBe("signed_out");
     }
-    // Limited: now even a right session is not checked.
+    expect(checkAdminSecret(SECRET, null)).toBe("ok");
     signInWithSecret();
-    expect((await listPeersAction({}, form({}))).message).toMatch(
-      /Too many wrong admin secrets/,
-    );
+    expect((await listPeersAction({}, form({}))).ok).toBe(true);
   });
 });
 

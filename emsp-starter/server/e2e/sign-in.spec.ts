@@ -220,3 +220,43 @@ test("demo: the admin secret is asked once and exchanged for a session cookie th
     page.getByRole("region", { name: "Sign in as an admin to see your peers" }),
   ).toBeVisible();
 });
+
+test("demo: a session cookie that no longer works is ignored, never counted as a wrong secret, and dropped by the sign-in page", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  // The form of a session, signed by no secret of this server: what a browser holds
+  // after ADMIN_SECRET was changed.
+  const stale = `v1.${Date.now() + 3_600_000}.${"A".repeat(22)}.${"A".repeat(43)}`;
+  await context.addCookies([
+    { name: "emsp_admin_secret", value: stale, url: baseURL },
+  ]);
+  // More page loads than the lockout allows wrong secrets per client (5): each sends
+  // the stale cookie, and each is shown the signed-out prompt.
+  for (let i = 0; i < 7; i += 1) {
+    await page.goto("/admin/peers");
+    await expect(
+      page.getByRole("region", {
+        name: "Sign in as an admin to see your peers",
+      }),
+    ).toBeVisible();
+  }
+  expect((await context.cookies()).map((c) => c.value)).toEqual([stale]);
+
+  // The sign-in page drops it when it opens.
+  await page.goto("/admin/sign-in");
+  await expect.poll(async () => (await context.cookies()).length).toBe(0);
+
+  // With the stale cookie back, the right secret is accepted at the first try.
+  await context.addCookies([
+    { name: "emsp_admin_secret", value: stale, url: baseURL },
+  ]);
+  await signIn(page);
+  await expect(
+    page.getByRole("heading", { name: "Account", level: 1 }),
+  ).toBeVisible();
+  const cookies = await context.cookies();
+  expect(cookies.map((c) => c.name)).toEqual(["emsp_admin_secret"]);
+  expect(cookies[0].value).not.toBe(stale);
+});

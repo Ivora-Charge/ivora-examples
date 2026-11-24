@@ -2,7 +2,7 @@ import "server-only";
 import { currentAdmin } from "@/lib/accounts/admin-session";
 import { explain, explainMessage, UNEXPECTED } from "@/lib/admin/errors";
 import { adminEnabled } from "./admin";
-import { endSecretSession, secretSession } from "./admin-secret-session";
+import { dropDeadSecretSession, secretSession } from "./admin-secret-session";
 
 /**
  * What an admin form shows after an action. A failed one also has a code (the OCPI
@@ -36,12 +36,6 @@ const REFUSED = {
     code: "session_expired",
     nextStep: "Sign in again (Account). The session lasts an hour.",
   },
-  limited: {
-    ok: false,
-    message: "Too many wrong admin secrets. Try again in 15 minutes.",
-    code: "rate_limited",
-    nextStep: "Wait 15 minutes, or sign in as an admin by email instead.",
-  },
 } satisfies Record<string, AdminResult>;
 
 /**
@@ -73,7 +67,8 @@ export async function asAdmin<T extends AdminResult>(
         "Ask an admin to give your user the admin role in emsp_admins (README: Admin web).",
     };
   if (!admin) {
-    if (!adminEnabled())
+    if (!adminEnabled()) {
+      await dropDeadSecretSession();
       return {
         ok: false,
         message:
@@ -81,11 +76,12 @@ export async function asAdmin<T extends AdminResult>(
         code: "admin_disabled",
         nextStep: "Sign in as an admin (Sign in, above).",
       };
+    }
     const session = await secretSession();
     if (session !== "ok") {
-      // A cookie that no longer works is dropped, so it is not sent (and counted) again.
-      if (session === "wrong" || session === "expired")
-        await endSecretSession();
+      // A cookie that no longer works was not counted as a wrong secret, and is
+      // dropped here, where the answer can still change cookies.
+      await dropDeadSecretSession();
       return REFUSED[session];
     }
   }

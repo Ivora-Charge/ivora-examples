@@ -10,6 +10,7 @@ import { reviewListAction } from "@/app/admin/payments/actions";
 import { setupStatusAction } from "@/app/admin/setup/actions";
 import {
   adminSecretSignInAction,
+  dropStaleSecretSessionAction,
   requestAdminCodeAction,
   signOutAdminAction,
   verifyAdminCodeAction,
@@ -49,6 +50,10 @@ import {
   resetAdminLimitForTests,
   SECRET_SESSION_MS,
 } from "@/lib/server/admin";
+import {
+  hasDeadSecretSession,
+  secretSession,
+} from "@/lib/server/admin-secret-session";
 import { setPaymentStoreForTests } from "@/lib/payments/registry";
 import { MemoryPaymentStore } from "@/lib/payments/store";
 import {
@@ -471,22 +476,35 @@ describe("a right code for an address that is not an admin", () => {
     ).not.toContain("noAdmins");
   });
 
-  it("leaves it out when the list cannot be read, and in demo mode", async () => {
+  it("leaves it out when the list cannot be read", async () => {
     fakeAuth();
-    vi.spyOn(accounts, "hasAdmin").mockRejectedValue(new Error("down"));
+    const read = vi
+      .spyOn(accounts, "hasAdmin")
+      .mockRejectedValue(new Error("down"));
     expect(Object.keys(await right())).not.toContain("noAdmins");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
 
+  it("leaves it out in demo mode, where the list is not even read", async () => {
     process.env.DEMO_MODE = "true";
-    resetSignInLimitsForTests();
     const auth = new DemoAuth();
     setAuthProviderForTests(auth);
     await auth.sendCode(ANA.email);
+    // The list is empty and can be read: only demo mode keeps the answer back. Were
+    // it read, the answer would carry `noAdmins: true`.
+    expect(await accounts.hasAdmin()).toBe(false);
+    const read = vi.spyOn(accounts, "hasAdmin");
     const demo = await verifyAdminCodeAction(
       {},
       form({ email: ANA.email, code: DEMO_CODE }),
     );
-    expect(demo).toMatchObject({ ok: false, code: "not_an_admin" });
-    expect(Object.keys(demo)).not.toContain("noAdmins");
+    expect(demo).toEqual({
+      ok: false,
+      message: "This account is not an admin.",
+      code: "not_an_admin",
+      email: ANA.email,
+    });
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("lets an admin in, with the admin cookie's flags", async () => {
@@ -614,11 +632,14 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
       expires: new Date(Date.now() + SECRET_SESSION_MS),
     });
     expect(SECRET_SESSION_MS).toBe(60 * 60 * 1000);
-    expect(value).toMatch(/^v1\.\d+\.[A-Za-z0-9_-]{43}$/);
+    // v1.<expiry>.<nonce, 128 bits>.<MAC, 256 bits>
+    expect(value).toMatch(/^v1\.\d{13}\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/);
+    expect(value.split(".")[1]).toBe(String(Date.now() + SECRET_SESSION_MS));
     expect(value).not.toContain(SECRET);
-    expect(
-      Buffer.from(value.split(".")[2], "base64url").toString("latin1"),
-    ).not.toContain(SECRET);
+    for (const part of value.split(".").slice(2))
+      expect(Buffer.from(part, "base64url").toString("latin1")).not.toContain(
+        SECRET,
+      );
     // The same flags as the email sign-in's cookie: one function makes both.
     fakeAuth();
     accounts.admins.set(ANA.id, "admin");
@@ -755,35 +776,209 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
     expect((await exchange(SECRET)).ok).toBe(true);
   });
 
-  it("refuses a session whose time or signature was changed, and one of another secret, counting each as a wrong secret", async () => {
+  it("refuses a session whose time, nonce or signature was changed, and one of another secret, without counting any", async () => {
     const real = issueSecretSession()!.value;
-    const [v, expires, mac] = real.split(".");
+    const [v, expires, nonce, mac] = real.split(".");
     process.env.ADMIN_SECRET = "another-secret-".repeat(3);
     const other = issueSecretSession()!.value;
     process.env.ADMIN_SECRET = SECRET;
+    const otherNonce = issueSecretSession()!.value.split(".")[2];
+    const swap = (text: string) =>
+      `${text.slice(0, -1)}${text.endsWith("A") ? "Q" : "A"}`;
     const forged = [
       // An hour more, with the old signature.
-      `${v}.${Number(expires) + SECRET_SESSION_MS}.${mac}`,
-      `${v}.${expires}.${mac.slice(0, -1)}${mac.endsWith("A") ? "B" : "A"}`,
+      `${v}.${Number(expires) + SECRET_SESSION_MS}.${nonce}.${mac}`,
+      // Another session's nonce, with this one's signature.
+      `${v}.${expires}.${otherNonce}.${mac}`,
+      `${v}.${expires}.${nonce}.${swap(mac)}`,
+      `${v}.${expires}.${swap(nonce)}.${mac}`,
       other,
-      `v2.${expires}.${mac}`,
+      `v2.${expires}.${nonce}.${mac}`,
+      // The first round's form, without a nonce.
+      `${v}.${expires}.${mac}`,
+      `${v}.0${expires}.${nonce}.${mac}`,
+      `${real}.`,
+      ` ${real}`,
       SECRET,
       "x",
+      "",
+      undefined,
     ];
-    expect(forged).toHaveLength(ADMIN_LIMIT.perClient + 1);
-    for (const value of forged.slice(0, ADMIN_LIMIT.perClient))
-      expect(checkSecretSession(value, "203.0.113.9")).toBe("wrong");
-    // Five wrong sessions lock the client like five wrong secrets: the real session
-    // and the real secret are not checked now.
-    expect(checkSecretSession(real, "203.0.113.9")).toBe("limited");
-    expect(checkAdminSecret(SECRET, "203.0.113.9")).toBe("limited");
-    expect(checkSecretSession(forged[5], "203.0.113.10")).toBe("wrong");
-    expect(checkSecretSession(real, "203.0.113.11")).toBe("ok");
+    expect(forged.length).toBeGreaterThan(ADMIN_LIMIT.perClient);
+    for (const value of forged) expect(checkSecretSession(value)).toBe("wrong");
+    expect(checkSecretSession(real)).toBe("ok");
+    // None was counted as a wrong secret.
+    expect(checkAdminSecret(SECRET, null)).toBe("ok");
 
     // Through an action: refused as signed out, and the cookie is dropped.
-    requestCookies.set(ADMIN_SECRET_COOKIE, forged[0]);
+    requestCookies.set(ADMIN_SECRET_COOKIE, forged[0]!);
     expect(await list()).toMatchObject({ ok: false, code: "signed_out" });
     expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+  });
+
+  it("gives every session its own 128-bit nonce, covered by the signature", () => {
+    const sessions = Array.from(
+      { length: 20 },
+      () => issueSecretSession()!.value,
+    );
+    // The same expiry for all (the clock stands still), and no two alike.
+    expect(new Set(sessions.map((s) => s.split(".")[1])).size).toBe(1);
+    expect(new Set(sessions).size).toBe(sessions.length);
+    for (const s of sessions) {
+      expect(Buffer.from(s.split(".")[2], "base64url")).toHaveLength(16);
+      expect(checkSecretSession(s)).toBe("ok");
+    }
+  });
+
+  it("accepts only the one spelling of the nonce and the signature", () => {
+    const alphabet =
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    const real = issueSecretSession()!.value;
+    const [v, expires, nonce, mac] = real.split(".");
+    // The last character of each holds bits that are not part of the bytes (2 of the
+    // signature's 6, 4 of the nonce's): changing only those gives other text for the
+    // same bytes. Each such text is refused.
+    const respelled = (text: string, spare: number) => {
+      const last = alphabet.indexOf(text.at(-1)!);
+      return Array.from({ length: (1 << spare) - 1 }, (_, i) => {
+        const other = `${text.slice(0, -1)}${alphabet[last ^ (i + 1)]}`;
+        expect(Buffer.from(other, "base64url")).toEqual(
+          Buffer.from(text, "base64url"),
+        );
+        return other;
+      });
+    };
+    const macs = respelled(mac, 2);
+    const nonces = respelled(nonce, 4);
+    expect(macs).toHaveLength(3);
+    expect(nonces).toHaveLength(15);
+    for (const m of macs)
+      expect(checkSecretSession(`${v}.${expires}.${nonce}.${m}`)).toBe("wrong");
+    for (const n of nonces)
+      expect(checkSecretSession(`${v}.${expires}.${n}.${mac}`)).toBe("wrong");
+    // Padding and the other base64 alphabet are not accepted either.
+    expect(checkSecretSession(`${real}=`)).toBe("wrong");
+    expect(
+      checkSecretSession(real.replaceAll("-", "+").replaceAll("_", "/")),
+    ).toBe(/[-_]/.test(real) ? "wrong" : "ok");
+    expect(checkSecretSession(real)).toBe("ok");
+  });
+
+  it("after ADMIN_SECRET is changed, ignores the old cookie without counting it and takes the new secret at once", async () => {
+    const NEXT = "rotated-secret-".repeat(3);
+    process.env.TRUSTED_PROXY_HEADER = "x-client-ip";
+    requestHeaders.set("x-client-ip", "203.0.113.9");
+    await exchange(SECRET);
+    const old = requestCookies.get(ADMIN_SECRET_COOKIE)!;
+    process.env.ADMIN_SECRET = NEXT;
+
+    // Far more page loads than the per-client count allows wrong secrets. A page can
+    // only read the cookie: it stays, and each load finds it not working.
+    for (let i = 0; i < ADMIN_LIMIT.total + 10; i += 1) {
+      expect(await secretSession()).toBe("wrong");
+      expect(await hasDeadSecretSession()).toBe(true);
+    }
+    expect(requestCookies.get(ADMIN_SECRET_COOKIE)).toBe(old);
+    // Nothing was counted: the new secret is accepted at the first try, and the new
+    // session replaces the old cookie.
+    expect(await exchange(NEXT)).toEqual({
+      ok: true,
+      message: "Signed in with the admin secret.",
+    });
+    expect(requestCookies.get(ADMIN_SECRET_COOKIE)).not.toBe(old);
+    expect((await list()).ok).toBe(true);
+    // All five wrong secrets are still this client's to spend.
+    for (let i = 0; i < ADMIN_LIMIT.perClient; i += 1)
+      expect(checkAdminSecret("wrong", "203.0.113.9")).toBe("wrong");
+    expect(checkAdminSecret(NEXT, "203.0.113.9")).toBe("limited");
+  });
+
+  it("locks nobody after 50 loads with a stale cookie, with or without a client address", async () => {
+    const stale = issueSecretSession()!.value;
+    process.env.ADMIN_SECRET = "rotated-secret-".repeat(3);
+    // Without a trusted client address only the total count exists.
+    for (let i = 0; i < ADMIN_LIMIT.total; i += 1) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, stale);
+      expect(await secretSession()).toBe("wrong");
+      // An action too: refused as signed out, the cookie dropped, nothing counted.
+      expect(await list()).toMatchObject({ ok: false, code: "signed_out" });
+      expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+    }
+    expect(checkAdminSecret(process.env.ADMIN_SECRET, null)).toBe("ok");
+    process.env.TRUSTED_PROXY_HEADER = "x-client-ip";
+    for (const address of ["203.0.113.9", "203.0.113.10"]) {
+      requestHeaders.set("x-client-ip", address);
+      expect((await exchange(process.env.ADMIN_SECRET)).ok).toBe(true);
+    }
+  });
+
+  it("drops a cookie that no longer works in every action of the sign-in page, in the limited branch too", async () => {
+    fakeAuth();
+    const NEXT = "rotated-secret-".repeat(3);
+    const stale = issueSecretSession()!.value;
+    process.env.ADMIN_SECRET = NEXT;
+    const actions: [string, () => Promise<unknown>][] = [
+      ["drop", () => dropStaleSecretSessionAction()],
+      ["code", () => requestAdminCodeAction({}, form({ email: BEN.email }))],
+      [
+        "verify",
+        () =>
+          verifyAdminCodeAction({}, form({ email: ANA.email, code: "000000" })),
+      ],
+      ["link", () => verifyAdminLinkAction({}, form({ tokenHash: "nope" }))],
+      ["wrong secret", () => exchange("wrong")],
+      ["sign out", () => signOutAdminAction()],
+    ];
+    for (const [name, run] of actions) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, stale);
+      await run();
+      expect(requestCookies.has(ADMIN_SECRET_COOKIE), name).toBe(false);
+    }
+    // An expired one of the secret set now is dropped the same way.
+    signInWithSecret(Date.now() - SECRET_SESSION_MS);
+    await dropStaleSecretSessionAction();
+    expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+
+    // Limited (by wrong secrets that were submitted): the stale cookie still goes.
+    resetAdminLimitForTests();
+    for (let i = 0; i < ADMIN_LIMIT.total; i += 1) await exchange("wrong");
+    requestCookies.set(ADMIN_SECRET_COOKIE, stale);
+    expect(await exchange(NEXT)).toMatchObject({
+      ok: false,
+      code: "rate_limited",
+    });
+    expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+
+    // On a server without ADMIN_SECRET a leftover cookie is dropped as well.
+    process.env.ADMIN_SECRET = "";
+    requestCookies.set(ADMIN_SECRET_COOKIE, stale);
+    expect(await hasDeadSecretSession()).toBe(true);
+    expect(await list()).toMatchObject({ ok: false, code: "admin_disabled" });
+    expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+  });
+
+  it("leaves a working session alone: no action of the sign-in page drops it, and wrong secrets from others do not end it", async () => {
+    fakeAuth();
+    await exchange(SECRET);
+    const value = requestCookies.get(ADMIN_SECRET_COOKIE)!;
+    expect(await hasDeadSecretSession()).toBe(false);
+    await dropStaleSecretSessionAction();
+    await requestAdminCodeAction({}, form({ email: BEN.email }));
+    await verifyAdminCodeAction({}, form({ email: ANA.email, code: "000000" }));
+    await exchange("wrong");
+    expect(requestCookies.get(ADMIN_SECRET_COOKIE)).toBe(value);
+    // The secret is locked for everyone now; a session already given keeps working.
+    for (let i = 0; i < ADMIN_LIMIT.total; i += 1)
+      checkAdminSecret("wrong", null);
+    expect(checkAdminSecret(SECRET, null)).toBe("limited");
+    expect(await secretSession()).toBe("ok");
+    expect((await list()).ok).toBe(true);
+    expect(requestCookies.get(ADMIN_SECRET_COOKIE)).toBe(value);
+    // With no cookie at all there is nothing to drop.
+    resetRequest();
+    expect(await hasDeadSecretSession()).toBe(false);
+    await dropStaleSecretSessionAction();
+    expect(requestCookies.size).toBe(0);
   });
 
   it("ends every session when the secret changes or is removed", async () => {
