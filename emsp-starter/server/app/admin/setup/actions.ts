@@ -4,6 +4,7 @@ import { currentAdmin } from "@/lib/accounts/admin-session";
 import { asAdmin, type AdminResult } from "@/lib/server/admin-action";
 import type { SetupStatus } from "@/lib/setup/checks";
 import { readSetupStatus } from "@/lib/setup/status";
+import { logText } from "@/lib/server/log-error";
 
 export type SetupState = AdminResult & { status?: SetupStatus };
 
@@ -31,9 +32,7 @@ export async function setupStatusAction(
     try {
       return await read();
     } catch (e) {
-      console.error(
-        `Admin setup status action failed: ${e instanceof Error ? e.name : "unknown error"}`,
-      );
+      console.error(`Admin setup status action failed: ${logText(e)}`);
       return { ok: false, message: SETTINGS.fallback, code: "unexpected" };
     }
   }

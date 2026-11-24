@@ -22,6 +22,7 @@ import type {
   StoredCdr,
   StoredSession,
 } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * Storing the sessions and CDRs a CPO sends, whether it pushes them to our Receiver
@@ -133,9 +134,7 @@ async function audit(
       details,
     });
   } catch (e) {
-    console.error(
-      `Audit of ${action} ${subjectId} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Audit of ${action} ${subjectId} failed: ${logText(e)}`);
   }
 }
 

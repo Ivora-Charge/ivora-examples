@@ -16,6 +16,8 @@ import {
   sampleLocations,
 } from "@/lib/mock-cpo/sample-data";
 import type { Cdr, Session } from "@/lib/ocpi/session-objects";
+import { MemoryPaymentStore } from "@/lib/payments/store";
+import { setPaymentStoreForTests } from "@/lib/payments/registry";
 import { MemoryPeerStore, type Peer } from "@/lib/ocpi/store";
 import { onSessionEvent, type SessionEvent } from "@/lib/sessions/events";
 import {
@@ -86,6 +88,8 @@ afterAll(async () => {
 });
 beforeEach(async () => {
   Object.assign(process.env, LIVE_ENV);
+  // Session events reach the payment listener, which would call the live database.
+  setPaymentStoreForTests(new MemoryPaymentStore());
   // CDRs refuse deletes: drop the trigger's table contents the only way left.
   await db.exec(`
     alter table public.emsp_cdrs disable trigger emsp_cdrs_immutable;
@@ -103,6 +107,7 @@ beforeEach(async () => {
     );
 });
 afterEach(() => {
+  setPaymentStoreForTests(undefined);
   process.env = { ...saved };
   vi.restoreAllMocks();
 });

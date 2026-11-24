@@ -16,6 +16,7 @@ import {
   type ReviewReason,
 } from "./store";
 import { StripeError, StripeUnknownError, type PaymentIntent } from "./stripe";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * Settling a payment from its CDR, releasing holds, raising them during a long
@@ -76,9 +77,7 @@ export async function audit(
       },
     });
   } catch (e) {
-    console.error(
-      `Audit of payment ${p.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Audit of payment ${p.id} failed: ${logText(e)}`);
   }
 }
 
@@ -233,9 +232,7 @@ export async function sendReceipt(
     );
     await audit(deps, "payment.receipt", p, { mailer: deps.mailer.name });
   } catch (e) {
-    console.error(
-      `Receipt of payment ${p.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Receipt of payment ${p.id} failed: ${logText(e)}`);
   }
 }
 
@@ -509,17 +506,13 @@ export async function sweepPayments(
         if (r.moved) out.expired++;
       }
     } catch (e) {
-      console.error(
-        `Payment sweep of ${held.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-      );
+      console.error(`Payment sweep of ${held.id} failed: ${logText(e)}`);
     }
   }
   try {
     await deps.payments.markSwept(now.toISOString());
   } catch (e) {
-    console.error(
-      `Recording the payment sweep failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Recording the payment sweep failed: ${logText(e)}`);
   }
   return out;
 }
@@ -690,7 +683,7 @@ export async function declineIncrement(
   } catch (e) {
     // The payment is flagged: an admin sees it even if the stop did not go out.
     console.error(
-      `Stopping the session of payment ${stopped.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
+      `Stopping the session of payment ${stopped.id} failed: ${logText(e)}`,
     );
   }
   return stopped;

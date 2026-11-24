@@ -15,6 +15,7 @@ import { isDemo } from "@/lib/server/demo";
 import { expireTokens } from "@/lib/tokens/manage";
 import { retryPendingPushes } from "@/lib/tokens/push";
 import { tokenStore } from "@/lib/tokens/registry";
+import { logText } from "@/lib/server/log-error";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
@@ -71,9 +72,7 @@ export async function GET(request: Request) {
       { headers: NO_STORE },
     );
   const failed = (job: string, e: unknown) =>
-    console.error(
-      `Scheduled ${job} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Scheduled ${job} failed: ${logText(e)}`);
   const startedAt = new Date();
   // When the payment sweep last finished, before this run: how long the job was away.
   // Read on its own: a failure here must not stop the jobs below.

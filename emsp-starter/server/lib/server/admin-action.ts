@@ -8,6 +8,7 @@ import {
 } from "@/lib/admin/errors";
 import { adminEnabled } from "./admin";
 import { dropDeadSecretSession, secretSession } from "./admin-secret-session";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * What an admin form shows after an action. A failed one also has a code (the OCPI
@@ -118,9 +119,7 @@ export async function asAdmin<T extends AdminResult>(
       (shown(e) || ("code" in e && e.code === "demo_mode"))
     )
       return { ok: false, message: e.message, ...explain(e, token) };
-    console.error(
-      `Admin ${what} action failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Admin ${what} action failed: ${logText(e)}`);
     return { ok: false, message: fallback, ...UNEXPECTED };
   }
 }

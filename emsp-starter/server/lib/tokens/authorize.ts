@@ -17,6 +17,7 @@ import { toOcpiToken } from "./push";
 import { tokenStore } from "./registry";
 import { requireCpoParty } from "./sender";
 import type { DriverToken } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * Real-time authorization (OCPI 2.2.1 section 12.2.1.2): a CPO asks whether a driver
@@ -60,7 +61,7 @@ export async function driverStanding(
     return driver.defaultPaymentMethodId ? "ok" : "no_credit";
   } catch (e) {
     console.error(
-      `Reading the account of token ${token.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
+      `Reading the account of token ${token.id} failed: ${logText(e)}`,
     );
     return "not_allowed";
   }
@@ -180,7 +181,7 @@ export async function authorizeToken(ctx: OcpiContext): Promise<Response> {
   } catch (e) {
     // The CPO is waiting with a driver at the charger: answer even if the log fails.
     console.error(
-      `Audit of a token authorization failed (request ${ctx.requestId}): ${e instanceof Error ? e.name : "unknown error"}`,
+      `Audit of a token authorization failed (request ${ctx.requestId}): ${logText(e)}`,
     );
   }
   return ocpiResponse(answer, ctx);

@@ -40,7 +40,7 @@ Every other template in this repository is a single Next.js app. A driver app ha
 
 ## Run locally
 
-Requires Node.js 22.13 or later. In two terminals:
+Requires Node.js 22 (22.13 or later; the template is tested on Node 22 only). In two terminals:
 
 ```sh
 cd server && npm ci && npm run dev    # http://localhost:3000, admin web and API

@@ -15,6 +15,7 @@ import {
 } from "./auth";
 import { DEMO_CARD_ID } from "./registry";
 import type { AccountStore, Driver } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * Passwordless sign-in for drivers, from the app and the web, and for admins:
@@ -187,9 +188,7 @@ export async function requestCode(
   } catch (e) {
     if (e instanceof AuthRateLimitedError) throw serviceLimit(e, "code");
     // The same answer as a success: whether an email exists is not ours to tell.
-    console.error(
-      `Sending a sign-in code failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Sending a sign-in code failed: ${logText(e)}`);
   }
   const group = limiters.code;
   return {

@@ -14,6 +14,7 @@ import {
   tariffsOfLocation,
 } from "./search";
 import type { StoredLocation } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * The app's location API: search, one location, and a price preview. Locations and
@@ -61,10 +62,8 @@ function limited(
 }
 
 const failed = (what: string, e: unknown) => {
-  // Name the error only: messages may carry database or peer details.
-  console.error(
-    `Location API ${what} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-  );
+  // logText adds a message only for errors built from a table or endpoint and a status.
+  console.error(`Location API ${what} failed: ${logText(e)}`);
   return json({ error: "Something went wrong" }, 500);
 };
 

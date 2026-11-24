@@ -5,6 +5,7 @@ import { userOf } from "./api";
 import type { AuthProvider } from "./auth";
 import { accountStore, authProvider } from "./registry";
 import type { AccountStore, AdminRole } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * Admin sign-in for the admin web: the same passwordless Supabase Auth sign-in as
@@ -40,9 +41,7 @@ export async function currentAdmin(): Promise<AdminIdentity | null> {
   try {
     return await adminFromToken(token);
   } catch (e) {
-    console.error(
-      `Admin session check failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Admin session check failed: ${logText(e)}`);
     return null;
   }
 }

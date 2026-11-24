@@ -1,5 +1,6 @@
 import "server-only";
 import type { StoredCdr, StoredSession } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * Internal events of the Sessions and CDRs modules, for the parts that act on them
@@ -48,8 +49,6 @@ export async function emitSessionEvent(event: SessionEvent): Promise<void> {
     try {
       await listener(structuredClone(event));
     } catch (e) {
-      console.error(
-        `A ${event.type} listener failed: ${e instanceof Error ? e.name : "unknown error"}`,
-      );
+      console.error(`A ${event.type} listener failed: ${logText(e)}`);
     }
 }

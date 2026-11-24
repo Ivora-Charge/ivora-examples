@@ -6,6 +6,7 @@ import { locationStore } from "@/lib/locations/registry";
 import { parseLocationAppId } from "@/lib/locations/search";
 import { peerStore } from "@/lib/ocpi/registry";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
+import { logText } from "@/lib/server/log-error";
 
 /** A problem report as the admin web shows it. */
 export type ProblemRow = {
@@ -151,9 +152,7 @@ export async function resolveProblemAction(
           details: { category: done.category },
         });
       } catch (e) {
-        console.error(
-          `Audit of report ${done.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-        );
+        console.error(`Audit of report ${done.id} failed: ${logText(e)}`);
       }
       return { ok: true, message: `Report ${done.id} is resolved.` };
     },

@@ -8,6 +8,7 @@ import { peerStore } from "./registry";
 import type { IssuedToken, Peer, PeerStore } from "./store";
 import { hashToken, tokensFromHeader } from "./tokens";
 import { ocpiTimestamp, sameParty, STATUS, type Party } from "./types";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * The OCPI server middleware. Wraps a route handler so that it only runs for a known
@@ -212,7 +213,7 @@ export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
       if (e instanceof OcpiProblem) return problem(e);
       // Name the error, not its details: they may include peer data.
       console.error(
-        `OCPI ${request.method} ${new URL(request.url).pathname} failed (request ${requestId}): ${e instanceof Error ? e.name : "unknown error"}`,
+        `OCPI ${request.method} ${new URL(request.url).pathname} failed (request ${requestId}): ${logText(e)}`,
       );
       return problem(
         new OcpiProblem(500, STATUS.SERVER_ERROR, "Internal server error"),

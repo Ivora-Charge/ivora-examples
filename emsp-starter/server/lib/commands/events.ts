@@ -1,5 +1,6 @@
 import "server-only";
 import type { Command } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * Internal command events, for the parts that tell the driver (push notifications):
@@ -48,8 +49,6 @@ export async function emitCommandEvent(event: CommandEvent): Promise<void> {
     try {
       await listener(structuredClone(event));
     } catch (e) {
-      console.error(
-        `A ${event.type} listener failed: ${e instanceof Error ? e.name : "unknown error"}`,
-      );
+      console.error(`A ${event.type} listener failed: ${logText(e)}`);
     }
 }

@@ -19,6 +19,7 @@ import {
 } from "@/lib/server/admin-secret-session";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 
 export type SignInState = {
   ok?: boolean;
@@ -51,9 +52,7 @@ function problem(e: unknown, what: string): SignInState {
           limit: e.limit,
         }
       : { ok: false, message: e.message };
-  console.error(
-    `Admin ${what} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-  );
+  console.error(`Admin ${what} failed: ${logText(e)}`);
   return { ok: false, message: "Something went wrong. Try again." };
 }
 
@@ -101,9 +100,7 @@ async function adminListEmpty(
   try {
     return !(await accounts.hasAdmin());
   } catch (e) {
-    console.error(
-      `Admin list check failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Admin list check failed: ${logText(e)}`);
     return undefined;
   }
 }

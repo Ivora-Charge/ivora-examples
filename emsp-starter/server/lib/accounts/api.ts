@@ -5,6 +5,7 @@ import { mode } from "@/lib/server/demo";
 import type { AuthProvider, AuthUser } from "./auth";
 import { accountStore, authProvider } from "./registry";
 import type { AccountStore, Driver } from "./store";
+import { logText } from "@/lib/server/log-error";
 
 /**
  * The driver API's plumbing: CORS for the app's web build, JSON answers, and the
@@ -145,10 +146,8 @@ export function driverView(d: Driver) {
   };
 }
 
-/** Logs an unexpected error by name only and answers 500. */
+/** Logs an unexpected error (its message only when known-safe, see logText) and answers 500. */
 export function failed(request: Request, what: string, e: unknown) {
-  console.error(
-    `Driver API ${what} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-  );
+  console.error(`Driver API ${what} failed: ${logText(e)}`);
   return json(request, { error: "Something went wrong" }, 500);
 }

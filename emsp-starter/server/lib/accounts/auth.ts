@@ -1,6 +1,7 @@
 import "server-only";
 import { randomBytes, randomUUID } from "node:crypto";
 import { outboundFetch } from "@/lib/server/demo";
+import { AuthRequestError, logText } from "@/lib/server/log-error";
 
 /**
  * Passwordless sign-in with Supabase Auth: the driver (or an admin) asks for an email,
@@ -137,8 +138,9 @@ export class SupabaseAuth implements AuthProvider {
         retryAfterOf(res.headers.get("retry-after")),
       );
     if (res.status >= 500)
-      throw new Error(
+      throw new AuthRequestError(
         `Auth request failed: ${method} ${path.split("?")[0]} (HTTP ${res.status})`,
+        res.status,
       );
     return { status: res.status, json };
   }
@@ -152,7 +154,10 @@ export class SupabaseAuth implements AuthProvider {
       create_user: true,
     });
     if (status >= 400)
-      throw new Error(`Auth request failed: POST otp (HTTP ${status})`);
+      throw new AuthRequestError(
+        `Auth request failed: POST otp (HTTP ${status})`,
+        status,
+      );
   }
 
   async verify(proof: Proof) {
@@ -187,9 +192,7 @@ export class SupabaseAuth implements AuthProvider {
     try {
       await this.call("POST", "logout?scope=local", {}, accessToken);
     } catch (e) {
-      console.error(
-        `Sign-out failed: ${e instanceof Error ? e.name : "unknown error"}`,
-      );
+      console.error(`Sign-out failed: ${logText(e)}`);
     }
   }
 }

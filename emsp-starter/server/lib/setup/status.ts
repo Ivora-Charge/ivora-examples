@@ -17,6 +17,7 @@ import { DatabaseRequestError } from "@/lib/server/supabase-rest";
 import { publicStops, type PublicStop, type SetupStatus } from "./checks";
 import { databaseCheck, type DatabaseCheck } from "./database";
 import { lastWebhookNotes, listJobRuns } from "./log";
+import { logText } from "@/lib/server/log-error";
 
 export type SetupDeps = {
   accounts: AccountStore;
@@ -46,9 +47,7 @@ async function known<T>(
   try {
     return await read();
   } catch (e) {
-    console.error(
-      `Setup status: reading ${what} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Setup status: reading ${what} failed: ${logText(e)}`);
     return null;
   }
 }
@@ -278,9 +277,7 @@ export async function publicSetupView(
     Promise.resolve()
       .then(() => workOutView(deps, now, key))
       .catch((e: unknown) => {
-        console.error(
-          `Public setup view failed: ${e instanceof Error ? e.name : "unknown error"}`,
-        );
+        console.error(`Public setup view failed: ${logText(e)}`);
         return null;
       }),
     // Too slow is "cannot tell": the page goes without, and so does the next 15 s.
