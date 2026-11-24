@@ -3,16 +3,28 @@ import { join } from "node:path";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
+import type { PaymentSummary } from "@/app/admin/payments/actions";
+import { PaymentPanel } from "@/app/admin/payments/payment-admin";
+import {
+  refundRequestId,
+  spendRefundRequestId,
+} from "@/app/admin/payments/request-id";
 import type { ActionState, PeerSummary } from "@/app/admin/peers/actions";
 import { Refused } from "@/app/admin/peers/connect/connect";
 import { HubParties } from "@/app/admin/peers/[id]/peer-page";
 import { moduleName, viewOf } from "@/app/admin/peers/peer-view";
 import { tokenRefused } from "@/app/admin/peers/refused";
+import { FindReport } from "@/app/admin/problems/problem-admin";
 import {
   firstAdminSql,
   LIMITED_MESSAGE,
   signInProblem,
 } from "@/app/admin/sign-in/states";
+import { TokenByUid } from "@/app/admin/tokens/token-admin";
+import { AdminProvider, type Who } from "@/app/admin/ui/admin-context";
+import { oneAtATime } from "@/app/admin/ui/use-action";
+import SetupPage from "@/app/page";
+import { firstAdmin, Setup, type SetupFacts } from "@/app/setup";
 import { AuthRateLimitedError, type AuthProvider } from "@/lib/accounts/auth";
 import {
   requestCode,
@@ -249,5 +261,205 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     );
     expect(html).toContain("Connected, but idle: no party is trusted yet.");
     expect(html).toContain("Accept the CPOs you have an agreement with.");
+  });
+});
+
+/** A page part as the server first renders it, for `admin` (null: nobody signed in). */
+const page = (admin: Who, part: ReturnType<typeof createElement>) =>
+  renderToStaticMarkup(
+    createElement(AdminProvider, {
+      admin,
+      secretEnabled: false,
+      demo: false,
+      children: part,
+    }),
+  );
+const ana: Who = { email: "ana@example.com", role: "admin" };
+
+describe("payments: one payment's panel", () => {
+  const payment = (over: Partial<PaymentSummary> = {}): PaymentSummary => ({
+    id: "22222222-2222-4222-8222-222222222222",
+    commandId: "cmd-1",
+    driverRef: "driver-1",
+    status: "held",
+    currency: "EUR",
+    holdAmount: 2500,
+    authorizedAmount: 2500,
+    capturedAmount: 0,
+    refundedAmount: 0,
+    cdrAmount: null,
+    cdrCurrency: null,
+    review: null,
+    shortfallAmount: 0,
+    reviewedAt: null,
+    stopReason: null,
+    error: "",
+    createdAt: "2026-11-24T14:07:00.000Z",
+    ...over,
+  });
+
+  it("offers capture and release for any held payment, not only one under review", () => {
+    // The server captures or releases any held payment (lib/payments/settle.ts).
+    const held = page(ana, createElement(PaymentPanel, { payment: payment() }));
+    expect(held).toContain("Decide this payment");
+    expect(held).toContain("Capture amount");
+    expect(held).toContain("Release hold");
+    const flagged = page(
+      ana,
+      createElement(PaymentPanel, {
+        payment: payment({ status: "captured", review: "dispute" }),
+      }),
+    );
+    expect(flagged).toContain("Mark reviewed");
+    const settled = page(
+      ana,
+      createElement(PaymentPanel, {
+        payment: payment({ status: "captured", capturedAmount: 900 }),
+      }),
+    );
+    expect(settled).not.toContain("Decide this payment");
+    expect(settled).toContain("Refund");
+  });
+
+  it("keeps a refund's request ID per payment until its outcome is known", () => {
+    const a = "33333333-3333-4333-8333-333333333333";
+    const b = "44444444-4444-4444-8444-444444444444";
+    const first = refundRequestId(a);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/);
+    // The panel is closed and opened again, or the payment found again: same ID.
+    expect(refundRequestId(a)).toBe(first);
+    expect(refundRequestId(b)).not.toBe(first);
+    // The form a reopened panel renders sends that kept ID.
+    const html = page(
+      ana,
+      createElement(PaymentPanel, { payment: payment({ id: a }) }),
+    );
+    expect(html).toContain(`name="requestId" value="${first}"`);
+    // Once the outcome is known the next refund of that payment gets a new one.
+    const next = spendRefundRequestId(a);
+    expect(next).not.toBe(first);
+    expect(refundRequestId(a)).toBe(next);
+    expect(
+      page(ana, createElement(PaymentPanel, { payment: payment({ id: a }) })),
+    ).toContain(`name="requestId" value="${next}"`);
+  });
+});
+
+describe("lookups that need no listed row", () => {
+  it("changes a token by its UID and type, without the driver reference", () => {
+    const html = page(ana, createElement(TokenByUid));
+    expect(html).toContain('name="uid"');
+    expect(html).toContain('name="type"');
+    expect(html).toContain('name="whitelist"');
+    expect(html).not.toContain('name="driverRef"');
+    for (const intent of ["block", "unblock", "whitelist"])
+      expect(html).toContain(`value="${intent}" name="intent"`);
+  });
+
+  it("finds a problem report by its ID", () => {
+    const html = page(
+      ana,
+      createElement(FindReport, { onResolved: async () => {} }),
+    );
+    expect(html).toContain('name="reportId"');
+    expect(html).toContain("Find report");
+  });
+});
+
+describe("peer page: one action at a time", () => {
+  it("ignores a second press while the first is still on its way", async () => {
+    let sent = 0;
+    let finish: (value: string) => void = () => {};
+    const rotate = oneAtATime(
+      () =>
+        new Promise<string>((resolve) => {
+          sent += 1;
+          finish = resolve;
+        }),
+      "skipped",
+    );
+    const first = rotate();
+    await expect(rotate()).resolves.toBe("skipped");
+    await expect(rotate()).resolves.toBe("skipped");
+    expect(sent).toBe(1);
+    finish("rotated");
+    await expect(first).resolves.toBe("rotated");
+    // Once it has answered, the next press is sent.
+    const again = rotate();
+    expect(sent).toBe(2);
+    finish("rotated again");
+    await expect(again).resolves.toBe("rotated again");
+  });
+
+  it("lets the next press through after a failure", async () => {
+    let fail = true;
+    const pull = oneAtATime(async () => {
+      if (fail) throw new Error("no answer");
+      return "pulled";
+    }, "skipped");
+    await expect(pull()).rejects.toThrow("no answer");
+    fail = false;
+    await expect(pull()).resolves.toBe("pulled");
+  });
+});
+
+describe("setup: nothing for a visitor who is not signed in", () => {
+  const facts = (settings: SetupFacts["settings"]): SetupFacts => ({
+    demo: false,
+    required: 6,
+    missing: [],
+    errors: [],
+    malformed: 0,
+    version: "2.2.1",
+    party: "NL-EXA",
+    codesPerHour: 5,
+    settings,
+  });
+  const unset = {
+    baseUrl: "https://emsp.example.com",
+    stripeKey: false,
+    webhookSecret: false,
+    cronSecret: false,
+    holds: ["€25.00"],
+  };
+
+  it("the server reads the payment and job settings for a signed-in admin only", async () => {
+    // Outside a request nobody is signed in: the same answer as a visitor's.
+    const element = await SetupPage();
+    const sent = (element.props as { facts: SetupFacts }).facts;
+    expect(sent.settings).toBeNull();
+    expect(JSON.stringify(sent)).not.toMatch(/stripe|webhook|cron|hold/i);
+  });
+
+  it("shows the sign-in prompt only, even if the page were given the settings", () => {
+    const html = page(null, createElement(Setup, { facts: facts(unset) }));
+    expect(html).toContain("Sign in as an admin to see this deployment");
+    expect(html).toContain('href="/admin/sign-in"');
+    expect(html).not.toMatch(/STRIPE|CRON_SECRET|Setup checklist|NL-EXA/);
+    expect(html).not.toMatch(/<input|<ol/);
+  });
+
+  it("shows a signed-in admin the stops, with the unset settings by name", () => {
+    const html = page(ana, createElement(Setup, { facts: facts(unset) }));
+    expect(html).toContain("Setup checklist");
+    expect(html).toContain("<code>STRIPE_SECRET_KEY</code>");
+    expect(html).toContain("<code>CRON_SECRET</code> is not set");
+  });
+
+  it("says 'cannot check from here' where the settings were not read", () => {
+    // An admin-secret sign-in: the server did not see it when it rendered.
+    const html = page(ana, createElement(Setup, { facts: facts(null) }));
+    expect(html).not.toContain("is not set, so the job never runs");
+    expect(html).not.toContain("Payments are not set up");
+    expect(html.match(/Cannot check from here/g)?.length).toBeGreaterThan(2);
+  });
+
+  it("names the admin secret at stop 5 only on a deployment that has one", () => {
+    const demo = { ...facts(null), demo: true };
+    const without = firstAdmin(demo, null, null, false);
+    expect(String(without.text)).not.toMatch(/secret/i);
+    expect(String(firstAdmin(demo, null, null, true).text)).toContain(
+      "admin secret",
+    );
   });
 });

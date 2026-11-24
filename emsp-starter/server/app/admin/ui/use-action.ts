@@ -93,3 +93,24 @@ export function useList<S extends ActionResult>(
   }, [signedIn, reload]);
   return { ...list, reload, loading: signedIn && !list.done };
 }
+
+/**
+ * One at a time: while a call of `fn` is still waiting for its answer, another call
+ * (a second press of the same or a neighbouring button) does nothing and gives
+ * `skipped`. For actions that must not be sent twice, such as a token rotation.
+ */
+export function oneAtATime<A extends unknown[], R>(
+  fn: (...args: A) => Promise<R>,
+  skipped: R,
+): (...args: A) => Promise<R> {
+  let running = false;
+  return async (...args: A) => {
+    if (running) return skipped;
+    running = true;
+    try {
+      return await fn(...args);
+    } finally {
+      running = false;
+    }
+  };
+}

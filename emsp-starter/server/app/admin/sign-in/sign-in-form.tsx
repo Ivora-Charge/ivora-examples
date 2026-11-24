@@ -203,7 +203,7 @@ function Account() {
 }
 
 export function SignIn({ codesPerHour }: { codesPerHour: number }) {
-  const { admin, hasSecret, secretEnabled, demo, setSecret, renew, ...ctx } =
+  const { signedIn, secretEnabled, demo, setSecret, renew, ...ctx } =
     useAdmin();
   const router = useRouter();
   const id = useId();
@@ -212,7 +212,9 @@ export function SignIn({ codesPerHour }: { codesPerHour: number }) {
   const [asked, setAsked] = useState(false);
   const [problem, setProblem] = useState<ActionResult>({});
 
-  if (admin || hasSecret) return <Account />;
+  // `signedIn`, not `admin`: once the server stops accepting the session (it ran
+  // out), the cookie's admin is stale and this page asks to sign in again.
+  if (signedIn) return <Account />;
 
   const go = (to: Step) => {
     setProblem({});

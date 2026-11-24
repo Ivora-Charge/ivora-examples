@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { brand, cssVariables } from "@/brand";
 import { fontFamilies } from "@/brand/fonts";
-import { currentAdmin } from "@/lib/accounts/admin-session";
+import { requestAdmin } from "./admin/ui/current-admin";
 import { adminEnabled } from "@/lib/server/admin";
 import { isDemo } from "@/lib/server/demo";
 import { AdminProvider } from "./admin/ui/admin-context";
@@ -36,7 +36,7 @@ export default async function RootLayout({
 }) {
   const demo = isDemo();
   // Only who is signed in reaches the page: the email and role, never the token.
-  const admin = await currentAdmin();
+  const admin = await requestAdmin();
   return (
     <html lang="en">
       <head>

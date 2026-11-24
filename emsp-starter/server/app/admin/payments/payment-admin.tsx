@@ -16,7 +16,11 @@ import {
   type PaymentSummary,
 } from "./actions";
 import { PaymentFacts, REVIEW_TEXT } from "./payment-facts";
-import { requestIdSpent } from "./request-id";
+import {
+  refundRequestId,
+  requestIdSpent,
+  spendRefundRequestId,
+} from "./request-id";
 
 const AMOUNT_LABEL =
   "Amount in the payment's minor units (cents for USD, CAD and EUR; whole yen for JPY; 3 decimals for KWD)";
@@ -64,12 +68,14 @@ function AuditLog({ lines }: { lines: AuditLine[] }) {
  * One payment with its own actions: refund, audit log and, while it waits for review,
  * the decision. Every form sends this payment's ID itself.
  */
-function PaymentPanel({ payment }: { payment: PaymentSummary }) {
+export function PaymentPanel({ payment }: { payment: PaymentSummary }) {
   const id = useId();
   const [p, setP] = useState(payment);
   // One request ID per refund the admin means: a retry of the same form never
-  // refunds twice. A new one once that refund's outcome is known (request-id.ts).
-  const [requestId, setRequestId] = useState(() => crypto.randomUUID());
+  // refunds twice. It is kept per payment for the life of the page, so closing and
+  // reopening this panel retries the same refund while its outcome is unknown; a new
+  // one only once that outcome is known (request-id.ts).
+  const [requestId, setRequestId] = useState(() => refundRequestId(payment.id));
   const refund = useAction(refundAction);
   const audit = useAction(paymentAuditAction);
   const decide = useAction(decideAction);
@@ -106,7 +112,7 @@ function PaymentPanel({ payment }: { payment: PaymentSummary }) {
           key={requestId}
           onSend={async (form) => {
             const r = await refund.run(form);
-            if (requestIdSpent(r)) setRequestId(crypto.randomUUID());
+            if (requestIdSpent(r)) setRequestId(spendRefundRequestId(p.id));
             took(r);
           }}
         >
@@ -150,7 +156,7 @@ function PaymentPanel({ payment }: { payment: PaymentSummary }) {
       </details>
       <Result state={refund.state} />
 
-      {p.review && (
+      {(p.status === "held" || p.review) && (
         <>
           <details className="fold">
             <summary>Decide this payment</summary>

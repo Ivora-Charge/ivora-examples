@@ -169,6 +169,109 @@ function TokenItem({
   );
 }
 
+/**
+ * One token by its UID and type, without the driver: for a card or a token a CPO
+ * reports, when the driver reference is not at hand. The same action as a token's own
+ * buttons in a driver's list.
+ */
+export function TokenByUid() {
+  const id = useId();
+  const change = useAction(changeTokenAction);
+  const found = change.state.tokens?.[0];
+  return (
+    <section className="card stack" aria-labelledby={`${id}-h`}>
+      <h2 id={`${id}-h`} className="h3">
+        Change a token by its UID
+      </h2>
+      <p className="small muted">
+        Without the driver reference: block, unblock or set the whitelist of one
+        token from its UID and type. A blocked token is refused from now on and
+        the change is pushed to every CPO at once.
+      </p>
+      <ActionForm
+        aria-label="Change a token by its UID"
+        onSend={(fd) => change.run(fd)}
+      >
+        <div className="fields">
+          <div className="field">
+            <label htmlFor={`${id}-uid`}>Token UID</label>
+            <input
+              id={`${id}-uid`}
+              name="uid"
+              required
+              maxLength={64}
+              autoComplete="off"
+            />
+          </div>
+          <div className="field">
+            <label htmlFor={`${id}-type`}>Type</label>
+            <select id={`${id}-type`} name="type" defaultValue="APP_USER">
+              <option value="APP_USER">App</option>
+              <option value="RFID">RFID card</option>
+            </select>
+          </div>
+          <WhitelistField />
+        </div>
+        <div className="row">
+          <button
+            type="submit"
+            className="btn ghost sm"
+            name="intent"
+            value="whitelist"
+          >
+            Set whitelist
+          </button>
+          <button
+            type="submit"
+            className="btn ghost sm"
+            name="intent"
+            value="unblock"
+          >
+            Unblock token
+          </button>
+          <button
+            type="submit"
+            className="btn danger sm"
+            name="intent"
+            value="block"
+          >
+            Block token
+          </button>
+        </div>
+      </ActionForm>
+      <Answer state={change.state} />
+      {found && (
+        <dl className="facts small">
+          <dt>Token</dt>
+          <dd>
+            {found.type === "APP_USER" ? "App token" : "RFID card"}{" "}
+            <code>{found.uid}</code>
+          </dd>
+          <dt>Driver</dt>
+          <dd>
+            <code>{found.driverRef}</code>
+          </dd>
+          <dt>Contract ID</dt>
+          <dd>
+            <code>{found.contractId}</code>
+          </dd>
+          <dt>Status</dt>
+          <dd>
+            <State kind={found.valid ? "ok" : "bad"}>
+              {found.status}
+              {found.valid ? " (may charge)" : " (may not charge)"}
+            </State>
+          </dd>
+          <dt>Whitelist</dt>
+          <dd>{found.whitelist}</dd>
+          <dt>Last updated</dt>
+          <dd>{utc(found.lastUpdated)}</dd>
+        </dl>
+      )}
+    </section>
+  );
+}
+
 function Driver({ driverRef }: { driverRef: string }) {
   const account = useAction(driverAccountAction);
   const tokens = useAction(driverTokensAction);
@@ -439,6 +542,8 @@ export function TokenAdmin({
       {driverRef && (
         <Driver key={`${driverRef}:${round}`} driverRef={driverRef} />
       )}
+
+      <TokenByUid />
 
       <section className="card stack" aria-labelledby={`${id}-push`}>
         <h2 id={`${id}-push`} className="h3">

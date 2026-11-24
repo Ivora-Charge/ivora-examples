@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { useId, useState } from "react";
 import { Result, State, Tile, utc } from "../ui/kit";
+import { ActionForm } from "../ui/parts";
 import { fields, useAction, useList } from "../ui/use-action";
 import {
   listProblemsAction,
@@ -191,6 +192,84 @@ function ReportRow({
   );
 }
 
+/**
+ * A report by its ID, whether or not it is among the listed rows (the list shows the
+ * newest 100): show it and, while it is open, mark it resolved.
+ */
+export function FindReport({
+  onResolved,
+}: {
+  onResolved: () => Promise<unknown>;
+}) {
+  const id = useId();
+  const show = useAction(showProblemAction);
+  const resolve = useAction(resolveProblemAction);
+  const [resolving, setResolving] = useState(false);
+  const report = show.state.report;
+  return (
+    <section className="card stack" aria-labelledby={`${id}-h`}>
+      <h2 id={`${id}-h`} className="h3">
+        Find a report by its ID
+      </h2>
+      <ActionForm
+        aria-label="Find a report by its ID"
+        onSend={(form) => show.run(form)}
+      >
+        <div className="field">
+          <label htmlFor={`${id}-id`}>Report ID</label>
+          <input
+            id={`${id}-id`}
+            name="reportId"
+            required
+            maxLength={36}
+            autoComplete="off"
+            aria-describedby={`${id}-hint`}
+          />
+          <span className="hint" id={`${id}-hint`}>
+            For a report that is not in the rows above: the list shows the
+            newest 100.
+          </span>
+        </div>
+        <div>
+          <button className="btn ghost sm" type="submit">
+            Find report
+          </button>
+        </div>
+      </ActionForm>
+      <Result state={resolve.state} />
+      {report ? (
+        <>
+          <ReportDetail report={report} />
+          {report.status === "open" && (
+            <div aria-busy={resolving}>
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={async () => {
+                  if (resolving) return;
+                  setResolving(true);
+                  try {
+                    await resolve.run(fields({ reportId: report.id }));
+                    await show.run(fields({ reportId: report.id }));
+                    await onResolved();
+                  } finally {
+                    setResolving(false);
+                  }
+                }}
+              >
+                Mark resolved
+                <span className="sr">: report {report.id}</span>
+              </button>
+            </div>
+          )}
+        </>
+      ) : (
+        <Result state={show.state} />
+      )}
+    </section>
+  );
+}
+
 export function ProblemAdmin({ demo }: { demo: boolean }) {
   const [status, setStatus] = useState<Filter>("open");
   const list = useList(listProblemsAction, { status });
@@ -271,6 +350,8 @@ export function ProblemAdmin({ demo }: { demo: boolean }) {
           </div>
         </div>
       )}
+
+      <FindReport onResolved={list.reload} />
 
       <div className="msg" role="note">
         <p>

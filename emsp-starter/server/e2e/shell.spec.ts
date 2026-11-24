@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { expectAccessible, goTo, signIn, type Place } from "./support";
 
 // Runs on the desktop and mobile projects (see playwright.config.ts).
-test("demo: Setup is labelled, shows the six stops and the OCPI identity", async ({
+test("demo: Setup shows a visitor the sign-in prompt only", async ({
   page,
 }) => {
   await page.goto("/");
@@ -13,6 +13,38 @@ test("demo: Setup is labelled, shows the six stops and the OCPI identity", async
     page.getByRole("heading", { name: "Get this network live", level: 1 }),
   ).toBeVisible();
   await expect(page).toHaveTitle(/^Setup · /);
+
+  // Signed out: one prompt with a link, no stop, no setting's name, no secret field.
+  await expect(
+    page.getByRole("heading", {
+      name: "Sign in as an admin to see this deployment's setup",
+    }),
+  ).toBeVisible();
+  const main = page.getByRole("main");
+  await expect(main.getByRole("link", { name: "Sign in" })).toHaveAttribute(
+    "href",
+    "/admin/sign-in",
+  );
+  await expect(page.getByRole("list", { name: "Setup checklist" })).toHaveCount(
+    0,
+  );
+  await expect(main).not.toContainText(/STRIPE|CRON_SECRET|is not set|ZZ-DMO/);
+  await expect(page.getByLabel("Admin secret")).toHaveCount(0);
+  // Nor does the page's own data say whether the payment or job secrets are set.
+  expect(await page.content()).not.toMatch(
+    /stripeKey|webhookSecret|cronSecret|STRIPE_|CRON_SECRET/,
+  );
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `setup, signed out, ${colorScheme}`);
+  }
+});
+
+test("demo: Setup shows a signed-in admin the six stops and the OCPI identity", async ({
+  page,
+}) => {
+  await signIn(page);
+  await goTo(page, "Setup");
 
   // Demo mode is never called live, and the hero counts only what is confirmed.
   const hero = page.getByRole("region", { name: "Overall state" });
@@ -30,34 +62,21 @@ test("demo: Setup is labelled, shows the six stops and the OCPI identity", async
   if (await database.getByText("Show the fix").isVisible())
     await database.getByText("Show the fix").click();
   await expect(database).toContainText("npm run db:migrate");
+  // The payment and job settings are read for an email sign-in only: with the admin
+  // secret these stops cannot check, and still show their fix.
+  for (const stop of ["#stop-3", "#stop-4"]) {
+    await expect(lane.locator(stop)).toContainText("Cannot check from here");
+    await expect(lane.locator(stop)).toContainText(
+      "only for an admin signed in by email",
+    );
+  }
+  await expect(lane.locator("#stop-6")).toContainText("The mock CPO stands in");
 
   const about = page.getByRole("complementary", {
     name: "About this deployment",
   });
   await expect(about).toContainText("OCPI 2.2.1");
   await expect(about).toContainText("ZZ-DMO");
-
-  // Signed out: a prompt with a link, and no secret field.
-  await expect(
-    page.getByText("Sign in as an admin to check your peers."),
-  ).toBeVisible();
-  await expect(page.getByLabel("Admin secret")).toHaveCount(0);
-  for (const colorScheme of ["light", "dark"] as const) {
-    await page.emulateMedia({ colorScheme });
-    await expectAccessible(page, `setup, signed out, ${colorScheme}`);
-  }
-});
-
-test("demo: Setup checks the peers once an admin is signed in", async ({
-  page,
-}) => {
-  await signIn(page);
-  await goTo(page, "Setup");
-  const peer = page.locator("#stop-6");
-  await expect(peer).toContainText("The mock CPO stands in");
-  await expect(
-    page.getByText("Sign in as an admin to check your peers."),
-  ).toHaveCount(0);
   for (const colorScheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme });
     await expectAccessible(page, `setup, signed in, ${colorScheme}`);
@@ -127,7 +146,9 @@ test("skip link moves focus to the main content", async ({
 });
 
 test("the admin web uses the self-hosted brand fonts", async ({ page }) => {
-  await page.goto("/");
+  // Signed in: Setup shows settings' names in the mono face.
+  await signIn(page);
+  await goTo(page, "Setup");
   const heading = page.getByRole("heading", { name: "Get this network live" });
   await expect(heading).toBeVisible();
   const family = (l: ReturnType<typeof page.locator>) =>

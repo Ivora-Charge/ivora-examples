@@ -6,10 +6,15 @@ import { listPeersAction, type ActionState } from "./admin/peers/actions";
 import { firstAdminSql } from "./admin/sign-in/states";
 import { useAdmin } from "./admin/ui/admin-context";
 import { Head, Icon, Result, State, Tile, type Kind } from "./admin/ui/kit";
-import { Copy, Later } from "./admin/ui/parts";
+import { Copy, Gate, Later } from "./admin/ui/parts";
 import { useList } from "./admin/ui/use-action";
 
-/** What the server knows without the database: names of settings, never values. */
+/**
+ * What the server knows without the database: names of settings, never values. This
+ * part is what the public overview page always showed: the mode, the OCPI identity
+ * and the names of the unset or malformed live-mode settings. The page shows none of
+ * it until an admin is signed in.
+ */
 export type SetupFacts = {
   demo: boolean;
   required: number;
@@ -18,6 +23,17 @@ export type SetupFacts = {
   malformed: number;
   version: string;
   party: string;
+  codesPerHour: number;
+  /**
+   * Read by the server only for an admin signed in by email (the session cookie), and
+   * null for everyone else: a visitor's page never carries whether the payment or
+   * job secrets are set. An admin-secret sign-in lives in the page's memory, which
+   * the server cannot see when it renders, so those stops say "cannot check".
+   */
+  settings: SetupSettings | null;
+};
+
+export type SetupSettings = {
   /** PUBLIC_BASE_URL, when it is set. */
   baseUrl: string | null;
   stripeKey: boolean;
@@ -25,8 +41,10 @@ export type SetupFacts = {
   cronSecret: boolean;
   /** The hold per charge, per currency, as text. */
   holds: string[];
-  codesPerHour: number;
 };
+
+const SECRET_ONLY =
+  "This page reads these settings only for an admin signed in by email, not for the admin secret.";
 
 /**
  * A stop is Done, Needs you, Broken or Waiting, or the page cannot tell yet: "Cannot
@@ -266,7 +284,7 @@ const database: Stop = {
 };
 
 function webhook(f: SetupFacts): Stop {
-  const address = `${f.baseUrl ?? "https://<this deployment>"}/api/webhooks/stripe`;
+  const address = `${f.settings?.baseUrl ?? "https://<this deployment>"}/api/webhooks/stripe`;
   const fix = (
     <Fix>
       <ol className="steps">
@@ -302,9 +320,17 @@ function webhook(f: SetupFacts): Stop {
       </p>
     </Fix>
   );
+  if (!f.settings)
+    return {
+      kind: "unknown",
+      big: "?",
+      title: "Payments webhook",
+      text: `${SECRET_ONLY} Until STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are set and one signed event has arrived, do not take card payments.`,
+      fix,
+    };
   const unset = [
-    !f.stripeKey && "STRIPE_SECRET_KEY",
-    !f.webhookSecret && "STRIPE_WEBHOOK_SECRET",
+    !f.settings.stripeKey && "STRIPE_SECRET_KEY",
+    !f.settings.webhookSecret && "STRIPE_WEBHOOK_SECRET",
   ].filter((v): v is string => Boolean(v));
   if (unset.length)
     return {
@@ -337,7 +363,7 @@ function webhook(f: SetupFacts): Stop {
 }
 
 function job(f: SetupFacts): Stop {
-  const request = `GET ${f.baseUrl ?? "https://<this deployment>"}/api/cron/ocpi-sync
+  const request = `GET ${f.settings?.baseUrl ?? "https://<this deployment>"}/api/cron/ocpi-sync
 Authorization: Bearer <CRON_SECRET>`;
   const note = (
     <div className="msg limit" role="note">
@@ -358,11 +384,12 @@ Authorization: Bearer <CRON_SECRET>`;
   const fix = (
     <Fix label="Fix: run it every minute">
       <ol className="steps">
-        {!f.cronSecret && (
+        {!f.settings?.cronSecret && (
           <li>
             <p>
-              Set <code>CRON_SECRET</code> (at least 32 characters) and
-              redeploy. The job answers only with it.
+              Set <code>CRON_SECRET</code> (at least 32 characters)
+              {f.settings ? "" : ", if it is not set yet,"} and redeploy. The
+              job answers only with it.
             </p>
           </li>
         )}
@@ -382,7 +409,16 @@ Authorization: Bearer <CRON_SECRET>`;
       </ol>
     </Fix>
   );
-  return f.cronSecret
+  if (!f.settings)
+    return {
+      kind: "unknown",
+      big: "?",
+      title: "Scheduled job",
+      text: `${SECRET_ONLY} Without CRON_SECRET the job never runs: no pulls, no token push retries, no payment sweep.`,
+      note,
+      fix,
+    };
+  return f.settings.cronSecret
     ? {
         kind: "unknown",
         big: "?",
@@ -407,10 +443,11 @@ Authorization: Bearer <CRON_SECRET>`;
       };
 }
 
-function firstAdmin(
+export function firstAdmin(
   f: SetupFacts,
   admin: ReturnType<typeof useAdmin>["admin"],
   lastEmail: string | null,
+  secretEnabled: boolean,
 ): Stop {
   if (admin)
     return {
@@ -425,7 +462,10 @@ function firstAdmin(
       kind: "off",
       big: "–",
       title: "No admin accounts in demo mode",
-      text: "Waits for the environment. Demo mode has no admin list; the admin pages take the admin secret instead, when one is set.",
+      // The admin secret is named only on a deployment that has one.
+      text: secretEnabled
+        ? "Waits for the environment. Demo mode has no admin list; the admin pages take the admin secret instead."
+        : "Waits for the environment. Demo mode has no admin list.",
     };
   return {
     kind: "unknown",
@@ -515,18 +555,8 @@ const peerFix = (
 
 function firstPeer(
   f: SetupFacts,
-  signedIn: boolean,
   list: { state: ActionState; loading: boolean },
 ): Stop {
-  if (!signedIn)
-    return {
-      kind: "unknown",
-      big: "?",
-      small: "peers",
-      title: "First peer",
-      text: "Peers are shown to a signed-in admin only, so this page cannot check them until you sign in. A peer is a CPO or a roaming hub you exchange data with; until one is connected, the drivers' map is empty and nobody can charge.",
-      fix: peerFix,
-    };
   if (list.loading)
     return {
       kind: "off",
@@ -590,16 +620,33 @@ function firstPeer(
   };
 }
 
-export function Setup({ facts: f }: { facts: SetupFacts }) {
-  const { admin, signedIn, lastEmail } = useAdmin();
+/**
+ * Setup shows nothing but the sign-in prompt until an admin is signed in: what a
+ * visitor may see before the first admin exists is decided separately (the public
+ * pre-admin view), with its own security review.
+ */
+export function Setup({ facts }: { facts: SetupFacts }) {
+  const { signedIn } = useAdmin();
+  return signedIn ? (
+    <Stops facts={facts} />
+  ) : (
+    <>
+      <Head crumbs={["Setup"]} title="Get this network live" />
+      <Gate what="see this deployment's setup" />
+    </>
+  );
+}
+
+function Stops({ facts: f }: { facts: SetupFacts }) {
+  const { admin, lastEmail, secretEnabled } = useAdmin();
   const peers = useList(listPeersAction);
   const stops = [
     environment(f),
     database,
     webhook(f),
     job(f),
-    firstAdmin(f, admin, lastEmail),
-    firstPeer(f, signedIn, peers),
+    firstAdmin(f, admin, lastEmail, secretEnabled),
+    firstPeer(f, peers),
   ];
   const done = stops.filter((s) => s.kind === "ok").length;
   const unknown = stops.filter((s) => s.kind === "unknown").length;
@@ -640,23 +687,6 @@ export function Setup({ facts: f }: { facts: SetupFacts }) {
               )}
             </div>
           </section>
-          {!signedIn && (
-            <div className="msg" role="note">
-              <p className="t">
-                <Icon name="lock" />
-                <span>Sign in as an admin to check your peers.</span>
-              </p>
-              <p>
-                Nobody is signed in, so this page shows the settings&apos; names
-                and the fixes only, and no data.
-              </p>
-              <p>
-                <Link className="btn sm" href="/admin/sign-in">
-                  Sign in <Icon name="arrow" />
-                </Link>
-              </p>
-            </div>
-          )}
           <ol className="lane" aria-label="Setup checklist">
             {stops.map((stop, i) => (
               <StopItem key={i} n={i + 1} stop={stop} next={i === next} />
@@ -681,11 +711,13 @@ export function Setup({ facts: f }: { facts: SetupFacts }) {
               <dd>
                 <code>{f.party}</code>
               </dd>
-              {f.baseUrl && (
+              {f.settings?.baseUrl && (
                 <>
                   <dt>Address</dt>
                   <dd>
-                    <code>{f.baseUrl.replace(/^https?:\/\//, "")}</code>
+                    <code>
+                      {f.settings.baseUrl.replace(/^https?:\/\//, "")}
+                    </code>
                   </dd>
                 </>
               )}
@@ -706,10 +738,11 @@ export function Setup({ facts: f }: { facts: SetupFacts }) {
                 <strong>Admin sessions:</strong> about one hour, then sign in
                 again.
               </li>
-              {f.holds.length > 0 && (
+              {f.settings && f.settings.holds.length > 0 && (
                 <li>
-                  <strong>Hold per charge:</strong> {f.holds.join(", ")},
-                  captured from the CDR, never above the hold.
+                  <strong>Hold per charge:</strong>{" "}
+                  {f.settings.holds.join(", ")}, captured from the CDR, never
+                  above the hold.
                 </li>
               )}
             </ul>

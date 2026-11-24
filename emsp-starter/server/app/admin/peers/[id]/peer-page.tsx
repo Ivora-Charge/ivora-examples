@@ -20,7 +20,7 @@ import {
   type ActionResult,
 } from "../../ui/kit";
 import { ActionForm, ago, ConfirmButton, Gated } from "../../ui/parts";
-import { fields, useList, useRun } from "../../ui/use-action";
+import { fields, oneAtATime, useList, useRun } from "../../ui/use-action";
 import {
   hubPartyAction,
   listPeersAction,
@@ -393,14 +393,24 @@ function PeerBody({
   const [busy, setBusy] = useState(false);
   const v = viewOf(peer);
   const registered = peer.status === "registered";
-  const send: Send = async (action, values) => {
-    setBusy(true);
-    const r = await run(action, fields(values));
-    setLast(r);
-    await reload();
-    setBusy(false);
-    return r;
-  };
+  // One action of this peer at a time: a second press of Rotate, Pull, Accept or
+  // Remove while the first is still on its way sends nothing (oneAtATime). The
+  // buttons also show as waiting meanwhile (aria-busy).
+  const [once] = useState(() =>
+    oneAtATime((job: () => Promise<ActionState>) => job(), {} as ActionState),
+  );
+  const send: Send = (action, values) =>
+    once(async () => {
+      setBusy(true);
+      try {
+        const r = await run(action, fields(values));
+        setLast(r);
+        await reload();
+        return r;
+      } finally {
+        setBusy(false);
+      }
+    });
   const host = (() => {
     try {
       return peer.versionsUrl ? new URL(peer.versionsUrl).host : null;

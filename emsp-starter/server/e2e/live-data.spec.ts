@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { goTo, signIn } from "./support";
+import { expectAccessible, goTo, signIn } from "./support";
 
 // Demo mode: adapters stay in memory and are never called.
 test("demo: an admin gives a peer the Ivora adapter from the peer's page, the key is never shown", async ({
@@ -34,6 +34,20 @@ test("demo: an admin gives a peer the Ivora adapter from the peer's page, the ke
   await expect(live.getByLabel("Read-only API key")).toHaveValue("");
   await expect(page.getByText(key)).toHaveCount(0);
 
+  // Every adapter is also listed on Peers, with a link back to its peer.
+  await goTo(page, "Peers");
+  const adapters = page.getByRole("region", { name: "Live-data adapters" });
+  const listed = adapters.getByRole("row").filter({ hasText: name });
+  await expect(listed).toContainText("Ivora");
+  await expect(listed).toContainText("Stored encrypted");
+  await expect(page.getByText(key)).toHaveCount(0);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `peers, with an adapter, ${colorScheme}`);
+  }
+  await listed.getByRole("link", { name }).click();
+  await expect(live).toContainText("Stored encrypted");
+
   await live.getByRole("button", { name: "Remove adapter" }).click();
   await live.getByRole("button", { name: "Yes, remove" }).click();
   await expect(live).toContainText("Adapter removed.");
@@ -42,6 +56,7 @@ test("demo: an admin gives a peer the Ivora adapter from the peer's page, the ke
 
 test("the old live-data address leads to Peers", async ({ page }) => {
   await page.goto("/admin/live-data");
+  await expect(page).toHaveURL(/\/admin\/peers#live-data$/);
   await expect(
     page.getByRole("heading", { name: "Peers", level: 1 }),
   ).toBeVisible();

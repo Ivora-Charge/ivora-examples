@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useAdmin } from "../ui/admin-context";
-import { Head, Icon, Message, Result, State, Tile } from "../ui/kit";
+import { listAdaptersAction } from "../live-data/actions";
+import { Head, Icon, Message, Result, State, Tile, utc } from "../ui/kit";
 import { ago, Copy, Gated } from "../ui/parts";
 import { useList } from "../ui/use-action";
 import { listPeersAction, type PeerSummary } from "./actions";
@@ -70,6 +71,80 @@ function PeerRow({ peer }: { peer: PeerSummary }) {
         </div>
       ))}
     </li>
+  );
+}
+
+/**
+ * Every live-data adapter in one place, each with a link to its peer's page, where it
+ * is set, replaced and removed.
+ */
+function Adapters() {
+  const list = useList(listAdaptersAction);
+  const adapters = list.state.adapters ?? [];
+  return (
+    <section className="stack" id="live-data" aria-labelledby="adapters-h">
+      <h2 id="adapters-h">Live-data adapters</h2>
+      <p className="muted">
+        OCPI 2.2.1 has no state of charge. A peer can have a read-only adapter
+        that reads it from the CPO&apos;s own API; set, replace or remove it on
+        the peer&apos;s page.
+      </p>
+      {list.loading ? (
+        <p className="muted" role="status">
+          Loading…
+        </p>
+      ) : list.state.ok === false ? (
+        <Result state={list.state} />
+      ) : adapters.length === 0 ? (
+        <p className="card flat muted" role="status">
+          No peer has an adapter: every peer shows OCPI data only.
+        </p>
+      ) : (
+        <div className="card tablecard">
+          <table className="data">
+            <caption className="sr">Live-data adapters, by peer</caption>
+            <thead>
+              <tr>
+                <th scope="col">Peer</th>
+                <th scope="col">Adapter</th>
+                <th scope="col">API URL</th>
+                <th scope="col">Account</th>
+                <th scope="col">API key</th>
+                <th scope="col">Last changed</th>
+              </tr>
+            </thead>
+            <tbody>
+              {adapters.map((a) => (
+                <tr key={a.peerId}>
+                  <th scope="row" className="c-main">
+                    <Link href={`/admin/peers/${a.peerId}`}>{a.peerLabel}</Link>
+                    <span className="sub mono">{a.peerId}</span>
+                  </th>
+                  <td className="c-kv" data-l="Adapter">
+                    {a.kindLabel}
+                  </td>
+                  <td className="c-kv" data-l="API URL">
+                    <span className="mono">{a.baseUrl}</span>
+                  </td>
+                  <td className="c-kv" data-l="Account">
+                    <span className="mono">{a.accountId}</span>
+                  </td>
+                  <td className="c-kv" data-l="API key">
+                    Stored encrypted
+                  </td>
+                  <td className="c-kv" data-l="Last changed">
+                    {utc(a.updatedAt)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <div className="foot">
+            <span>{list.state.message}</span>
+          </div>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -142,6 +217,7 @@ export function PeerList({
                 ))}
               </ul>
             )}
+            <Adapters />
           </div>
           <aside className="card stack">
             <h2 className="h3">Our side</h2>

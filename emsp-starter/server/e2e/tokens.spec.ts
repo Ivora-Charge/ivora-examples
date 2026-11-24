@@ -59,6 +59,30 @@ test("demo: an admin finds the sample driver, then issues and blocks an app toke
   await item.getByRole("button", { name: "Yes, block" }).click();
   await expect(tokens).toContainText("Token blocked.");
   await expect(item).toContainText("(may not charge)");
+
+  // A token is also reached by its UID and type alone, without the driver.
+  const uid = (
+    await item.getByRole("heading").locator(".mono").innerText()
+  ).trim();
+  const byUid = page.getByRole("region", { name: "Change a token by its UID" });
+  await byUid.getByLabel("Token UID").fill(uid);
+  await byUid
+    .getByRole("button", { name: "Unblock token", exact: true })
+    .click();
+  await expect(byUid.getByRole("status")).toContainText("Token unblocked.");
+  await expect(byUid).toContainText(driver);
+  await expect(byUid).toContainText("active (may charge)");
+  await byUid.getByLabel("Whitelist").selectOption("NEVER");
+  await byUid.getByRole("button", { name: "Set whitelist" }).click();
+  await expect(byUid.getByRole("status")).toContainText("Whitelist changed.");
+  await byUid.getByRole("button", { name: "Block token", exact: true }).click();
+  await expect(byUid.getByRole("status")).toContainText("Token blocked.");
+  await expect(byUid).toContainText("(may not charge)");
+  await byUid.getByLabel("Token UID").fill("NO-SUCH-TOKEN");
+  await byUid
+    .getByRole("button", { name: "Unblock token", exact: true })
+    .click();
+  await expect(byUid.getByRole("alert")).toBeVisible();
 });
 
 test("demo: Drivers and tokens shows only a sign-in prompt when nobody is signed in", async ({
