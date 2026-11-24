@@ -3,6 +3,7 @@ import { getChargers } from "../chargers";
 import { config, isDemo } from "../env";
 import { getIvora } from "../ivora";
 import { getLive } from "../live";
+import { networkStore, payoutGate } from "../network";
 import { getPricing } from "../pricing";
 import { resolveQrBase, type QrBase } from "../qr-base";
 import { createSupabaseLimiter } from "../team/supabase";
@@ -20,6 +21,16 @@ interface Shared {
 }
 const g = globalThis as unknown as { __cpoCheckout?: Shared };
 const shared = (): Shared => (g.__cpoCheckout ??= { cache: new Map() });
+
+/** The payout check and checkout snapshot of network mode (see CheckoutDeps.network). */
+function network(mode: "live" | "demo"): CheckoutDeps["network"] {
+  return {
+    gate: (operatorId, locationId) =>
+      payoutGate({ store: networkStore() }, mode, operatorId, locationId),
+    snapshot: (operatorId, checkoutId, locationId) =>
+      networkStore().snapshot(operatorId, checkoutId, locationId),
+  };
+}
 
 /**
  * The one place that picks the checkout store. In demo mode it is the visitor's cookie
@@ -45,6 +56,7 @@ export function getCheckout(): CheckoutDeps {
       secret: "demo-mode",
       // Demo reads are the visitor's own cookie: never shared between visitors.
       cache: new Map(),
+      network: network("demo"),
     };
   }
   return {
@@ -57,6 +69,7 @@ export function getCheckout(): CheckoutDeps {
     publicOrigin: publicOrigin(),
     secret: config.supabaseServiceRoleKey,
     cache: s.cache,
+    network: network("live"),
   };
 }
 

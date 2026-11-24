@@ -10,7 +10,12 @@ import {
 } from "@/lib/hosts";
 import { FormActions } from "@/app/ui/field";
 import { Result } from "../result";
-import { archiveHostAction, assignSiteAction, saveHostAction } from "./actions";
+import {
+  archiveHostAction,
+  assignSiteAction,
+  saveFeeAction,
+  saveHostAction,
+} from "./actions";
 
 export interface HostFormValues {
   id: string | null;
@@ -187,6 +192,113 @@ export function SiteHostForm(p: {
         <span className="saved" role="status">
           {state.ok ? "Saved" : ""}
         </span>
+      )}
+    </form>
+  );
+}
+
+export interface FeeFormValues {
+  mode: "percent" | "per_kwh";
+  /** As typed: "10" (percent), "0.05" (per kWh), "15.00" (monthly). */
+  percent: string;
+  perKwh: string;
+  monthly: string;
+}
+
+/**
+ * A host's network fee: a share of each session's amount, or an amount per kWh, plus
+ * an optional monthly fee per charger (shown on the statement, never collected). A
+ * save is a new version that applies to sessions started after it.
+ */
+export function FeeForm(p: {
+  hostId: string;
+  hostName: string;
+  currency: string;
+  current: FeeFormValues;
+}) {
+  const [state, action, pending] = useActionState(saveFeeAction, EMPTY);
+  const id = useId();
+  const v = state.values;
+  const mode = (v?.mode as FeeFormValues["mode"]) ?? p.current.mode;
+  return (
+    <form action={action} className="form fee-form">
+      <input type="hidden" name="hostId" value={p.hostId} />
+      <Result state={state.ok ? {} : state} />
+      <fieldset className="form nested">
+        <legend>Network fee for {p.hostName}</legend>
+        <div className="confirm">
+          <input
+            id={`${id}-percent-mode`}
+            type="radio"
+            name="mode"
+            value="percent"
+            defaultChecked={mode === "percent"}
+          />
+          <label htmlFor={`${id}-percent-mode`}>
+            A percentage of each session&apos;s amount
+          </label>
+        </div>
+        <div className="field">
+          <label htmlFor={`${id}-percent`}>Percentage (0 to 100)</label>
+          <input
+            id={`${id}-percent`}
+            name="percent"
+            inputMode="decimal"
+            maxLength={7}
+            defaultValue={v?.percent ?? p.current.percent}
+            aria-describedby={`${id}-percent-hint`}
+          />
+          <p id={`${id}-percent-hint`} className="hint muted">
+            For example 10 or 7.5. Rounded half up to the cent, once per
+            session.
+          </p>
+        </div>
+        <div className="confirm">
+          <input
+            id={`${id}-kwh-mode`}
+            type="radio"
+            name="mode"
+            value="per_kwh"
+            defaultChecked={mode === "per_kwh"}
+          />
+          <label htmlFor={`${id}-kwh-mode`}>A flat amount per kWh</label>
+        </div>
+        <div className="field">
+          <label htmlFor={`${id}-kwh`}>Amount per kWh ({p.currency})</label>
+          <input
+            id={`${id}-kwh`}
+            name="perKwh"
+            inputMode="decimal"
+            maxLength={10}
+            defaultValue={v?.perKwh ?? p.current.perKwh}
+          />
+        </div>
+        <div className="field">
+          <label htmlFor={`${id}-monthly`}>
+            Monthly fee per charger ({p.currency}, optional)
+          </label>
+          <input
+            id={`${id}-monthly`}
+            name="monthly"
+            inputMode="decimal"
+            maxLength={12}
+            defaultValue={v?.monthly ?? p.current.monthly}
+            aria-describedby={`${id}-monthly-hint`}
+          />
+          <p id={`${id}-monthly-hint`} className="hint muted">
+            Shown on the host&apos;s statement; the kit never collects it.
+          </p>
+        </div>
+      </fieldset>
+      <FormActions saved={Boolean(state.ok)} savedAt={state.savedAt}>
+        <button type="submit" className="button" disabled={pending}>
+          {pending ? "Saving…" : "Save network fee"}
+        </button>
+      </FormActions>
+      {state.ok && (
+        <p className="muted" role="status">
+          {state.ok}
+        </p>
       )}
     </form>
   );

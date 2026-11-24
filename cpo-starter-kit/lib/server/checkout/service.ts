@@ -28,6 +28,8 @@ import { stripeView } from "../onboarding/stripe";
 import { effectiveTariff } from "../pricing/service";
 import { driverText } from "../pricing/tariff";
 import type { PricingStore, TariffDefinition } from "../pricing/types";
+import type { PayoutGate } from "../network/service";
+import type { CheckoutHost } from "../network/types";
 import { digest, type RateLimiter } from "../rate-limit";
 import { RETURN_FALLBACK_MESSAGE, sessionReturnUrl } from "./return-url";
 import {
@@ -77,6 +79,20 @@ export interface CheckoutDeps {
   secret: string;
   /** Short-lived reads shared by page views (see `cached`). */
   cache: Map<string, { until: number; value: unknown }>;
+  /**
+   * Network mode: whether a site's host can be paid (a paid checkout at a host's site
+   * waits for the host's payout account), and the record of the host, its payout
+   * account and fee version a checkout makes when it starts. getCheckout() always sets
+   * it; absent only in tests of sites without hosts.
+   */
+  network?: {
+    gate(operatorId: string, locationId: number | null): Promise<PayoutGate>;
+    snapshot(
+      operatorId: string,
+      checkoutId: string,
+      locationId: number,
+    ): Promise<CheckoutHost | null>;
+  };
   now?: () => number;
 }
 
@@ -261,6 +277,38 @@ const stripeNotReady = (operator: string, apiCode?: string) =>
     `${operator} can't take card payments here yet. Nothing was charged. Please contact them, or use another way to start charging.`,
     apiCode,
   );
+
+/**
+ * A host's site whose payout account is not ready (or, in live mode, host payments
+ * that are not available yet): no card payment starts. Staff see why on the Hosts page.
+ */
+const hostNotReady = (operator: string) =>
+  new CheckoutError(
+    "host_not_ready",
+    `Card payment isn't set up at this site yet, so it can't be paid for here. Nothing was charged. Please contact ${operator}.`,
+  );
+
+/** The payout check for a station's site; open when there is no network to ask. */
+async function gateFor(
+  d: CheckoutDeps,
+  operatorId: string,
+  station: Pick<Station, "location_id">,
+): Promise<PayoutGate> {
+  if (!d.network) return { ok: true, hostId: null };
+  return d.network.gate(
+    operatorId,
+    typeof station.location_id === "number" ? station.location_id : null,
+  );
+}
+
+function logGate(g: PayoutGate, record?: string) {
+  if (!g.ok)
+    console.warn("cpo-starter-kit: card payment off at a host's site", {
+      host: g.hostId,
+      reason: g.reason,
+      ...(record ? { checkout: record } : {}),
+    });
+}
 
 const notFree = () =>
   new CheckoutError(
@@ -554,6 +602,22 @@ export async function loadChargePage(
       view.connector.blocked = "in_use";
     if (view.connector.blocked)
       close(blockedError(view.connector.blocked, view.connector.status));
+    if (paid) {
+      try {
+        const g = await gateFor(d, found.operatorId, station.value);
+        if (!g.ok) close(hostNotReady(operatorName));
+      } catch (e) {
+        console.error("cpo-starter-kit: checkout payout check failed", {
+          error: e instanceof Error ? e.name : "error",
+        });
+        close(
+          new CheckoutError(
+            "unavailable",
+            "Card payment can't be checked right now. Try again in a minute. Nothing was charged.",
+          ),
+        );
+      }
+    }
   } else {
     log("status read", station.reason);
     errors.push("The charger's status can't be read right now.");
@@ -899,6 +963,48 @@ export async function payAndCharge(
     if (state.blocked)
       throw await fail(blockedError(state.blocked, state.status));
     if (!ready) throw await fail(stripeNotReady(operatorName));
+    // Network mode: a host's site takes card payments only while the host can be paid,
+    // and the checkout records its host, payout account and fee version now, in one
+    // database statement, before any bill. A failed read stops here (nothing was
+    // asked of Ivora yet); the same tap tries again.
+    let gate: PayoutGate;
+    let snap: CheckoutHost | null = null;
+    try {
+      gate = await gateFor(d, found.operatorId, station);
+      if (
+        gate.ok &&
+        gate.hostId !== null &&
+        typeof station.location_id === "number"
+      )
+        snap = await d.network!.snapshot(
+          found.operatorId,
+          id,
+          station.location_id,
+        );
+    } catch (e) {
+      console.error("cpo-starter-kit: checkout payout check failed", {
+        checkout: id,
+        error: e instanceof Error ? e.name : "error",
+      });
+      throw new CheckoutError(
+        "unavailable",
+        "Card payment can't be checked right now. Try again in a minute. Nothing was charged.",
+      );
+    }
+    logGate(gate, id);
+    if (!gate.ok) throw await fail(hostNotReady(operatorName));
+    // The snapshot must name the host just checked, with an account: a site moved to
+    // another host in between (or an account removed) is refused, never paid to the
+    // wrong account.
+    if (
+      gate.hostId !== null &&
+      (!snap || snap.hostId !== gate.hostId || !snap.payoutAccountId)
+    ) {
+      console.warn("cpo-starter-kit: checkout host changed during the tap", {
+        checkout: id,
+      });
+      throw await fail(hostNotReady(operatorName));
+    }
   }
 
   if (!rec.billId) {
@@ -1120,6 +1226,17 @@ export async function startFreeSession(
       currency: first.r.def.currency,
     });
     rec = (await d.store.get(found.operatorId, id))!;
+    // Network mode: a free session at a host's site counts on the host's statement
+    // (sessions and energy, no money). Recording it never blocks a free start.
+    if (d.network && typeof station.location_id === "number")
+      await d.network
+        .snapshot(found.operatorId, id, station.location_id)
+        .catch((e: unknown) => {
+          console.error("cpo-starter-kit: free session host not recorded", {
+            checkout: id,
+            error: e instanceof Error ? e.name : "error",
+          });
+        });
   }
   const id = rec.id;
 
