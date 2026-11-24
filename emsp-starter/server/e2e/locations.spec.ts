@@ -1,5 +1,4 @@
 import { expect, test } from "@playwright/test";
-import { E2E_ADMIN_SECRET } from "../playwright.config";
 
 // Demo mode: the location API serves the built-in mock CPO's sample data, offline.
 test("demo: the app's location search, detail and price preview", async ({
@@ -55,17 +54,4 @@ test("demo: a CAD location shows CA$ and a CA$ price preview next to the EUR one
     )
   ).json();
   expect(preview.preview.text).toMatch(/^CA\$\d+\.\d{2}$/);
-});
-
-test("demo: pulling locations from a CPO is refused, nothing sent", async ({
-  page,
-}) => {
-  await page.goto("/admin/peers");
-  const sync = page.getByRole("region", { name: "Pull locations and tariffs" });
-  await sync.getByLabel("Peer ID").fill("00000000-0000-4000-8000-000000000000");
-  await sync.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
-  await sync.getByRole("button", { name: "Pull changes" }).click();
-  await expect(sync.getByRole("alert")).toContainText(
-    "Demo mode: refused to pull locations and tariffs from a CPO. Nothing was sent.",
-  );
 });

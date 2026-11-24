@@ -1,7 +1,9 @@
 "use client";
 
-import { TableWrap } from "../table-wrap";
-import { ActionCard } from "../action-card";
+import Link from "next/link";
+import { useState } from "react";
+import { Result, State, Tile, utc } from "../ui/kit";
+import { fields, useAction, useList } from "../ui/use-action";
 import {
   listProblemsAction,
   resolveProblemAction,
@@ -19,71 +21,27 @@ const CATEGORY_TEXT: Record<ProblemRow["category"], string> = {
   other: "Other",
 };
 
-function ProblemTable({ reports }: { reports: ProblemRow[] }) {
-  if (!reports.length) return null;
-  return (
-    <TableWrap label="Problem reports table">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Reported</th>
-            <th scope="col">Status</th>
-            <th scope="col">What</th>
-            <th scope="col">Message</th>
-            <th scope="col">Location / EVSE</th>
-            <th scope="col">Driver</th>
-            <th scope="col">Photo</th>
-            <th scope="col">Report ID</th>
-          </tr>
-        </thead>
-        <tbody>
-          {reports.map((r) => (
-            <tr key={r.id}>
-              <td>{r.createdAt}</td>
-              <td className={r.status === "open" ? "flag" : undefined}>
-                {r.status}
-                {r.resolvedBy && (
-                  <span className="muted"> ({r.resolvedBy})</span>
-                )}
-              </td>
-              <td>{CATEGORY_TEXT[r.category]}</td>
-              <td className="wrap">{r.message}</td>
-              <td>
-                {r.locationName && <>{r.locationName} </>}
-                <code>{r.location}</code>
-                {r.evseUid && (
-                  <>
-                    {" "}
-                    / <code>{r.evseUid}</code>
-                  </>
-                )}
-              </td>
-              <td>
-                <code>{r.driverRef}</code>
-              </td>
-              <td>{r.hasPhoto ? "Yes" : "-"}</td>
-              <td>
-                <code>{r.id}</code>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </TableWrap>
-  );
-}
+const FILTERS = [
+  ["open", "Open"],
+  ["resolved", "Resolved"],
+  ["all", "All"],
+] as const;
+type Filter = (typeof FILTERS)[number][0];
 
-function ReportDetail({ report }: { report: ProblemsState["report"] }) {
-  if (!report) return null;
+function ReportDetail({
+  report,
+}: {
+  report: NonNullable<ProblemsState["report"]>;
+}) {
   return (
-    <>
-      <dl className="facts">
+    <div className="stack tight">
+      <dl className="facts small">
         <dt>Reported</dt>
-        <dd>{report.createdAt}</dd>
+        <dd>{utc(report.createdAt)}</dd>
         <dt>What</dt>
         <dd>{CATEGORY_TEXT[report.category]}</dd>
         <dt>Message</dt>
-        <dd className="wrap">{report.message}</dd>
+        <dd>{report.message}</dd>
         <dt>Location</dt>
         <dd>
           {report.locationName && <>{report.locationName} </>}
@@ -104,10 +62,15 @@ function ReportDetail({ report }: { report: ProblemsState["report"] }) {
         <dt>Status</dt>
         <dd>
           {report.status}
-          {report.resolvedAt && ` (${report.resolvedBy}, ${report.resolvedAt})`}
+          {report.resolvedAt &&
+            ` (${report.resolvedBy}, ${utc(report.resolvedAt)})`}
+        </dd>
+        <dt>Report ID</dt>
+        <dd>
+          <code>{report.id}</code>
         </dd>
       </dl>
-      {report.photo && (
+      {report.photo ? (
         // A data URL the server checked to be a JPEG or PNG; never a remote image.
         // eslint-disable-next-line @next/next/no-img-element
         <img
@@ -115,53 +78,214 @@ function ReportDetail({ report }: { report: ProblemsState["report"] }) {
           alt="The driver's photo of the problem"
           className="report-photo"
         />
+      ) : (
+        <p className="small muted">The driver sent no photo.</p>
+      )}
+    </div>
+  );
+}
+
+/** One report: a row of the table, with its own actions, and its detail when opened. */
+function ReportRow({
+  r,
+  onResolve,
+}: {
+  r: ProblemRow;
+  onResolve: (id: string) => Promise<unknown>;
+}) {
+  const show = useAction(showProblemAction);
+  const [open, setOpen] = useState(false);
+  const [resolving, setResolving] = useState(false);
+  const what = CATEGORY_TEXT[r.category];
+  const where = r.locationName ?? r.location;
+  return (
+    <>
+      <tr>
+        <th scope="row" className="c-main">
+          {what}
+          <span className="sub">{r.message}</span>
+          <span className="sub">
+            {r.locationName && <>{r.locationName} </>}
+            <span className="mono">{r.location}</span>
+            {r.evseUid && (
+              <>
+                {" "}
+                / <span className="mono">{r.evseUid}</span>
+              </>
+            )}
+          </span>
+        </th>
+        <td className="c-kv" data-l="Driver">
+          <span className="mono">{r.driverRef}</span>
+        </td>
+        <td className="c-kv" data-l="Reported">
+          {utc(r.createdAt)}
+        </td>
+        <td className="c-kv" data-l="Photo">
+          {r.hasPhoto ? "Yes" : "No"}
+        </td>
+        <td className="c-state">
+          {r.status === "open" ? (
+            <State kind="todo">Open</State>
+          ) : (
+            <State kind="done">Resolved</State>
+          )}
+          {r.resolvedBy && <span className="sub">{r.resolvedBy}</span>}
+        </td>
+        <td className="c-wide">
+          <span className="row" aria-busy={show.pending || resolving}>
+            <button
+              type="button"
+              className="btn ghost sm"
+              aria-expanded={open}
+              onClick={() => {
+                if (open) return setOpen(false);
+                setOpen(true);
+                void show.run(fields({ reportId: r.id }));
+              }}
+            >
+              {open ? "Hide report" : "Show report"}
+              <span className="sr">
+                : {what}, {where}
+              </span>
+            </button>
+            {r.status === "open" && (
+              <button
+                type="button"
+                className="btn ghost sm"
+                onClick={async () => {
+                  if (resolving) return;
+                  setResolving(true);
+                  try {
+                    await onResolve(r.id);
+                  } finally {
+                    setResolving(false);
+                  }
+                }}
+              >
+                Mark resolved
+                <span className="sr">
+                  : {what}, {where}
+                </span>
+              </button>
+            )}
+          </span>
+        </td>
+      </tr>
+      {open && (
+        <tr>
+          <td className="c-wide" colSpan={6}>
+            {show.pending && !show.state.report ? (
+              <p className="muted" role="status">
+                Loading…
+              </p>
+            ) : show.state.report ? (
+              <ReportDetail report={show.state.report} />
+            ) : (
+              <Result state={show.state} />
+            )}
+          </td>
+        </tr>
       )}
     </>
   );
 }
 
-export function ProblemAdmin() {
+export function ProblemAdmin({ demo }: { demo: boolean }) {
+  const [status, setStatus] = useState<Filter>("open");
+  const list = useList(listProblemsAction, { status });
+  const resolve = useAction(resolveProblemAction);
+  const reports = list.state.reports ?? [];
   return (
-    <>
-      <ActionCard<ProblemsState>
-        id="list"
-        title="Reported problems"
-        action={listProblemsAction}
-        submit={<button type="submit">Show reports</button>}
-        details={(state) => <ProblemTable reports={state.reports ?? []} />}
-      >
-        <label>
-          Status
-          <select name="status" defaultValue="open">
-            <option value="open">Open</option>
-            <option value="resolved">Resolved</option>
-            <option value="all">All</option>
-          </select>
-        </label>
-      </ActionCard>
-      <ActionCard<ProblemsState>
-        id="show"
-        title="Look up a report"
-        action={showProblemAction}
-        submit={<button type="submit">Show report</button>}
-        details={(state) => <ReportDetail report={state.report} />}
-      >
-        <label>
-          Report ID
-          <input name="reportId" maxLength={36} required autoComplete="off" />
-        </label>
-      </ActionCard>
-      <ActionCard<ProblemsState>
-        id="resolve"
-        title="Mark a report resolved"
-        action={resolveProblemAction}
-        submit={<button type="submit">Mark resolved</button>}
-      >
-        <label>
-          Report ID
-          <input name="reportId" maxLength={36} required autoComplete="off" />
-        </label>
-      </ActionCard>
-    </>
+    <div className="stack">
+      <div className="chips" role="group" aria-label="Show">
+        {FILTERS.map(([value, label]) => (
+          <button
+            key={value}
+            className="chip"
+            type="button"
+            aria-pressed={status === value}
+            onClick={() => setStatus(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      <Result state={resolve.state} />
+
+      {list.loading ? (
+        <p className="muted" role="status">
+          Loading…
+        </p>
+      ) : list.state.ok === false ? (
+        <Result state={list.state} />
+      ) : reports.length === 0 ? (
+        <div className="card flat stack">
+          <div className="row">
+            <Tile kind="off" big="0" small="reports" />
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <h2>
+                {status === "open"
+                  ? "No open reports"
+                  : status === "resolved"
+                    ? "No resolved reports"
+                    : "No reports yet"}
+              </h2>
+              <p className="muted">
+                A report appears here the moment a driver sends one from the
+                app.
+              </p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="card tablecard" aria-busy={list.pending}>
+          <table className="data">
+            <caption className="sr">Problem reports, newest first</caption>
+            <thead>
+              <tr>
+                <th scope="col">What and where</th>
+                <th scope="col">Driver</th>
+                <th scope="col">Reported</th>
+                <th scope="col">Photo</th>
+                <th scope="col">State</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reports.map((r) => (
+                <ReportRow
+                  key={r.id}
+                  r={r}
+                  onResolve={async (id) => {
+                    await resolve.run(fields({ reportId: id }));
+                    await list.reload();
+                  }}
+                />
+              ))}
+            </tbody>
+          </table>
+          <div className="foot">
+            <span>{list.state.message}</span>
+          </div>
+        </div>
+      )}
+
+      <div className="msg" role="note">
+        <p>
+          Pass charger faults on to the CPO. Look up payments on{" "}
+          <Link href="/admin/payments">Payments</Link> and the driver on{" "}
+          <Link href="/admin/tokens">Drivers and tokens</Link>. Marking a report
+          resolved records who did it, in the report and the audit log.
+        </p>
+        {demo && (
+          <p>
+            Demo mode: reports are kept in memory only, until the server
+            restarts.
+          </p>
+        )}
+      </div>
+    </div>
   );
 }

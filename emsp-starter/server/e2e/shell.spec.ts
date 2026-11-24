@@ -1,17 +1,106 @@
 import { expect, test } from "@playwright/test";
+import { expectAccessible, goTo, signIn, type Place } from "./support";
 
 // Runs on the desktop and mobile projects (see playwright.config.ts).
-test("demo: admin overview is labelled and shows the OCPI identity", async ({
+test("demo: Setup is labelled, shows the six stops and the OCPI identity", async ({
   page,
 }) => {
   await page.goto("/");
   await expect(
-    page.getByRole("status").filter({ hasText: "Demo" }),
+    page.getByRole("status").filter({ hasText: "Demo" }).first(),
   ).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Overview" })).toBeVisible();
-  await expect(page.getByText("2.2.1")).toBeVisible();
-  await expect(page.getByText("DMO", { exact: true })).toBeVisible();
-  await expect(page).toHaveTitle(/admin$/);
+  await expect(
+    page.getByRole("heading", { name: "Get this network live", level: 1 }),
+  ).toBeVisible();
+  await expect(page).toHaveTitle(/^Setup · /);
+
+  // Demo mode is never called live, and the hero counts only what is confirmed.
+  const hero = page.getByRole("region", { name: "Overall state" });
+  await expect(hero).toContainText("Demo mode: sample data, nothing stored");
+  await expect(page.getByText("Live", { exact: true })).toHaveCount(0);
+
+  const lane = page.getByRole("list", { name: "Setup checklist" });
+  await expect(lane.locator("> li")).toHaveCount(6);
+  // Stop 1 knows its state today: the missing settings, by name only.
+  await expect(lane.locator("#stop-1")).toContainText("Needs you");
+  await expect(lane.locator("#stop-1")).toContainText("is not set");
+  // A stop that needs a server read that does not exist yet says so, with its fix.
+  const database = lane.locator("#stop-2");
+  await expect(database).toContainText("Cannot check from here");
+  if (await database.getByText("Show the fix").isVisible())
+    await database.getByText("Show the fix").click();
+  await expect(database).toContainText("npm run db:migrate");
+
+  const about = page.getByRole("complementary", {
+    name: "About this deployment",
+  });
+  await expect(about).toContainText("OCPI 2.2.1");
+  await expect(about).toContainText("ZZ-DMO");
+
+  // Signed out: a prompt with a link, and no secret field.
+  await expect(
+    page.getByText("Sign in as an admin to check your peers."),
+  ).toBeVisible();
+  await expect(page.getByLabel("Admin secret")).toHaveCount(0);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `setup, signed out, ${colorScheme}`);
+  }
+});
+
+test("demo: Setup checks the peers once an admin is signed in", async ({
+  page,
+}) => {
+  await signIn(page);
+  await goTo(page, "Setup");
+  const peer = page.locator("#stop-6");
+  await expect(peer).toContainText("The mock CPO stands in");
+  await expect(
+    page.getByText("Sign in as an admin to check your peers."),
+  ).toHaveCount(0);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `setup, signed in, ${colorScheme}`);
+  }
+});
+
+test("the menu reaches every place: a rail on desktop, a tab bar and More on a phone", async ({
+  page,
+  isMobile,
+}) => {
+  await page.goto("/");
+  const rail = page.getByRole("navigation", { name: "Admin", exact: true });
+  const tabs = page.getByRole("navigation", { name: "Admin, phone" });
+  await expect(rail).toBeVisible({ visible: !isMobile });
+  await expect(tabs).toBeVisible({ visible: isMobile });
+
+  const places: [Place, string][] = [
+    ["Peers", "Peers"],
+    ["Sessions", "Sessions"],
+    ["Problems", "Problems"],
+    ["Payments", "Payments"],
+    ["Reconciliation", "Reconciliation"],
+    ["Drivers and tokens", "Drivers and tokens"],
+    ["Account", "Sign in"],
+    ["Setup", "Get this network live"],
+  ];
+  for (const [place, heading] of places) {
+    await goTo(page, place);
+    await expect(
+      page.getByRole("heading", { name: heading, level: 1 }),
+    ).toBeVisible();
+    // Every place says where you are, and none asks for a secret.
+    const current = (isMobile ? tabs : rail).locator('[aria-current="page"]');
+    await expect(current.first()).toBeVisible();
+    await expect(page.getByLabel("Admin secret")).toHaveCount(0);
+  }
+  if (isMobile) {
+    // The sheet closes once a link in it is followed.
+    await goTo(page, "Problems");
+    await expect(
+      tabs.getByRole("link", { name: "Reconciliation" }),
+    ).toBeHidden();
+  }
 });
 
 test("demo: status API reports demo mode", async ({ request }) => {
@@ -39,7 +128,7 @@ test("skip link moves focus to the main content", async ({
 
 test("the admin web uses the self-hosted brand fonts", async ({ page }) => {
   await page.goto("/");
-  const heading = page.getByRole("heading", { name: "Overview" });
+  const heading = page.getByRole("heading", { name: "Get this network live" });
   await expect(heading).toBeVisible();
   const family = (l: ReturnType<typeof page.locator>) =>
     l.evaluate((el) => getComputedStyle(el).fontFamily);

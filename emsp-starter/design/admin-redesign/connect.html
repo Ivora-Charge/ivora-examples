@@ -1547,8 +1547,8 @@ code.nw {
   <h2 class="h3">What happens</h2>
   <ol class="steps small">
     <li><p>We read the hub's versions and choose OCPI 2.2.1.</p></li>
-    <li><p>We send our credentials, signed with the one-time token.</p></li>
-    <li><p>The hub answers with a permanent token. Each side stores its own, encrypted. The one-time token is now spent.</p></li>
+    <li><p>Our credentials are sent with the one-time token.</p></li>
+    <li><p>The hub answers with a permanent token. We keep the hub's token encrypted and ours only as a hash. The one-time token is now spent.</p></li>
     <li><p>The hub shows as <strong>Registered</strong>. Nothing flows yet: you accept the parties you trade with next.</p></li>
   </ol>
   <p class="small muted">Which CPOs the hub sends you, and what from them, is a <strong>subscription you set in the hub's own portal</strong>, not here.</p>
@@ -1571,8 +1571,8 @@ code.nw {
   <h2 class="h3">What happens</h2>
   <ol class="steps small">
     <li><p>We read the hub's versions and choose OCPI 2.2.1.</p></li>
-    <li><p>We send our credentials, signed with the one-time token.</p></li>
-    <li><p>The hub answers with a permanent token. Each side stores its own, encrypted. The one-time token is now spent.</p></li>
+    <li><p>Our credentials are sent with the one-time token.</p></li>
+    <li><p>The hub answers with a permanent token. We keep the hub's token encrypted and ours only as a hash. The one-time token is now spent.</p></li>
     <li><p>The hub shows as <strong>Registered</strong>. Nothing flows yet: you accept the parties you trade with next.</p></li>
   </ol>
   <p class="small muted">Which CPOs the hub sends you, and what from them, is a <strong>subscription you set in the hub's own portal</strong>, not here.</p>
@@ -1613,7 +1613,7 @@ code.nw {
   <p class="t"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 9v4.500M12 17h.01"/><path d="M10.3 3.9 2.4 17.500A2 2 0 0 0 4.1 20.500h15.800a2 2 0 0 0 1.7-3L13.7 3.900a2 2 0 0 0-3.4 0z"/></svg><span>The hub refused the one-time token. Nothing was stored on either side.</span></p>
   <p class="label">Usual reasons</p>
         <ul class="bullets">
-          <li><strong>Already used.</strong> The first handshake that reaches the hub spends the token, even one that failed later. If the hub's portal shows this network as registered, ask the hub to reset the registration, then issue a new token.</li>
+          <li><strong>Already used.</strong> The first handshake that reaches the hub may spend the token, even if it failed later. If the hub's portal shows this network as registered, ask the hub to reset the registration, then issue a new token.</li>
           <li><strong>Expired, or from the other environment.</strong> Test and production have different tokens and different versions URLs.</li>
           <li><strong>Copied with a space or a line break</strong> at either end.</li>
         </ul>

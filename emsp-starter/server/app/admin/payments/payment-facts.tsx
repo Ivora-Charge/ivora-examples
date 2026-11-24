@@ -1,7 +1,8 @@
 import { formatMinorAmount } from "@/lib/locations/pricing";
+import { utc } from "../ui/kit";
 import type { PaymentSummary } from "./actions";
 
-const REVIEW_TEXT: Record<string, string> = {
+export const REVIEW_TEXT: Record<string, string> = {
   cdr_above_hold: "CDR above the hold: the hold was captured, the rest was not",
   hold_expired: "The hold expired before the CDR: nothing was charged",
   currency_mismatch:
@@ -43,29 +44,33 @@ export function PaymentFacts({ p }: { p: PaymentSummary }) {
         : null,
     ],
     ["Review", p.review ? (REVIEW_TEXT[p.review] ?? p.review) : null],
-    ["Reviewed", p.reviewedAt],
+    ["Reviewed", p.reviewedAt ? utc(p.reviewedAt) : null],
     ["Stopped", p.stopReason],
     ["Note", p.error || null],
-    ["Created", p.createdAt],
+    ["Created", utc(p.createdAt)],
   ];
   return (
-    <div className="peer">
-      <dl className="facts">
+    <div className="stack tight">
+      <dl className="facts small">
         {rows
           .filter(([, v]) => v !== null && v !== "")
           .map(([k, v]) => (
             <div key={k} style={{ display: "contents" }}>
               <dt>{k}</dt>
               <dd>
-                {k === "Payment" || k === "Charge" ? <code>{v}</code> : v}
+                {k === "Payment" || k === "Charge" || k === "Driver" ? (
+                  <code>{v}</code>
+                ) : (
+                  v
+                )}
               </dd>
             </div>
           ))}
       </dl>
       {p.refunds?.map((r) => (
-        <p key={r.id} className="muted">
+        <p key={r.id} className="small muted">
           Refund {formatMinorAmount(r.amount, p.currency)}: {r.status}
-          {r.reason ? ` (${r.reason})` : ""}, by {r.actor} at {r.createdAt}
+          {r.reason ? ` (${r.reason})` : ""}, by {r.actor} at {utc(r.createdAt)}
         </p>
       ))}
     </div>

@@ -7,7 +7,7 @@ Fork it, brand it in five minutes, and you have:
 - **A driver app** (iOS, Android and the web, from one Expo codebase): a map and list of chargers with live status and prices, passwordless sign-in, start by QR code or charger ID, a live session with stop, cards with Stripe, receipts and history, push notifications, favourites and problem reports. Accessible, in light and dark mode, with every string in a locale file.
 - **An OCPI 2.2.1 eMSP server** (Next.js): any number of CPO peers in both handshake directions, locations and tariffs pulled and received, drivers' tokens pushed to every CPO with real-time authorization, START_SESSION and STOP_SESSION, sessions and CDRs received and pulled, reconciliation per peer and day.
 - **Payments on your own Stripe account:** a card hold before every start, capture from the session's CDR (never above the hold), refunds with a reason, admin review, email receipts.
-- **An admin web** for your team: CPO peers and each module's last pull and error, live and recent sessions, payments and refunds with an audit log, CDR reconciliation with a CSV, drivers and tokens, reported problems. Every error shows its OCPI code and a next step.
+- **An admin web** for your team: a setup checklist with a fix for every stop, peers (CPOs and roaming hubs) and each module's last pull and error, live and recent sessions, payments and refunds with an audit log, CDR reconciliation with a CSV, drivers and tokens, reported problems. Every error shows its OCPI code and a next step.
 - **A demo mode** that runs all of it offline, with no keys, against a built-in mock CPO.
 
 | Folder               | What it is                                                                                                                         |
@@ -28,11 +28,11 @@ All in demo mode. The driver app, **Kilolane**:
 
 The admin web:
 
-| Desktop, light                                                                         | Desktop, dark                                                                                | Phone, dark                                                                              |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
-| ![Sessions, live and recent, light mode](server/docs/admin-sessions-desktop-light.png) | ![CDR reconciliation per peer, dark mode](server/docs/admin-reconciliation-desktop-dark.png) | ![Overview with the OCPI identity, dark mode](server/docs/admin-overview-phone-dark.png) |
+| Desktop, light                                                                         | Desktop, dark                                                                                | Phone, dark                                                                            |
+| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------- |
+| ![Sessions, live and recent, light mode](server/docs/admin-sessions-desktop-light.png) | ![CDR reconciliation per peer, dark mode](server/docs/admin-reconciliation-desktop-dark.png) | ![Setup, the six stops, on a phone, dark mode](server/docs/admin-setup-phone-dark.png) |
 
-More in the [app README](app/README.md) and the [server README](server/README.md#admin-web). A redesign of the admin web is proposed as mockups in [`design/admin-redesign/`](design/admin-redesign/README.md); it is not built yet.
+More in the [app README](app/README.md) and the [server README](server/README.md#admin-web). The admin web is built from the brief and mockups in [`design/admin-redesign/`](design/admin-redesign/README.md).
 
 ## Why two packages
 
@@ -65,7 +65,7 @@ Every secret lives on the server, in `server/.env.local` locally or the host's e
 | Maps              | app    | `EXPO_PUBLIC_MAP_STYLE_URL` (and `_DARK`, `EXPO_PUBLIC_MAP_ATTRIBUTION`, `EXPO_PUBLIC_MAP_ATTRIBUTION_URL`)                 | OpenFreeMap's keyless tiles: free, no uptime guarantee. See [Map](app/README.md#map).         |
 | CPO live data     | server | None: a read-only key per CPO peer, set in the admin web                                                                    | No state of charge or power in the app.                                                       |
 
-Then apply the migrations (`npm run db:migrate` in `server/`), add your first admin, connect your first CPO from **CPO peers**, and try a charge in [Stripe test mode](server/README.md#try-it-in-stripe-test-mode) before you [go live with payments](server/README.md#go-live-with-payments).
+Then apply the migrations (`npm run db:migrate` in `server/`), add your first admin, connect your first CPO or hub from **Peers**, and try a charge in [Stripe test mode](server/README.md#try-it-in-stripe-test-mode) before you [go live with payments](server/README.md#go-live-with-payments).
 
 ## Deploy
 
