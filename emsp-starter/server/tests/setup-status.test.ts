@@ -521,7 +521,10 @@ describe("the setup status read", () => {
     // A refusal alone does not fail the stop: anyone can send one.
     expect(passes(s, T0)[2]).toBe(true);
     // A signed event that failed here, after the last handled one.
-    payments.newestEvent!.receivedAt = new Date(now - 3_600_000).toISOString();
+    // Wall clock on purpose: peers.audit() stamps the entry with the real time.
+    payments.newestEvent!.receivedAt = new Date(
+      Date.now() - 3_600_000,
+    ).toISOString();
     await peers.audit({
       actor: "stripe-webhook",
       action: "webhook.failed",
