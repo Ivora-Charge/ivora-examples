@@ -28,6 +28,11 @@ export type HubParty = {
    */
   source: "admin" | "hubclientinfo" | "credentials";
   name?: string;
+  /**
+   * When the operator accepted it (UTC, ISO 8601): "Trusted since 12 Nov". Kept in the
+   * hub_parties data, so no column. Absent on a party accepted before this was kept.
+   */
+  trustedAt?: string;
 };
 
 /**

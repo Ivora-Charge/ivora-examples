@@ -29,7 +29,7 @@ import {
   type ActionState,
   type PeerSummary,
 } from "../actions";
-import { moduleName, viewOf } from "../peer-view";
+import { inARow, moduleName, sendTheCpo, sinceDay, viewOf } from "../peer-view";
 
 type HubParty = NonNullable<PeerSummary["hub"]>["parties"][number];
 type Send = (
@@ -117,7 +117,7 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
           </h3>
           <p className="meta">
             {p.status === "trusted"
-              ? `Trusted: ${perParty ? "pulled from, sent commands and tokens" : "pulled from and sent commands"}, and what it sends is accepted. ${SOURCE[p.source]}`
+              ? `Trusted${sinceDay(p.trustedAt) ? ` since ${sinceDay(p.trustedAt)}` : ""}: ${perParty ? "pulled from, sent commands and tokens" : "pulled from and sent commands"}, and what it sends is accepted. ${SOURCE[p.source]}`
               : `${SOURCE[p.source]} Not trusted: nothing is pulled from it, no command is sent to it and nothing it sends is accepted.${perParty ? "" : " Tokens still reach it if the hub passes them on."}`}
           </p>
         </div>
@@ -251,7 +251,7 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
 }
 
 /** The last pull of each module, and a failed one's error with its code and next step. */
-function Pulls({ peer }: { peer: PeerSummary }) {
+export function Pulls({ peer }: { peer: PeerSummary }) {
   const sync = peer.sync ?? [];
   if (!sync.length) return <p className="small muted">Nothing to pull yet.</p>;
   return (
@@ -266,7 +266,10 @@ function Pulls({ peer }: { peer: PeerSummary }) {
               ) : m.ok ? (
                 <State kind="ok">{ago(m.lastPullAt)}</State>
               ) : (
-                <State kind="bad">Failed {ago(m.lastPullAt)}</State>
+                <State kind="bad">
+                  Failed {ago(m.lastPullAt)}
+                  {inARow(m) && `, ${inARow(m)}`}
+                </State>
               )}
               {m.ok !== null && ` · ${m.items} stored`}
               {m.invalid > 0 && `, ${m.invalid} invalid skipped`}
@@ -291,7 +294,7 @@ function Pulls({ peer }: { peer: PeerSummary }) {
             kind="bad"
             title={`${moduleName(m.module)}: ${m.error}`}
             code={m.code}
-            nextStep={m.nextStep}
+            nextStep={[m.nextStep, sendTheCpo(m)].filter(Boolean).join(" ")}
           />
         ))}
     </>

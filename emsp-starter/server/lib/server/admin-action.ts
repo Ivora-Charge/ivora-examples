@@ -1,6 +1,11 @@
 import "server-only";
 import { currentAdmin } from "@/lib/accounts/admin-session";
-import { explain, explainMessage, UNEXPECTED } from "@/lib/admin/errors";
+import {
+  explain,
+  explainMessage,
+  UNEXPECTED,
+  type TokenContext,
+} from "@/lib/admin/errors";
 import { adminEnabled } from "./admin";
 import { dropDeadSecretSession, secretSession } from "./admin-secret-session";
 
@@ -63,7 +68,14 @@ export async function asAdmin<T extends AdminResult>(
     shown,
     fallback,
     what,
-  }: { shown: (e: unknown) => boolean; fallback: string; what: string },
+    token,
+  }: {
+    shown: (e: unknown) => boolean;
+    fallback: string;
+    what: string;
+    /** Which token a refusal by a CPO is about (lib/admin/errors.ts). */
+    token?: TokenContext;
+  },
 ): Promise<T | AdminResult> {
   const admin = await currentAdmin();
   if (admin && admin.role !== "admin")
@@ -98,14 +110,14 @@ export async function asAdmin<T extends AdminResult>(
     const result = await fn(admin ? `admin:${admin.userId}` : "admin:secret");
     // A refusal of the action itself (a bad field, an unknown ID) explains itself too.
     if (result.ok === false && !result.code && result.message)
-      return { ...result, ...explainMessage(result.message) };
+      return { ...result, ...explainMessage(result.message, token) };
     return result;
   } catch (e) {
     if (
       e instanceof Error &&
       (shown(e) || ("code" in e && e.code === "demo_mode"))
     )
-      return { ok: false, message: e.message, ...explain(e) };
+      return { ok: false, message: e.message, ...explain(e, token) };
     console.error(
       `Admin ${what} action failed: ${e instanceof Error ? e.name : "unknown error"}`,
     );

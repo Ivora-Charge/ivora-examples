@@ -3,17 +3,22 @@ import { randomUUID } from "node:crypto";
 import { toE4 } from "@/lib/locations/pricing";
 import type { Cdr, Session } from "@/lib/ocpi/session-objects";
 import {
+  DatabaseRequestError,
   eq,
   inList,
+  supabaseRequest,
   supabaseRest,
   type SupabaseTransport,
 } from "@/lib/server/supabase-rest";
-import type {
-  CdrKey,
+import {
+  SESSION_STATUSES,
+  type CdrKey,
   CdrSource,
   NewCdr,
   ReconciliationQuery,
   ReconciliationRow,
+  SessionCountQuery,
+  SessionCounts,
   SessionKey,
   SessionListQuery,
   SessionStore,
@@ -21,6 +26,20 @@ import type {
   StoredCdr,
   StoredSession,
 } from "./store";
+
+/**
+ * Part of a driver reference, session ID, charger or location, any letter case. The
+ * term was checked by `sessionSearchTerm` (letters, digits and . : @ / + - _ only), so
+ * only the underscore means anything in a pattern, and it matches one more character.
+ */
+const searchFilter = (term: string) => {
+  const like = `"*${term}*"`;
+  return `or=${encodeURIComponent(
+    `(${["driver_ref", "session_id", "data->>evse_uid", "data->>location_id"]
+      .map((c) => `${c}.ilike.${like}`)
+      .join(",")})`,
+  )}`;
+};
 
 type SessionRow = {
   id: string;
@@ -124,6 +143,7 @@ const sessionFilter = (k: SessionKey) =>
  */
 export class SupabaseSessionStore implements SessionStore {
   private readonly rest: ReturnType<typeof supabaseRest>;
+  private readonly request: ReturnType<typeof supabaseRequest>;
 
   constructor(
     url: string,
@@ -131,6 +151,7 @@ export class SupabaseSessionStore implements SessionStore {
     transport?: SupabaseTransport,
   ) {
     this.rest = supabaseRest(url, serviceRoleKey, transport);
+    this.request = supabaseRequest(url, serviceRoleKey, transport);
   }
 
   private async sessions(filter: string): Promise<StoredSession[]> {
@@ -266,11 +287,65 @@ export class SupabaseSessionStore implements SessionStore {
     return rows.length > 0;
   }
 
+  /** The peer, driver and search filters, shared by the list and the counts. */
+  private matchFilters(q: SessionCountQuery) {
+    return [
+      q.peerId && `peer_id=${eq(q.peerId)}`,
+      q.driverRef && `driver_ref=${eq(q.driverRef)}`,
+      q.search && searchFilter(q.search),
+    ];
+  }
+
+  /**
+   * One count per status, asked together (the database counts; no row is sent). The
+   * total is their sum, so the numbers on screen always add up.
+   */
+  async countSessions(q: SessionCountQuery): Promise<SessionCounts> {
+    const counts = await Promise.all(
+      SESSION_STATUSES.map(async (status) => {
+        const path = [
+          ...this.matchFilters(q),
+          `status=eq.${status}`,
+          "select=id",
+          "limit=1",
+        ]
+          .filter(Boolean)
+          .join("&");
+        const res = await this.request(
+          "GET",
+          `emsp_sessions?${path}`,
+          undefined,
+          "count=exact",
+        );
+        if (!res.ok)
+          throw new DatabaseRequestError(
+            `Database request failed: GET emsp_sessions (HTTP ${res.status})`,
+            res.status,
+            null,
+          );
+        // Content-Range: "0-0/42", or "*/0" when nothing matches.
+        const n = Number(
+          /\/(\d+)$/.exec(res.headers.get("Content-Range") ?? "")?.[1],
+        );
+        if (!Number.isInteger(n))
+          throw new DatabaseRequestError(
+            "Database request failed: GET emsp_sessions (no count)",
+            res.status,
+            null,
+          );
+        return [status, n] as const;
+      }),
+    );
+    return {
+      total: counts.reduce((a, [, n]) => a + n, 0),
+      byStatus: Object.fromEntries(counts),
+    };
+  }
+
   listSessions(q: SessionListQuery) {
     const filters = [
-      q.peerId && `peer_id=${eq(q.peerId)}`,
+      ...this.matchFilters(q),
       q.statuses && `status=${inList([...q.statuses])}`,
-      q.driverRef && `driver_ref=${eq(q.driverRef)}`,
       q.before && `start_date_time=lt.${encodeURIComponent(q.before)}`,
     ].filter(Boolean);
     return this.sessions(

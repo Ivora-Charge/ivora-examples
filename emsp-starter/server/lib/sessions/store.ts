@@ -129,10 +129,46 @@ export type SessionListQuery = {
   /** Any of these statuses; all when unset. */
   statuses?: readonly string[];
   driverRef?: string;
+  /**
+   * Part of a driver reference, session ID, charger (EVSE UID) or location ID, any
+   * letter case. Use `sessionSearchTerm` to check what the admin typed first.
+   */
+  search?: string;
   /** Only sessions that started before this (exclusive): the next page. */
   before?: string;
   limit: number;
 };
+
+/** The filters a count shares with the list: everything but status, page and size. */
+export type SessionCountQuery = Pick<
+  SessionListQuery,
+  "peerId" | "driverRef" | "search"
+>;
+
+/** How many sessions match, in total and per status (a status with none is 0). */
+export type SessionCounts = {
+  total: number;
+  byStatus: Record<string, number>;
+};
+
+/** Every status a session can have. */
+export const SESSION_STATUSES = [
+  "ACTIVE",
+  "PENDING",
+  "RESERVATION",
+  "COMPLETED",
+  "INVALID",
+] as const;
+
+const SEARCH_TERM = /^[A-Za-z0-9 ._:@/+-]{1,64}$/;
+/**
+ * The search text, trimmed, or null when it is empty or has characters a reference
+ * never has (they would mean something in a database pattern).
+ */
+export function sessionSearchTerm(v: string): string | null {
+  const t = v.trim();
+  return SEARCH_TERM.test(t) ? t : null;
+}
 
 export interface SessionStore {
   getSession(key: SessionKey): Promise<StoredSession | null>;
@@ -169,6 +205,8 @@ export interface SessionStore {
   reconcile(query: ReconciliationQuery): Promise<ReconciliationRow[]>;
   /** Sessions, newest start first. */
   listSessions(query: SessionListQuery): Promise<StoredSession[]>;
+  /** The totals behind the list, in one call. */
+  countSessions(query: SessionCountQuery): Promise<SessionCounts>;
 }
 
 const e4 = (n: number) => Number(toE4(n));
@@ -318,14 +356,40 @@ export class MemorySessionStore implements SessionStore {
       if (s.id === id) Object.assign(s, { stopReason: reason, updatedAt: now });
   }
 
+  private matches(s: StoredSession, q: SessionCountQuery) {
+    const needle = q.search?.toLowerCase();
+    return (
+      (!q.peerId || s.peerId === q.peerId) &&
+      (!q.driverRef || s.driverRef === q.driverRef) &&
+      (!needle ||
+        [
+          s.driverRef,
+          s.session.id,
+          s.session.evse_uid,
+          s.session.location_id,
+        ].some((v) => v?.toLowerCase().includes(needle)))
+    );
+  }
+
+  async countSessions(q: SessionCountQuery): Promise<SessionCounts> {
+    const byStatus: Record<string, number> = Object.fromEntries(
+      SESSION_STATUSES.map((st) => [st, 0]),
+    );
+    for (const s of this.sessions.values())
+      if (this.matches(s, q)) byStatus[s.session.status]++;
+    return {
+      total: Object.values(byStatus).reduce((a, b) => a + b, 0),
+      byStatus,
+    };
+  }
+
   async listSessions(q: SessionListQuery) {
     const before = q.before ? Date.parse(q.before) : Infinity;
     return [...this.sessions.values()]
       .filter(
         (s) =>
-          (!q.peerId || s.peerId === q.peerId) &&
+          this.matches(s, q) &&
           (!q.statuses || q.statuses.includes(s.session.status)) &&
-          (!q.driverRef || s.driverRef === q.driverRef) &&
           dateTimeMs(s.session.start_date_time) < before,
       )
       .sort(

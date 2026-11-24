@@ -11,8 +11,8 @@ import {
 } from "@/app/admin/payments/request-id";
 import type { ActionState, PeerSummary } from "@/app/admin/peers/actions";
 import { Refused } from "@/app/admin/peers/connect/connect";
-import { HubParties, PushMode } from "@/app/admin/peers/[id]/peer-page";
-import { PeerList } from "@/app/admin/peers/peer-list";
+import { HubParties, Pulls, PushMode } from "@/app/admin/peers/[id]/peer-page";
+import { PeerList, PeerRow } from "@/app/admin/peers/peer-list";
 import { moduleName, viewOf } from "@/app/admin/peers/peer-view";
 import { tokenRefused } from "@/app/admin/peers/refused";
 import { FindReport } from "@/app/admin/problems/problem-admin";
@@ -559,6 +559,84 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     expect(each).toContain("Trusted: pulled from, sent commands and tokens");
     expect(each).toContain("send them no command or token and refuse");
     expect(each).not.toContain("Tokens still reach it");
+  });
+
+  it("shows when a party was trusted, where it is known", () => {
+    const withDate = peer({
+      hub: {
+        pushMode: "hub",
+        parties: [
+          {
+            countryCode: "DE",
+            partyId: "RVE",
+            status: "trusted",
+            source: "admin",
+            name: "Riverside EV",
+            trustedAt: "2026-11-12T09:30:00.000Z",
+          },
+          // Accepted before the time was kept: no date, nothing invented.
+          {
+            countryCode: "NL",
+            partyId: "LVP",
+            status: "trusted",
+            source: "admin",
+            name: "Lakeview Power",
+          },
+        ],
+      },
+    });
+    const html = renderToStaticMarkup(
+      createElement(HubParties, { peer: withDate, send: async () => ({}) }),
+    );
+    expect(html).toContain("Trusted since 12 Nov 2026: pulled from");
+    expect(html.match(/Trusted since/g)).toHaveLength(1);
+    expect(html).toContain("Trusted: pulled from");
+  });
+
+  it("shows failed pulls in a row, and the request ID to send the CPO", () => {
+    const failed = peer({
+      parties: ["CPO NL-HSC (Harbour Street Charge)"],
+      sync: [
+        {
+          module: "sessions",
+          lastPullAt: "2026-11-24T14:01:00.000Z",
+          lastFullSyncAt: null,
+          ok: false,
+          items: 0,
+          invalid: 0,
+          running: false,
+          error: "failed with OCPI status 3000",
+          code: "OCPI 3000",
+          nextStep: "Try again later.",
+          failures: 4,
+          requestId: "5b2e0b3c-2d6e-4f65-a8ef-6a8f1c0f9d11",
+        },
+        {
+          module: "cdrs",
+          lastPullAt: "2026-11-24T14:01:00.000Z",
+          lastFullSyncAt: null,
+          ok: false,
+          items: 0,
+          invalid: 0,
+          running: false,
+          error: "failed with OCPI status 3000",
+          code: "OCPI 3000",
+          nextStep: "Try again later.",
+          failures: 1,
+        },
+      ],
+    });
+    const row = renderToStaticMarkup(createElement(PeerRow, { peer: failed }));
+    expect(row).toContain("4 times in a row");
+    expect(row).toContain(
+      "Send the CPO the time and this request ID: 5b2e0b3c-2d6e-4f65-a8ef-6a8f1c0f9d11.",
+    );
+    // A first failure says nothing about "in a row"; no request ID, nothing to send.
+    expect(row.match(/times in a row/g)).toHaveLength(1);
+    expect(row.match(/Send the CPO/g)).toHaveLength(1);
+    const detail = renderToStaticMarkup(createElement(Pulls, { peer: failed }));
+    expect(detail).toContain("4 times in a row");
+    expect(detail).toContain("5b2e0b3c-2d6e-4f65-a8ef-6a8f1c0f9d11");
   });
 
   it("shows the Token pushes card with the hub's mode selected, and sends a change", async () => {

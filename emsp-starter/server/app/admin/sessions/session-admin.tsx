@@ -12,11 +12,11 @@ import {
   type SessionRow,
   type SessionsState,
 } from "./actions";
-import type { STATUS_FILTERS } from "./filters";
+import { OPEN_SESSION_STATUSES, type STATUS_FILTERS } from "./filters";
 
 type Status = (typeof STATUS_FILTERS)[number];
 
-/** The filters as chips, in the reader's words. No counts: the server gives none. */
+/** The filters as chips, in the reader's words; the list's counts go beside them. */
 const CHIPS: [Status, string][] = [
   ["all", "All"],
   ["live", "Live"],
@@ -101,9 +101,25 @@ type Filters = {
   status: Status;
   peerId: string;
   driverRef: string;
+  search: string;
   before: string;
 };
-const NONE: Filters = { status: "all", peerId: "", driverRef: "", before: "" };
+const NONE: Filters = {
+  status: "all",
+  peerId: "",
+  driverRef: "",
+  search: "",
+  before: "",
+};
+
+/** The number beside a chip, from the list's counts. */
+function chipCount(value: Status, c: SessionsState["counts"]): number | null {
+  if (!c) return null;
+  if (value === "all") return c.total;
+  if (value === "live")
+    return OPEN_SESSION_STATUSES.reduce((n, s) => n + (c.byStatus[s] ?? 0), 0);
+  return c.byStatus[value] ?? 0;
+}
 
 export function Sessions() {
   const { signedIn, demo } = useAdmin();
@@ -128,7 +144,9 @@ export function Sessions() {
   );
   const filtered =
     filters.status !== "all" ||
-    Boolean(filters.peerId || filters.driverRef || filters.before);
+    Boolean(
+      filters.peerId || filters.driverRef || filters.search || filters.before,
+    );
 
   const showOlder = async () => {
     if (!nextBefore) return;
@@ -164,6 +182,12 @@ export function Sessions() {
                 onClick={() => setFilters((f) => ({ ...f, status: value }))}
               >
                 {label}
+                {chipCount(value, state.counts) !== null && (
+                  <span className="muted">
+                    {" "}
+                    {chipCount(value, state.counts)}
+                  </span>
+                )}
               </button>
             ))}
           </div>
@@ -175,6 +199,7 @@ export function Sessions() {
                   ...f,
                   peerId: String(form.get("peerId") ?? ""),
                   driverRef: String(form.get("driverRef") ?? "").trim(),
+                  search: String(form.get("search") ?? "").trim(),
                   before: String(form.get("before") ?? "").trim(),
                 }))
               }
@@ -194,6 +219,22 @@ export function Sessions() {
                       </option>
                     ))}
                   </select>
+                </div>
+                <div className="field">
+                  <label htmlFor={`${id}-search`}>Search</label>
+                  <input
+                    id={`${id}-search`}
+                    name="search"
+                    type="search"
+                    maxLength={64}
+                    autoComplete="off"
+                    defaultValue={filters.search}
+                    aria-describedby={`${id}-search-h`}
+                  />
+                  <span className="hint" id={`${id}-search-h`}>
+                    Part of a driver reference, session ID, charger or location
+                    ID.
+                  </span>
                 </div>
                 <div className="field">
                   <label htmlFor={`${id}-driver`}>Driver reference</label>
@@ -295,7 +336,12 @@ export function Sessions() {
               </table>
               <div className="foot">
                 <span role="status">
-                  {rows.length} shown, newest first
+                  {rows.length}
+                  {state.listTotal !== undefined &&
+                  state.listTotal >= rows.length
+                    ? ` of ${state.listTotal}`
+                    : ""}{" "}
+                  shown, newest first
                   {nextBefore ? "; there are older ones" : ""}. Times in UTC.
                 </span>
                 {nextBefore && (

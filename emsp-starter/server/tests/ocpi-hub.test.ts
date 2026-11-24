@@ -464,7 +464,12 @@ describe("trusted parties of a hub", () => {
   it("accepts a party by hand; nothing is built in", async () => {
     const peer = await accept({ countryCode: "zz", partyId: "aaa" });
     expect(peer.hubParties).toEqual([
-      { ...A, status: "trusted", source: "admin" },
+      {
+        ...A,
+        status: "trusted",
+        source: "admin",
+        trustedAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/),
+      },
     ]);
     expect(trustedParties(peer)).toEqual([A]);
     expect(isCpoParty(peer, A)).toBe(true);
@@ -472,6 +477,32 @@ describe("trusted parties of a hub", () => {
     expect(
       (await peers.listAudit(hubPeer.id, 5)).map((a) => a.action),
     ).toContain("ocpi.hub.party_trusted");
+  });
+
+  it("records when a party was accepted, and keeps that when it is accepted again", async () => {
+    const at = (iso: string) => ({ store: peers, now: () => new Date(iso) });
+    await acceptParty(hubPeer.id, A, at("2026-11-12T09:30:00Z"));
+    const first = (await peers.getPeer(hubPeer.id))!.hubParties;
+    expect(first[0].trustedAt).toBe("2026-11-12T09:30:00.000Z");
+    // Accepting a trusted party again (a new name) does not restart its clock.
+    await acceptParty(
+      hubPeer.id,
+      { ...A, name: "Renamed" },
+      at("2026-11-20T00:00:00Z"),
+    );
+    const again = (await peers.getPeer(hubPeer.id))!.hubParties;
+    expect(again).toHaveLength(1);
+    expect(again[0]).toMatchObject({
+      name: "Renamed",
+      trustedAt: "2026-11-12T09:30:00.000Z",
+    });
+    // A party accepted before the time was kept has none, and the list still works.
+    await peers.updatePeer(hubPeer.id, {
+      hubParties: [{ ...A, status: "trusted", source: "admin" }],
+    });
+    const legacy = await peers.getPeer(hubPeer.id);
+    expect(legacy!.hubParties[0].trustedAt).toBeUndefined();
+    expect(trustedParties(legacy!)).toEqual([A]);
   });
 
   it("validates, and refuses our own party, another peer's party and another hub's", async () => {
@@ -701,6 +732,7 @@ describe("trusted parties of a hub", () => {
       status: "trusted",
       source: "hubclientinfo",
       name: "Party A",
+      trustedAt: expect.any(String),
     });
     const list = await listPeersAction({}, as({}));
     const row = list.peers!.find((p) => p.id === hubPeer.id)!;

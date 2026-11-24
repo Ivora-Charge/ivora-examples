@@ -155,6 +155,45 @@ describe("an OCPI error code and a next step on every error", () => {
     });
   });
 
+  it("tells a refused one-time token from a refused permanent token", () => {
+    const refused = new OcpiUnauthorizedError("refused our token (HTTP 401)", {
+      ...request,
+      httpStatus: 401,
+    });
+    const oneTime = explain(refused, "one-time");
+    const permanent = explain(refused, "permanent");
+    // Same code either way; the next step differs.
+    expect(oneTime.code).toBe("HTTP 401");
+    expect(permanent.code).toBe("HTTP 401");
+    expect(oneTime.nextStep).toMatch(/new one-time token/);
+    expect(oneTime.nextStep).not.toMatch(/Rotate/);
+    expect(permanent.nextStep).toMatch(/Rotate tokens.*register again/);
+    expect(permanent.nextStep).not.toMatch(
+      /new one-time token \(Token A\) from/,
+    );
+    // No context: the general next step is unchanged.
+    expect(explain(refused).nextStep).toMatch(
+      /Rotate tokens \(CPO peers\); if/,
+    );
+    // Through a message (handshake and stored pull errors) and a pull error too.
+    const msg =
+      "POST cpo.example.com/ocpi/2.2.1/credentials refused our token (HTTP 403)";
+    expect(explainMessage(msg, "one-time")).toEqual({
+      code: "HTTP 403",
+      nextStep: oneTime.nextStep,
+    });
+    expect(explainMessage(msg, "permanent").nextStep).toBe(permanent.nextStep);
+    expect(
+      explain(new SyncError("Pulling failed", undefined, 401), "permanent"),
+    ).toMatchObject({
+      nextStep: permanent.nextStep,
+    });
+    // Other errors do not change with the context.
+    expect(
+      explain(new OcpiTransportError("timed out", request), "one-time"),
+    ).toEqual(explain(new OcpiTransportError("timed out", request)));
+  });
+
   it("reads the code back from a message, for handshake errors and stored pulls", () => {
     expect(
       explainMessage(
@@ -292,6 +331,41 @@ describe("CPO peers: status, last pull and errors per module", () => {
       nextStep: OCPI_NEXT_STEP[2001],
     });
     expect(by.sessions).toMatchObject({ ok: false, code: "OCPI 3000" });
+    // A registered peer's refused token is the permanent one.
+    await locations.saveSyncState(
+      {
+        peerId: peer.id,
+        module: "tariffs",
+        lastFullSyncAt: null,
+        cursor: null,
+        run: null,
+        lastResult: {
+          ok: false,
+          mode: "full",
+          finishedAt: "2026-10-21T12:00:00.000Z",
+          items: 0,
+          invalid: 0,
+          removed: 0,
+          error:
+            "GET cpo.example.com/ocpi/2.2.1/tariffs refused our token (HTTP 401)",
+          httpStatus: 401,
+          failures: 4,
+          requestId: "5b2e0b3c-2d6e-4f65-a8ef-6a8f1c0f9d11",
+        },
+      },
+      null,
+    );
+    const again = (await listPeersAction({}, form({}))).peers!.find(
+      (p) => p.id === peer.id,
+    )!;
+    expect(again.sync!.find((m) => m.module === "tariffs")).toMatchObject({
+      failures: 4,
+      requestId: "5b2e0b3c-2d6e-4f65-a8ef-6a8f1c0f9d11",
+      nextStep: /Rotate tokens.*register again/,
+    });
+    // No count was kept for these older results: a failure is at least the first.
+    expect(by.cdrs).toMatchObject({ failures: 1 });
+    expect(by.cdrs.requestId).toBeUndefined();
     // Demo mode lists the built-in mock CPO first.
     expect(listed.peers![0]).toMatchObject({ id: DEMO_PEER_ID, demo: true });
   });
@@ -318,6 +392,65 @@ describe("sessions: live and recent, by peer, status and driver", () => {
     setSessionStoreForTests(s);
     return s;
   }
+
+  it("counts per status and in total, and says how many of the list are shown", async () => {
+    store();
+    const live = await listSessionsAction({}, form({}));
+    expect(live.counts).toEqual({
+      total: 3,
+      byStatus: {
+        ACTIVE: 1,
+        PENDING: 0,
+        RESERVATION: 0,
+        COMPLETED: 2,
+        INVALID: 0,
+      },
+    });
+    expect(live.listTotal).toBe(1);
+    expect(live.message).toBe("1 of 1 session(s).");
+    // The chips keep their numbers when one is chosen; the list's total follows it.
+    const done = await listSessionsAction({}, form({ status: "COMPLETED" }));
+    expect(done.counts).toEqual(live.counts);
+    expect(done.listTotal).toBe(2);
+    // The peer filter narrows the counts too.
+    const other = await listSessionsAction(
+      {},
+      form({ status: "all", peerId: OTHER }),
+    );
+    expect(other.counts!.total).toBe(1);
+    expect(other.listTotal).toBe(1);
+  });
+
+  it("searches by driver, charger or session reference on the server", async () => {
+    store();
+    const ids = async (search: string, extra = {}) =>
+      (
+        await listSessionsAction({}, form({ status: "all", search, ...extra }))
+      ).sessions?.map((r) => r.ref.split("/")[2]);
+    // Driver (part of it, any case), session ID, charger and location.
+    expect(await ids("DRIVER-1")).toEqual(["S2"]);
+    expect(await ids("s3")).toEqual(["S3"]);
+    expect(await ids("LOC1-1")).toEqual(["S1"]);
+    expect(await ids("loc2")).toEqual(["S2"]);
+    expect(await ids("nothing like it")).toEqual([]);
+    // It narrows the counts and the list's total, and combines with the other filters.
+    const hit = await listSessionsAction(
+      {},
+      form({ status: "all", search: "LOC" }),
+    );
+    expect(hit.counts!.total).toBe(3);
+    const narrowed = await listSessionsAction(
+      {},
+      form({ status: "all", search: "S2", peerId: OTHER }),
+    );
+    expect(narrowed.sessions).toEqual([]);
+    expect(narrowed.filters).toMatchObject({ search: "S2" });
+    // A term with pattern characters is refused, not passed to the database.
+    for (const bad of ["a%b", 'a"b', "a,b", "x".repeat(65), "a(b"])
+      expect(
+        await listSessionsAction({}, form({ status: "all", search: bad })),
+      ).toMatchObject({ ok: false, message: /Search takes up to 64/ });
+  });
 
   it("shows a session's cost in its own currency, CAD with CA$ and JPY without decimals", async () => {
     const s = new MemorySessionStore();
@@ -420,6 +553,7 @@ describe("sessions: live and recent, by peer, status and driver", () => {
       status: "all",
       peerId: "",
       driverRef: "",
+      search: "",
       before: "",
     });
     expect(first.nextBefore).toBe("2026-09-30T22:21:00.001Z");

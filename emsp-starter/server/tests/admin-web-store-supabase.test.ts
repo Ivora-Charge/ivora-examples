@@ -252,6 +252,11 @@ describe("session list", () => {
         { peerId: B, limit: 100 },
         { driverRef: "driver-2", limit: 100 },
         { before: "2026-09-30T22:00:00Z", limit: 100 },
+        { search: "driver-2", limit: 100 },
+        { search: "P1", limit: 100 },
+        { search: "loc1-1", limit: 100 },
+        { search: "LOC", peerId: A, statuses: ["COMPLETED"], limit: 100 },
+        { search: "no-such-thing", limit: 100 },
       ]) {
         const live = await sessions.listSessions(query);
         // Ties on the start are ordered by our row ID, which differs per store.
@@ -269,6 +274,32 @@ describe("session list", () => {
       ).toEqual(["B1"]);
     },
   );
+});
+
+describe("session counts", () => {
+  it("count per status and in total, like the memory store", async () => {
+    for (const query of [
+      {},
+      { peerId: A },
+      { peerId: B },
+      { driverRef: "driver-2" },
+      { search: "P1" },
+      { search: "loc" },
+      { search: "nope" },
+    ]) {
+      const counts = await sessions.countSessions(query);
+      expect(counts).toEqual(await memSessions.countSessions(query));
+      expect(counts.total).toBe(
+        Object.values(counts.byStatus).reduce((a, b) => a + b, 0),
+      );
+      // The list under the same filters has as many rows as the counts say.
+      expect(
+        (await sessions.listSessions({ ...query, limit: 100 })).length,
+      ).toBe(counts.total);
+    }
+    expect((await sessions.countSessions({})).byStatus.ACTIVE).toBe(1);
+    expect((await sessions.countSessions({ peerId: B })).total).toBe(1);
+  });
 });
 
 describe("audit log read", () => {

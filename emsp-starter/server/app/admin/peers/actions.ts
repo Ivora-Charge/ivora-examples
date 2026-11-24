@@ -7,7 +7,11 @@ import {
   rotateCredentials,
   unregisterPeer,
 } from "@/lib/ocpi/handshake";
-import { explainMessage, explainStatus } from "@/lib/admin/errors";
+import {
+  explainMessage,
+  explainStatus,
+  type TokenContext,
+} from "@/lib/admin/errors";
 import { DEMO_PEER_ID, locationStore } from "@/lib/locations/registry";
 import type { SyncKey, SyncModule, SyncState } from "@/lib/locations/store";
 import {
@@ -40,6 +44,10 @@ export type ModuleSync = {
   ok: boolean | null;
   items: number;
   invalid: number;
+  /** Failed pulls in a row, when the last one failed. */
+  failures?: number;
+  /** The request ID of the last failed pull's request, to give the CPO. */
+  requestId?: string;
   /** A pull is running, or stopped part way (the next pull resumes it). */
   running: boolean;
   error?: string;
@@ -70,8 +78,8 @@ function moduleSync(module: SyncKey, s: SyncState | null): ModuleSync {
   const r = s?.lastResult ?? null;
   const failed = r && !r.ok;
   const help = failed
-    ? (explainStatus(r.statusCode, r.httpStatus) ??
-      explainMessage(r.error ?? ""))
+    ? (explainStatus(r.statusCode, r.httpStatus, "permanent") ??
+      explainMessage(r.error ?? "", "permanent"))
     : null;
   return {
     module,
@@ -81,6 +89,8 @@ function moduleSync(module: SyncKey, s: SyncState | null): ModuleSync {
     items: r?.items ?? 0,
     invalid: r?.invalid ?? 0,
     running: Boolean(s?.run),
+    ...(failed && { failures: r.failures ?? 1 }),
+    ...(failed && r.requestId && { requestId: r.requestId }),
     ...(failed && {
       error: r.error ?? "The pull failed.",
       code: help!.code,
@@ -140,11 +150,13 @@ function summary(p: Peer): PeerSummary {
 function asAdmin(
   form: FormData,
   fn: () => Promise<ActionState>,
+  token: TokenContext = "permanent",
 ): Promise<ActionState> {
   return gate(form, fn, {
     shown: (e) => e instanceof HandshakeError || e instanceof SyncError,
     fallback: "Something went wrong. Check the peer list before trying again.",
     what: "peer",
+    token,
   });
 }
 
@@ -153,21 +165,25 @@ export async function connectPeerAction(
   _prev: ActionState,
   form: FormData,
 ): Promise<ActionState> {
-  return asAdmin(form, async () => {
-    const peer = await connectToCpo(
-      {
-        label: field(form, "label"),
-        versionsUrl: field(form, "versionsUrl"),
-        tokenA: field(form, "tokenA"),
-      },
-      { store: peerStore(), actor: "admin" },
-    );
-    return {
-      ok: true,
-      message: `Registered at ${peer.label}.`,
-      peer: summary(peer),
-    };
-  });
+  return asAdmin(
+    form,
+    async () => {
+      const peer = await connectToCpo(
+        {
+          label: field(form, "label"),
+          versionsUrl: field(form, "versionsUrl"),
+          tokenA: field(form, "tokenA"),
+        },
+        { store: peerStore(), actor: "admin" },
+      );
+      return {
+        ok: true,
+        message: `Registered at ${peer.label}.`,
+        peer: summary(peer),
+      };
+    },
+    "one-time",
+  );
 }
 
 /** A CPO will register with us: issue its Token A. */

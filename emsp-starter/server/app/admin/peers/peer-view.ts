@@ -51,3 +51,28 @@ export function viewOf(p: PeerSummary): PeerView {
     lastPullAt: pulls.at(-1) ?? null,
   };
 }
+
+/** "4 times in a row", or "" for a first failure or an old record without a count. */
+export function inARow(m: Pick<ModuleSync, "failures">): string {
+  return m.failures && m.failures > 1 ? `${m.failures} times in a row` : "";
+}
+
+/** What to send the CPO about a failed pull, with the request ID when one was kept. */
+export function sendTheCpo(m: Pick<ModuleSync, "requestId">): string {
+  return m.requestId
+    ? `Send the CPO the time and this request ID: ${m.requestId}.`
+    : "";
+}
+
+/** "12 Nov 2026" in UTC, or "" when the time is not known (accepted before it was kept). */
+export function sinceDay(iso: string | undefined): string {
+  const ms = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(ms)
+    ? ""
+    : new Date(ms).toLocaleDateString("en-GB", {
+        day: "numeric",
+        month: "short",
+        year: "numeric",
+        timeZone: "UTC",
+      });
+}

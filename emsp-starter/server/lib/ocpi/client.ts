@@ -108,7 +108,15 @@ export async function ocpiRequest(
 
   for (let attempt = 0; ; attempt++) {
     try {
-      return await attemptOnce(req, method, url, what, correlationId, opts);
+      return await attemptOnce(
+        req,
+        method,
+        url,
+        what,
+        correlationId,
+        opts,
+        randomUUID(),
+      );
     } catch (e) {
       if (!(e instanceof Retryable)) throw e;
       if (attempt >= retries) throw e.error;
@@ -125,11 +133,39 @@ async function attemptOnce(
   what: string,
   correlationId: string,
   opts: ClientOptions,
+  requestId: string,
+): Promise<OcpiResult> {
+  try {
+    return await sendOnce(
+      req,
+      method,
+      url,
+      what,
+      correlationId,
+      opts,
+      requestId,
+    );
+  } catch (e) {
+    // Every failure of this attempt names the request ID the peer saw.
+    const failure = e instanceof Retryable ? e.error : e;
+    if (failure instanceof OcpiError) failure.details.requestId ??= requestId;
+    throw e;
+  }
+}
+
+async function sendOnce(
+  req: OcpiRequest,
+  method: string,
+  url: URL,
+  what: string,
+  correlationId: string,
+  opts: ClientOptions,
+  requestId: string,
 ): Promise<OcpiResult> {
   const headers: Record<string, string> = {
     Authorization: authorizationHeader(req.token),
     Accept: "application/json",
-    "X-Request-ID": randomUUID(),
+    "X-Request-ID": requestId,
     "X-Correlation-ID": correlationId,
   };
   if (req.body !== undefined) headers["Content-Type"] = "application/json";
