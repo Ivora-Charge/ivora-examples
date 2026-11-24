@@ -87,8 +87,8 @@ export const signIn = {
       <p class="label">You can ask again in</p>
       <p class="big" data-countdown="2292">38:12</p>
       <p><strong>Whose limit:</strong> this server's. It sends at most 5 codes per email address per hour, so that nobody can flood an inbox.</p>
-      <p><strong>Until then:</strong> the codes already sent still work. Check the spam folder for the newest one.</p>
-      <dl class="help"><dt>Code</dt><dd><code>sign_in_limited</code></dd><dt>Next step</dt><dd>Type a code you already have, or wait until 14:52 and ask once.</dd></dl>
+      <p><strong>Until then:</strong> the newest code still works until it expires. Check the spam folder for it.</p>
+      <dl class="help"><dt>Code</dt><dd><code>sign_in_limited</code></dd><dt>Next step</dt><dd>Type the newest code you have, or wait until 14:52 and ask once.</dd></dl>
     </div>
     <a class="btn wide" href="#code">Type a code I already have</a>
     <a class="btn ghost wide" href="#email">Use another email</a>

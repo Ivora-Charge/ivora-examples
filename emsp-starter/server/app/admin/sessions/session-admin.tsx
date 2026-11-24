@@ -1,140 +1,319 @@
 "use client";
 
-import { TableWrap } from "../table-wrap";
-import { ActionCard } from "../action-card";
+import Link from "next/link";
+import { useEffect, useId, useState } from "react";
+import { listPeersAction } from "../peers/actions";
+import { useAdmin } from "../ui/admin-context";
+import { Head, Icon, Result, State, Tile, utc } from "../ui/kit";
+import { ActionForm, Gated } from "../ui/parts";
+import { fields, useAction, useList } from "../ui/use-action";
 import {
   listSessionsAction,
   type SessionRow,
   type SessionsState,
 } from "./actions";
-import { STATUS_FILTERS } from "./filters";
+import type { STATUS_FILTERS } from "./filters";
 
-const STATUS_TEXT: Record<(typeof STATUS_FILTERS)[number], string> = {
-  live: "Live (active, pending or reserved)",
-  all: "All",
-  ACTIVE: "Active",
-  PENDING: "Pending",
-  RESERVATION: "Reservation",
-  COMPLETED: "Completed",
-  INVALID: "Invalid",
-};
+type Status = (typeof STATUS_FILTERS)[number];
 
-function SessionTable({ sessions }: { sessions: SessionRow[] }) {
-  if (!sessions.length) return null;
+/** The filters as chips, in the reader's words. No counts: the server gives none. */
+const CHIPS: [Status, string][] = [
+  ["all", "All"],
+  ["live", "Live"],
+  ["ACTIVE", "Charging now"],
+  ["PENDING", "Starting"],
+  ["RESERVATION", "Reserved"],
+  ["INVALID", "Needs a look"],
+  ["COMPLETED", "Finished"],
+];
+
+const STATE: Record<string, ["ok" | "todo" | "bad" | "done" | "off", string]> =
+  {
+    ACTIVE: ["ok", "Charging"],
+    PENDING: ["todo", "Starting"],
+    RESERVATION: ["todo", "Reserved"],
+    COMPLETED: ["done", "Finished"],
+    INVALID: ["bad", "Needs a look"],
+  };
+
+/** A UTC time that breaks only between its day and its time. */
+function When({ iso }: { iso: string }) {
+  const [day, ...time] = utc(iso).split(" ");
   return (
-    <TableWrap label="Sessions table">
-      <table>
-        <thead>
-          <tr>
-            <th scope="col">Started</th>
-            <th scope="col">Status</th>
-            <th scope="col">CPO</th>
-            <th scope="col">Session</th>
-            <th scope="col" className="num">
-              kWh
-            </th>
-            <th scope="col">Cost (CPO)</th>
-            <th scope="col">Location / EVSE / connector</th>
-            <th scope="col">Driver</th>
-            <th scope="col">Charge ID</th>
-            <th scope="col">Ended</th>
-          </tr>
-        </thead>
-        <tbody>
-          {sessions.map((s) => (
-            <tr key={s.id}>
-              <td>{s.start}</td>
-              <td className={s.status === "INVALID" ? "flag" : undefined}>
-                {s.status}
-                {s.stopReason && (
-                  <span className="muted"> (stopped: {s.stopReason})</span>
-                )}
-              </td>
-              <td>{s.peer}</td>
-              <td>
-                <code>{s.ref}</code>
-              </td>
-              <td className="num">{s.kwh}</td>
-              <td>{s.cost ?? "-"}</td>
-              <td>{s.location}</td>
-              <td>
-                {s.driverRef ?? <span className="muted">not our token</span>}
-              </td>
-              <td>{s.commandId ? <code>{s.commandId}</code> : "-"}</td>
-              <td>{s.end ?? "-"}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </TableWrap>
+    <>
+      <span className="nw">{day}</span>{" "}
+      <span className="nw">{time.join(" ")}</span>
+    </>
   );
 }
 
-export function SessionAdmin() {
+function Row({ s }: { s: SessionRow }) {
+  const [kind, word] = STATE[s.status] ?? ["off", s.status];
+  // "12.50 EUR excl. VAT, 15.00 incl.", as the CPO gave it: one amount per line.
+  const [cost, inclVat] = s.cost ? s.cost.split(/, (?=[^,]*$)/) : [null];
   return (
-    <ActionCard<SessionsState>
-      id="list"
-      title="Live and recent sessions"
-      action={listSessionsAction}
-      submit={(state) => (
-        <>
-          <button type="submit">Show sessions</button>
-          {state.nextBefore && (
-            <button type="submit" name="older" value={state.nextBefore}>
-              Show older sessions
-            </button>
+    <tr>
+      <th scope="row" className="c-main">
+        {s.location}
+        <span className="sub mono">{s.ref}</span>
+      </th>
+      <td className="c-kv" data-l="Peer">
+        {s.peer}
+      </td>
+      <td className="c-kv" data-l="Driver">
+        {s.driverRef ? (
+          <span className="mono">{s.driverRef}</span>
+        ) : (
+          <span className="muted">not our token</span>
+        )}
+      </td>
+      <td className="c-kv" data-l="Started">
+        <span>
+          <When iso={s.start} />
+          {s.end && (
+            <span className="sub">
+              ended <When iso={s.end} />
+            </span>
           )}
-        </>
-      )}
-      details={(state) => <SessionTable sessions={state.sessions ?? []} />}
-    >
-      {(state) => {
-        // The form resets after each list; it keeps the filters of the last one.
-        const f = state.filters;
-        return (
-          <div key={JSON.stringify(f ?? {})} style={{ display: "contents" }}>
-            <label>
-              Status
-              <select name="status" defaultValue={f?.status ?? "live"}>
-                {STATUS_FILTERS.map((s) => (
-                  <option key={s} value={s}>
-                    {STATUS_TEXT[s]}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Peer ID (optional)
-              <input
-                name="peerId"
-                maxLength={36}
-                autoComplete="off"
-                defaultValue={f?.peerId}
-              />
-            </label>
-            <label>
-              Driver reference (optional)
-              <input
-                name="driverRef"
-                maxLength={64}
-                autoComplete="off"
-                defaultValue={f?.driverRef}
-              />
-            </label>
-            <label>
-              Started before (optional)
-              <input
-                name="before"
-                maxLength={24}
-                autoComplete="off"
-                placeholder="2026-10-01 or 2026-10-01T06:00:00Z"
-                defaultValue={f?.before}
-              />
-              <span className="muted">A UTC day or timestamp.</span>
-            </label>
+        </span>
+      </td>
+      <td className="c-kv num" data-l="Energy">
+        {s.kwh} kWh
+      </td>
+      <td className="c-big num">
+        {cost ?? <span className="muted">not yet</span>}
+        {inclVat && <span className="sub">{inclVat}</span>}
+        {s.commandId && (
+          <span className="sub">
+            charge <span className="mono">{s.commandId}</span>
+          </span>
+        )}
+      </td>
+      <td className="c-state">
+        <State kind={kind}>{word}</State>
+        {s.stopReason && <span className="sub">stopped: {s.stopReason}</span>}
+      </td>
+    </tr>
+  );
+}
+
+type Filters = {
+  status: Status;
+  peerId: string;
+  driverRef: string;
+  before: string;
+};
+const NONE: Filters = { status: "all", peerId: "", driverRef: "", before: "" };
+
+export function Sessions() {
+  const { signedIn, demo } = useAdmin();
+  const id = useId();
+  const [filters, setFilters] = useState<Filters>(NONE);
+  // The list is the page: it opens by itself and again on every change of a filter.
+  const list = useList(listSessionsAction, filters);
+  const older = useAction(listSessionsAction);
+  const peers = useList(listPeersAction);
+  // Pages of older sessions, added under the first one.
+  const [more, setMore] = useState<SessionRow[]>([]);
+  const [nextBefore, setNextBefore] = useState<string | undefined>();
+  const state: SessionsState = list.state;
+  useEffect(() => {
+    setMore([]);
+    setNextBefore(state.nextBefore);
+  }, [state]);
+
+  const seen = new Set<string>();
+  const rows = [...(state.sessions ?? []), ...more].filter((s) =>
+    seen.has(s.id) ? false : (seen.add(s.id), true),
+  );
+  const filtered =
+    filters.status !== "all" ||
+    Boolean(filters.peerId || filters.driverRef || filters.before);
+
+  const showOlder = async () => {
+    if (!nextBefore) return;
+    const r = await older.run(fields({ ...filters, older: nextBefore }));
+    if (r.ok && r.sessions) {
+      setMore((m) => [...m, ...r.sessions!]);
+      setNextBefore(r.nextBefore);
+    }
+  };
+
+  return (
+    <>
+      <Head
+        crumbs={["Charging"]}
+        title="Sessions"
+        lead="Every charge from every peer, newest first, as the CPO last described it. The list opens by itself: there is nothing to press first."
+      />
+      <Gated what="see sessions">
+        <div className="stack">
+          {demo && (
+            <p className="muted">
+              Demo mode: the sessions are the mock CPO&apos;s samples, kept in
+              memory.
+            </p>
+          )}
+          <div className="chips" role="group" aria-label="Show">
+            {CHIPS.map(([value, label]) => (
+              <button
+                key={value}
+                className="chip"
+                type="button"
+                aria-pressed={filters.status === value}
+                onClick={() => setFilters((f) => ({ ...f, status: value }))}
+              >
+                {label}
+              </button>
+            ))}
           </div>
-        );
-      }}
-    </ActionCard>
+          <details className="fold">
+            <summary>More filters</summary>
+            <ActionForm
+              onSend={async (form) =>
+                setFilters((f) => ({
+                  ...f,
+                  peerId: String(form.get("peerId") ?? ""),
+                  driverRef: String(form.get("driverRef") ?? "").trim(),
+                  before: String(form.get("before") ?? "").trim(),
+                }))
+              }
+            >
+              <div className="fields">
+                <div className="field">
+                  <label htmlFor={`${id}-peer`}>Peer</label>
+                  <select
+                    id={`${id}-peer`}
+                    name="peerId"
+                    defaultValue={filters.peerId}
+                  >
+                    <option value="">Every peer</option>
+                    {peers.state.peers?.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="field">
+                  <label htmlFor={`${id}-driver`}>Driver reference</label>
+                  <input
+                    id={`${id}-driver`}
+                    name="driverRef"
+                    maxLength={64}
+                    autoComplete="off"
+                    aria-describedby={`${id}-driver-h`}
+                  />
+                  <span className="hint" id={`${id}-driver-h`}>
+                    The whole reference, exactly.
+                  </span>
+                </div>
+                <div className="field">
+                  <label htmlFor={`${id}-before`}>Started before</label>
+                  <input
+                    id={`${id}-before`}
+                    name="before"
+                    maxLength={24}
+                    autoComplete="off"
+                    placeholder="2026-10-01"
+                    aria-describedby={`${id}-before-h`}
+                  />
+                  <span className="hint" id={`${id}-before-h`}>
+                    A UTC day (2026-10-01) or timestamp (2026-10-01T06:00:00Z).
+                  </span>
+                </div>
+              </div>
+              <div className="row">
+                <button className="btn ghost sm" type="submit">
+                  Apply filters
+                </button>
+                {signedIn && filtered && (
+                  <button
+                    className="btn ghost sm"
+                    type="reset"
+                    onClick={() => setFilters(NONE)}
+                  >
+                    Clear all filters
+                  </button>
+                )}
+              </div>
+            </ActionForm>
+          </details>
+
+          {list.loading && (
+            <p className="muted" role="status">
+              Loading…
+            </p>
+          )}
+          {list.done && !state.ok && <Result state={state} />}
+          {state.ok && rows.length === 0 && (
+            <div className="card flat stack">
+              <div className="row">
+                <Tile kind="off" big="0" />
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <h2>{filtered ? "No sessions match" : "No sessions yet"}</h2>
+                  <p className="muted">
+                    {filtered
+                      ? "No session fits these filters. Choose All, or clear the other filters."
+                      : "A session appears here the moment a driver starts a charge, or a CPO sends one. Sessions older than the first peer are not fetched."}
+                  </p>
+                </div>
+              </div>
+              {!filtered && (
+                <div>
+                  <Link className="btn ghost" href="/admin/peers">
+                    See peers
+                  </Link>
+                </div>
+              )}
+            </div>
+          )}
+          {state.ok && rows.length > 0 && (
+            <div className="card tablecard" aria-busy={list.pending}>
+              <table className="data sessions">
+                <caption className="sr">Sessions, newest first</caption>
+                <thead>
+                  <tr>
+                    <th scope="col">Location and reference</th>
+                    <th scope="col">Peer</th>
+                    <th scope="col">Driver</th>
+                    <th scope="col">Started</th>
+                    <th scope="col" className="num">
+                      Energy
+                    </th>
+                    <th scope="col" className="num">
+                      Cost (CPO)
+                    </th>
+                    <th scope="col">State</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((s) => (
+                    <Row key={s.id} s={s} />
+                  ))}
+                </tbody>
+              </table>
+              <div className="foot">
+                <span role="status">
+                  {rows.length} shown, newest first
+                  {nextBefore ? "; there are older ones" : ""}. Times in UTC.
+                </span>
+                {nextBefore && (
+                  <button
+                    className="btn ghost sm"
+                    type="button"
+                    aria-disabled={older.pending}
+                    onClick={showOlder}
+                  >
+                    Show older <Icon name="arrow" />
+                  </button>
+                )}
+              </div>
+              {older.done && !older.state.ok && <Result state={older.state} />}
+            </div>
+          )}
+        </div>
+      </Gated>
+    </>
   );
 }

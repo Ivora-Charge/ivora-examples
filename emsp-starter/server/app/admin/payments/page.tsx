@@ -1,38 +1,38 @@
 import type { Metadata } from "next";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { forEmailAdmin } from "../ui/for-admin";
+import { Head } from "../ui/kit";
+import { Gated } from "../ui/parts";
 import { PaymentAdmin } from "./payment-admin";
 
-export const metadata: Metadata = { title: "Payments and refunds" };
+export const metadata: Metadata = { title: "Payments" };
 
-export default function PaymentsPage() {
-  const demo = isDemo();
+const ID = /^[0-9a-f-]{36}$/i;
+
+export default async function PaymentsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ find?: string | string[] }>;
+}) {
+  // A link from another page (a flagged payment on Reconciliation) names the payment.
+  const { find } = await searchParams;
+  // Whether the key is set, never the key; and only for an admin signed in by email.
+  const stripeSet = await forEmailAdmin(() => Boolean(config.stripeSecretKey));
   return (
     <>
-      <h1>Payments and refunds</h1>
-      <section className="card" aria-labelledby="about">
-        <h2 id="about">How drivers pay</h2>
-        <p>
-          Before every app start, the driver&apos;s saved card is held for a set
-          amount. The session&apos;s CDR then captures its total incl. VAT,
-          never more than the hold. Anything the rules cannot settle (a CDR
-          above the hold, a hold that expired, another currency) waits here for
-          a person, and is never charged automatically.
-        </p>
-        {demo ? (
-          <p className="note">
-            Demo mode: no card is charged and nothing is sent to Stripe.
-          </p>
-        ) : (
-          !config.stripeSecretKey && (
-            <p className="note">
-              Payments are not set up: set <code>STRIPE_SECRET_KEY</code>. Until
-              then every app start is refused.
-            </p>
-          )
-        )}
-      </section>
-      <PaymentAdmin />
+      <Head
+        crumbs={["Money"]}
+        title="Payments"
+        lead="A card hold before every app start, captured from the session's CDR and never above the hold. What the rules cannot settle waits here for a person, and is never charged automatically."
+      />
+      <Gated what="see payments">
+        <PaymentAdmin
+          demo={isDemo()}
+          stripeSet={stripeSet}
+          find={typeof find === "string" && ID.test(find) ? find : undefined}
+        />
+      </Gated>
     </>
   );
 }

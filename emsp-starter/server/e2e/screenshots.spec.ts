@@ -1,80 +1,122 @@
-import { expect, test, type Locator, type Page } from "@playwright/test";
-import { E2E_ADMIN_SECRET } from "../playwright.config";
+import { expect, test, type Page } from "@playwright/test";
+import { goTo, signIn, type Place } from "./support";
 
 /**
  * The READMEs' admin screenshots, on demand only: SCREENSHOT=1 npm run test:e2e --
  * screenshots. Demo mode, offline: docs/admin-<page>-<desktop|phone>-<light|dark>.png,
- * the whole page on desktop and the screen, scrolled to the result, on a phone.
+ * the whole page on desktop and the screen on a phone.
  */
 test.skip(!process.env.SCREENSHOT, "only with SCREENSHOT=1");
 // Chromium sometimes fails the first capture of a cold server; a picture is safe to retake.
 test.describe.configure({ retries: 2 });
 
-/** Scrolls the result near the top of the screen, with its button above it. */
-const top = (l: Locator) =>
-  l.evaluate((el) => {
-    el.scrollIntoView({ block: "start" });
-    window.scrollBy(0, -88);
-  });
+/** Signed in with the demo's admin secret, on a place of the menu, with its list open. */
+const at =
+  (place: Place, ready: (page: Page) => Promise<void>) =>
+  async (page: Page) => {
+    await signIn(page);
+    await goTo(page, place);
+    await ready(page);
+  };
 
-const PAGES: [string, string, (page: Page) => Promise<void>][] = [
+const PAGES: [string, (page: Page) => Promise<void>][] = [
   [
-    "overview",
-    "/",
+    "setup",
+    at("Setup", async (page) => {
+      await expect(page.locator("#stop-6")).toContainText("mock CPO");
+    }),
+  ],
+  [
+    "sign-in",
     async (page) => {
-      await expect(page.getByText("DMO", { exact: true })).toBeVisible();
+      await page.goto("/admin/sign-in");
+      await page.getByLabel("Email").fill("ana@example.com");
+      await page.getByRole("button", { name: "Email me a code" }).click();
+      await expect(page.getByLabel("6-digit code")).toBeVisible();
+    },
+  ],
+  [
+    "signed-out",
+    async (page) => {
+      await page.goto("/admin/peers");
+      await expect(
+        page.getByRole("heading", { name: /^Sign in as an admin/ }),
+      ).toBeVisible();
     },
   ],
   [
     "peers",
-    "/admin/peers",
-    async (page) => {
-      const list = page.getByRole("region", { name: "Peers and their status" });
-      await list.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
-      await list.getByRole("button", { name: "Show peers" }).click();
-      await expect(list).toContainText("Mock CPO (demo, built in)");
-      await top(list.getByRole("status"));
-    },
+    at("Peers", async (page) => {
+      await expect(page.getByRole("list", { name: "Peers" })).toContainText(
+        "Mock CPO",
+      );
+    }),
+  ],
+  [
+    "connect",
+    at("Peers", async (page) => {
+      await page.getByRole("link", { name: "Connect a peer" }).click();
+      await page
+        .getByRole("button", { name: /A roaming hub gave me a one-time token/ })
+        .click();
+      await expect(page.getByLabel("One-time token")).toBeVisible();
+    }),
   ],
   [
     "sessions",
-    "/admin/sessions",
-    async (page) => {
-      const list = page.getByRole("region", {
-        name: "Live and recent sessions",
-      });
-      await list.getByLabel("Status").selectOption("all");
-      await list.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
-      await list.getByRole("button", { name: "Show sessions" }).click();
-      await expect(list.getByRole("status")).toContainText("session(s)");
-      await top(list.getByRole("status"));
-    },
+    at("Sessions", async (page) => {
+      await expect(page.locator("table.data tbody tr")).toHaveCount(3);
+    }),
+  ],
+  [
+    "problems",
+    at("Problems", async (page) => {
+      await expect(
+        page.getByRole("group", { name: "Show" }).getByRole("button").first(),
+      ).toBeVisible();
+      await expect(page.getByText("Loading…")).toHaveCount(0);
+    }),
+  ],
+  [
+    "payments",
+    at("Payments", async (page) => {
+      await expect(
+        page.getByRole("region", { name: "To review" }).getByRole("status"),
+      ).toBeVisible();
+    }),
   ],
   [
     "reconciliation",
-    "/admin/reconciliation",
-    async (page) => {
-      const card = page.getByRole("region", { name: "Reconcile" });
-      await card.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
-      await card.getByRole("button", { name: "Reconcile" }).click();
-      await expect(card.getByRole("status")).toContainText("mismatch(es)");
-      await top(card.getByRole("status"));
-    },
+    at("Reconciliation", async (page) => {
+      await expect(
+        page.getByRole("region", { name: "Mismatches" }),
+      ).toBeVisible();
+    }),
+  ],
+  [
+    "drivers",
+    at("Drivers and tokens", async (page) => {
+      await page.getByLabel("Driver reference").fill("demo-driver");
+      await page.getByRole("button", { name: "Find driver" }).click();
+      await expect(page.getByRole("region", { name: "Tokens" })).toContainText(
+        "token(s)",
+      );
+    }),
   ],
 ];
 
 for (const scheme of ["light", "dark"] as const)
-  for (const [name, path, show] of PAGES)
+  for (const [name, show] of PAGES)
     test(`screenshot: admin ${name}, ${scheme}`, async ({ page }, info) => {
       await page.emulateMedia({ colorScheme: scheme });
-      await page.goto(path);
       await show(page);
+      await page.evaluate(() => document.fonts.ready);
       // No focus ring or caret on the picture.
       await page.evaluate(() =>
         (document.activeElement as HTMLElement)?.blur(),
       );
+      await page.evaluate(() => window.scrollTo(0, 0));
       const device = info.project.name === "mobile" ? "phone" : "desktop";
-      // Desktop pages end just below their result: show the whole page there.
       await page.screenshot({
         path: `docs/admin-${name}-${device}-${scheme}.png`,
         fullPage: device === "desktop",

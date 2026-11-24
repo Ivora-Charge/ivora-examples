@@ -119,8 +119,8 @@ const next = `
   <h2 class="h3">What happens</h2>
   <ol class="steps small">
     <li><p>We read the hub's versions and choose OCPI 2.2.1.</p></li>
-    <li><p>We send our credentials, signed with the one-time token.</p></li>
-    <li><p>The hub answers with a permanent token. Each side stores its own, encrypted. The one-time token is now spent.</p></li>
+    <li><p>Our credentials are sent with the one-time token.</p></li>
+    <li><p>The hub answers with a permanent token. We keep the hub's token encrypted and ours only as a hash. The one-time token is now spent.</p></li>
     <li><p>The hub shows as <strong>Registered</strong>. Nothing flows yet: you accept the parties you trade with next.</p></li>
   </ol>
   <p class="small muted">Which CPOs the hub sends you, and what from them, is a <strong>subscription you set in the hub's own portal</strong>, not here.</p>
@@ -210,7 +210,7 @@ export const connect = {
           next: "Get a new one-time token in the hub's portal and paste it below. Rotating tokens does not help here: there is no registration to rotate yet.",
           body: `<p class="label">Usual reasons</p>
         <ul class="bullets">
-          <li><strong>Already used.</strong> The first handshake that reaches the hub spends the token, even one that failed later. If the hub's portal shows this network as registered, ask the hub to reset the registration, then issue a new token.</li>
+          <li><strong>Already used.</strong> The first handshake that reaches the hub may spend the token, even if it failed later. If the hub's portal shows this network as registered, ask the hub to reset the registration, then issue a new token.</li>
           <li><strong>Expired, or from the other environment.</strong> Test and production have different tokens and different versions URLs.</li>
           <li><strong>Copied with a space or a line break</strong> at either end.</li>
         </ul>`,
@@ -231,7 +231,7 @@ const party = ({ kind, big, small, name, id, meta, trusted, show }) => `
 <li class="item acts"${show ? ` data-show="${show}"` : ""}>
   ${tile(kind, big, small)}
   <div class="what"><h3>${name} <span class="mono muted">${id}</span></h3><p class="meta">${meta}</p></div>
-  <span class="end">${trusted ? `<button class="btn danger sm" type="button">Remove<span class="sr"> ${name}</span></button>` : `<button class="btn sm" type="button" data-go="trusted">Accept<span class="sr"> ${name}</span></button>`}</span>
+  <span class="end">${trusted ? `<button class="btn danger sm" type="button" aria-disabled="true" title="Not in this mockup">Remove<span class="sr"> ${name}</span></button>` : `<button class="btn sm" type="button" data-go="trusted">Accept<span class="sr"> ${name}</span></button>`}</span>
 </li>`;
 
 const P = {
@@ -280,7 +280,7 @@ ${head(['<a href="peers.html">Network</a>', '<a href="peers.html">Peers</a>'], '
     <section class="stack" aria-labelledby="offered-h">
       <div class="row between">
         <h2 id="offered-h">Offered <span class="muted" data-show="trusted">3</span><span class="muted" data-show="offered">5</span></h2>
-        <button class="btn ghost sm" type="button">${icon("refresh")}Read the hub's list again</button>
+        <button class="btn ghost sm" type="button" aria-disabled="true" title="Not in this mockup">${icon("refresh")}Read the hub's list again</button>
       </div>
       <p class="muted">The hub lists these CPOs. Offered is not trusted: we send them nothing and refuse what arrives in their name until you accept.</p>
       <ul class="list">
@@ -295,7 +295,7 @@ ${head(['<a href="peers.html">Network</a>', '<a href="peers.html">Peers</a>'], '
             <div class="field" style="width:7rem"><label for="pid">Party ID</label><input id="pid" maxlength="3" placeholder="ABC"></div>
             <div class="field" style="flex:1;min-width:10rem"><label for="pname">Name (optional)</label><input id="pname" maxlength="100"></div>
           </div>
-          <div><button class="btn sm" type="submit">Accept this party</button></div>
+          <div><button class="btn sm" type="submit" aria-disabled="true" title="Not in this mockup">Accept this party</button></div>
         </form>
       </details>
     </section>
@@ -325,14 +325,14 @@ ${head(['<a href="peers.html">Network</a>', '<a href="peers.html">Peers</a>'], '
         <dt>Sessions</dt><dd>${state("ok", "1 min ago")}</dd>
         <dt>CDRs</dt><dd>${state("ok", "1 min ago")}</dd>
       </dl>
-      <button class="btn ghost sm" type="button">${icon("refresh")}Pull changes now</button>
+      <button class="btn ghost sm" type="button" aria-disabled="true" title="Not in this mockup">${icon("refresh")}Pull changes now</button>
     </section>
     <section class="card stack">
       <h2 class="h3">Tokens and removal</h2>
       <p class="small muted">Rotating swaps both permanent tokens for new ones. Do it after a leak or on your own schedule. It does not repair a refused one-time token.</p>
       <div class="row">
-        <button class="btn ghost sm" type="button">Rotate tokens</button>
-        <button class="btn danger sm" type="button">Unregister</button>
+        <button class="btn ghost sm" type="button" aria-disabled="true" title="Not in this mockup">Rotate tokens</button>
+        <button class="btn danger sm" type="button" aria-disabled="true" title="Not in this mockup">Unregister</button>
       </div>
     </section>
   </aside>

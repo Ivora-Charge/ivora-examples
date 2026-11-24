@@ -1,12 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import Link from "next/link";
 import type { ReactNode } from "react";
 import { brand, cssVariables } from "@/brand";
 import { fontFamilies } from "@/brand/fonts";
+import { requestAdmin } from "./admin/ui/current-admin";
 import { isDemo } from "@/lib/server/demo";
+import { AdminProvider } from "./admin/ui/admin-context";
+import { Shell } from "./admin/ui/shell";
 import "./globals.css";
 
-// Demo mode comes from the server environment at request time.
+// Demo mode and who is signed in come from the server at request time.
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
@@ -15,13 +17,25 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: brand.color.background,
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: brand.color.background },
+    {
+      media: "(prefers-color-scheme: dark)",
+      color: brand.colorDark.background,
+    },
+  ],
   width: "device-width",
   initialScale: 1,
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
   const demo = isDemo();
+  // Only who is signed in reaches the page: the email and role, never the token.
+  const admin = await requestAdmin();
   return (
     <html lang="en">
       <head>
@@ -30,9 +44,11 @@ export default function RootLayout({ children }: { children: ReactNode }) {
         <style>{cssVariables(brand, fontFamilies)}</style>
       </head>
       <body>
-        <a className="skip" href="#main">
-          Skip to content
-        </a>
+        <nav aria-label="Skip">
+          <a className="skip" href="#main">
+            Skip to content
+          </a>
+        </nav>
         {demo && (
           <p className="demo-banner" role="status">
             <strong>Demo</strong> Sample data from a built-in mock CPO. No card
@@ -40,23 +56,12 @@ export default function RootLayout({ children }: { children: ReactNode }) {
             email or push service.
           </p>
         )}
-        <header className="topbar">
-          <span className="brand">{brand.name}</span>
-          <span className="muted">Admin</span>
-          <nav aria-label="Admin" className="nav">
-            <Link href="/">Overview</Link>
-            <Link href="/admin/peers">CPO peers</Link>
-            <Link href="/admin/sessions">Sessions</Link>
-            <Link href="/admin/payments">Payments and refunds</Link>
-            <Link href="/admin/reconciliation">Reconciliation</Link>
-            <Link href="/admin/tokens">Drivers and tokens</Link>
-            <Link href="/admin/problems">Problems</Link>
-            <Link href="/admin/sign-in">Sign in</Link>
-          </nav>
-        </header>
-        <main id="main" tabIndex={-1}>
-          {children}
-        </main>
+        <AdminProvider
+          admin={admin && { email: admin.email, role: admin.role }}
+          demo={demo}
+        >
+          <Shell name={brand.name}>{children}</Shell>
+        </AdminProvider>
       </body>
     </html>
   );

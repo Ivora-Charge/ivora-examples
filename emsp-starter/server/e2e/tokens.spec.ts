@@ -1,42 +1,111 @@
 import { expect, test } from "@playwright/test";
-import { E2E_ADMIN_SECRET } from "../playwright.config";
+import { expectAccessible, goTo, signIn } from "./support";
 
 // Demo mode: tokens live in memory and nothing is pushed to a CPO.
-test("demo: an admin looks up the sample driver, then issues and blocks an app token", async ({
+test("demo: an admin finds the sample driver, then issues and blocks an app token", async ({
   page,
 }) => {
-  await page.goto("/");
-  await page.getByRole("link", { name: "Drivers and tokens" }).first().click();
+  await signIn(page);
+  await goTo(page, "Drivers and tokens");
   await expect(
     page.getByRole("heading", { name: "Drivers and tokens", level: 1 }),
   ).toBeVisible();
   await expect(page.getByText("nothing is pushed to a CPO")).toBeVisible();
+  await expect(page.getByLabel("Admin secret")).toHaveCount(0);
 
-  const lookup = page.getByRole("region", { name: "Look up a driver" });
-  await lookup.getByLabel("Driver reference").fill("demo-driver");
-  await lookup.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
-  await lookup.getByRole("button", { name: "Show tokens" }).click();
-  await expect(lookup.getByRole("status")).toContainText("2 token(s).");
-  await expect(lookup.getByRole("status")).toContainText("ZZDMOCDEMO0001");
+  const find = page.getByRole("region", { name: "Find a driver" });
+  await find.getByLabel("Driver reference").fill("demo-driver");
+  await find.getByRole("button", { name: "Find driver" }).click();
+
+  // The driver is a thing with its own actions: the account, then its tokens.
+  const account = page.getByRole("region", { name: "Driver demo-driver" });
+  await expect(account.getByRole("status")).toContainText("Driver found.");
+  await expect(account).toContainText("active (may charge)");
+  // Blocking the driver is covered by unit tests: other e2e flows share this driver.
+  await expect(
+    account.getByRole("button", { name: "Block driver" }),
+  ).toBeVisible();
+
+  const tokens = page.getByRole("region", { name: "Tokens" });
+  await expect(tokens).toContainText("2 token(s).");
+  await expect(tokens).toContainText("ZZDMOCDEMO0001");
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `drivers, signed in, ${colorScheme}`);
+  }
 
   // Unique per run: the server keeps demo tokens for as long as it runs.
   const driver = `e2e-${test.info().project.name}-${Date.now()}`;
-  const create = page.getByRole("region", { name: "Create an app token" });
-  await create.getByLabel("Driver reference").fill(driver);
-  await create.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
-  await create.getByRole("button", { name: "Create app token" }).click();
-  const created = create.getByRole("status");
-  await expect(created).toContainText("Demo mode: not pushed to any CPO.");
-  const uid = (await created.locator("dd code").first().textContent())!;
+  await find.getByLabel("Driver reference").fill(driver);
+  await find.getByRole("button", { name: "Find driver" }).click();
+  const unknown = page.getByRole("region", { name: `Driver ${driver}` });
+  await expect(unknown.getByRole("alert")).toContainText(
+    "No such driver account.",
+  );
+  await expect(unknown.getByRole("alert")).toContainText("not_found");
+  await expect(tokens).toContainText("No tokens for this driver.");
 
-  const change = page.getByRole("region", {
-    name: "Block, unblock or change the whitelist",
-  });
-  await change.getByLabel("Token UID").fill(uid);
-  await change.getByLabel("Admin secret").fill(E2E_ADMIN_SECRET);
-  await change.getByRole("button", { name: "Block", exact: true }).click();
-  await expect(change.getByRole("status")).toContainText("Token blocked.");
-  await expect(change.getByRole("status")).toContainText("(may not charge)");
+  // No token yet, so the form to create one is open, with the driver filled in.
+  const create = tokens.getByRole("form", { name: "Create an app token" });
+  await create.getByRole("button", { name: "Create app token" }).click();
+  await expect(tokens).toContainText(
+    "App token created. Demo mode: not pushed to any CPO.",
+  );
+  const item = tokens.getByRole("listitem").filter({ hasText: "App token" });
+  await expect(item).toContainText("active (may charge)");
+
+  // Block it from its own row; the first press asks, the second does it.
+  await item.getByRole("button", { name: /^Block / }).click();
+  await item.getByRole("button", { name: "Yes, block" }).click();
+  await expect(tokens).toContainText("Token blocked.");
+  await expect(item).toContainText("(may not charge)");
+
+  // A token is also reached by its UID and type alone, without the driver.
+  const uid = (
+    await item.getByRole("heading").locator(".mono").innerText()
+  ).trim();
+  const byUid = page.getByRole("region", { name: "Change a token by its UID" });
+  await byUid.getByLabel("Token UID").fill(uid);
+  await byUid
+    .getByRole("button", { name: "Unblock token", exact: true })
+    .click();
+  await expect(byUid.getByRole("status")).toContainText("Token unblocked.");
+  await expect(byUid).toContainText(driver);
+  await expect(byUid).toContainText("active (may charge)");
+  await byUid.getByLabel("Whitelist").selectOption("NEVER");
+  await byUid.getByRole("button", { name: "Set whitelist" }).click();
+  await expect(byUid.getByRole("status")).toContainText("Whitelist changed.");
+  await byUid.getByRole("button", { name: "Block token", exact: true }).click();
+  await expect(byUid.getByRole("status")).toContainText("Token blocked.");
+  await expect(byUid).toContainText("(may not charge)");
+  await byUid.getByLabel("Token UID").fill("NO-SUCH-TOKEN");
+  await byUid
+    .getByRole("button", { name: "Unblock token", exact: true })
+    .click();
+  await expect(byUid.getByRole("alert")).toBeVisible();
+});
+
+test("demo: Drivers and tokens shows only a sign-in prompt when nobody is signed in", async ({
+  page,
+}) => {
+  await page.goto("/admin/tokens");
+  await expect(
+    page.getByRole("heading", { name: "Drivers and tokens", level: 1 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", {
+      name: "Sign in as an admin to see drivers and tokens",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("main").getByRole("link", { name: "Sign in" }),
+  ).toHaveAttribute("href", "/admin/sign-in");
+  await expect(page.getByLabel("Admin secret")).toHaveCount(0);
+  await expect(page.getByLabel("Driver reference")).toHaveCount(0);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `drivers, signed out, ${colorScheme}`);
+  }
 });
 
 test("OCPI tokens endpoints refuse unknown tokens", async ({ request }) => {

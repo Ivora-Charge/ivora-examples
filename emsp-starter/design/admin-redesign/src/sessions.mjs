@@ -145,7 +145,7 @@ ${head(["Charging"], "Sessions", "Every charge from every peer, newest first. Th
     </table>
     <div class="foot">
       <span>8 of 128 · today, 24 Nov · refreshed 10 seconds ago</span>
-      <button class="btn ghost sm" type="button">Show older ${icon("arrow")}</button>
+      <button class="btn ghost sm" type="button" aria-disabled="true" title="Not in this mockup">Show older ${icon("arrow")}</button>
     </div>
   </div>
 </div>`,
