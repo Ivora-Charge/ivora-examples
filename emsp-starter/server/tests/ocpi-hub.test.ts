@@ -34,6 +34,7 @@ import {
 } from "@/lib/ocpi/handshake";
 import {
   acceptParty,
+  dismissRefusal,
   offerFromHub,
   removeParty,
   setHubPushMode,
@@ -64,6 +65,7 @@ import {
   MemoryPeerStore,
   REFUSAL_KEEP_MS,
   REFUSAL_WINDOW_MS,
+  refusalListFull,
   type HubParty,
   type Peer,
   type PeerStore,
@@ -2608,5 +2610,164 @@ describe("compare-and-set on the peer's version counter", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("a full refused-party list", () => {
+  const party = (i: number) => String(i).padStart(3, "0");
+  const note = (i: number, at: number) =>
+    peers.noteRefusal({
+      peerId: hubPeer.id,
+      countryCode: "ZZ",
+      partyId: party(i),
+      kind: "routing",
+      module: "locations",
+      times: 1,
+      at: new Date(at).toISOString(),
+    });
+  /** MAX_REFUSED rows, the first (000) last seen at T0, the rest 7 s apart after it. */
+  const fill = async () => {
+    for (let i = 0; i < MAX_REFUSED; i++)
+      await note(i, T0.getTime() + i * 7_000);
+  };
+
+  it("eviction and the full signal agree at 24 h minus and plus one second", async () => {
+    await fill();
+    const last = T0.getTime() + (MAX_REFUSED - 1) * 7_000;
+    // Row 000 was last seen at T0. All rows are protected until it is 24 h + 1 s old.
+    const edge = T0.getTime() + REFUSAL_KEEP_MS;
+    const rows = () => peers.listRefusals(hubPeer.id);
+    expect(refusalListFull(await rows(), edge - 1_000)).toBe(true);
+    expect(refusalListFull(await rows(), edge)).toBe(true);
+    expect(refusalListFull(await rows(), edge + 1_000)).toBe(false);
+    // The store agrees: 1 s short of the day, a new party is dropped ...
+    expect(await note(500, edge - 1_000)).toBe(false);
+    expect(peers.refusals.size).toBe(MAX_REFUSED);
+    // ... and exactly a day on, still dropped (replaceable only when older) ...
+    expect(await note(500, edge)).toBe(false);
+    // ... one second later it replaces the oldest row, and only that one.
+    expect(await note(500, edge + 1_000)).toBe(true);
+    expect(peers.refusals.has(`${hubPeer.id}|ZZ-${party(0)}`)).toBe(false);
+    expect(peers.refusals.has(`${hubPeer.id}|ZZ-${party(1)}`)).toBe(true);
+    expect(peers.refusals.size).toBe(MAX_REFUSED);
+    expect(last).toBeGreaterThan(T0.getTime());
+  });
+
+  it("is not full below MAX_REFUSED rows, however recent", async () => {
+    await fill();
+    peers.refusals.delete(`${hubPeer.id}|ZZ-${party(3)}`);
+    expect(
+      refusalListFull(await peers.listRefusals(hubPeer.id), T0.getTime()),
+    ).toBe(false);
+  });
+
+  it("logs a dropped new party once per window per hub, and only for a full list", async () => {
+    await fill();
+    const peer = (await peers.getPeer(hubPeer.id))!;
+    const err = vi.mocked(console.error);
+    err.mockClear();
+    let now = T0.getTime() + MAX_REFUSED * 7_000 + 10 * REFUSAL_WINDOW_MS;
+    const refuse = (p: string) =>
+      noteRefused(
+        peers,
+        peer,
+        new Request(`${EMSP}/locations/ZZ/${p}/L1`, { method: "PUT" }),
+        { party: { countryCode: "ZZ", partyId: p }, kind: "routing" },
+        () => now,
+      );
+    await refuse("N01");
+    await refuse("N02");
+    const full = () =>
+      err.mock.calls.filter((c) =>
+        /refused-party list .* is full/.test(String(c[0])),
+      );
+    expect(full()).toHaveLength(1);
+    expect(String(full()[0][0])).toContain(hubPeer.id);
+    expect(String(full()[0][0])).not.toContain("N01");
+    // Another window: logged again.
+    now += REFUSAL_WINDOW_MS;
+    await refuse("N03");
+    expect(full()).toHaveLength(2);
+    // Room made: a dropped write for another reason (budget) says nothing.
+    peers.refusals.delete(`${hubPeer.id}|ZZ-${party(0)}`);
+    now += REFUSAL_WINDOW_MS;
+    await refuse("N04");
+    expect(full()).toHaveLength(2);
+  });
+
+  it("the admin action dismisses only for an admin, and the peer list says when the list is full", async () => {
+    await fill();
+    process.env.ADMIN_SECRET = "s".repeat(32);
+    const as = (f: Record<string, string>) => adminForm({ ...f });
+    const dismiss = (adminSecret?: string) =>
+      hubPartyAction(
+        {},
+        as({
+          peerId: hubPeer.id,
+          intent: "dismiss",
+          countryCode: "ZZ",
+          partyId: party(7),
+          ...(adminSecret && { adminSecret }),
+        }),
+      );
+    // Signed out: nothing deleted, nothing audited.
+    expect(await dismiss()).toMatchObject({ ok: false });
+    expect(peers.refusals.size).toBe(MAX_REFUSED);
+    expect(
+      peers.auditLog.filter((a) => a.action === "ocpi.hub.refusal_dismissed"),
+    ).toHaveLength(0);
+    signInWithSecret();
+    // Full needs every row seen within a day: use the real clock for the rows.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date(T0.getTime() + 60_000 * 20));
+      const list = await listPeersAction({}, as({}));
+      const row = list.peers!.find((p) => p.id === hubPeer.id)!;
+      expect(row.hub?.refusedFull).toBe(true);
+      expect(row.hub?.refused).toHaveLength(MAX_REFUSED);
+    } finally {
+      vi.useRealTimers();
+    }
+    const done = await dismiss();
+    expect(done).toMatchObject({ ok: true });
+    expect(peers.refusals.has(`${hubPeer.id}|ZZ-${party(7)}`)).toBe(false);
+    const after = await listPeersAction({}, as({}));
+    expect(
+      after.peers!.find((p) => p.id === hubPeer.id)!.hub?.refusedFull,
+    ).toBeUndefined();
+  });
+
+  it("Dismiss deletes the row through the same gate and audits it", async () => {
+    await fill();
+    await dismissRefusal(
+      hubPeer.id,
+      { countryCode: "zz", partyId: party(5).toLowerCase() },
+      { store: peers, actor: "admin" },
+    );
+    expect(peers.refusals.has(`${hubPeer.id}|ZZ-${party(5)}`)).toBe(false);
+    expect(peers.refusals.size).toBe(MAX_REFUSED - 1);
+    expect(peers.auditLog.at(-1)).toMatchObject({
+      action: "ocpi.hub.refusal_dismissed",
+      subjectId: hubPeer.id,
+      details: { party: `ZZ-${party(5)}` },
+    });
+    // Not a hub, and a bad party: refused, nothing audited.
+    await expect(
+      dismissRefusal(
+        "nope",
+        { countryCode: "ZZ", partyId: "AAA" },
+        { store: peers },
+      ),
+    ).rejects.toThrow(HandshakeError);
+    await expect(
+      dismissRefusal(
+        hubPeer.id,
+        { countryCode: "Z", partyId: "AAA" },
+        { store: peers },
+      ),
+    ).rejects.toThrow();
+    expect(
+      peers.auditLog.filter((a) => a.action === "ocpi.hub.refusal_dismissed"),
+    ).toHaveLength(1);
   });
 });

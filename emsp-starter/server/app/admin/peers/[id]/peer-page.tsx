@@ -165,10 +165,15 @@ export function refusalHeadline(r: Refusal): string {
  */
 export function RefusedParties({
   refused,
+  full = false,
   accept,
+  dismiss,
 }: {
   refused: Refusal[];
+  /** The list is at its maximum with every row seen in the last 24 hours. */
+  full?: boolean;
   accept: (r: Refusal) => unknown;
+  dismiss: (r: Refusal) => unknown;
 }) {
   const id = useId();
   if (!refused.length) return null;
@@ -183,6 +188,13 @@ export function RefusedParties({
         Each party is counted at most once a minute, so a count can be lower
         than what was sent.
       </p>
+      {full && (
+        <p className="meta" role="status">
+          This list is full: every place is taken by a party seen in the last 24
+          hours. A new refused party is not listed until you accept or dismiss a
+          row.
+        </p>
+      )}
       <ul className="list">
         {refused.map((r) => (
           <li className="item acts" key={code(r)}>
@@ -195,8 +207,8 @@ export function RefusedParties({
                 {`${times(r.times)}, last at ${utc(r.lastSeen)} (${r.module}), first at ${utc(r.firstSeen)}. ${refusalReason(r)}`}
               </p>
             </div>
-            {r.kind === "routing" && (
-              <span className="end">
+            <span className="end">
+              {r.kind === "routing" && (
                 <button
                   className="btn sm"
                   type="button"
@@ -204,8 +216,15 @@ export function RefusedParties({
                 >
                   Accept this party<span className="sr"> {code(r)}</span>
                 </button>
-              </span>
-            )}
+              )}
+              <button
+                className="btn ghost sm"
+                type="button"
+                onClick={() => dismiss(r)}
+              >
+                Dismiss<span className="sr"> {code(r)}</span>
+              </button>
+            </span>
           </li>
         ))}
       </ul>
@@ -295,8 +314,12 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
       )}
       <RefusedParties
         refused={peer.hub?.refused ?? []}
+        full={peer.hub?.refusedFull === true}
         accept={(r) =>
           act("accept", { countryCode: r.countryCode, partyId: r.partyId })
+        }
+        dismiss={(r) =>
+          act("dismiss", { countryCode: r.countryCode, partyId: r.partyId })
         }
       />
       <section className="stack" aria-labelledby={`${id}-o`}>

@@ -23,6 +23,7 @@ import {
 } from "@/lib/locations/sync";
 import {
   acceptParty,
+  dismissRefusal,
   offerFromHub,
   removeParty,
   setHubPushMode,
@@ -37,6 +38,7 @@ import type {
   Peer,
   PeerStore,
 } from "@/lib/ocpi/store";
+import { refusalListFull } from "@/lib/ocpi/store";
 import { logText } from "@/lib/server/log-error";
 import { assertLive, isDemo } from "@/lib/server/demo";
 import { ABSENT_CODES, DatabaseRequestError } from "@/lib/server/supabase-rest";
@@ -85,6 +87,11 @@ export type PeerSummary = {
      * out. Empty when the 202611240002 migration is not applied yet.
      */
     refused?: HubRefusal[];
+    /**
+     * The refused list holds its maximum of parties, all seen in the last 24 hours, so
+     * new refused parties are dropped until a row is accepted or dismissed.
+     */
+    refusedFull?: boolean;
   };
   modules: string[];
   registeredAt: string | null;
@@ -268,10 +275,18 @@ export async function managePeerAction(
  * A hub's refused parties that are still not trusted. A read that fails (the table is
  * not there before its migration) shows none rather than failing the peer list.
  */
-async function refusedOf(store: PeerStore, p: Peer): Promise<HubRefusal[]> {
-  if (!isHubPeer(p)) return [];
+async function refusedOf(
+  store: PeerStore,
+  p: Peer,
+): Promise<{ refused: HubRefusal[]; full: boolean }> {
+  if (!isHubPeer(p)) return { refused: [], full: false };
   try {
-    return (await store.listRefusals(p.id)).filter((r) => !isCpoParty(p, r));
+    const rows = await store.listRefusals(p.id);
+    // Full is read from every row the hub holds, also one trusted since.
+    return {
+      refused: rows.filter((r) => !isCpoParty(p, r)),
+      full: refusalListFull(rows, Date.now()),
+    };
   } catch (e) {
     if (!(
       e instanceof DatabaseRequestError &&
@@ -281,7 +296,7 @@ async function refusedOf(store: PeerStore, p: Peer): Promise<HubRefusal[]> {
       console.error(
         `Reading the refused pushes of peer ${p.id} failed: ${logText(e)}`,
       );
-    return [];
+    return { refused: [], full: false };
   }
 }
 
@@ -296,7 +311,11 @@ export async function listPeersAction(
     const peers: PeerSummary[] = await Promise.all(
       (await store.listPeers()).map(async (p) => {
         const s = summary(p);
-        if (s.hub) s.hub.refused = await refusedOf(store, p);
+        if (s.hub) {
+          const { refused, full } = await refusedOf(store, p);
+          s.hub.refused = refused;
+          if (full) s.hub.refusedFull = true;
+        }
         return {
           ...s,
           sync: await Promise.all(
@@ -460,6 +479,25 @@ export async function hubPartyAction(
       return {
         ok: true,
         message: `${party.countryCode.toUpperCase()}-${party.partyId.toUpperCase()} is trusted through ${peer.label}.`,
+        peer: summary(peer),
+      };
+    }
+    if (intent === "dismiss") {
+      let peer: Awaited<ReturnType<typeof dismissRefusal>>;
+      try {
+        peer = await dismissRefusal(id, party, deps);
+      } catch (e) {
+        if (
+          e instanceof DatabaseRequestError &&
+          e.code !== null &&
+          ABSENT_CODES.has(e.code)
+        )
+          return pendingMigration();
+        throw e;
+      }
+      return {
+        ok: true,
+        message: `Dismissed the refused pushes of ${party.countryCode.toUpperCase()}-${party.partyId.toUpperCase()} at ${peer.label}. It is still not trusted; a new refused push lists it again.`,
         peer: summary(peer),
       };
     }
