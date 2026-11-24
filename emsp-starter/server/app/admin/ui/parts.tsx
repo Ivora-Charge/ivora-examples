@@ -82,6 +82,35 @@ export function Copy({
 }
 
 /**
+ * Our OCPI versions URL, to copy. The server sends it with the page only to an admin
+ * signed in by email (and with a new one-time token, to whoever created it). Without
+ * it, as for an admin-secret sign-in, this says how to put it together by hand.
+ */
+export function OurVersionsUrl({ url }: { url: string | null }) {
+  if (url) return <Copy text={url} label="Our versions URL" />;
+  return (
+    <p className="small" role="note" aria-label="Our versions URL">
+      This server&apos;s public address (<code>PUBLIC_BASE_URL</code>) followed
+      by <code>/ocpi/versions</code>. It is shown here in full only to an admin
+      signed in by email.
+    </p>
+  );
+}
+
+/**
+ * Our OCPI party (country code and party ID). The server sends it with the page only
+ * to an admin signed in by email; without it, this names the public API that answers.
+ */
+export function OurParty({ party }: { party: string | null }) {
+  if (party) return <code>{party}</code>;
+  return (
+    <>
+      Ask <code>GET /api/v1/status</code>
+    </>
+  );
+}
+
+/**
  * A fix that waits behind "Show the fix" on a phone and is open where there is room
  * (from 60rem, where the stylesheet hides the summary).
  */

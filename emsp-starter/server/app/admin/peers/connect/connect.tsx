@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useId, useState } from "react";
 import { useAdmin } from "../../ui/admin-context";
 import { Head, Icon, Message, Result, State, Tile, utc } from "../../ui/kit";
-import { ActionForm, Copy, Gated } from "../../ui/parts";
+import { ActionForm, Copy, Gated, OurVersionsUrl } from "../../ui/parts";
 import { useAction } from "../../ui/use-action";
 import {
   connectPeerAction,
@@ -245,7 +245,7 @@ function Register({
   back,
 }: {
   given: "hub" | "cpo";
-  versionsUrl: string;
+  versionsUrl: string | null;
   back: () => void;
 }) {
   const w = WORDS[given];
@@ -368,7 +368,7 @@ function Register({
             <p className="small muted">
               Some portals want your versions URL before they issue a token.
             </p>
-            <Copy text={versionsUrl} label="Our versions URL" />
+            <OurVersionsUrl url={versionsUrl} />
           </aside>
         ) : (
           <WhatHappens given={given} />
@@ -382,7 +382,7 @@ function Invite({
   versionsUrl,
   back,
 }: {
-  versionsUrl: string;
+  versionsUrl: string | null;
   back: () => void;
 }) {
   const id = useId();
@@ -418,10 +418,7 @@ function Invite({
                   {utc(state.expiresAt)}.
                 </p>
                 <p className="label">Our versions URL</p>
-                <Copy
-                  text={state.versionsUrl ?? versionsUrl}
-                  label="Our versions URL"
-                />
+                <OurVersionsUrl url={state.versionsUrl ?? versionsUrl} />
                 <p className="label">One-time token (Token A)</p>
                 <Copy text={state.tokenA} label="One-time token" />
               </Message>
@@ -506,7 +503,12 @@ const CHOICES: [Given, "hub" | "bolt" | "out", string, string][] = [
   ],
 ];
 
-export function Connect({ versionsUrl }: { versionsUrl: string }) {
+export function Connect({
+  versionsUrl,
+}: {
+  /** Our versions URL: null unless an admin is signed in by email. */
+  versionsUrl: string | null;
+}) {
   const { demo } = useAdmin();
   const [given, setGiven] = useState<Given | null>(null);
   const back = () => setGiven(null);

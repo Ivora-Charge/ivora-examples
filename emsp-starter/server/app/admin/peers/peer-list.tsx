@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useAdmin } from "../ui/admin-context";
 import { listAdaptersAction } from "../live-data/actions";
 import { Head, Icon, Message, Result, State, Tile, utc } from "../ui/kit";
-import { ago, Copy, Gated } from "../ui/parts";
+import { ago, Gated, OurParty, OurVersionsUrl } from "../ui/parts";
 import { useList } from "../ui/use-action";
 import { listPeersAction, type PeerSummary } from "./actions";
 import { moduleName, viewOf } from "./peer-view";
@@ -153,8 +153,9 @@ export function PeerList({
   party,
   version,
 }: {
-  versionsUrl: string;
-  party: string;
+  /** Our versions URL and party: null unless an admin is signed in by email. */
+  versionsUrl: string | null;
+  party: string | null;
   version: string;
 }) {
   const { signedIn, demo } = useAdmin();
@@ -225,11 +226,11 @@ export function PeerList({
               A peer that registers with us asks for this address. It is public
               and safe to share; tokens are not.
             </p>
-            <Copy text={versionsUrl} label="Our versions URL" />
+            <OurVersionsUrl url={versionsUrl} />
             <dl className="facts small">
               <dt>Party</dt>
               <dd>
-                <code>{party}</code>
+                <OurParty party={party} />
               </dd>
               <dt>Role</dt>
               <dd>eMSP, OCPI {version}</dd>

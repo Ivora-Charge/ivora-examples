@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { brand } from "@/brand";
-import { requestAdmin } from "./admin/ui/current-admin";
+import { forEmailAdmin } from "./admin/ui/for-admin";
 import { SIGN_IN_LIMITS } from "@/lib/accounts/sign-in";
 import { formatMinorAmount } from "@/lib/locations/pricing";
 import {
@@ -50,21 +50,23 @@ function readSettings(): SetupSettings {
  * new server read say "cannot check from here" and show their fix.
  *
  * A visitor who is not signed in sees the sign-in prompt only (setup.tsx), and the
- * page's data for them holds nothing about this deployment's settings: only what
- * `GET /api/v1/status` already answers to anyone (the mode and the OCPI identity) and
- * two constants of the code. The settings are read, and sent, only for an admin
- * signed in by email.
+ * page's data for them holds nothing about this deployment's configuration: only the
+ * mode, which the banner on every page shows, and constants of the code. The
+ * settings and the OCPI party are read, and sent, only for an admin signed in by
+ * email.
  */
 export default async function SetupPage() {
   const status = getStatus();
-  const admin = await requestAdmin();
   const facts: SetupFacts = {
     demo: status.mode === "demo",
     required: LIVE_REQUIRED.length,
-    version: status.ocpi.version,
-    party: `${status.ocpi.country_code}-${status.ocpi.party_id}`,
     codesPerHour: SIGN_IN_LIMITS.code.perEmail.limit,
-    settings: admin ? readSettings() : null,
+    // The OCPI version this code implements: the same on every deployment.
+    version: status.ocpi.version,
+    party: await forEmailAdmin(
+      () => `${status.ocpi.country_code}-${status.ocpi.party_id}`,
+    ),
+    settings: await forEmailAdmin(readSettings),
   };
   return <Setup facts={facts} />;
 }

@@ -41,7 +41,7 @@ test("demo: Setup shows a visitor the sign-in prompt only", async ({
   }
 });
 
-test("demo: Setup shows a signed-in admin the six stops and the OCPI identity", async ({
+test("demo: Setup shows a signed-in admin the six stops and the OCPI version", async ({
   page,
 }) => {
   await signIn(page);
@@ -81,7 +81,9 @@ test("demo: Setup shows a signed-in admin the six stops and the OCPI identity", 
     name: "About this deployment",
   });
   await expect(about).toContainText("OCPI 2.2.1");
-  await expect(about).toContainText("ZZ-DMO");
+  // Our party is sent with the page only to an admin signed in by email; with the
+  // admin secret the page names the public API that answers it.
+  await expect(about).toContainText("GET /api/v1/status");
   for (const colorScheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme });
     await expectAccessible(page, `setup, signed in, ${colorScheme}`);

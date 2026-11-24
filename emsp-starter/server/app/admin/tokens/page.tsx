@@ -2,13 +2,16 @@ import type { Metadata } from "next";
 import { ocpiUrls } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 import { DEMO_DRIVER_REF } from "@/lib/tokens/registry";
+import { forEmailAdmin } from "../ui/for-admin";
 import { Head } from "../ui/kit";
 import { Gated } from "../ui/parts";
 import { TokenAdmin } from "./token-admin";
 
 export const metadata: Metadata = { title: "Drivers and tokens" };
 
-export default function TokensPage() {
+export default async function TokensPage() {
+  // Our address goes only to an admin signed in by email.
+  const tokensUrl = await forEmailAdmin(() => ocpiUrls().tokens);
   return (
     <>
       <Head
@@ -18,7 +21,7 @@ export default function TokensPage() {
       />
       <Gated what="see drivers and tokens">
         <TokenAdmin
-          tokensUrl={ocpiUrls().tokens}
+          tokensUrl={tokensUrl}
           sampleDriver={isDemo() ? DEMO_DRIVER_REF : null}
         />
       </Gated>

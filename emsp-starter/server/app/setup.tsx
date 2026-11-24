@@ -6,23 +6,25 @@ import { listPeersAction, type ActionState } from "./admin/peers/actions";
 import { firstAdminSql } from "./admin/sign-in/states";
 import { useAdmin } from "./admin/ui/admin-context";
 import { Head, Icon, Result, State, Tile, type Kind } from "./admin/ui/kit";
-import { Copy, Gate, Later } from "./admin/ui/parts";
+import { Copy, Gate, Later, OurParty } from "./admin/ui/parts";
 import { useList } from "./admin/ui/use-action";
 
 /**
- * What every visitor's page carries: the mode and the OCPI identity, which
- * `GET /api/v1/status` answers to anyone, and two constants of the code (how many
- * live-mode settings there are, the sign-in code limit). Nothing here says which
- * setting is set, unset or malformed. The page shows none of it until an admin is
+ * What every visitor's page carries: the mode, which the banner shows, and three
+ * constants of the code (how many live-mode settings there are, the sign-in code
+ * limit, the OCPI version). Nothing here says which setting is set, unset or
+ * malformed, or who this deployment is. The page shows none of it until an admin is
  * signed in.
  */
 export type SetupFacts = {
   demo: boolean;
   /** How many live-mode settings there are: a constant, not this deployment's state. */
   required: number;
-  version: string;
-  party: string;
   codesPerHour: number;
+  /** The OCPI version this code implements: a constant. */
+  version: string;
+  /** Our OCPI party, sent by the server only to an admin signed in by email. */
+  party: string | null;
   /**
    * Read by the server only for an admin signed in by email (the session cookie), and
    * null for everyone else: a visitor's page never carries the name of an unset or
@@ -770,7 +772,7 @@ function Stops({ facts: f }: { facts: SetupFacts }) {
               <dd>eMSP, OCPI {f.version}</dd>
               <dt>Party</dt>
               <dd>
-                <code>{f.party}</code>
+                <OurParty party={f.party} />
               </dd>
               {f.settings?.baseUrl && (
                 <>

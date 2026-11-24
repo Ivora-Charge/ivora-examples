@@ -4,7 +4,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { PaymentSummary } from "@/app/admin/payments/actions";
-import { PaymentPanel } from "@/app/admin/payments/payment-admin";
+import { PaymentAdmin, PaymentPanel } from "@/app/admin/payments/payment-admin";
 import {
   refundRequestId,
   spendRefundRequestId,
@@ -12,6 +12,7 @@ import {
 import type { ActionState, PeerSummary } from "@/app/admin/peers/actions";
 import { Refused } from "@/app/admin/peers/connect/connect";
 import { HubParties } from "@/app/admin/peers/[id]/peer-page";
+import { PeerList } from "@/app/admin/peers/peer-list";
 import { moduleName, viewOf } from "@/app/admin/peers/peer-view";
 import { tokenRefused } from "@/app/admin/peers/refused";
 import { FindReport } from "@/app/admin/problems/problem-admin";
@@ -23,6 +24,10 @@ import {
 import { TokenByUid } from "@/app/admin/tokens/token-admin";
 import { AdminProvider, type Who } from "@/app/admin/ui/admin-context";
 import { oneAtATime } from "@/app/admin/ui/use-action";
+import PaymentsPage from "@/app/admin/payments/page";
+import ConnectPage from "@/app/admin/peers/connect/page";
+import PeersPage from "@/app/admin/peers/page";
+import TokensPage from "@/app/admin/tokens/page";
 import SetupPage from "@/app/page";
 import { firstAdmin, Setup, type SetupFacts } from "@/app/setup";
 import { AuthRateLimitedError, type AuthProvider } from "@/lib/accounts/auth";
@@ -433,9 +438,9 @@ describe("setup: nothing for a visitor who is not signed in", () => {
   ): SetupFacts => ({
     demo,
     required: 6,
+    codesPerHour: 5,
     version: "2.2.1",
     party: "NL-EXA",
-    codesPerHour: 5,
     settings,
   });
 
@@ -471,6 +476,7 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     const element = await SetupPage();
     const sent = (element.props as { facts: SetupFacts }).facts;
     expect(sent.settings).toBeNull();
+    expect(sent.party).toBeNull();
     expect(Object.keys(sent).sort()).toEqual([
       "codesPerHour",
       "demo",
@@ -502,6 +508,7 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     expect(sent.settings?.missing).toEqual([...LIVE_REQUIRED]);
     expect(sent.settings?.errors.join(" ")).toContain("STRIPE_SECRET_KEY");
     expect(sent.settings?.stripeKey).toBe(false);
+    expect(sent.party).toMatch(/^[A-Z]{2}-/);
     const html = page(ana, element);
     expect(html).toContain("<code>PUBLIC_BASE_URL</code> is not set");
     expect(html).toContain("<code>HOLD_AMOUNTS</code>");
@@ -556,6 +563,83 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     expect(html).toContain("only to an admin signed in by");
     expect(html).toContain("openssl rand -base64 32");
     expect(html.match(/Cannot check from here/g)?.length).toBeGreaterThan(3);
+  });
+
+  // Every other page whose server part reads the configuration.
+  const PAGES: [string, () => Promise<unknown>][] = [
+    ["peers", () => PeersPage()],
+    ["connect", () => ConnectPage()],
+    ["tokens", () => TokensPage()],
+    [
+      "payments",
+      () => PaymentsPage({ searchParams: Promise.resolve({ find: "x" }) }),
+    ],
+  ];
+  // A real-looking deployment: the values a visitor must not be sent.
+  const REAL = {
+    PUBLIC_BASE_URL: "https://charge.example.org",
+    EMSP_COUNTRY_CODE: "DE",
+    EMSP_PARTY_ID: "QRS",
+    STRIPE_SECRET_KEY: `sk_test_${"a1B2".repeat(8)}`,
+  };
+
+  it("no page's data tells a visitor the address, the identity or whether Stripe is set", async () => {
+    Object.assign(process.env, REAL);
+    for (const [name, render] of PAGES) {
+      const data = JSON.stringify(await render());
+      expect(data, name).not.toMatch(/charge\.example\.org|localhost|QRS/);
+      expect(data, name).not.toMatch(/"stripeSet":(true|false)/);
+      expect(data, name).not.toMatch(/"(versionsUrl|tokensUrl)":"/);
+      expect(data, name).not.toMatch(/[A-Z][A-Z0-9]+_[A-Z0-9_]+/);
+    }
+    // The same pages with the address unset: nothing changes for a visitor.
+    const before = await Promise.all(PAGES.map(([, r]) => r()));
+    process.env.PUBLIC_BASE_URL = "";
+    process.env.STRIPE_SECRET_KEY = "";
+    process.env.EMSP_PARTY_ID = "";
+    const after = await Promise.all(PAGES.map(([, r]) => r()));
+    expect(JSON.stringify(after)).toBe(JSON.stringify(before));
+  });
+
+  it("an admin signed in by email is sent them", async () => {
+    Object.assign(process.env, REAL);
+    signedInAdmin.current = { userId: "u1", ...ana! };
+    const data = JSON.stringify(
+      await Promise.all(PAGES.map(([, render]) => render())),
+    );
+    expect(data).toContain(
+      '"versionsUrl":"https://charge.example.org/ocpi/versions"',
+    );
+    expect(data).toContain('"party":"DE-QRS"');
+    expect(data).toContain('"tokensUrl":"https://charge.example.org/ocpi/');
+    expect(data).toContain('"stripeSet":true');
+  });
+
+  it("an admin-secret sign-in is told how to find what the server did not send", () => {
+    const peers = page(
+      ana,
+      createElement(PeerList, {
+        versionsUrl: null,
+        party: null,
+        version: "2.2.1",
+      }),
+    );
+    expect(peers).toContain("<code>GET /api/v1/status</code>");
+    expect(peers).toContain("<code>/ocpi/versions</code>");
+    expect(peers).toContain("only to an admin signed in by email");
+    const payments = page(
+      ana,
+      createElement(PaymentAdmin, { demo: false, stripeSet: null }),
+    );
+    expect(payments).toContain("Whether it is set shows here only to");
+    expect(payments).not.toContain("Payments are not set up");
+    // Demo mode says the same as before, and an email admin still gets the warning.
+    expect(
+      page(ana, createElement(PaymentAdmin, { demo: true, stripeSet: null })),
+    ).not.toContain("Whether it is set");
+    expect(
+      page(ana, createElement(PaymentAdmin, { demo: false, stripeSet: false })),
+    ).toContain("Payments are not set up");
   });
 
   it("names the admin secret at stop 5 only to whoever signed in with it", () => {

@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { forEmailAdmin } from "../ui/for-admin";
 import { Head } from "../ui/kit";
 import { Gated } from "../ui/parts";
 import { PaymentAdmin } from "./payment-admin";
@@ -16,6 +17,8 @@ export default async function PaymentsPage({
 }) {
   // A link from another page (a flagged payment on Reconciliation) names the payment.
   const { find } = await searchParams;
+  // Whether the key is set, never the key; and only for an admin signed in by email.
+  const stripeSet = await forEmailAdmin(() => Boolean(config.stripeSecretKey));
   return (
     <>
       <Head
@@ -26,8 +29,7 @@ export default async function PaymentsPage({
       <Gated what="see payments">
         <PaymentAdmin
           demo={isDemo()}
-          // Whether the key is set, never the key.
-          stripeSet={Boolean(config.stripeSecretKey)}
+          stripeSet={stripeSet}
           find={typeof find === "string" && ID.test(find) ? find : undefined}
         />
       </Gated>

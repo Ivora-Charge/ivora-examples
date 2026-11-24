@@ -485,8 +485,8 @@ export function TokenAdmin({
   tokensUrl,
   sampleDriver,
 }: {
-  /** Where CPOs pull every token from. */
-  tokensUrl: string;
+  /** Where CPOs pull every token from: null unless an admin is signed in by email. */
+  tokensUrl: string | null;
   /** Demo mode: the sample driver's reference. */
   sampleDriver: string | null;
 }) {
@@ -551,9 +551,11 @@ export function TokenAdmin({
         </h2>
         <p className="small muted">
           Every change is pushed to each CPO at once; CPOs can also pull every
-          token from <code>{tokensUrl}</code> and ask us in real time before a
-          driver charges. Pushes a CPO missed are retried by the scheduled job;
-          this sends the ones that are due now.
+          token from{" "}
+          {tokensUrl ? <code>{tokensUrl}</code> : "our OCPI tokens endpoint"}{" "}
+          and ask us in real time before a driver charges. Pushes a CPO missed
+          are retried by the scheduled job; this sends the ones that are due
+          now.
         </p>
         <div aria-busy={retry.pending}>
           <button

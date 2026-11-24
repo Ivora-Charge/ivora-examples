@@ -400,8 +400,11 @@ export function PaymentAdmin({
   find,
 }: {
   demo: boolean;
-  /** STRIPE_SECRET_KEY is set (never its value). */
-  stripeSet: boolean;
+  /**
+   * STRIPE_SECRET_KEY is set (never its value). Null when the server did not say: it
+   * says only to an admin signed in by email, not to an admin-secret sign-in.
+   */
+  stripeSet: boolean | null;
   /** A payment or charge ID to look up at once (from a link). */
   find?: string;
 }) {
@@ -410,6 +413,12 @@ export function PaymentAdmin({
       {demo ? (
         <p className="muted">
           Demo mode: no card is charged and nothing is sent to Stripe.
+        </p>
+      ) : stripeSet === null ? (
+        <p className="muted">
+          Payments need <code>STRIPE_SECRET_KEY</code> on the server: without it
+          every app start is refused. Whether it is set shows here only to an
+          admin signed in by email.
         </p>
       ) : (
         !stripeSet && (
