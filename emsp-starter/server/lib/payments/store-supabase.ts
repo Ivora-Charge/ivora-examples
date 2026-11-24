@@ -330,6 +330,16 @@ export class SupabasePaymentStore implements PaymentStore {
     return rows.length > 0;
   }
 
+  async lastEvent() {
+    const [row] = await this.rest<{ type: string; received_at: string }[]>(
+      "GET",
+      "emsp_stripe_events?select=type,received_at&order=received_at.desc&limit=1",
+    );
+    return row
+      ? { type: row.type, receivedAt: new Date(row.received_at).toISOString() }
+      : null;
+  }
+
   async markSwept(now: string) {
     // Moves the one row forward only; makes it the first time.
     const moved = await this.rest<{ id: number }[]>(

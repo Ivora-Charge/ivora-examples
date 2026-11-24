@@ -5,6 +5,7 @@ import { fontFamilies } from "@/brand/fonts";
 import { requestAdmin } from "./admin/ui/current-admin";
 import { isDemo } from "@/lib/server/demo";
 import { AdminProvider } from "./admin/ui/admin-context";
+import { SetupProvider } from "./admin/ui/setup-context";
 import { Shell } from "./admin/ui/shell";
 import "./globals.css";
 
@@ -60,7 +61,9 @@ export default async function RootLayout({
           admin={admin && { email: admin.email, role: admin.role }}
           demo={demo}
         >
-          <Shell name={brand.name}>{children}</Shell>
+          <SetupProvider>
+            <Shell name={brand.name}>{children}</Shell>
+          </SetupProvider>
         </AdminProvider>
       </body>
     </html>

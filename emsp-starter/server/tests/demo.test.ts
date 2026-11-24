@@ -11,6 +11,7 @@ import {
 import { configErrors, missingForLive } from "@/lib/server/config";
 import { GET } from "@/app/api/v1/status/route";
 import { peerFetch, setPeerNetworkForTests } from "@/lib/server/peer-fetch";
+import { setDatabaseCheckForTests } from "@/lib/setup/database";
 
 const LIVE = {
   EMSP_COUNTRY_CODE: "nl",
@@ -36,6 +37,7 @@ describe("demo mode", () => {
   });
   afterEach(() => {
     vi.unstubAllGlobals();
+    setDatabaseCheckForTests(undefined);
     process.env = { ...saved };
   });
 
@@ -94,7 +96,7 @@ describe("demo mode", () => {
   });
 
   it("serves the status API offline, labelled demo, with no secrets", async () => {
-    const res = GET();
+    const res = await GET();
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       mode: "demo",
@@ -106,13 +108,35 @@ describe("demo mode", () => {
 
   it("reports the configured OCPI identity in live mode, still without secrets", async () => {
     Object.assign(process.env, LIVE);
-    const body = await GET().text();
+    // "live" needs the database check to pass too (tests/setup-status.test.ts).
+    setDatabaseCheckForTests(async () => ({
+      state: "ok",
+      shipped: 1,
+      applied: 1,
+      pending: [],
+      newest: "x.sql",
+    }));
+    const body = await (await GET()).text();
     expect(JSON.parse(body)).toMatchObject({
       mode: "live",
       ocpi: { country_code: "NL", party_id: "ABC" },
     });
     expect(body).not.toContain(LIVE.SUPABASE_SERVICE_ROLE_KEY);
     expect(body).not.toContain(LIVE.SUPABASE_URL);
+  });
+
+  it("says setup, not live, while the database does not answer", async () => {
+    Object.assign(process.env, LIVE);
+    // The stubbed fetch throws: no probe gets an answer.
+    const body = await (await GET()).text();
+    expect(Object.keys(JSON.parse(body)).sort()).toEqual([
+      "mode",
+      "name",
+      "ocpi",
+    ]);
+    expect(JSON.parse(body).mode).toBe("setup");
+    expect(body).not.toContain(LIVE.SUPABASE_SERVICE_ROLE_KEY);
+    expect(body).not.toContain("db.example.test");
   });
 
   it("lets outboundFetch through only in live mode", async () => {

@@ -5,6 +5,7 @@ import { locationStore } from "@/lib/locations/registry";
 import { installDriverAppListeners } from "@/lib/driver-app/listen";
 import { paymentDeps } from "@/lib/payments/registry";
 import { sweepPayments } from "@/lib/payments/settle";
+import { recordJobRun } from "@/lib/setup/log";
 import { syncAllPeers } from "@/lib/locations/sync";
 import { peerStore } from "@/lib/ocpi/registry";
 import { pullAllSessions } from "@/lib/sessions/pull";
@@ -49,6 +50,9 @@ function authorised(header: string | null): boolean {
  *    missed.
  *
  * A failure of one job does not stop the others.
+ *
+ * Some runs are recorded for the Setup page (when, and whether everything got through:
+ * lib/setup/log.ts), so it can say how often the job really runs.
  */
 export async function GET(request: Request) {
   if (!config.cronSecret)
@@ -70,6 +74,15 @@ export async function GET(request: Request) {
     console.error(
       `Scheduled ${job} failed: ${e instanceof Error ? e.name : "unknown error"}`,
     );
+  const startedAt = new Date();
+  // When the payment sweep last finished, before this run: how long the job was away.
+  // Read on its own: a failure here must not stop the jobs below.
+  let sweptBefore: string | null = null;
+  try {
+    sweptBefore = await paymentDeps("cron").payments.lastSweptAt();
+  } catch (e) {
+    failed("read of the last payment sweep", e);
+  }
   let ok = true;
   let tokens: { expired: number; pushes: unknown } | undefined;
   try {
@@ -127,6 +140,7 @@ export async function GET(request: Request) {
     ok = false;
     failed("payment sweep", e);
   }
+  await recordJobRun({ peers: peerStore() }, { ok, startedAt, sweptBefore });
   return Response.json(
     ok
       ? {

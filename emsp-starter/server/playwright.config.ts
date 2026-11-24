@@ -4,22 +4,26 @@ const PORT = 3317;
 export const E2E_ADMIN_SECRET = "e2e-only-admin-secret-0123456789abcdef";
 
 /**
- * The same build under five synthetic configurations, so that e2e/signed-out.spec.ts
+ * The same build under six synthetic configurations, so that e2e/signed-out.spec.ts
  * can compare what each sends to a visitor who is not signed in. Every value is made
  * up for this offline run: none is a credential, and no server here is ever asked to
- * reach the hosts named. Signed-out pages read no database.
+ * reach the hosts named. The servers out of demo mode are started with
+ * e2e/fake-database.mjs, which answers their database requests in process.
  *
- * In demo mode:
+ * In demo mode (no database; no admin can exist, so Setup shows a visitor the public
+ * view: six names, none done):
  * - "demo": the server every other spec uses. Demo mode by DEMO_MODE, defaults.
  * - "misconfigured": every live-mode setting unset and optional ones malformed. It is
  *   in demo mode for that reason alone.
  * - "demo-full": everything set and well formed (an address, an identity, payments,
- *   email, the job), kept in demo mode by DEMO_MODE.
+ *   email, the job) but the admin secret, kept in demo mode by DEMO_MODE.
  *
  * Not in demo mode:
  * - "live-a", "live-b": everything well formed, with different addresses and
  *   identities. One has payments, the job and the admin secret set, the other has
- *   none of them.
+ *   none of them. Neither database has an admin yet, and what the two hold differs
+ *   (peers, times, events), but the same stops pass.
+ * - "live-admin": "live-a" again with a database that has an admin.
  */
 const fake = (prefix: string, fill: string) => prefix + fill.repeat(6);
 const LIVE_A = {
@@ -65,14 +69,20 @@ const MISCONFIGURED = {
   ADMIN_SECRET: E2E_ADMIN_SECRET,
 };
 
+const LIVE_ADMIN = { ...LIVE_A, SUPABASE_URL: "https://db-three.example.org" };
+
 export type Setup = {
   name: string;
   url: string;
   mode: "demo" | "live";
   /** ADMIN_SECRET is set: the one thing the sign-in page says about the settings. */
   secret: boolean;
+  /** An admin exists, so a visitor gets no public view of Setup. Never in demo mode. */
+  admin: boolean;
   env: Record<string, string>;
 };
+/** The database stand-in, loaded into the servers that are not in demo mode. */
+const FAKE_DATABASE = "--import=./e2e/fake-database.mjs";
 export const SETUPS: Setup[] = [
   {
     name: "demo",
@@ -89,17 +99,29 @@ export const SETUPS: Setup[] = [
   {
     name: "demo-full",
     mode: "demo",
-    secret: true,
-    env: { ...LIVE_A, DEMO_MODE: "true" },
+    secret: false,
+    env: { ...LIVE_A, ADMIN_SECRET: "", DEMO_MODE: "true" },
   },
   { name: "live-a", mode: "live", secret: true, env: LIVE_A },
   { name: "live-b", mode: "live", secret: false, env: LIVE_B },
+  {
+    name: "live-admin",
+    mode: "live",
+    secret: true,
+    admin: true,
+    env: LIVE_ADMIN,
+  },
 ].map((setup, i) => ({
+  admin: false,
   ...setup,
   mode: setup.mode as Setup["mode"],
   url: `http://localhost:${PORT + i}`,
-  // Only the first is in demo mode because it was asked to be.
-  env: { DEMO_MODE: "", ...setup.env },
+  env: {
+    // Only the first is in demo mode because it was asked to be.
+    DEMO_MODE: "",
+    ...(setup.mode === "live" ? { NODE_OPTIONS: FAKE_DATABASE } : {}),
+    ...setup.env,
+  },
 }));
 
 // Runs the built admin web in demo mode: no credentials, no network beyond localhost.

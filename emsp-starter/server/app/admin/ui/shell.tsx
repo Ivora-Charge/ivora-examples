@@ -5,10 +5,14 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { useAdmin } from "./admin-context";
 import { Icon, Mark, type IconName } from "./kit";
+import { useSetup } from "./setup-context";
 
 /**
  * The frame every admin page shares, as in the design: a top bar and a tab bar with
  * five places on a phone; from 60rem a labelled rail on the left.
+ *
+ * The first place is Setup until all six checks pass, and Health from then on. Only a
+ * signed-in admin's menu can say Health: a visitor's always says Setup.
  */
 type Place = { href: string; label: string; icon: IconName };
 const SETUP: Place = { href: "/", label: "Setup", icon: "setup" };
@@ -112,6 +116,8 @@ export function Shell({
   children: ReactNode;
 }) {
   const path = usePathname();
+  const { health } = useSetup();
+  const first = health ? "Health" : SETUP.label;
   const current = (href: string) =>
     isAt(path, href) ? ("page" as const) : undefined;
   const money = isAt(path, PAYMENTS.href) || isAt(path, RECON.href);
@@ -141,7 +147,7 @@ export function Shell({
             ) : (
               <Link key={n.href} href={n.href} aria-current={current(n.href)}>
                 <Icon name={n.icon} />
-                {n.label}
+                {n === SETUP ? first : n.label}
               </Link>
             ),
           )}
@@ -154,7 +160,7 @@ export function Shell({
         <div className="page">{children}</div>
       </main>
       <nav className="tabs" aria-label="Admin, phone">
-        {tab(SETUP)}
+        {tab(SETUP, first)}
         {tab(PEERS)}
         {tab(SESSIONS)}
         {tab(PAYMENTS, "Money", money ? "page" : undefined)}

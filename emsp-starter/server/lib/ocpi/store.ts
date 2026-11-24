@@ -129,6 +129,8 @@ export interface PeerStore {
   }): Promise<Peer>;
   getPeer(id: string): Promise<Peer | null>;
   listPeers(): Promise<Peer[]>;
+  /** Whether any peer is registered, by reading at most one row. */
+  hasRegisteredPeer(): Promise<boolean>;
   /**
    * Changes a peer. With `ifStatus`, only when the peer still has that status: returns
    * null otherwise, so two concurrent handshakes cannot both win. With `ifRev`,
@@ -148,8 +150,15 @@ export interface PeerStore {
   /** Revokes every active token of the peer, except `keepHash`. */
   revokePeerTokens(peerId: string, keepHash?: string): Promise<void>;
   audit(entry: AuditEntry): Promise<void>;
-  /** The audit log of one subject (a payment, a token, a peer), newest first. */
-  listAudit(subjectId: string, limit: number): Promise<AuditRecord[]>;
+  /**
+   * The audit log of one subject (a payment, a token, a peer), newest first; with
+   * `action`, its entries of that action only.
+   */
+  listAudit(
+    subjectId: string,
+    limit: number,
+    action?: string,
+  ): Promise<AuditRecord[]>;
 }
 
 /** Peers in memory: for demo mode (nothing persists) and for tests. */
@@ -196,6 +205,10 @@ export class MemoryPeerStore implements PeerStore {
     return [...this.peers.values()]
       .sort((a, b) => a.createdAt.localeCompare(b.createdAt))
       .map((p) => structuredClone(p));
+  }
+
+  async hasRegisteredPeer() {
+    return [...this.peers.values()].some((p) => p.status === "registered");
   }
 
   async updatePeer(
@@ -248,9 +261,13 @@ export class MemoryPeerStore implements PeerStore {
     });
   }
 
-  async listAudit(subjectId: string, limit: number) {
+  async listAudit(subjectId: string, limit: number, action?: string) {
     return this.auditLog
-      .filter((e) => e.subjectId === subjectId)
+      .filter(
+        (e) =>
+          e.subjectId === subjectId &&
+          (action === undefined || e.action === action),
+      )
       .reverse()
       .slice(0, limit)
       .map((e) => structuredClone(e));

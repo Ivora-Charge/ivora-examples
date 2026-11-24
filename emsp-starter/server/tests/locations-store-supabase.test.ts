@@ -217,17 +217,26 @@ describe("Supabase location store (PostgREST)", () => {
   });
 
   it("reports failures by table and status only", async () => {
-    replies.push(new Response(`{"message":"bad ${KEY}"}`, { status: 400 }));
-    await expect(
-      store.getLocation({
+    replies.push(
+      new Response(`{"code":"42501","message":"bad ${KEY}"}`, { status: 400 }),
+    );
+    const error = await store
+      .getLocation({
         peerId: PEER,
         countryCode: "ZZ",
         partyId: "MCK",
         id: "1",
-      }),
-    ).rejects.toThrow(
-      new Error("Database request failed: GET emsp_ocpi_locations (HTTP 400)"),
-    );
+      })
+      .catch((e: unknown) => e);
+    // The table, the status and the answer's error code; nothing else of the answer.
+    expect(error).toBeInstanceOf(Error);
+    expect({ ...(error as Error), message: (error as Error).message }).toEqual({
+      name: "DatabaseRequestError",
+      message: "Database request failed: GET emsp_ocpi_locations (HTTP 400)",
+      status: 400,
+      code: "42501",
+    });
+    expect(String((error as Error).stack)).not.toContain(KEY);
   });
 });
 
