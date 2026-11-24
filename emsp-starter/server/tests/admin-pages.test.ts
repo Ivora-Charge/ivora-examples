@@ -563,9 +563,15 @@ describe("peers: a row and a hub's page, from the peer list", () => {
       "3 times, last at 2026-11-24 10:30 UTC (locations), first at 2026-11-24 09:00 UTC. Its OCPI-from party is not trusted behind this hub.",
     );
     expect(html).toContain(
-      "once, last at 2026-11-24 08:00 UTC (sessions), first at 2026-11-24 08:00 UTC. The URL or body named it, but the request came from NL-EXH (OCPI-from).",
+      "once, last at 2026-11-24 08:00 UTC (sessions), first at 2026-11-24 08:00 UTC. The request came from NL-EXH (OCPI-from); the URL or body named this party. It did not send the data itself, so there is nothing to accept.",
     );
+    // A party only named by another sender: its own headline, and no Accept.
+    expect(html).toContain(
+      'A trusted party sent data naming <span class="mono">BE-QQQ</span>',
+    );
+    expect(html).not.toContain('refused: <span class="mono">BE-QQQ');
     expect(html).toContain('Accept this party<span class="sr"> NL-XYZ</span>');
+    expect(html).not.toContain('Accept this party<span class="sr"> BE-QQQ');
     expect(html).toContain("a count can be lower than what was sent");
     // None refused: no section.
     expect(

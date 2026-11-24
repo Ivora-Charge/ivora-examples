@@ -147,12 +147,21 @@ const times = (n: number) => (n === 1 ? "once" : `${n} times`);
 export function refusalReason(r: Refusal): string {
   if (r.kind === "routing")
     return `Its OCPI-from party is not trusted behind this hub${r.otherParty ? `; the URL named ${r.otherParty}` : ""}.`;
-  return `The URL or body named it, but the request came from ${r.otherParty ?? "another party"} (OCPI-from).`;
+  return `The request came from ${r.otherParty ?? "another party"} (OCPI-from); the URL or body named this party. It did not send the data itself, so there is nothing to accept.`;
+}
+
+/** The headline of a refused party: it sent data itself, or another party named it. */
+export function refusalHeadline(r: Refusal): string {
+  return r.kind === "routing"
+    ? "A party sent us data and was refused:"
+    : "A trusted party sent data naming";
 }
 
 /**
- * Parties behind the hub that sent us data and were refused because they are not
- * trusted, with Accept this party on each: the same action as the add-a-party form.
+ * Parties behind the hub whose pushes were refused because they are not trusted. Accept
+ * this party (the same action as the add-a-party form) only where the party sent the
+ * data itself (kind `routing`, it was the OCPI-from party); a party another sender only
+ * named in the URL or body (kind `path`) is listed without it.
  */
 export function RefusedParties({
   refused,
@@ -169,7 +178,7 @@ export function RefusedParties({
         Refused <span className="muted">{refused.length}</span>
       </h2>
       <p className="muted">
-        These parties sent us data through the hub and were refused, because
+        Data for these parties came through the hub and was refused, because
         they are not trusted. Accept one only if you have an agreement with it.
         Each party is counted at most once a minute, so a count can be lower
         than what was sent.
@@ -180,22 +189,23 @@ export function RefusedParties({
             <Tile kind="todo" big={<Icon name="alert" />} />
             <div className="what">
               <h3>
-                A party sent us data and was refused:{" "}
-                <span className="mono">{code(r)}</span>
+                {refusalHeadline(r)} <span className="mono">{code(r)}</span>
               </h3>
               <p className="meta">
                 {`${times(r.times)}, last at ${utc(r.lastSeen)} (${r.module}), first at ${utc(r.firstSeen)}. ${refusalReason(r)}`}
               </p>
             </div>
-            <span className="end">
-              <button
-                className="btn sm"
-                type="button"
-                onClick={() => accept(r)}
-              >
-                Accept this party<span className="sr"> {code(r)}</span>
-              </button>
-            </span>
+            {r.kind === "routing" && (
+              <span className="end">
+                <button
+                  className="btn sm"
+                  type="button"
+                  onClick={() => accept(r)}
+                >
+                  Accept this party<span className="sr"> {code(r)}</span>
+                </button>
+              </span>
+            )}
           </li>
         ))}
       </ul>

@@ -102,7 +102,6 @@ describe("Supabase peer store (PostgREST)", () => {
       p_module: "locations",
       p_other_party: "ZZ-AAA",
       p_times: 3,
-      p_now: "2026-10-21T10:00:00.000Z",
     });
     replies.push(Response.json([{ noted: false }]));
     expect(
@@ -145,6 +144,13 @@ describe("Supabase peer store (PostgREST)", () => {
     ]);
     expect(requests[2].url).toBe(
       `https://db.example.test/rest/v1/emsp_ocpi_hub_refusals?peer_id=eq.${ROW.id}&order=last_seen.desc,country_code.asc,party_id.asc&limit=100&select=country_code,party_id,kind,module,other_party,times,first_seen,last_seen`,
+    );
+    // An accepted party's row is deleted.
+    replies.push(new Response(null, { status: 204 }));
+    await store.forgetRefusal(ROW.id, { countryCode: "zz", partyId: "bbb" });
+    expect(requests[3].method).toBe("DELETE");
+    expect(requests[3].url).toBe(
+      `https://db.example.test/rest/v1/emsp_ocpi_hub_refusals?peer_id=eq.${ROW.id}&country_code=eq.ZZ&party_id=eq.BBB`,
     );
   });
 

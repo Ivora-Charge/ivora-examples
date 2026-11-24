@@ -1,6 +1,8 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { assertLive } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
+import { ABSENT_CODES, DatabaseRequestError } from "@/lib/server/supabase-rest";
 import { tokensReceiver } from "@/lib/tokens/push";
 import type { TokenStore } from "@/lib/tokens/store";
 import { ocpiPages, type ClientOptions } from "./client";
@@ -159,6 +161,21 @@ export async function acceptParty(
     subjectId: peerId,
     details: { party: idOf(party), offered: held?.status === "offered" },
   });
+  // A trusted party's pushes are no longer refused: drop its refusal row, so it does
+  // not count toward the hub's cap. Best effort: the table is missing before its
+  // migration, and the accept stands either way.
+  try {
+    await deps.store.forgetRefusal(peerId, party);
+  } catch (e) {
+    if (!(
+      e instanceof DatabaseRequestError &&
+      e.code !== null &&
+      ABSENT_CODES.has(e.code)
+    ))
+      console.error(
+        `Forgetting the refused pushes of ${idOf(party)} at peer ${peerId} failed: ${logText(e)}`,
+      );
+  }
   return updated;
 }
 

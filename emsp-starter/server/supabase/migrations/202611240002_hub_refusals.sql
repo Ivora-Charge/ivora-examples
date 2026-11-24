@@ -36,10 +36,17 @@ alter table public.emsp_ocpi_hub_refusals enable row level security;
 revoke all on table public.emsp_ocpi_hub_refusals from public, anon, authenticated, service_role;
 grant select, insert, update, delete on table public.emsp_ocpi_hub_refusals to service_role;
 
--- Notes p_times refusals of one party at p_now. Writes at most once per party per
--- 60 seconds: a note within 60 seconds of the row's last_seen changes nothing and
--- returns false, so a sender cannot drive writes faster than that. A new row past 100
--- for the peer drops the peer's rows seen longest ago. Returns whether it wrote.
+-- Notes p_times refusals of one party, at the database's own clock (now()). Bounded so
+-- that a hub token holder cannot drive writes:
+-- - per party: a note within 60 seconds of the row's last_seen changes nothing;
+-- - per hub, for new parties: a party with no row yet gets one only while fewer than
+--   10 of the peer's rows were first seen in the last 60 seconds, so rotating the
+--   party on every request adds at most 10 rows (and drops at most 10 old ones) a
+--   minute;
+-- - at most 100 rows per peer: a new row past that drops the peer's rows seen
+--   longest ago.
+-- Calls for one peer run one at a time (a transaction lock per peer), so concurrent
+-- calls cannot overshoot the budget or the cap. Returns whether it wrote.
 create function public.emsp_ocpi_hub_refusal_note(
   p_peer_id uuid,
   p_country_code text,
@@ -47,32 +54,51 @@ create function public.emsp_ocpi_hub_refusal_note(
   p_kind text,
   p_module text,
   p_other_party text,
-  p_times integer,
-  p_now timestamptz
+  p_times integer
 ) returns table (noted boolean)
 language plpgsql
 security invoker
 set search_path = ''
 as $$
 declare
-  v_noted boolean;
+  v_now timestamptz := now();
+  v_last timestamptz;
+  v_noted boolean := false;
 begin
-  insert into public.emsp_ocpi_hub_refusals as r (
-    peer_id, country_code, party_id, kind, module, other_party, times, first_seen, last_seen
-  )
-  values (
-    p_peer_id, p_country_code, p_party_id, p_kind, p_module, p_other_party,
-    greatest(p_times, 1), p_now, p_now
-  )
-  on conflict (peer_id, country_code, party_id) do update set
-    kind = excluded.kind,
-    module = excluded.module,
-    other_party = excluded.other_party,
-    times = r.times + excluded.times,
-    last_seen = excluded.last_seen
-  where r.last_seen <= excluded.last_seen - interval '60 seconds';
-  v_noted := found;
-  if v_noted then
+  perform pg_advisory_xact_lock(
+    hashtextextended('emsp_ocpi_hub_refusals:peer:' || p_peer_id::text, 0)
+  );
+  select r.last_seen into v_last
+  from public.emsp_ocpi_hub_refusals as r
+  where r.peer_id = p_peer_id
+    and r.country_code = p_country_code
+    and r.party_id = p_party_id;
+  if found then
+    update public.emsp_ocpi_hub_refusals as r set
+      kind = p_kind,
+      module = p_module,
+      other_party = p_other_party,
+      times = r.times + greatest(p_times, 1),
+      last_seen = greatest(v_now, r.last_seen)
+    where r.peer_id = p_peer_id
+      and r.country_code = p_country_code
+      and r.party_id = p_party_id
+      and r.last_seen <= v_now - interval '60 seconds';
+    v_noted := found;
+  elsif (
+    select count(*)
+    from public.emsp_ocpi_hub_refusals as b
+    where b.peer_id = p_peer_id
+      and b.first_seen > v_now - interval '60 seconds'
+  ) < 10 then
+    insert into public.emsp_ocpi_hub_refusals (
+      peer_id, country_code, party_id, kind, module, other_party, times, first_seen, last_seen
+    )
+    values (
+      p_peer_id, p_country_code, p_party_id, p_kind, p_module, p_other_party,
+      greatest(p_times, 1), v_now, v_now
+    );
+    v_noted := true;
     delete from public.emsp_ocpi_hub_refusals as d
     where d.peer_id = p_peer_id
       and (d.country_code, d.party_id) not in (
@@ -86,7 +112,7 @@ begin
   return query select v_noted;
 end;
 $$;
-revoke execute on function public.emsp_ocpi_hub_refusal_note(uuid, text, text, text, text, text, integer, timestamptz) from public, anon, authenticated;
-grant execute on function public.emsp_ocpi_hub_refusal_note(uuid, text, text, text, text, text, integer, timestamptz) to service_role;
+revoke execute on function public.emsp_ocpi_hub_refusal_note(uuid, text, text, text, text, text, integer) from public, anon, authenticated;
+grant execute on function public.emsp_ocpi_hub_refusal_note(uuid, text, text, text, text, text, integer) to service_role;
 
 commit;

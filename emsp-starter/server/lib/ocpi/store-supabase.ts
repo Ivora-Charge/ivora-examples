@@ -17,6 +17,7 @@ import type {
   RefusalNote,
 } from "./store";
 import { MAX_REFUSED, tokenActive } from "./store";
+import type { Party } from "./types";
 
 type PeerRow = {
   id: string;
@@ -81,7 +82,7 @@ const COLUMNS: Record<keyof PeerPatch, keyof PeerRow> = {
  */
 export class SupabasePeerStore implements PeerStore {
   private readonly rest: <T>(
-    method: "GET" | "POST" | "PATCH",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
   ) => Promise<T>;
@@ -273,10 +274,16 @@ export class SupabasePeerStore implements PeerStore {
         p_module: note.module,
         p_other_party: note.otherParty ?? null,
         p_times: Math.max(1, Math.trunc(note.times)),
-        p_now: note.at,
       },
     );
     return Boolean(rows[0]?.noted);
+  }
+
+  async forgetRefusal(peerId: string, party: Party) {
+    await this.rest(
+      "DELETE",
+      `emsp_ocpi_hub_refusals?peer_id=${eq(peerId)}&country_code=${eq(party.countryCode.toUpperCase())}&party_id=${eq(party.partyId.toUpperCase())}`,
+    );
   }
 
   async listRefusals(peerId: string): Promise<HubRefusal[]> {

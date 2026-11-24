@@ -62,6 +62,13 @@ test("live-admin: a party the hub sent and we refused is listed, and Accept this
   await expect(refused).toContainText(
     "Its OCPI-from party is not trusted behind this hub.",
   );
+  // A party the hub only named in the URL: its own headline, and nothing to accept.
+  await expect(
+    refused.getByText("A trusted party sent data naming BE-QQQ"),
+  ).toBeVisible();
+  await expect(
+    refused.getByRole("button", { name: /Accept this party BE-QQQ/ }),
+  ).toHaveCount(0);
   for (const colorScheme of schemes) {
     await page.emulateMedia({ colorScheme });
     await expectAccessible(page, `hub page, a refused party, ${colorScheme}`);

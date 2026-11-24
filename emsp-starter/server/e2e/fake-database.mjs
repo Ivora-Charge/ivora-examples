@@ -75,6 +75,18 @@ const refusals = () => [
     first_seen: ago(7_200),
     last_seen: ago(600),
   },
+  // Named in the URL by the hub's own party: listed, but not offered for accepting.
+  {
+    peer_id: hub().id,
+    country_code: "BE",
+    party_id: "QQQ",
+    kind: "path",
+    module: "sessions",
+    other_party: "NL-EXH",
+    times: 1,
+    first_seen: ago(900),
+    last_seen: ago(900),
+  },
 ];
 const audit = (action, seconds, details = {}) => ({
   occurred_at: ago(seconds),

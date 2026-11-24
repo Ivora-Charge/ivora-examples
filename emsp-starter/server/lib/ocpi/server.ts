@@ -25,7 +25,8 @@ import { ocpiTimestamp, sameParty, STATUS, type Party } from "./types";
  *   do not use routing headers.
  * - Echoes X-Request-ID and X-Correlation-ID, generating them when missing.
  * - A hub's push refused for its party (RefusedPartyProblem, here or in receiver.ts)
- *   is noted for the hub's page (refusals.ts) before the 403 goes out.
+ *   is noted for the hub's page (refusals.ts); the 403 waits for that write at most
+ *   REFUSAL_WRITE_WAIT_MS (1.5 s) and is the same whatever the write does.
  */
 export type OcpiContext = {
   request: Request;
