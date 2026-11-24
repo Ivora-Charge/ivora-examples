@@ -6,7 +6,8 @@
 //
 // It speaks just enough of the Data API (PostgREST) for the setup status read and the
 // database check: every shipped table, column and function exists, and four tables
-// have rows. What they hold differs per host, on purpose:
+// have rows (five on db-three, whose hub has refused pushes). What they hold differs
+// per host, on purpose:
 //
 // - db-one and db-two have no admin yet. Their facts differ (other peers, other
 //   times, a refused webhook request on one), but the same stops pass and fail, so a
@@ -61,6 +62,20 @@ const hub = () => ({
     },
   ],
 });
+// Pushes the hub sent for parties nobody trusts (emsp_ocpi_hub_refusals).
+const refusals = () => [
+  {
+    peer_id: hub().id,
+    country_code: "NL",
+    party_id: "XYZ",
+    kind: "routing",
+    module: "locations",
+    other_party: null,
+    times: 3,
+    first_seen: ago(7_200),
+    last_seen: ago(600),
+  },
+];
 const audit = (action, seconds, details = {}) => ({
   occurred_at: ago(seconds),
   actor: "e2e",
@@ -94,6 +109,7 @@ const DATABASES = {
   "db-three.example.org": () => ({
     admins: 1,
     peers: [peer(8), hub()],
+    refusals: refusals(),
     events: [{ type: "charge.refunded", received_at: ago(90) }],
     sweeps: [{ swept_at: ago(15) }],
     audit: [audit("job.run", 300, { ok: true, since_last_s: 60 })],
@@ -113,6 +129,10 @@ function answer(url) {
       return state.peers.filter(
         (row) => (!status || row.status === status) && (!id || row.id === id),
       );
+    }
+    if (table === "emsp_ocpi_hub_refusals") {
+      const id = url.searchParams.get("peer_id")?.replace(/^eq\./, "");
+      return (state.refusals ?? []).filter((row) => row.peer_id === id);
     }
     if (table === "emsp_stripe_events") return state.events;
     if (table === "emsp_payment_sweeps") return state.sweeps;

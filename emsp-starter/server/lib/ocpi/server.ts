@@ -4,6 +4,7 @@ import { BodyTooLargeError, readLimitedText } from "./body";
 import { OcpiProblem } from "./errors";
 import { ourParty } from "./identity";
 import { isPartyOfPeer } from "./parties";
+import { noteRefused, pathParty, RefusedPartyProblem } from "./refusals";
 import { peerStore } from "./registry";
 import { ocpiRequestIds } from "./request-ids";
 import type { IssuedToken, Peer, PeerStore } from "./store";
@@ -23,6 +24,8 @@ import { ocpiTimestamp, sameParty, STATUS, type Party } from "./types";
  *   this eMSP and "from" one of the peer's roles. The versions and credentials modules
  *   do not use routing headers.
  * - Echoes X-Request-ID and X-Correlation-ID, generating them when missing.
+ * - A hub's push refused for its party (RefusedPartyProblem, here or in receiver.ts)
+ *   is noted for the hub's page (refusals.ts) before the 403 goes out.
  */
 export type OcpiContext = {
   request: Request;
@@ -133,8 +136,10 @@ export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
         message: p.message,
       });
 
+    let store: PeerStore | undefined;
+    let peer: Peer | null = null;
     try {
-      const store = peerStore();
+      store = peerStore();
       let token: IssuedToken | null = null;
       let tokenValue = "";
       for (const candidate of tokensFromHeader(h.get("Authorization"))) {
@@ -144,7 +149,7 @@ export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
           break;
         }
       }
-      const peer = token ? await store.getPeer(token.peerId) : null;
+      peer = token ? await store.getPeer(token.peerId) : null;
       if (
         !token ||
         !peer ||
@@ -183,10 +188,9 @@ export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
             "OCPI-to-country-code and OCPI-to-party-id do not match this eMSP",
           );
         if (!isPartyOfPeer(peer, from))
-          throw new OcpiProblem(
-            403,
-            STATUS.CLIENT_ERROR,
+          throw new RefusedPartyProblem(
             "OCPI-from-country-code and OCPI-from-party-id are not a party of this token",
+            { party: from, kind: "routing", other: pathParty(request.url) },
           );
       }
 
@@ -204,6 +208,8 @@ export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
       res.headers.set("X-Correlation-ID", correlationId);
       return res;
     } catch (e) {
+      if (e instanceof RefusedPartyProblem && store && peer)
+        await noteRefused(store, peer, request, e.refused);
       if (e instanceof OcpiProblem) return problem(e);
       // Name the error, not its details: they may include peer data.
       console.error(

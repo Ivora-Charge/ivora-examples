@@ -50,7 +50,15 @@ import {
 import { MAX_CREDENTIALS_ROLES, parseCredentials } from "@/lib/ocpi/schema";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import {
+  moduleOf,
+  noteRefused,
+  pathParty,
+  resetRefusalWritesForTests,
+} from "@/lib/ocpi/refusals";
+import {
+  MAX_REFUSED,
   MemoryPeerStore,
+  REFUSAL_WINDOW_MS,
   type HubParty,
   type Peer,
   type PeerStore,
@@ -138,6 +146,7 @@ beforeEach(async () => {
   setLocationStoreForTests(locations);
   setCommandStoreForTests(commands);
   setSessionStoreForTests(sessions);
+  resetRefusalWritesForTests();
   setPreAuthForTests({
     async hold() {
       return { ok: true, reference: null };
@@ -1432,6 +1441,244 @@ describe("pushes received through a hub", () => {
     await expect(
       hub.cpo(A).putLocation(hub.cpo(A).state.locations[1], { push: true }),
     ).rejects.toMatchObject({ httpStatus: 403 });
+  });
+});
+
+describe("refused pushes through a hub are noted for its page", () => {
+  const HUB: Party = { countryCode: "ZZ", partyId: "HUB" };
+  const refusedB = () => peers.listRefusals(hubPeer.id);
+  const pushB = (loc = hub.cpo(B).state.locations[0]) =>
+    expect(rawPush(B, `locations/ZZ/BBB/${loc.id}`, loc)).rejects.toMatchObject(
+      { httpStatus: 403, statusCode: 2000 },
+    );
+
+  it("a refused push is noted once, counted after the window, and nothing of the request is kept", async () => {
+    await accept(A);
+    const note = vi.spyOn(peers, "noteRefusal");
+    let now = T0.getTime();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await pushB();
+    expect(await refusedB()).toEqual([
+      {
+        ...B,
+        kind: "routing",
+        module: "locations",
+        times: 1,
+        firstSeen: T0.toISOString(),
+        lastSeen: T0.toISOString(),
+      },
+    ]);
+    // Within the window: refused as before, and no write at all.
+    now += 1_000;
+    await pushB();
+    now += 1_000;
+    await pushB();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect((await refusedB())[0].times).toBe(1);
+    // After it: one write that counts the refusals in between too.
+    now = T0.getTime() + REFUSAL_WINDOW_MS + 1;
+    await pushB();
+    expect(note).toHaveBeenCalledTimes(2);
+    expect(await refusedB()).toEqual([
+      expect.objectContaining({
+        ...B,
+        times: 4,
+        firstSeen: T0.toISOString(),
+        lastSeen: new Date(now).toISOString(),
+      }),
+    ]);
+    // Only parties, the module, counts and times: no body, token or header value.
+    const row = JSON.stringify(await refusedB());
+    expect(row).not.toContain(hub.state.emsp!.token);
+    expect(row).not.toContain(hub.cpo(B).state.locations[0].id);
+    expect(locations.locations.size).toBe(0);
+  });
+
+  it("names the URL's party when the OCPI-from party is the hub's or a trusted one", async () => {
+    await accept(A);
+    const aLoc = hub.cpo(A).state.locations[0];
+    // A trusted party in OCPI-from, B in the path.
+    await expect(
+      rawPush(A, `locations/ZZ/BBB/${aLoc.id}`, { ...aLoc, party_id: "BBB" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await refusedB()).toEqual([
+      expect.objectContaining({ ...B, kind: "path", otherParty: "ZZ-AAA" }),
+    ]);
+    // The hub's own party in OCPI-from, an unknown party in the path.
+    await expect(
+      rawPush(HUB, `locations/ZZ/CCC/${aLoc.id}`, { ...aLoc, party_id: "CCC" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await refusedB()).toContainEqual(
+      expect.objectContaining({
+        countryCode: "ZZ",
+        partyId: "CCC",
+        kind: "path",
+        module: "locations",
+        otherParty: "ZZ-HUB",
+      }),
+    );
+  });
+
+  it("notes nothing for a GET, a trusted party, the hub's own party, our party or a direct peer", async () => {
+    await accept(A);
+    await accept(B);
+    const aLoc = hub.cpo(A).state.locations[0];
+    // Both trusted: A's objects under B's path are refused, but B is no one to accept.
+    await expect(
+      rawPush(A, `locations/ZZ/BBB/${aLoc.id}`, { ...aLoc, party_id: "BBB" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    // The hub's own party, writing under its own name.
+    await expect(
+      rawPush(HUB, `locations/ZZ/HUB/${aLoc.id}`, { ...aLoc, party_id: "HUB" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    // A GET of an untrusted party.
+    await expect(
+      rawPush({ countryCode: "ZZ", partyId: "DDD" }, "tokens", undefined, {
+        method: "GET",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await peers.listRefusals(hubPeer.id)).toEqual([]);
+    // A direct CPO's refused push is not a hub's.
+    const dp = await connectToCpo(
+      {
+        label: "Mock CPO",
+        versionsUrl: direct.urls.versions,
+        tokenA: direct.issueTokenA(),
+      },
+      { store: peers, client },
+    );
+    const loc = direct.state.locations[0];
+    await expect(
+      rawPush(
+        { countryCode: "ZZ", partyId: "EEE" },
+        `locations/ZZ/EEE/${loc.id}`,
+        loc,
+        {
+          token: direct.state.emsp!.token,
+        },
+      ),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await peers.listRefusals(dp.id)).toEqual([]);
+    expect(peers.refusals.size).toBe(0);
+  });
+
+  it("a failed write changes nothing for the sender: still 403, logged by name", async () => {
+    vi.spyOn(peers, "noteRefusal").mockRejectedValue(new Error("db down"));
+    await pushB();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Noting a refused push from ZZ-BBB .* failed: Error$/,
+      ),
+    );
+  });
+
+  it("keeps at most MAX_REFUSED parties per hub, dropping the ones seen longest ago", async () => {
+    const at = (i: number) => new Date(T0.getTime() + i * 1_000).toISOString();
+    const party = (i: number) => `${String(i).padStart(3, "0")}`;
+    for (let i = 0; i < MAX_REFUSED + 5; i++)
+      await peers.noteRefusal({
+        peerId: hubPeer.id,
+        countryCode: "ZZ",
+        partyId: party(i),
+        kind: "routing",
+        module: "locations",
+        times: 1,
+        at: at(i),
+      });
+    const kept = await peers.listRefusals(hubPeer.id);
+    expect(kept).toHaveLength(MAX_REFUSED);
+    expect(kept[0].partyId).toBe(party(MAX_REFUSED + 4));
+    expect(kept.map((r) => r.partyId)).not.toContain(party(4));
+    expect(kept.map((r) => r.partyId)).toContain(party(5));
+    expect(peers.refusals.size).toBe(MAX_REFUSED);
+    // Another hub's list is its own.
+    await peers.noteRefusal({
+      peerId: "other",
+      countryCode: "ZZ",
+      partyId: "ZZZ",
+      kind: "routing",
+      module: "locations",
+      times: 1,
+      at: at(0),
+    });
+    expect(await peers.listRefusals(hubPeer.id)).toHaveLength(MAX_REFUSED);
+  });
+
+  it("this process tracks a bounded number of parties", async () => {
+    const peer = (await peers.getPeer(hubPeer.id))!;
+    const note = vi.spyOn(peers, "noteRefusal").mockResolvedValue(true);
+    const req = new Request(`${EMSP}/locations/ZZ/AAA/L1`, { method: "PUT" });
+    const id = (i: number) => i.toString(36).toUpperCase().padStart(3, "0");
+    const refuse = (i: number) =>
+      noteRefused(
+        peers,
+        peer,
+        req,
+        { party: { countryCode: "ZZ", partyId: id(i) }, kind: "routing" },
+        () => T0.getTime(),
+      );
+    // 1001 parties within one window: one write each, and the first is forgotten.
+    for (let i = 0; i <= 1_000; i++) await refuse(i);
+    expect(note).toHaveBeenCalledTimes(1_001);
+    // The forgotten one is written again; one still held is not.
+    await refuse(0);
+    await refuse(1_000);
+    expect(note).toHaveBeenCalledTimes(1_002);
+  });
+
+  it("reads the module and URL party of a request", () => {
+    expect(moduleOf(`${EMSP}/sessions/zz/bbb/S1`)).toBe("sessions");
+    expect(moduleOf("https://x.example.test/")).toBe("other");
+    expect(pathParty(`${EMSP}/locations/zz/bbb/L1`)).toEqual(B);
+    expect(pathParty(`${EMSP}/cdrs`)).toBeUndefined();
+    expect(pathParty(`${EMSP}/locations/zzz/bbb/L1`)).toBeUndefined();
+  });
+
+  it("the hub page lists a refused party, and Accept this party trusts it through the audited action", async () => {
+    process.env.ADMIN_SECRET = "s".repeat(32);
+    signInWithSecret();
+    await pushB();
+    const listed = async () =>
+      (await listPeersAction({}, adminForm({}))).peers!.find(
+        (p) => p.id === hubPeer.id,
+      )!.hub!.refused;
+    expect(await listed()).toEqual([
+      expect.objectContaining({ ...B, kind: "routing", times: 1 }),
+    ]);
+    const acc = await hubPartyAction(
+      {},
+      adminForm({
+        peerId: hubPeer.id,
+        intent: "accept",
+        countryCode: "ZZ",
+        partyId: "BBB",
+        name: "",
+      }),
+    );
+    expect(acc).toMatchObject({ ok: true });
+    expect((await peers.getPeer(hubPeer.id))!.hubParties).toContainEqual(
+      expect.objectContaining({ ...B, status: "trusted", source: "admin" }),
+    );
+    expect(peers.auditLog.at(-1)).toMatchObject({
+      action: "ocpi.hub.party_trusted",
+      subjectId: hubPeer.id,
+      details: { party: "ZZ-BBB" },
+    });
+    // Trusted now: no longer listed as refused, and its push goes through.
+    expect(await listed()).toEqual([]);
+    await hub.cpo(B).putLocation(hub.cpo(B).state.locations[0], { push: true });
+    expect(locations.locations.size).toBe(1);
+  });
+
+  it("the peer list still loads when the refusals cannot be read (migration pending)", async () => {
+    process.env.ADMIN_SECRET = "s".repeat(32);
+    signInWithSecret();
+    vi.spyOn(peers, "listRefusals").mockRejectedValue(new Error("absent"));
+    const list = await listPeersAction({}, adminForm({}));
+    expect(list.ok).toBe(true);
+    expect(list.peers!.find((p) => p.id === hubPeer.id)!.hub!.refused).toEqual(
+      [],
+    );
   });
 });
 

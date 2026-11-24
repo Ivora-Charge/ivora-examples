@@ -77,6 +77,77 @@ describe("Supabase peer store (PostgREST)", () => {
     expect(await requests[2].json()).toMatchObject({ hub_push_mode: "hub" });
   });
 
+  it("notes a hub's refused party through its function, and reads them newest first", async () => {
+    replies.push(Response.json([{ noted: true }]));
+    const noted = await store.noteRefusal({
+      peerId: ROW.id,
+      countryCode: "ZZ",
+      partyId: "BBB",
+      kind: "path",
+      module: "locations",
+      otherParty: "ZZ-AAA",
+      times: 3,
+      at: "2026-10-21T10:00:00.000Z",
+    });
+    expect(noted).toBe(true);
+    expect(requests[0].method).toBe("POST");
+    expect(requests[0].url).toBe(
+      "https://db.example.test/rest/v1/rpc/emsp_ocpi_hub_refusal_note",
+    );
+    expect(await requests[0].json()).toEqual({
+      p_peer_id: ROW.id,
+      p_country_code: "ZZ",
+      p_party_id: "BBB",
+      p_kind: "path",
+      p_module: "locations",
+      p_other_party: "ZZ-AAA",
+      p_times: 3,
+      p_now: "2026-10-21T10:00:00.000Z",
+    });
+    replies.push(Response.json([{ noted: false }]));
+    expect(
+      await store.noteRefusal({
+        peerId: ROW.id,
+        countryCode: "ZZ",
+        partyId: "BBB",
+        kind: "routing",
+        module: "cdrs",
+        times: 1,
+        at: "2026-10-21T10:00:01.000Z",
+      }),
+    ).toBe(false);
+    expect((await requests[1].json()).p_other_party).toBeNull();
+
+    replies.push(
+      Response.json([
+        {
+          country_code: "ZZ",
+          party_id: "BBB",
+          kind: "routing",
+          module: "locations",
+          other_party: null,
+          times: "4",
+          first_seen: "2026-10-21T10:00:00+00:00",
+          last_seen: "2026-10-21T10:05:00+00:00",
+        },
+      ]),
+    );
+    expect(await store.listRefusals(ROW.id)).toEqual([
+      {
+        countryCode: "ZZ",
+        partyId: "BBB",
+        kind: "routing",
+        module: "locations",
+        times: 4,
+        firstSeen: "2026-10-21T10:00:00.000Z",
+        lastSeen: "2026-10-21T10:05:00.000Z",
+      },
+    ]);
+    expect(requests[2].url).toBe(
+      `https://db.example.test/rest/v1/emsp_ocpi_hub_refusals?peer_id=eq.${ROW.id}&order=last_seen.desc,country_code.asc,party_id.asc&limit=100&select=country_code,party_id,kind,module,other_party,times,first_seen,last_seen`,
+    );
+  });
+
   it("updates conditionally on the status, mapping columns", async () => {
     replies.push(Response.json([]));
     const res = await store.updatePeer(

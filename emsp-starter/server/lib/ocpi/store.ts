@@ -126,6 +126,46 @@ export type AuditEntry = {
 /** An audit log entry as read back, newest first. */
 export type AuditRecord = AuditEntry & { at: string };
 
+/**
+ * Why a hub's push was refused: `routing`, its OCPI-from party is not trusted behind
+ * the hub; `path`, the party of the URL or body is not the OCPI-from party.
+ */
+export type RefusalKind = "routing" | "path";
+
+/**
+ * Refused pushes of one party behind a hub peer (refusals.ts): who, why, how often and
+ * when. No request body, token, header value or IP address.
+ */
+export type HubRefusal = {
+  /** The refused party, upper case. */
+  countryCode: string;
+  partyId: string;
+  kind: RefusalKind;
+  /** The OCPI module of the last refused request. */
+  module: string;
+  /** The other party of the last refused request ("NL-HUB"), when the two differ. */
+  otherParty?: string;
+  /** Refusals counted: a lower bound (at most one write per party per window). */
+  times: number;
+  firstSeen: string;
+  lastSeen: string;
+};
+
+/** One write of `times` refusals of a party at `at` (refusals.ts). */
+export type RefusalNote = Omit<
+  HubRefusal,
+  "firstSeen" | "lastSeen" | "otherParty"
+> & {
+  peerId: string;
+  otherParty?: string;
+  at: string;
+};
+
+/** Most refused parties kept per hub peer; the ones seen longest ago go first. */
+export const MAX_REFUSED = 100;
+/** A party's refusals are written at most once per this window (also in the SQL). */
+export const REFUSAL_WINDOW_MS = 60_000;
+
 export interface PeerStore {
   createPeer(input: {
     label: string;
@@ -164,6 +204,14 @@ export interface PeerStore {
     limit: number,
     action?: string,
   ): Promise<AuditRecord[]>;
+  /**
+   * Notes refusals of a party behind a hub peer: a new row, or one more count on the
+   * party's row. Writes nothing (and returns false) within REFUSAL_WINDOW_MS of the
+   * row's last write; keeps at most MAX_REFUSED rows per peer.
+   */
+  noteRefusal(note: RefusalNote): Promise<boolean>;
+  /** A hub peer's refused parties, seen most recently first. */
+  listRefusals(peerId: string): Promise<HubRefusal[]>;
 }
 
 /** Peers in memory: for demo mode (nothing persists) and for tests. */
@@ -171,6 +219,7 @@ export class MemoryPeerStore implements PeerStore {
   readonly peers = new Map<string, Peer>();
   readonly tokens = new Map<string, IssuedToken & { revokedAt?: string }>();
   readonly auditLog: AuditRecord[] = [];
+  readonly refusals = new Map<string, HubRefusal & { peerId: string }>();
 
   async createPeer(input: {
     label: string;
@@ -276,5 +325,44 @@ export class MemoryPeerStore implements PeerStore {
       .reverse()
       .slice(0, limit)
       .map((e) => structuredClone(e));
+  }
+
+  async noteRefusal(note: RefusalNote) {
+    const key = `${note.peerId}|${note.countryCode}-${note.partyId}`;
+    const held = this.refusals.get(key);
+    if (
+      held &&
+      Date.parse(note.at) - Date.parse(held.lastSeen) < REFUSAL_WINDOW_MS
+    )
+      return false;
+    const { at, otherParty, ...rest } = note;
+    this.refusals.set(key, {
+      ...rest,
+      ...(otherParty && { otherParty }),
+      times: (held?.times ?? 0) + Math.max(1, note.times),
+      firstSeen: held?.firstSeen ?? at,
+      lastSeen: at,
+    });
+    const kept = new Set(
+      (await this.listRefusals(note.peerId)).map(
+        (r) => `${note.peerId}|${r.countryCode}-${r.partyId}`,
+      ),
+    );
+    for (const [k, r] of this.refusals)
+      if (r.peerId === note.peerId && !kept.has(k)) this.refusals.delete(k);
+    return true;
+  }
+
+  async listRefusals(peerId: string) {
+    return [...this.refusals.values()]
+      .filter((r) => r.peerId === peerId)
+      .sort(
+        (a, b) =>
+          b.lastSeen.localeCompare(a.lastSeen) ||
+          a.countryCode.localeCompare(b.countryCode) ||
+          a.partyId.localeCompare(b.partyId),
+      )
+      .slice(0, MAX_REFUSED)
+      .map(({ peerId: _, ...r }) => structuredClone(r));
   }
 }

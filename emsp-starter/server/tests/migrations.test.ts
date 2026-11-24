@@ -517,6 +517,142 @@ describe("hub push mode (202611240001_hub_push_mode)", () => {
   });
 });
 
+describe("refused hub pushes (202611240002_hub_refusals)", () => {
+  const newPeer = async () =>
+    (
+      await db.query<{ id: string }>(
+        `insert into public.emsp_ocpi_peers (label, direction) values ('Hub', 'outbound') returning id`,
+      )
+    ).rows[0].id;
+  const note = async (
+    peer: string,
+    party: string,
+    at: string,
+    { times = 1, kind = "routing", other = null as string | null } = {},
+  ) =>
+    (
+      await db.query<{ noted: boolean }>(
+        "select noted from public.emsp_ocpi_hub_refusal_note($1, 'ZZ', $2, $3, 'locations', $4, $5, $6)",
+        [peer, party, kind, other, times, at],
+      )
+    ).rows[0].noted;
+  const rows = async (peer: string) =>
+    (
+      await db.query<{
+        party_id: string;
+        kind: string;
+        other_party: string | null;
+        times: string;
+        first_seen: Date;
+        last_seen: Date;
+      }>(
+        `select party_id, kind, other_party, times, first_seen, last_seen
+         from public.emsp_ocpi_hub_refusals where peer_id = $1
+         order by last_seen desc, party_id`,
+        [peer],
+      )
+    ).rows;
+
+  it("notes a party once, writes nothing within 60 seconds, and adds the count after", async () => {
+    const peer = await newPeer();
+    expect(await note(peer, "BBB", "2026-10-21T10:00:00Z")).toBe(true);
+    expect(
+      await note(peer, "BBB", "2026-10-21T10:00:59Z", { kind: "path" }),
+    ).toBe(false);
+    let [row] = await rows(peer);
+    expect(row).toMatchObject({ party_id: "BBB", kind: "routing" });
+    expect(Number(row.times)).toBe(1);
+    expect(
+      await note(peer, "BBB", "2026-10-21T10:01:00Z", {
+        times: 3,
+        kind: "path",
+        other: "ZZ-AAA",
+      }),
+    ).toBe(true);
+    [row] = await rows(peer);
+    expect(row).toMatchObject({ kind: "path", other_party: "ZZ-AAA" });
+    expect(Number(row.times)).toBe(4);
+    expect(new Date(row.first_seen).toISOString()).toBe(
+      "2026-10-21T10:00:00.000Z",
+    );
+    expect(new Date(row.last_seen).toISOString()).toBe(
+      "2026-10-21T10:01:00.000Z",
+    );
+  });
+
+  it("keeps at most 100 parties per peer, dropping the ones seen longest ago", async () => {
+    const peer = await newPeer();
+    const other = await newPeer();
+    await note(other, "OLD", "2026-10-21T09:00:00Z");
+    const id = (i: number) => i.toString(36).toUpperCase().padStart(3, "0");
+    for (let i = 0; i < 103; i++)
+      await note(
+        peer,
+        id(i),
+        new Date(Date.parse("2026-10-21T10:00:00Z") + i * 1_000).toISOString(),
+      );
+    const kept = (await rows(peer)).map((r) => r.party_id);
+    expect(kept).toHaveLength(100);
+    expect(kept[0]).toBe(id(102));
+    expect(kept).not.toContain(id(2));
+    expect(kept).toContain(id(3));
+    // Another peer's rows are not touched.
+    expect(await rows(other)).toHaveLength(1);
+  });
+
+  it("rejects malformed rows", async () => {
+    const peer = await newPeer();
+    const bad: [string, unknown[]][] = [
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'zz', 'BBB', 'routing', 'locations', null, 1, now())",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BB', 'routing', 'locations', null, 1, now())",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BBB', 'other', 'locations', null, 1, now())",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BBB', 'routing', 'Locations!', null, 1, now())",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BBB', 'routing', 'locations', 'x', 1, now())",
+        [peer],
+      ],
+    ];
+    for (const [sql, args] of bad)
+      await expect(db.query(sql, args)).rejects.toThrow(/check constraint/);
+    await expect(
+      db.query(
+        "select public.emsp_ocpi_hub_refusal_note(gen_random_uuid(), 'ZZ', 'BBB', 'routing', 'locations', null, 1, now())",
+      ),
+    ).rejects.toThrow(/foreign key/);
+  });
+
+  it("is closed to anon and authenticated, and open to the service role", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await asRole(db, role, async () => {
+        await expect(
+          db.query("select * from public.emsp_ocpi_hub_refusals"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          db.query(
+            "select public.emsp_ocpi_hub_refusal_note(gen_random_uuid(), 'ZZ', 'BBB', 'routing', 'locations', null, 1, now())",
+          ),
+        ).rejects.toThrow(/permission denied/);
+      });
+    const peer = await newPeer();
+    await asRole(db, "service_role", async () => {
+      expect(await note(peer, "SRV", "2026-10-21T10:00:00Z")).toBe(true);
+      expect(await rows(peer)).toHaveLength(1);
+    });
+  });
+});
+
 describe("roaming hub parties (202611160001_hub_parties)", () => {
   const peer = async () =>
     (
