@@ -7,6 +7,7 @@ import {
 import type {
   AuditEntry,
   AuditRecord,
+  HubPushMode,
   HubRefusal,
   IssuedToken,
   NewToken,
@@ -31,6 +32,8 @@ type PeerRow = {
   hub_parties: Peer["hubParties"];
   /** Absent before the 202611240001 migration. */
   hub_push_mode?: Peer["hubPushMode"];
+  /** Absent before the 202611250001 migration. */
+  push_gen?: number | string;
   token_ciphertext: string | null;
   rev: number;
   created_at: string;
@@ -51,6 +54,7 @@ const toPeer = (r: PeerRow): Peer => ({
   hubParties: r.hub_parties ?? [],
   // Before the 202611240001 migration there is no column: every hub pushes per party.
   hubPushMode: r.hub_push_mode ?? "per_party",
+  pushGen: r.push_gen === undefined ? null : Number(r.push_gen),
   tokenCiphertext: r.token_ciphertext,
   rev: Number(r.rev),
   createdAt: r.created_at,
@@ -161,6 +165,31 @@ export class SupabasePeerStore implements PeerStore {
       body,
     );
     return rows[0] ? toPeer(rows[0]) : null;
+  }
+
+  async setHubPushMode(input: {
+    peerId: string;
+    mode: HubPushMode;
+    ifRev: number;
+    now: string;
+    actor: string;
+  }) {
+    const [row] = await this.rest<
+      { peer_row: PeerRow; from_mode: HubPushMode; owed: number | string }[]
+    >("POST", "rpc/emsp_ocpi_hub_set_push_mode", {
+      p_peer_id: input.peerId,
+      p_mode: input.mode,
+      p_expected_rev: Math.trunc(input.ifRev),
+      p_now: input.now,
+      p_actor: input.actor,
+    });
+    return row
+      ? {
+          peer: toPeer(row.peer_row),
+          from: row.from_mode,
+          owed: Number(row.owed),
+        }
+      : null;
   }
 
   async issueToken(token: NewToken) {

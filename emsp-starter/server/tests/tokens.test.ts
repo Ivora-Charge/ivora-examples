@@ -434,9 +434,9 @@ describe("issuing tokens and pushing them to every CPO", () => {
       error: "x",
       now: T0.toISOString(),
     });
-    await tokens.pushSucceeded("p", t.id, "2026-10-21T10:00:04.000Z");
+    await tokens.pushSucceeded("p", t.id, "2026-10-21T10:00:04.000Z", null);
     expect(await tokens.countPendingPushes(10)).toBe(1);
-    await tokens.pushSucceeded("p", t.id, "2026-10-21T10:00:05.000Z");
+    await tokens.pushSucceeded("p", t.id, "2026-10-21T10:00:05.000Z", null);
     expect(await tokens.countPendingPushes(10)).toBe(0);
   });
 

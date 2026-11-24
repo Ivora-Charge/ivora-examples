@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import type { PeerStore } from "@/lib/ocpi/store";
+import { MemoryPeerStore, type PeerStore } from "@/lib/ocpi/store";
 import type { WhitelistType } from "@/lib/ocpi/token-objects";
 import { tokenReceivers } from "./push";
 
@@ -74,7 +74,15 @@ export type PendingPush = {
   /** Safe to show: no tokens or peer data. */
   lastError: string;
   nextAttemptAt: string;
+  /**
+   * The peer's push generation the push is owed in (Peer.pushGen). A push started under
+   * an older one does not clear it.
+   */
+  pushGen: number;
 };
+
+/** A push generation no peer reaches: clears an owed push of any generation. */
+export const ANY_PUSH_GEN = Number.MAX_SAFE_INTEGER;
 
 /** Longest wait between retries of a failed push. */
 export const MAX_PUSH_BACKOFF_MS = 6 * 60 * 60 * 1000;
@@ -119,23 +127,22 @@ export interface TokenStore {
     error: string;
     now: string;
   }): Promise<void>;
-  /** Clears what the peer is owed, unless the token changed again since `pushedLastUpdated`. */
+  /**
+   * Clears what the peer is owed, unless the token changed again since
+   * `pushedLastUpdated`, or the peer's push mode was switched since the push started
+   * (the push was made under push generation `pushGen`, Peer.pushGen; null on a
+   * database without the generation: no check).
+   */
   pushSucceeded(
     peerId: string,
     tokenId: string,
     pushedLastUpdated: string,
+    pushGen: number | null,
   ): Promise<void>;
   /** Pushes to retry now, oldest first. */
   duePushes(now: string, limit: number): Promise<PendingPush[]>;
   /** How many pushes are owed, counting at most `max`. */
   countPendingPushes(max: number): Promise<number>;
-  /**
-   * Owes `peerId` every active token, due at `now`, through the outbox: the catch-up
-   * when a hub switches to pushes addressed to its own party. A token already owed to
-   * the peer stays one entry, so owing twice never pushes a token twice. Returns how
-   * many tokens are owed.
-   */
-  oweActive(peerId: string, now: string): Promise<number>;
 }
 
 const ms = (iso: string) => Date.parse(iso);
@@ -149,19 +156,44 @@ export class MemoryTokenStore implements TokenStore {
   readonly tokens = new Map<string, DriverToken>();
   readonly pushes = new Map<string, PendingPush>();
 
-  constructor(private readonly peers?: PeerStore) {}
+  constructor(private readonly peers?: PeerStore) {
+    // The hub push-mode switch owes through this outbox in its own step (MemoryPeerStore).
+    if (peers instanceof MemoryPeerStore)
+      peers.catchUp = (peerId, gen, now, owe) =>
+        this.catchUp(peerId, gen, now, owe);
+  }
 
-  private async receivers(): Promise<string[]> {
-    return (await tokenReceivers(this.peers!)).map((p) => p.id);
+  private async receivers(): Promise<{ id: string; gen: number }[]> {
+    return (await tokenReceivers(this.peers!)).map((p) => ({
+      id: p.id,
+      gen: p.pushGen ?? 0,
+    }));
+  }
+
+  /**
+   * The database's emsp_ocpi_hub_set_push_mode: moves the pushes owed to `peerId` to
+   * generation `gen`, and with `owe` owes it every token, blocked ones too.
+   */
+  private catchUp(peerId: string, gen: number, now: string, owe: boolean) {
+    for (const p of this.pushes.values())
+      if (p.peerId === peerId) p.pushGen = gen;
+    if (!owe) return 0;
+    for (const t of this.tokens.values())
+      this.owe(t, [{ id: peerId, gen }], now);
+    return this.tokens.size;
   }
 
   /**
    * Owes `t` to `peerIds`: the database's emsp_tokens_owe_push trigger (due after the
    * first push's grace), or emsp_token_owe_active (due at `dueAt`).
    */
-  private owe(t: DriverToken, peerIds: string[], dueAt?: string) {
+  private owe(
+    t: DriverToken,
+    peers: { id: string; gen: number }[],
+    dueAt?: string,
+  ) {
     const due = dueAt ? ms(dueAt) : ms(t.lastUpdated) + FIRST_PUSH_GRACE_MS;
-    for (const peerId of peerIds) {
+    for (const { id: peerId, gen } of peers) {
       const key = `${peerId}:${t.id}`;
       const held = this.pushes.get(key);
       this.pushes.set(key, {
@@ -176,6 +208,7 @@ export class MemoryTokenStore implements TokenStore {
         nextAttemptAt: new Date(
           held ? Math.min(ms(held.nextAttemptAt), due) : due,
         ).toISOString(),
+        pushGen: Math.max(held?.pushGen ?? 0, gen),
       });
     }
   }
@@ -287,6 +320,8 @@ export class MemoryTokenStore implements TokenStore {
       nextAttemptAt: new Date(
         ms(input.now) + pushBackoffMs(attempts),
       ).toISOString(),
+      // A failure never lowers the generation; a row made by it is the oldest.
+      pushGen: held?.pushGen ?? 0,
     });
   }
 
@@ -294,10 +329,15 @@ export class MemoryTokenStore implements TokenStore {
     peerId: string,
     tokenId: string,
     pushedLastUpdated: string,
+    pushGen: number | null,
   ) {
     const key = `${peerId}:${tokenId}`;
     const held = this.pushes.get(key);
-    if (held && ms(held.tokenLastUpdated) <= ms(pushedLastUpdated))
+    if (
+      held &&
+      ms(held.tokenLastUpdated) <= ms(pushedLastUpdated) &&
+      (pushGen === null || held.pushGen <= pushGen)
+    )
       this.pushes.delete(key);
   }
 
@@ -311,15 +351,5 @@ export class MemoryTokenStore implements TokenStore {
 
   async countPendingPushes(max: number) {
     return Math.min(max, this.pushes.size);
-  }
-
-  async oweActive(peerId: string, now: string) {
-    let owed = 0;
-    for (const t of this.tokens.values())
-      if (t.status === "active") {
-        this.owe(t, [peerId], now);
-        owed++;
-      }
-    return owed;
   }
 }

@@ -418,10 +418,7 @@ export async function hubPartyAction(
       const mode = field(form, "mode") as HubPushMode;
       let saved: Awaited<ReturnType<typeof setHubPushMode>>;
       try {
-        saved = await setHubPushMode(id, mode, {
-          ...deps,
-          tokens: tokenStore(),
-        });
+        saved = await setHubPushMode(id, mode, deps);
       } catch (e) {
         if (
           e instanceof DatabaseRequestError &&
@@ -437,7 +434,7 @@ export async function hubPartyAction(
         message: !changed
           ? `${peer.label} already pushes this way.`
           : mode === "hub"
-            ? `Tokens now go to ${peer.label}'s own party, in one push; the hub decides who receives them. ${owed} active token(s) queued so the hub gets the full set once.`
+            ? `Tokens now go to ${peer.label}'s own party, in one push; the hub decides who receives them. ${owed} token(s), blocked ones too, queued so the hub gets each one's current state once.`
             : `Tokens now go to each trusted party behind ${peer.label}, one push each.`,
         peer: summary(peer),
       };

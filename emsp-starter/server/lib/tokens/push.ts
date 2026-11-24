@@ -9,7 +9,7 @@ import { decryptToken } from "@/lib/ocpi/tokens";
 import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 import { isDemo } from "@/lib/server/demo";
 import { logText } from "@/lib/server/log-error";
-import type { DriverToken, TokenStore } from "./store";
+import { ANY_PUSH_GEN, type DriverToken, type TokenStore } from "./store";
 
 /**
  * Pushing our tokens to every CPO's Tokens Receiver (OCPI 2.2.1 section 12.2.2):
@@ -192,7 +192,14 @@ async function pushTo(
       await send(peer, sent, { method: "PUT" }, deps, now);
     }
     // Clears what the peer is owed only up to the version sent: a newer one stays queued.
-    await deps.tokens.pushSucceeded(peer.id, t.id, sent.lastUpdated);
+    // Nor one owed in a later push generation: the hub's mode was switched meanwhile and
+    // the switch owes the token again, to be sent the new way.
+    await deps.tokens.pushSucceeded(
+      peer.id,
+      t.id,
+      sent.lastUpdated,
+      peer.pushGen,
+    );
     return { peerId: peer.id, label: peer.label, ok: true };
   } catch (e) {
     const error = errorText(e);
@@ -250,6 +257,7 @@ export async function retryPendingPushes(
         p.peerId,
         p.tokenId,
         "9999-12-31T23:59:59.000Z",
+        ANY_PUSH_GEN,
       );
       report.dropped++;
       continue;

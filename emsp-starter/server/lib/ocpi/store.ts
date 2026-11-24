@@ -59,6 +59,13 @@ export type Peer = {
    * start with `hub`; hubs registered before this setting existed stay `per_party`.
    */
   hubPushMode: HubPushMode;
+  /**
+   * Raised by every push-mode switch. A token push carries the one it started under and
+   * only clears an outbox row owed in that generation or an older one, so a push that
+   * was under way during a switch cannot clear what the switch re-owed. Null on a
+   * database without the 202611250001 migration.
+   */
+  pushGen: number | null;
   /** The token we send to the peer, encrypted (tokens.ts). Never leaves the server. */
   tokenCiphertext: string | null;
   /**
@@ -198,6 +205,22 @@ export interface PeerStore {
     ifStatus?: PeerStatus,
     ifRev?: number,
   ): Promise<Peer | null>;
+  /**
+   * Switches a registered peer's hub push mode, if it still has revision `ifRev`, and
+   * audits it, as one atomic step. Switching to `hub` also owes the peer every token
+   * (active and blocked) through the token outbox, due at `now` (the catch-up), when it
+   * has a token and a tokens Receiver. Every push already owed to the peer moves to the
+   * new push generation. Returns null when the peer changed or is not registered, or
+   * already has the mode; nothing is written then. Throws when it could not complete:
+   * nothing is written either.
+   */
+  setHubPushMode(input: {
+    peerId: string;
+    mode: HubPushMode;
+    ifRev: number;
+    now: string;
+    actor: string;
+  }): Promise<{ peer: Peer; from: HubPushMode; owed: number } | null>;
   issueToken(token: NewToken): Promise<void>;
   /** An active (not revoked, not expired) token by its hash. */
   findToken(hash: string): Promise<IssuedToken | null>;
@@ -254,6 +277,7 @@ export class MemoryPeerStore implements PeerStore {
       hubParties: [],
       // Like the column default: a peer registered now starts with pushes to the hub.
       hubPushMode: "hub",
+      pushGen: 0,
       tokenCiphertext: null,
       rev: 0,
       createdAt: now,
@@ -294,6 +318,59 @@ export class MemoryPeerStore implements PeerStore {
       updatedAt: new Date().toISOString(),
     });
     return structuredClone(p);
+  }
+
+  /**
+   * Set by a MemoryTokenStore made over this store: owes `peerId` every token in
+   * generation `gen`, and moves the pushes already owed to it to `gen`. Returns how many
+   * tokens it owes. Nothing awaits in it or in setHubPushMode, so the switch, the
+   * catch-up and the audit are one step, like the database function.
+   */
+  catchUp?: (peerId: string, gen: number, now: string, owe: boolean) => number;
+
+  async setHubPushMode(input: {
+    peerId: string;
+    mode: HubPushMode;
+    ifRev: number;
+    now: string;
+    actor: string;
+  }) {
+    const p = this.peers.get(input.peerId);
+    if (
+      !p ||
+      p.status !== "registered" ||
+      p.rev !== input.ifRev ||
+      p.hubPushMode === input.mode
+    )
+      return null;
+    const from = p.hubPushMode;
+    const before = structuredClone(p);
+    p.hubPushMode = input.mode;
+    p.pushGen = (p.pushGen ?? 0) + 1;
+    p.rev += 1;
+    p.updatedAt = input.now;
+    const owe =
+      input.mode === "hub" &&
+      !!p.tokenCiphertext &&
+      p.endpoints.some(
+        (e) => e.identifier === "tokens" && e.role === "RECEIVER",
+      );
+    let owed = 0;
+    try {
+      owed = this.catchUp?.(p.id, p.pushGen, input.now, owe) ?? 0;
+    } catch (e) {
+      // All or nothing, like the transaction.
+      Object.assign(p, before);
+      throw e;
+    }
+    this.auditLog.push({
+      at: input.now,
+      actor: input.actor,
+      action: "ocpi.hub.push_mode_set",
+      subjectId: p.id,
+      details: { mode: input.mode, from, owed },
+    });
+    return { peer: structuredClone(p), from, owed };
   }
 
   async issueToken(token: NewToken) {

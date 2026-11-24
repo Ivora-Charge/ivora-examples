@@ -4,7 +4,6 @@ import { assertLive } from "@/lib/server/demo";
 import { logText } from "@/lib/server/log-error";
 import { ABSENT_CODES, DatabaseRequestError } from "@/lib/server/supabase-rest";
 import { tokensReceiver } from "@/lib/tokens/push";
-import type { TokenStore } from "@/lib/tokens/store";
 import { ocpiPages, type ClientOptions } from "./client";
 import { OcpiError } from "./errors";
 import { HandshakeError } from "./handshake";
@@ -343,50 +342,47 @@ export async function offerFromHub(
  * trusted party behind it (`per_party`). Pushes already owed are sent the new way on
  * their next try.
  *
- * Switching from `per_party` to `hub` owes the hub every active token through the
- * outbox (the catch-up), so the hub gets the full set once; the retry job sends them,
- * and later changes go out as usual. Switching back needs no catch-up: the trusted
- * parties got every change through the hub. If the catch-up cannot be queued, the mode
- * is set back and the error thrown, so trying again owes the set once, not twice.
+ * Switching from `per_party` to `hub` owes the hub every token, active and blocked,
+ * through the outbox (the catch-up), so the hub gets each token's current state once;
+ * the retry job sends them, and later changes go out as usual. Switching back needs no
+ * catch-up: the trusted parties got every change through the hub.
+ *
+ * The mode change, the catch-up and the audit entry are one step in the store (one
+ * database transaction): when it throws, nothing changed, and trying again is safe. It
+ * also raises the peer's push generation, so a push that started before the switch
+ * cannot clear what the catch-up owes (tokens/store.ts, pushSucceeded).
  */
 export async function setHubPushMode(
   peerId: string,
   mode: HubPushMode,
-  deps: HubDeps & { tokens: Pick<TokenStore, "oweActive">; now?: () => Date },
+  deps: HubDeps & { now?: () => Date },
 ): Promise<{ peer: Peer; owed: number; changed: boolean }> {
   if (mode !== "hub" && mode !== "per_party")
     throw new HandshakeError("Push mode must be hub or per_party");
   const peer = await hubPeer(deps.store, peerId);
-  const from = peer.hubPushMode;
-  if (from === mode) return { peer, owed: 0, changed: false };
-  const updated = await deps.store.updatePeer(
-    peerId,
-    { hubPushMode: mode },
-    "registered",
-    peer.rev,
-  );
-  if (!updated) throw new HandshakeError("The peer changed; try again");
-  let owed = 0;
-  if (mode === "hub" && updated.tokenCiphertext && tokensReceiver(updated)) {
-    try {
-      owed = await deps.tokens.oweActive(
-        peerId,
-        (deps.now?.() ?? new Date()).toISOString(),
-      );
-    } catch {
-      await deps.store
-        .updatePeer(peerId, { hubPushMode: from }, "registered", updated.rev)
-        .catch(() => null);
-      throw new HandshakeError(
-        "Could not queue the hub's tokens; the mode is unchanged, try again",
-      );
-    }
+  if (peer.hubPushMode === mode) return { peer, owed: 0, changed: false };
+  let switched: Awaited<ReturnType<PeerStore["setHubPushMode"]>>;
+  try {
+    switched = await deps.store.setHubPushMode({
+      peerId,
+      mode,
+      ifRev: peer.rev,
+      now: (deps.now?.() ?? new Date()).toISOString(),
+      actor: deps.actor ?? "admin",
+    });
+  } catch (e) {
+    // A database without the switch function (migration pending) is the page's to explain.
+    if (
+      e instanceof DatabaseRequestError &&
+      e.code !== null &&
+      ABSENT_CODES.has(e.code)
+    )
+      throw e;
+    console.error(`Switching peer ${peerId}'s push mode failed: ${logText(e)}`);
+    throw new HandshakeError(
+      "Could not switch the push mode; it is unchanged, try again",
+    );
   }
-  await deps.store.audit({
-    actor: deps.actor ?? "admin",
-    action: "ocpi.hub.push_mode_set",
-    subjectId: peerId,
-    details: { mode, from, owed },
-  });
-  return { peer: updated, owed, changed: true };
+  if (!switched) throw new HandshakeError("The peer changed; try again");
+  return { peer: switched.peer, owed: switched.owed, changed: true };
 }
