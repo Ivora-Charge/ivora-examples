@@ -302,6 +302,162 @@ describe("session counts", () => {
   });
 });
 
+/**
+ * Search terms that must never reach the database: each would end the quoted value or
+ * the `or=(...)`, widen the pattern, or is not plain ASCII. Every store refuses them
+ * itself, whatever its caller checked.
+ */
+const ADVERSARIAL_TERMS = [
+  'x*",peer_id.neq."y',
+  "a,b",
+  "a)",
+  "(a",
+  "a)&peer_id=neq.x",
+  'a"b',
+  "a'b",
+  "a\\b",
+  'a\\",peer_id.neq."',
+  "*",
+  "a*b",
+  "%",
+  "a%b",
+  "a\u0000b",
+  "a\nb",
+  "a\rb",
+  "a\tb",
+  "a\u007fb",
+  "a\u001bb",
+  "ａbc", // fullwidth a
+  "аbc", // Cyrillic a
+  "a\u200bb", // zero-width space
+  "a\u00a0b", // no-break space
+  "a\u2024b", // one dot leader
+  "a\uff0cb", // fullwidth comma
+  "a\u201cb", // left double quotation mark
+  "café",
+  "a;b",
+  "a&b",
+  "a=b",
+  "a#b",
+  "a?b",
+  "a|b",
+  "a{b}",
+  "x".repeat(65),
+  " padded ",
+  "",
+];
+
+describe("session search in the store itself", () => {
+  /** A store whose every database request is recorded, then answered by PGlite. */
+  function recorded() {
+    const seen: { method: string; url: string }[] = [];
+    const rest = pgliteRest(db);
+    const store = new SupabaseSessionStore(URL_, KEY, async (url, init) => {
+      seen.push({ method: init?.method ?? "GET", url: String(url) });
+      return rest(url, init);
+    });
+    return { store, seen };
+  }
+
+  it(
+    "refuses every term that could break out of the filter, before any request",
+    { timeout: 20_000 },
+    async () => {
+      expect(ADVERSARIAL_TERMS.length).toBeGreaterThanOrEqual(36);
+      const { store, seen } = recorded();
+      for (const search of ADVERSARIAL_TERMS.filter(Boolean)) {
+        await expect(
+          store.listSessions({ search, limit: 100 }),
+          search,
+        ).rejects.toThrow(/Session search refused/);
+        await expect(store.countSessions({ search }), search).rejects.toThrow(
+          /Session search refused/,
+        );
+        await expect(
+          memSessions.listSessions({ search, limit: 100 }),
+          search,
+        ).rejects.toThrow(/Session search refused/);
+        await expect(
+          memSessions.countSessions({ search }),
+          search,
+        ).rejects.toThrow(/Session search refused/);
+      }
+      expect(seen).toEqual([]);
+      // An empty term is no search at all.
+      expect((await store.countSessions({ search: "" })).total).toBe(
+        (await store.countSessions({})).total,
+      );
+    },
+  );
+
+  it(
+    "reads no row to count, and caps a search's counts",
+    { timeout: 20_000 },
+    async () => {
+      const { store, seen } = recorded();
+      await store.countSessions({ peerId: A });
+      // Five counts, one per status: HEAD requests, so no row comes back.
+      expect(seen).toHaveLength(5);
+      for (const r of seen) {
+        expect(r.method).toBe("HEAD");
+        expect(r.url).not.toMatch(/select=/);
+      }
+      seen.length = 0;
+      await store.countSessions({ search: "p1" });
+      // With a term: at most 1001 IDs per status, never an exact count of a scan.
+      expect(seen).toHaveLength(5);
+      for (const r of seen) {
+        expect(r.method).toBe("GET");
+        expect(r.url).toMatch(/select=id&limit=1001$/);
+      }
+    },
+  );
+
+  it("says when a search matches more than it counts", async () => {
+    const ids = Array.from({ length: 1001 }, (_, i) => ({ id: `r${i}` }));
+    const store = new SupabaseSessionStore(URL_, KEY, async (url) =>
+      Response.json(String(url).includes("status=eq.COMPLETED") ? ids : []),
+    );
+    expect(await store.countSessions({ search: "p" })).toEqual({
+      total: 1000,
+      byStatus: {
+        ACTIVE: 0,
+        PENDING: 0,
+        RESERVATION: 0,
+        COMPLETED: 1000,
+        INVALID: 0,
+      },
+      more: ["COMPLETED"],
+    });
+  });
+
+  it(
+    "takes _ as any one character, in both stores",
+    { timeout: 20_000 },
+    async () => {
+      for (const search of ["driver_2", "p_", "_"]) {
+        const live = await sessions.listSessions({ search, limit: 100 });
+        const mem = await memSessions.listSessions({ search, limit: 100 });
+        expect(live.map((s) => s.session.id).sort()).toEqual(
+          mem.map((s) => s.session.id).sort(),
+        );
+        expect(await sessions.countSessions({ search })).toEqual(
+          await memSessions.countSessions({ search }),
+        );
+      }
+      const dash = await sessions.listSessions({
+        search: "driver-2",
+        limit: 100,
+      });
+      expect(dash.length).toBeGreaterThan(0);
+      expect(
+        (await sessions.listSessions({ search: "driver_2", limit: 100 }))
+          .length,
+      ).toBe(dash.length);
+    },
+  );
+});
+
 describe("audit log read", () => {
   it(
     "reads one subject's entries, newest first",

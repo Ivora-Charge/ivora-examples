@@ -59,6 +59,7 @@ import { PaymentError } from "@/lib/payments/settle";
 import { MemoryPaymentStore, type Payment } from "@/lib/payments/store";
 import { StripeUnknownError, type StripeApi } from "@/lib/payments/stripe";
 import { resetAdminLimitForTests } from "@/lib/server/admin";
+import { asAdmin, type AdminResult } from "@/lib/server/admin-action";
 import { DemoModeError } from "@/lib/server/demo";
 import { setSessionStoreForTests } from "@/lib/sessions/registry";
 import { MemorySessionStore } from "@/lib/sessions/store";
@@ -192,6 +193,39 @@ describe("an OCPI error code and a next step on every error", () => {
     expect(
       explain(new OcpiTransportError("timed out", request), "one-time"),
     ).toEqual(explain(new OcpiTransportError("timed out", request)));
+  });
+
+  it("keeps the token context on a refusal an action returns or throws", async () => {
+    const opts = (token?: "one-time" | "permanent") => ({
+      shown: () => true,
+      fallback: "x",
+      what: "test",
+      token,
+    });
+    const message =
+      "POST cpo.example.com/ocpi/2.2.1/credentials refused our token (HTTP 401)";
+    const returned = async (): Promise<AdminResult> => ({ ok: false, message });
+    const thrown = async (): Promise<AdminResult> => {
+      throw new OcpiUnauthorizedError(message, { ...request, httpStatus: 401 });
+    };
+    for (const fn of [returned, thrown]) {
+      const oneTime = await asAdmin(form({}), fn, opts("one-time"));
+      const permanent = await asAdmin(form({}), fn, opts("permanent"));
+      const none = await asAdmin(form({}), fn, opts());
+      expect(oneTime).toMatchObject({
+        ok: false,
+        code: "HTTP 401",
+        nextStep: explainMessage(message, "one-time").nextStep,
+      });
+      expect(oneTime.nextStep).toMatch(/new one-time token/);
+      expect(permanent.nextStep).toBe(
+        explainMessage(message, "permanent").nextStep,
+      );
+      expect(none.nextStep).toBe(explainMessage(message).nextStep);
+      expect(
+        new Set([oneTime, permanent, none].map((r) => r.nextStep)).size,
+      ).toBe(3);
+    }
   });
 
   it("reads the code back from a message, for handshake errors and stored pulls", () => {
@@ -405,8 +439,10 @@ describe("sessions: live and recent, by peer, status and driver", () => {
         COMPLETED: 2,
         INVALID: 0,
       },
+      more: [],
     });
     expect(live.listTotal).toBe(1);
+    expect(live.listTotalMore).toBeUndefined();
     expect(live.message).toBe("1 of 1 session(s).");
     // The chips keep their numbers when one is chosen; the list's total follows it.
     const done = await listSessionsAction({}, form({ status: "COMPLETED" }));
@@ -419,6 +455,48 @@ describe("sessions: live and recent, by peer, status and driver", () => {
     );
     expect(other.counts!.total).toBe(1);
     expect(other.listTotal).toBe(1);
+  });
+
+  it("counts a search up to 1000 per status, then says 1000+", async () => {
+    const s = store();
+    const [template] = [...s.sessions.values()];
+    for (let i = 0; i < 1001; i++)
+      await s.insertSession(
+        PEER,
+        {
+          session: {
+            ...template.session,
+            id: `BULK-${i}`,
+            status: "COMPLETED",
+          },
+          fieldTimes: {},
+          driverRef: null,
+          commandId: null,
+          completedAt: null,
+        },
+        "2026-10-01T00:00:00.000Z",
+      );
+    const all = await listSessionsAction({}, form({ status: "all" }));
+    // No search: exact, uncapped counts.
+    expect(all.counts!.byStatus.COMPLETED).toBe(1003);
+    expect(all.counts!.more).toEqual([]);
+    const hit = await listSessionsAction(
+      {},
+      form({ status: "COMPLETED", search: "bulk" }),
+    );
+    expect(hit.counts).toMatchObject({
+      total: 1000,
+      byStatus: { COMPLETED: 1000, ACTIVE: 0 },
+      more: ["COMPLETED"],
+    });
+    expect(hit).toMatchObject({ listTotal: 1000, listTotalMore: true });
+    // The list keeps its limit of 100.
+    expect(hit.sessions).toHaveLength(100);
+    expect(hit.message).toMatch(/^100 of 1000\+ session\(s\)/);
+    // A chip whose statuses were not capped says so exactly.
+    const live = await listSessionsAction({}, form({ search: "bulk" }));
+    expect(live).toMatchObject({ listTotal: 0 });
+    expect(live.listTotalMore).toBeUndefined();
   });
 
   it("searches by driver, charger or session reference on the server", async () => {

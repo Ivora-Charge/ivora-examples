@@ -146,9 +146,11 @@ async function attemptOnce(
       requestId,
     );
   } catch (e) {
-    // Every failure of this attempt names the request ID the peer saw.
+    // Every failure of this attempt names the request ID the peer saw. A request we
+    // refused to send has none: the peer never saw it.
     const failure = e instanceof Retryable ? e.error : e;
-    if (failure instanceof OcpiError) failure.details.requestId ??= requestId;
+    if (failure instanceof OcpiError && !(failure instanceof OcpiNotSentError))
+      failure.details.requestId ??= requestId;
     throw e;
   }
 }

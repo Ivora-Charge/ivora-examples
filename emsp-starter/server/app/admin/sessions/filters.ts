@@ -8,6 +8,3 @@ export const STATUS_FILTERS = [
   "COMPLETED",
   "INVALID",
 ] as const;
-
-/** The statuses a "live" list covers (the same as lib/sessions/store.ts). */
-export const OPEN_SESSION_STATUSES = ["ACTIVE", "PENDING", "RESERVATION"];

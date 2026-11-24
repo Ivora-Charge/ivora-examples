@@ -12,7 +12,8 @@ import {
   type SessionRow,
   type SessionsState,
 } from "./actions";
-import { OPEN_SESSION_STATUSES, type STATUS_FILTERS } from "./filters";
+import type { STATUS_FILTERS } from "./filters";
+import { filterCount } from "@/lib/sessions/statuses";
 
 type Status = (typeof STATUS_FILTERS)[number];
 
@@ -112,13 +113,11 @@ const NONE: Filters = {
   before: "",
 };
 
-/** The number beside a chip, from the list's counts. */
-function chipCount(value: Status, c: SessionsState["counts"]): number | null {
+/** The number beside a chip, from the list's counts: "1000+" when a search capped it. */
+function chipCount(value: Status, c: SessionsState["counts"]): string | null {
   if (!c) return null;
-  if (value === "all") return c.total;
-  if (value === "live")
-    return OPEN_SESSION_STATUSES.reduce((n, s) => n + (c.byStatus[s] ?? 0), 0);
-  return c.byStatus[value] ?? 0;
+  const { n, more } = filterCount(value, c);
+  return `${n}${more ? "+" : ""}`;
 }
 
 export function Sessions() {
@@ -233,7 +232,7 @@ export function Sessions() {
                   />
                   <span className="hint" id={`${id}-search-h`}>
                     Part of a driver reference, session ID, charger or location
-                    ID.
+                    ID. A _ matches any one character.
                   </span>
                 </div>
                 <div className="field">
@@ -339,7 +338,7 @@ export function Sessions() {
                   {rows.length}
                   {state.listTotal !== undefined &&
                   state.listTotal >= rows.length
-                    ? ` of ${state.listTotal}`
+                    ? ` of ${state.listTotal}${state.listTotalMore ? "+" : ""}`
                     : ""}{" "}
                   shown, newest first
                   {nextBefore ? "; there are older ones" : ""}. Times in UTC.

@@ -21,7 +21,7 @@ export function supabaseRequest(
   timeoutMs = 10_000,
 ) {
   return function request(
-    method: "GET" | "POST" | "PATCH" | "DELETE",
+    method: "GET" | "HEAD" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
     prefer?: string,

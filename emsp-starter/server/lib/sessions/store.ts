@@ -3,6 +3,14 @@ import { randomUUID } from "node:crypto";
 import { toE4 } from "@/lib/locations/pricing";
 import { dateTimeMs } from "@/lib/ocpi/locations";
 import type { Cdr, Session } from "@/lib/ocpi/session-objects";
+import {
+  type SessionCounts,
+  checkedSearchTerm,
+  matchesSearch,
+  OPEN_SESSION_STATUSES,
+  SESSION_SEARCH_COUNT_CAP,
+  SESSION_STATUSES,
+} from "./statuses";
 
 /**
  * Our drivers' sessions and CDRs, per CPO peer, keyed like OCPI: the CPO party's country
@@ -131,7 +139,9 @@ export type SessionListQuery = {
   driverRef?: string;
   /**
    * Part of a driver reference, session ID, charger (EVSE UID) or location ID, any
-   * letter case. Use `sessionSearchTerm` to check what the admin typed first.
+   * letter case; `_` matches any one character. Use `sessionSearchTerm` on what the
+   * admin typed: a store throws, without asking the database, for a term that
+   * `sessionSearchTerm` would not return unchanged.
    */
   search?: string;
   /** Only sessions that started before this (exclusive): the next page. */
@@ -145,30 +155,13 @@ export type SessionCountQuery = Pick<
   "peerId" | "driverRef" | "search"
 >;
 
-/** How many sessions match, in total and per status (a status with none is 0). */
-export type SessionCounts = {
-  total: number;
-  byStatus: Record<string, number>;
-};
-
-/** Every status a session can have. */
-export const SESSION_STATUSES = [
-  "ACTIVE",
-  "PENDING",
-  "RESERVATION",
-  "COMPLETED",
-  "INVALID",
-] as const;
-
-const SEARCH_TERM = /^[A-Za-z0-9 ._:@/+-]{1,64}$/;
-/**
- * The search text, trimmed, or null when it is empty or has characters a reference
- * never has (they would mean something in a database pattern).
- */
-export function sessionSearchTerm(v: string): string | null {
-  const t = v.trim();
-  return SEARCH_TERM.test(t) ? t : null;
-}
+export {
+  OPEN_SESSION_STATUSES,
+  SESSION_SEARCH_COUNT_CAP,
+  SESSION_STATUSES,
+  sessionSearchTerm,
+  type SessionCounts,
+} from "./statuses";
 
 export interface SessionStore {
   getSession(key: SessionKey): Promise<StoredSession | null>;
@@ -217,8 +210,6 @@ export const inRange = (dateTime: string, q: ReconciliationQuery) => {
   const t = dateTimeMs(dateTime);
   return t >= Date.parse(q.from) && t < Date.parse(q.to);
 };
-/** Sessions still running, or about to. */
-export const OPEN_SESSION_STATUSES = ["ACTIVE", "PENDING", "RESERVATION"];
 const OPEN = OPEN_SESSION_STATUSES;
 /** Byte order, like the database's `collate "C"`. */
 export const byCode = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -357,33 +348,44 @@ export class MemorySessionStore implements SessionStore {
   }
 
   private matches(s: StoredSession, q: SessionCountQuery) {
-    const needle = q.search?.toLowerCase();
+    const term = q.search;
     return (
       (!q.peerId || s.peerId === q.peerId) &&
       (!q.driverRef || s.driverRef === q.driverRef) &&
-      (!needle ||
+      (!term ||
         [
           s.driverRef,
           s.session.id,
           s.session.evse_uid,
           s.session.location_id,
-        ].some((v) => v?.toLowerCase().includes(needle)))
+        ].some((v) => v != null && matchesSearch(v, term)))
     );
   }
 
   async countSessions(q: SessionCountQuery): Promise<SessionCounts> {
+    if (q.search) checkedSearchTerm(q.search);
     const byStatus: Record<string, number> = Object.fromEntries(
       SESSION_STATUSES.map((st) => [st, 0]),
     );
     for (const s of this.sessions.values())
       if (this.matches(s, q)) byStatus[s.session.status]++;
+    // The same cap as the database store's, so both answer alike.
+    const more: string[] = [];
+    if (q.search)
+      for (const st of SESSION_STATUSES)
+        if (byStatus[st] > SESSION_SEARCH_COUNT_CAP) {
+          byStatus[st] = SESSION_SEARCH_COUNT_CAP;
+          more.push(st);
+        }
     return {
       total: Object.values(byStatus).reduce((a, b) => a + b, 0),
       byStatus,
+      more,
     };
   }
 
   async listSessions(q: SessionListQuery) {
+    if (q.search) checkedSearchTerm(q.search);
     const before = q.before ? Date.parse(q.before) : Infinity;
     return [...this.sessions.values()]
       .filter(

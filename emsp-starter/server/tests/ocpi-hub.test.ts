@@ -795,6 +795,69 @@ describe("pulls through a hub", () => {
     expect(await locations.getSyncState(hubPeer.id, "locations")).toBeNull();
   });
 
+  it("count failed pulls in a row per party, each with its own request ID", async () => {
+    await accept(A);
+    await accept(B);
+    await refreshHub();
+    const ids: Record<string, string[]> = { AAA: [], BBB: [] };
+    let failA = true;
+    const failing: ClientOptions = {
+      ...client,
+      async transport(url, init) {
+        const h = new Headers(init?.headers);
+        const to = h.get("ocpi-to-party-id") ?? "";
+        ids[to]?.push(h.get("x-request-id") ?? "");
+        // The hub answers for party A with a server error; B is served.
+        if (to === "AAA" && failA)
+          return Response.json(
+            {
+              status_code: 3000,
+              status_message: "no",
+              timestamp: "2026-11-24T00:00:00Z",
+            },
+            { status: 502 },
+          );
+        return net.transport(url, init);
+      },
+    };
+    const deps = { peers, locations, client: failing };
+    const result = async (key: "locations@ZZ-AAA" | "locations@ZZ-BBB") =>
+      (await locations.getSyncState(hubPeer.id, key))!.lastResult!;
+    for (const n of [1, 2]) {
+      await expect(
+        syncPeer(hubPeer.id, "locations", deps, { party: A }),
+      ).rejects.toThrow();
+      expect(await result("locations@ZZ-AAA")).toMatchObject({
+        ok: false,
+        failures: n,
+        requestId: ids.AAA.at(-1),
+      });
+    }
+    await syncPeer(hubPeer.id, "locations", deps, { party: B });
+    // B's pull went through: its own result, with no failure and no request ID.
+    const b = await result("locations@ZZ-BBB");
+    expect(b.ok).toBe(true);
+    expect(b.failures).toBeUndefined();
+    expect(b.requestId).toBeUndefined();
+    expect((await result("locations@ZZ-AAA")).failures).toBe(2);
+    // The admin's peer list shows the count and request ID per party.
+    process.env.ADMIN_SECRET = "s".repeat(32);
+    signInWithSecret();
+    const row = (await listPeersAction({}, adminForm({}))).peers!.find(
+      (p) => p.id === hubPeer.id,
+    )!;
+    expect(
+      row.sync!.find((m) => m.module === "locations@ZZ-AAA"),
+    ).toMatchObject({ ok: false, failures: 2, requestId: ids.AAA.at(-1) });
+    expect(
+      row.sync!.find((m) => m.module === "locations@ZZ-BBB"),
+    ).toMatchObject({ ok: true });
+    // A good pull of A starts its count over.
+    failA = false;
+    await syncPeer(hubPeer.id, "locations", deps, { party: A });
+    expect((await result("locations@ZZ-AAA")).failures).toBeUndefined();
+  });
+
   it("skip objects of any other party than the one pulled", async () => {
     await accept(A);
     await accept(B);

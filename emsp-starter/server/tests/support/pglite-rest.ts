@@ -4,10 +4,9 @@ import type { PGlite, Transaction } from "@electric-sql/pglite";
  * Just enough of Supabase's Data API (PostgREST) over PGlite for the stores' requests:
  * GET, PATCH and DELETE with eq/lt/gte/lte/in/is filters, an `or=(...)` of ilike
  * filters (on a column or a `column->>key` of a json one) and `select` (GET also with
- * `order`, `limit`, `offset` and `Prefer: count=exact`, answered in Content-Range);
- * POST inserts with
- * `on_conflict` and `resolution=ignore-duplicates`; and POST rpc/<function> with named
- * arguments. Each request runs in its own transaction as service_role, like PostgREST,
+ * `order`, `limit` and `offset`); HEAD with `Prefer: count=exact`, answered in
+ * Content-Range with no body; POST inserts with `on_conflict` and
+ * `resolution=ignore-duplicates`; and POST rpc/<function> with named arguments. Each request runs in its own transaction as service_role, like PostgREST,
  * so grants and row locks are Postgres's own. Requests from concurrent callers
  * interleave between requests, which is where lost updates happen.
  */
@@ -26,12 +25,11 @@ export function pgliteRest(db: PGlite) {
         return table(tx, method, path, url.searchParams, body, prefer);
       });
       if (rows === undefined) return new Response(null, { status: 204 });
-      // Like PostgREST: the count of every match, whatever `limit` cut.
+      // Like PostgREST: a HEAD answers with the count alone, and no body.
       if (!Array.isArray(rows))
-        return Response.json(rows.rows, {
-          headers: {
-            "Content-Range": `${rows.count.range}/${rows.count.total}`,
-          },
+        return new Response(null, {
+          status: 200,
+          headers: { "Content-Range": `*/${rows.count}` },
         });
       return Response.json(rows);
     } catch (e) {
@@ -151,24 +149,17 @@ async function table(
   const t = `public.${ident(name)}`;
   const args: unknown[] = [];
   let sql: string;
-  if (method === "GET") {
+  if (method === "HEAD") {
+    if (!prefer.includes("count=exact"))
+      throw new Error("Unsupported HEAD without count=exact");
+    const { rows } = await tx.query<{ n: string }>(
+      `select count(*) as n from ${t}${where(params, args)}`,
+      args,
+    );
+    return { count: Number(rows[0].n) };
+  } else if (method === "GET") {
     const ret = returning(params).replace(" returning ", "");
-    const filter = where(params, args);
-    sql = `select ${ret} from ${t}${filter}${paging(params)}`;
-    if (prefer.includes("count=exact")) {
-      const { rows } = await tx.query<{ n: string }>(
-        `select count(*) as n from ${t}${filter}`,
-        args,
-      );
-      const page = (await tx.query(sql, args)).rows;
-      return {
-        rows: page,
-        count: {
-          total: Number(rows[0].n),
-          range: page.length ? `0-${page.length - 1}` : "*",
-        },
-      };
-    }
+    sql = `select ${ret} from ${t}${where(params, args)}${paging(params)}`;
   } else if (method === "DELETE") {
     sql = `delete from ${t}${where(params, args)}${returning(params)}`;
   } else if (method === "PATCH") {

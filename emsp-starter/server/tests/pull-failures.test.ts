@@ -26,14 +26,21 @@ let locations: MemoryLocationStore;
 let cpo: MockCpo;
 let peer: Peer;
 let net: ReturnType<typeof inProcessNetwork>;
-/** What the CPO answers the next pulls with: an HTTP status, or 200 for the real one. */
-let answer = 200;
+/**
+ * What the CPO answers the next pulls with: an HTTP status, 200 for the real one, or
+ * "not sent" for a request our own address check refuses before sending it.
+ */
+let answer: number | "not sent" = 200;
 /** The X-Request-ID of every request we sent. */
 let sent: string[] = [];
 
 const client = (): ClientOptions => ({
   retries: 0,
   transport: async (url, init) => {
+    if (answer === "not sent")
+      throw Object.assign(new Error("not a public address"), {
+        code: "peer_address_refused",
+      });
     sent.push(new Headers(init?.headers).get("x-request-id") ?? "");
     if (answer === 200) return net.transport(url, init);
     return Response.json(
@@ -152,5 +159,19 @@ describe("failed pulls in a row, and the request ID of the last one", () => {
     expect(
       (await locations.getSyncState(peer.id, "locations"))!.lastResult,
     ).toMatchObject({ failures: 2 });
+  });
+
+  it("keeps no request ID for a request that was never sent", async () => {
+    answer = 500;
+    await expect(pull()).rejects.toThrow();
+    answer = "not sent";
+    const err = await pull().catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as { requestId?: string }).requestId).toBeUndefined();
+    const r = (await locations.getSyncState(peer.id, "locations"))!.lastResult!;
+    // Still a failure in a row, but the CPO never saw a request to name.
+    expect(r).toMatchObject({ ok: false, failures: 2 });
+    expect(r.requestId).toBeUndefined();
+    expect(r.error).toMatch(/refused: /);
   });
 });
