@@ -1,7 +1,7 @@
 import "server-only";
-import { randomUUID } from "node:crypto";
 import { BodyTooLargeError, readLimitedText } from "./body";
 import { OcpiProblem } from "./errors";
+import { ocpiRequestIds } from "./request-ids";
 import { ourParty } from "./identity";
 import { isPartyOfPeer } from "./parties";
 import { peerStore } from "./registry";
@@ -44,7 +44,6 @@ export type OcpiRouteOptions = {
   routing: "none" | "required";
 };
 
-const ID = /^[\x21-\x7e]{1,255}$/;
 /** The largest request body a peer may send. */
 export const MAX_REQUEST_BYTES = 256 * 1024;
 
@@ -125,13 +124,8 @@ function routingParty(h: Headers, side: "from" | "to"): Party | undefined {
 export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
   return async function ocpiRoute(request: Request): Promise<Response> {
     const h = request.headers;
-    const requestId = ID.test(h.get("X-Request-ID") ?? "")
-      ? h.get("X-Request-ID")!
-      : randomUUID();
-    const correlationId = ID.test(h.get("X-Correlation-ID") ?? "")
-      ? h.get("X-Correlation-ID")!
-      : randomUUID();
-    const ids = { requestId, correlationId };
+    const ids = ocpiRequestIds(h);
+    const { requestId, correlationId } = ids;
     const problem = (p: OcpiProblem) =>
       ocpiResponse(undefined, ids, {
         httpStatus: p.httpStatus,

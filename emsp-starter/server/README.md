@@ -696,7 +696,7 @@ The server logs the table or endpoint and the HTTP status of a refused Supabase 
 - **HTTP 404 on a table**: the migrations are not applied. Run `npm run db:migrate` or the files in `supabase/migrations` in filename order (see [Database](#database)). To see what is applied, run in the Supabase SQL editor: `select filename from public.emsp_schema_migrations order by 1;`.
 - **HTTP 401 or 403**: the wrong key. `SUPABASE_SERVICE_ROLE_KEY` takes the secret key (`sb_secret_...`) or the legacy `service_role` key, not the publishable or `anon` key, and it must come from the same project as `SUPABASE_URL`.
 - **`ENETUNREACH` from `npm run db:migrate`**: your machine has no IPv6 and the direct database host is IPv6-only. Use the Session pooler connection string (port 5432) from the Supabase dashboard as `SUPABASE_DB_URL`.
-- **A path under `/ocpi` with a malformed segment** (for example an encoded backslash) answers 404.
+- **A path under `/ocpi` with a malformed segment** (a percent-escape that does not decode, a control character, or a `.` or `..` segment) answers 404 in the OCPI envelope. Any other printable ASCII, an encoded backslash included, reaches the handler, since OCPI IDs may contain it.
 
 ## What it uses
 

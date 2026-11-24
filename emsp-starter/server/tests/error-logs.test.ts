@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { failed } from "@/lib/accounts/api";
+import { SupabaseAuth } from "@/lib/accounts/auth";
 import { AuthRequestError, logText } from "@/lib/server/log-error";
 import { supabaseRest } from "@/lib/server/supabase-rest";
 
@@ -46,6 +47,26 @@ describe("route error logs", () => {
     );
     expect(logText(e)).toContain("POST otp (HTTP 401)");
   });
+
+  it.each([400, 401, 500])(
+    "a Supabase Auth refusal (HTTP %i) logs no key, email, query or body",
+    async (status) => {
+      const auth = new SupabaseAuth("https://x.supabase.test", KEY, (async () =>
+        Response.json(
+          { msg: `refused ${EMAIL} ${KEY}` },
+          { status },
+        )) as unknown as ConstructorParameters<typeof SupabaseAuth>[2]);
+      const err = await auth
+        .sendCode(EMAIL, `https://app.example.test/next?token=${KEY}`)
+        .catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AuthRequestError);
+      const line = logText(err);
+      expect(line).toContain("otp");
+      expect(line).toContain(`HTTP ${status}`);
+      for (const secret of [KEY, EMAIL, "redirect_to", "token=", "refused"])
+        expect(line).not.toContain(secret);
+    },
+  );
 
   it("logs any other error by name only", () => {
     expect(logText(new TypeError(`bad ${EMAIL} ${KEY}`))).toBe("TypeError");

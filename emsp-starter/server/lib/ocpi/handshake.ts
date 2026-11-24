@@ -27,7 +27,6 @@ import {
   type CredentialsRole,
   type Endpoint,
 } from "./types";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * The OCPI 2.2.1 credentials handshake, from the eMSP side.
