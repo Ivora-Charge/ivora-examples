@@ -15,6 +15,13 @@ import {
   saveHost,
 } from "@/lib/server/hosts";
 import { resetDemoHosts, setDemoViewAs } from "@/lib/server/hosts/demo-cookie";
+import { getNetwork, saveFeePlan } from "@/lib/server/network";
+import { setDemoPayout } from "@/lib/server/network/demo";
+import {
+  cookieDemoNetwork,
+  resetDemoNetwork,
+} from "@/lib/server/network/demo-cookie";
+import type { PayoutStatus } from "@/lib/server/network/types";
 import { getTeam } from "@/lib/server/team";
 import { resetDemoTeam } from "@/lib/server/team/demo-cookie";
 
@@ -38,6 +45,51 @@ function refresh() {
   revalidatePath("/chargers");
   revalidatePath("/live");
   revalidatePath("/reports");
+  revalidatePath("/reports/statements");
+}
+
+/**
+ * A new network fee version for a host, effective now: sessions started after it use
+ * it, earlier ones keep theirs. Owners and managers.
+ */
+export async function saveFeeAction(
+  _prev: ActionState,
+  form: FormData,
+): Promise<ActionState> {
+  const values = {
+    mode: str(form, "mode") ?? "",
+    percent: str(form, "percent") ?? "",
+    perKwh: str(form, "perKwh") ?? "",
+    monthly: str(form, "monthly") ?? "",
+  };
+  try {
+    const actor = await requireRole("manager");
+    await saveFeePlan(getNetwork(), actor, str(form, "hostId"), values);
+    refresh();
+    return {
+      ok: `Network fee saved. It applies to sessions started from now on.${demoNote()}`,
+      savedAt: Date.now(),
+    };
+  } catch (e) {
+    return { ...actionError(e, "host fee save"), values };
+  }
+}
+
+const PAYOUT_STATES: PayoutStatus[] = ["none", "action_needed", "ready"];
+
+/** Demo only: simulate a host's payout status (Stripe is never asked). */
+export async function simulatePayoutAction(form: FormData): Promise<void> {
+  if (!isDemo()) return;
+  await requireRole("manager");
+  const status = str(form, "status") as PayoutStatus;
+  const hostId = str(form, "hostId") ?? "";
+  if (
+    !PAYOUT_STATES.includes(status) ||
+    !/^demo-host-[a-z0-9-]{1,40}$/.test(hostId)
+  )
+    return;
+  await setDemoPayout(cookieDemoNetwork(), hostId, status);
+  refresh();
 }
 
 /** Adds a host (no `id`) or saves one; unticked switches are off. */
@@ -136,5 +188,6 @@ export async function resetDemoHostsAction(): Promise<void> {
   await requireRole("manager");
   await resetDemoHosts();
   await resetDemoTeam();
+  await resetDemoNetwork();
   refresh();
 }

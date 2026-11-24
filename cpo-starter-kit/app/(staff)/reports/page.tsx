@@ -5,6 +5,7 @@ import { formatMinor, mixedCurrenciesNote } from "@/lib/money";
 import { requireNetworkReader } from "@/lib/server/auth";
 import { hostStore } from "@/lib/server/hosts";
 import { loadHostFilter, type HostFilterView } from "@/lib/server/hosts/filter";
+import { getNetwork, rowFees } from "@/lib/server/network";
 import { narrow } from "@/lib/server/scope";
 import { HOST_ROLE } from "@/lib/roles";
 import { getIvora, IvoraError } from "@/lib/server/ivora";
@@ -118,7 +119,9 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
   const [stats, sessions, ivoraSessions, ivoraBills, stripe] =
     await Promise.all([
       scoped ? null : loadStats(d.ivora, q),
-      loadSessions(d, reportFilter(me, c), q.page, c.places),
+      loadSessions(d, reportFilter(me, c), q.page, c.places, (rows) =>
+        rowFees(getNetwork(), me, rows),
+      ),
       loadIvoraSessions(d, q, c.places, cursors.s),
       loadIvoraBills(d, q, cursors.b),
       // Payouts are the operator's.
@@ -141,6 +144,21 @@ async function Content({ searchParams }: { searchParams: SearchParams }) {
           </a>
         }
       />
+      {(me.host || hosts.options.length > 0) && (
+        <p className="muted">
+          <Link
+            href={`/reports/statements${
+              hosts.filter.kind === "host"
+                ? `?host=${hostFilterParam(hosts.filter)}`
+                : ""
+            }`}
+          >
+            Monthly statements
+          </Link>{" "}
+          per host: sessions, energy, revenue, network fee and the host&apos;s
+          share, with CSV and print.
+        </p>
+      )}
       <Filters q={q} stations={c.stations} zone={q.timeZone} hosts={hosts}>
         Times are in {q.timeZone} ({ZONE_SOURCE[c.timeZoneSource]}). In tables
         they are in each site&apos;s time zone, with UTC below. The CSV has
@@ -762,6 +780,8 @@ function sessionRows(rows: SessionRow[]): DataTableRow[] {
   return rows.map((r) => ({
     id: r.reference,
     values: {
+      fee: r.network?.feeMinor ?? 0,
+      share: r.network?.hostShareMinor ?? 0,
       started: r.startedAt ?? r.createdAt,
       ended: r.endedAt ?? "",
       charger: `${r.stationName} ${r.siteName ?? ""}`.trim(),
@@ -799,6 +819,28 @@ function sessionRows(rows: SessionRow[]): DataTableRow[] {
             </>
           ) : null}
         </>
+      ),
+      fee: r.network ? (
+        <>
+          {money(r.network.feeMinor, r.currency)}
+          <br />
+          <span className="muted">{r.network.hostName}</span>
+        </>
+      ) : (
+        <span className="muted">Your own site</span>
+      ),
+      share: r.network ? (
+        <>
+          {money(r.network.hostShareMinor, r.currency)}
+          {r.network.note && (
+            <>
+              <br />
+              <span className="muted">{r.network.note}</span>
+            </>
+          )}
+        </>
+      ) : (
+        <span className="muted">–</span>
       ),
       type: SESSION_KIND_LABELS[r.kind],
       status: (
@@ -848,6 +890,12 @@ function Sessions({ result, q }: { result: SessionsResult; q: ReportQuery }) {
             { key: "energy", label: "Energy", numeric: true },
             { key: "billed", label: "Billed", numeric: true },
             { key: "collected", label: "Collected", numeric: true },
+            ...(result.rows.some((r) => r.network)
+              ? [
+                  { key: "fee", label: "Network fee", numeric: true },
+                  { key: "share", label: "Host share", numeric: true },
+                ]
+              : []),
             { key: "type", label: "Type", filter: true },
             { key: "status", label: "Status", filter: true },
             { key: "reference", label: "Reference", hidden: true },

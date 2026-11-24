@@ -381,6 +381,10 @@ export async function loadSessions(
   f: ReportFilter,
   page: number,
   ctx: StationContext,
+  /** Network mode: each row's host, network fee and host share (see rowFees). */
+  fees?: (
+    rows: ReportCheckout[],
+  ) => Promise<Map<string, NonNullable<SessionRow["network"]>>>,
 ): Promise<SessionsResult> {
   try {
     const totals = await d.store.totals(f);
@@ -390,9 +394,13 @@ export async function loadSessions(
       limit: PAGE_ROWS,
       offset: (at - 1) * PAGE_ROWS,
     });
+    const network = fees ? await fees(rows) : null;
     return {
       ok: true,
-      rows: rows.map((c) => toRow(c, ctx)),
+      rows: rows.map((c) => ({
+        ...toRow(c, ctx),
+        network: network?.get(c.id) ?? null,
+      })),
       totals,
       page: at,
       pages,
