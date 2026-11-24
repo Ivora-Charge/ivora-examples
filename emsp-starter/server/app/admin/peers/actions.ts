@@ -28,9 +28,12 @@ import {
   setHubPushMode,
 } from "@/lib/ocpi/hub";
 import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
+import { MIGRATION_PENDING, NO_TRUSTED_PARTY } from "./peer-view";
 import { peerStore } from "@/lib/ocpi/registry";
 import type { HubParty, HubPushMode, Peer } from "@/lib/ocpi/store";
 import { assertLive, isDemo } from "@/lib/server/demo";
+import { ABSENT_CODES, DatabaseRequestError } from "@/lib/server/supabase-rest";
+import { databaseCheck } from "@/lib/setup/database";
 import { tokenStore } from "@/lib/tokens/registry";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
@@ -64,7 +67,12 @@ export type PeerSummary = {
   versionsUrl: string | null;
   parties: string[];
   /** A roaming hub: the parties behind it and whether the operator trusts them. */
-  hub?: { parties: HubParty[]; pushMode: HubPushMode };
+  hub?: {
+    parties: HubParty[];
+    pushMode: HubPushMode;
+    /** The hub's version details have a hubclientinfo Sender: it publishes a list of parties. */
+    listsParties: boolean;
+  };
   modules: string[];
   registeredAt: string | null;
   /** Per module this server pulls; only in the peer list. */
@@ -139,7 +147,13 @@ function summary(p: Peer): PeerSummary {
         `${r.role} ${r.country_code}-${r.party_id} (${r.business_details.name})${isHubPeer(p) && r.role === "CPO" ? " declared by the hub, not trusted" : ""}`,
     ),
     ...(isHubPeer(p) && {
-      hub: { parties: p.hubParties, pushMode: p.hubPushMode },
+      hub: {
+        parties: p.hubParties,
+        pushMode: p.hubPushMode,
+        listsParties: p.endpoints.some(
+          (e) => e.identifier === "hubclientinfo" && e.role === "SENDER",
+        ),
+      },
     }),
     modules: [...new Set(p.endpoints.map((e) => e.identifier))].sort(),
     registeredAt: p.registeredAt,
@@ -291,7 +305,10 @@ export async function syncPeerAction(
     if (isHubPeer(peer) && !trustedParties(peer).length)
       return {
         ok: false,
-        message: `${peer.label} is a roaming hub with no trusted party: accept a party first.`,
+        message: `No party behind ${peer.label} is trusted yet, so there is nothing to pull from.`,
+        code: NO_TRUSTED_PARTY,
+        nextStep:
+          "Accept a party your hub contact gave you, in the form below, then pull again.",
       };
     for (const module of ["tariffs", "locations"] as const)
       if (
@@ -325,6 +342,23 @@ async function purgeParty(
 }
 
 /**
+ * The answer when a save fails because the database lacks a migration: the files
+ * Setup's database check names as pending, and where to read more.
+ */
+async function pendingMigration(): Promise<ActionState> {
+  const pending = await databaseCheck({ fresh: true })
+    .then((c) => c.pending)
+    .catch(() => []);
+  return {
+    ok: false,
+    message: `The Send tokens setting cannot be saved yet: a database migration is pending${pending.length ? ` (${pending.join(", ")})` : ""}.`,
+    code: MIGRATION_PENDING,
+    nextStep:
+      "Apply the pending migration (Setup, stop 2, shows which one), then choose again.",
+  };
+}
+
+/**
  * The CPO parties behind a roaming hub: accept one (a new one, or one the hub offered),
  * stop trusting one, or read the hub's client list for parties to offer; or set how
  * tokens are pushed to the hub (`push_mode`). Until a party is accepted we pull nothing
@@ -343,10 +377,22 @@ export async function hubPartyAction(
     const intent = field(form, "intent");
     if (intent === "push_mode") {
       const mode = field(form, "mode") as HubPushMode;
-      const { peer, owed, changed } = await setHubPushMode(id, mode, {
-        ...deps,
-        tokens: tokenStore(),
-      });
+      let saved: Awaited<ReturnType<typeof setHubPushMode>>;
+      try {
+        saved = await setHubPushMode(id, mode, {
+          ...deps,
+          tokens: tokenStore(),
+        });
+      } catch (e) {
+        if (
+          e instanceof DatabaseRequestError &&
+          e.code !== null &&
+          ABSENT_CODES.has(e.code)
+        )
+          return pendingMigration();
+        throw e;
+      }
+      const { peer, owed, changed } = saved;
       return {
         ok: true,
         message: !changed

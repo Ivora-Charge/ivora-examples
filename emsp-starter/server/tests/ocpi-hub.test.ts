@@ -918,7 +918,10 @@ describe("pulls through a hub", () => {
       peerId: hubPeer.id,
       intent: "full",
     });
-    expect((await syncPeerAction({}, f)).message).toMatch(/no trusted party/);
+    const none = await syncPeerAction({}, f);
+    expect(none).toMatchObject({ ok: false, code: "no_trusted_party" });
+    expect(none.message).toMatch(/No party behind .* is trusted yet/);
+    expect(none.nextStep).not.toMatch(/Check the fields above/);
     await accept(A);
     const done = await syncPeerAction({}, f);
     expect(done.ok).toBe(true);

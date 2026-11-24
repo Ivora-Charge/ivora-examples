@@ -29,7 +29,15 @@ import {
   type ActionState,
   type PeerSummary,
 } from "../actions";
-import { inARow, moduleName, sendTheCpo, sinceDay, viewOf } from "../peer-view";
+import {
+  inARow,
+  MIGRATION_PENDING,
+  moduleName,
+  NO_TRUSTED_PARTY,
+  sendTheCpo,
+  sinceDay,
+  viewOf,
+} from "../peer-view";
 
 type HubParty = NonNullable<PeerSummary["hub"]>["parties"][number];
 type Send = (
@@ -45,10 +53,54 @@ const SOURCE: Record<HubParty["source"], string> = {
   credentials: "Declared by the hub when it registered.",
 };
 
+/** Opens the "add a party" form and moves to it, from a link that points there. */
+function showAddParty(e: React.MouseEvent) {
+  const form = document.getElementById("add-party");
+  if (!(form instanceof HTMLDetailsElement)) return;
+  e.preventDefault();
+  form.open = true;
+  form.scrollIntoView({ block: "center" });
+  form.querySelector("input")?.focus();
+}
+
+/** A pull that found no trusted party: says so, and points at the form that adds one. */
+export function NoTrustedPartyMessage({ state }: { state: ActionState }) {
+  if (state.code !== NO_TRUSTED_PARTY) return null;
+  return (
+    <Message
+      kind="bad"
+      title={state.message}
+      code={state.code}
+      nextStep={
+        <>
+          {state.nextStep}{" "}
+          <a href="#add-party" onClick={showAddParty}>
+            Go to the add-a-party form
+          </a>
+          .
+        </>
+      }
+    />
+  );
+}
+
+/** Under the Send tokens selector: the change was not saved because a migration is pending. */
+export function PushPendingNote({ state }: { state: ActionState }) {
+  if (state.code !== MIGRATION_PENDING) return null;
+  return (
+    <p className="small" role="alert">
+      Not saved: a database migration is pending.{" "}
+      <Link href="/#stop-2">Open Setup</Link> to see which one, apply it, then
+      choose again.
+    </p>
+  );
+}
+
 /** How our token pushes reach the hub: one push to its own party, or one per party. */
 export function PushMode({ peer, send }: { peer: PeerSummary; send: Send }) {
   const id = useId();
   const mode = peer.hub?.pushMode ?? "per_party";
+  const [answer, setAnswer] = useState<ActionState>({});
   return (
     <section className="card stack" aria-labelledby={`${id}-h`}>
       <h2 className="h3" id={`${id}-h`}>
@@ -69,18 +121,21 @@ export function PushMode({ peer, send }: { peer: PeerSummary; send: Send }) {
         <select
           id={`${id}-mode`}
           value={mode}
-          onChange={(e) =>
-            send(hubPartyAction, {
-              peerId: peer.id,
-              intent: "push_mode",
-              mode: e.target.value,
-            })
+          onChange={async (e) =>
+            setAnswer(
+              await send(hubPartyAction, {
+                peerId: peer.id,
+                intent: "push_mode",
+                mode: e.target.value,
+              }),
+            )
           }
         >
           <option value="hub">One push to the hub&apos;s own party</option>
           <option value="per_party">One push per trusted party</option>
         </select>
       </div>
+      <PushPendingNote state={answer} />
     </section>
   );
 }
@@ -92,6 +147,7 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
   const trusted = parties.filter((p) => p.status === "trusted");
   const offered = parties.filter((p) => p.status === "offered");
   const perParty = peer.hub?.pushMode === "per_party";
+  const lists = peer.hub?.listsParties !== false;
   const act = (intent: string, p?: HubParty | Record<string, string>) =>
     send(hubPartyAction, {
       peerId: peer.id,
@@ -169,26 +225,40 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
           <h2 id={`${id}-o`}>
             Offered <span className="muted">{offered.length}</span>
           </h2>
-          <button
-            className="btn ghost sm"
-            type="button"
-            onClick={() => act("offer")}
-          >
-            <Icon name="refresh" />
-            Read the hub&apos;s list again
-          </button>
+          {lists && (
+            <button
+              className="btn ghost sm"
+              type="button"
+              onClick={() => act("offer")}
+            >
+              <Icon name="refresh" />
+              Read the hub&apos;s list again
+            </button>
+          )}
         </div>
+        {!lists && (
+          <Message
+            kind="wait"
+            title="This hub does not publish a list of parties: add the party your hub contact gave you."
+          />
+        )}
         <p className="muted">
-          {`The hub lists these CPOs. Offered is not trusted: until you accept, we pull nothing from them, send them no command${perParty ? " or token" : ""} and refuse what arrives in their name.`}
+          {`${lists ? "The hub lists these CPOs." : "Parties the hub declared when it registered."} Offered is not trusted: until you accept, we pull nothing from them, send them no command${perParty ? " or token" : ""} and refuse what arrives in their name.`}
         </p>
         {offered.length > 0 ? (
           <ul className="list">{offered.map(row)}</ul>
         ) : (
           <p className="card flat muted">
-            No offered party. Read the hub&apos;s list again, or add one below.
+            {lists
+              ? "No offered party. Read the hub's list again, or add one below."
+              : "No offered party. Add one below."}
           </p>
         )}
-        <details className="card flat fold">
+        <details
+          className="card flat fold"
+          id="add-party"
+          open={!lists || undefined}
+        >
           <summary>Add a party the hub does not list</summary>
           <ActionForm
             onSend={(form) =>
@@ -468,7 +538,11 @@ function PeerBody({
   return (
     <div className="cols" aria-busy={busy}>
       <div className="stack">
-        <Result state={last} />
+        {last.code === NO_TRUSTED_PARTY ? (
+          <NoTrustedPartyMessage state={last} />
+        ) : (
+          <Result state={last} />
+        )}
         {peer.demo && (
           <Message
             kind="wait"
