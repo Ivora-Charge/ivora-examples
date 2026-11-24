@@ -387,6 +387,16 @@ describe("hub push mode switch on PGlite", () => {
     expect(src).toMatch(/for share of p/i);
   });
 
+  it("the switch locks the peer FOR NO KEY UPDATE, so an outbox insert's FK lock can still go", async () => {
+    const [{ src }] = (
+      await db.query<{ src: string }>(
+        "select prosrc as src from pg_proc where proname = 'emsp_ocpi_hub_set_push_mode'",
+      )
+    ).rows;
+    expect(src).toMatch(/for no key update;/i);
+    expect(src).not.toMatch(/for update;/i);
+  });
+
   it("a retry round under way during a switch cannot clear what the switch owes", async () => {
     await db.query(
       "update public.emsp_ocpi_peers set hub_parties = $2 where id = $1",

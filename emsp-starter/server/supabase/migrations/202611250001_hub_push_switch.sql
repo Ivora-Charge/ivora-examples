@@ -17,7 +17,7 @@ alter table public.emsp_token_pushes
 
 -- Same as before, and the row it owes carries the peer's generation. The peer row is
 -- read FOR SHARE, so a token change and a concurrent mode switch (which locks the peer
--- FOR UPDATE) take turns: a change committed first is moved to the new generation by
+-- FOR NO KEY UPDATE) take turns: a change committed first is moved to the new generation by
 -- the switch, and one made after it waits for the switch and reads the new generation.
 create or replace function public.emsp_tokens_owe_push() returns trigger
 language plpgsql
@@ -75,7 +75,9 @@ begin
   select p.hub_push_mode, p.roles into v_from, v_roles
   from public.emsp_ocpi_peers as p
   where p.id = p_peer_id and p.status = 'registered' and p.rev = p_expected_rev
-  for update;
+  -- NO KEY UPDATE, not UPDATE: it still blocks the trigger's FOR SHARE, but not the FK
+  -- KEY SHARE a concurrent outbox insert takes on the peer, which could deadlock.
+  for no key update;
   if not found or v_from = p_mode then
     return;
   end if;
