@@ -29,7 +29,9 @@ import { sameParty, STATUS, type Party } from "./types";
  *   process, refusals in between are added to the next write);
  * - a hub gets at most MAX_NEW_REFUSED new parties per REFUSAL_WINDOW_MS, so a sender
  *   that names a new party on every request cannot flush the list;
- * - at most MAX_REFUSED parties are kept per hub, the ones seen longest ago dropped.
+ * - at most MAX_REFUSED parties are kept per hub: a new party replaces the one seen
+ *   longest ago, but never one seen within REFUSAL_KEEP_MS (24 h); when all were, the
+ *   new party is dropped, so a sustained flood cannot displace active rows.
  * Counts are therefore a lower bound. The 403 waits at most REFUSAL_WRITE_WAIT_MS for
  * the write, and after a "table missing" answer (migration pending) this process
  * writes nothing for ABSENT_BACKOFF_MS.
@@ -198,18 +200,21 @@ export async function noteRefused(
   map.delete(key);
   map.set(key, { lastWriteMs: ms, pending: 0 });
   while (map.size > MAX_TRACKED) map.delete(map.keys().next().value!);
-  const write = store
-    .noteRefusal({
-      peerId: peer.id,
-      countryCode: r.party.countryCode,
-      partyId: r.party.partyId,
-      kind: r.kind,
-      module: moduleOf(request.url),
-      ...(r.other &&
-        !sameParty(r.other, r.party) && { otherParty: id(r.other) }),
-      times: 1 + (held?.pending ?? 0),
-      at: new Date(ms).toISOString(),
-    })
+  // Through a promise, so a store that throws synchronously is a failed write too.
+  const write = Promise.resolve()
+    .then(() =>
+      store.noteRefusal({
+        peerId: peer.id,
+        countryCode: r.party.countryCode,
+        partyId: r.party.partyId,
+        kind: r.kind,
+        module: moduleOf(request.url),
+        ...(r.other &&
+          !sameParty(r.other, r.party) && { otherParty: id(r.other) }),
+        times: 1 + (held?.pending ?? 0),
+        at: new Date(ms).toISOString(),
+      }),
+    )
     .then(
       () => undefined,
       (e: unknown) => {

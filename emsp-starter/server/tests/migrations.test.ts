@@ -579,7 +579,8 @@ describe("refused hub pushes (202611240002_hub_refusals)", () => {
       await note(peer, "BBB", { times: 3, kind: "path", other: "ZZ-AAA" }),
     ).toBe(true);
     [row] = await rows(peer);
-    expect(row).toMatchObject({ kind: "path", other_party: "ZZ-AAA" });
+    // 'routing' is never downgraded to 'path'; the module and other party follow.
+    expect(row).toMatchObject({ kind: "routing", other_party: "ZZ-AAA" });
     expect(Number(row.times)).toBe(4);
     expect(
       new Date(row.last_seen).getTime() - new Date(row.first_seen).getTime(),
@@ -601,18 +602,58 @@ describe("refused hub pushes (202611240002_hub_refusals)", () => {
     const flood = [];
     for (let i = 0; i < 50; i++)
       flood.push(await note(peer, `F${id(i).slice(1)}`));
-    expect(flood.filter(Boolean)).toHaveLength(10);
-    expect(flood.slice(10).some(Boolean)).toBe(false);
+    // Room for 5; the genuine rows were seen within 24 hours, so none makes way.
+    expect(flood.filter(Boolean)).toHaveLength(5);
+    expect(flood.slice(5).some(Boolean)).toBe(false);
     const kept = (await rows(peer)).map((r) => r.party_id);
     expect(kept).toHaveLength(100);
-    expect(genuine.filter((g) => kept.includes(g))).toHaveLength(90);
+    expect(genuine.filter((g) => kept.includes(g))).toHaveLength(95);
     // A party already listed still counts under its own window.
     expect(await note(peer, genuine[0])).toBe(true);
     // Another peer's budget is its own.
     expect(await note(other, "OTH")).toBe(true);
-    // A minute later the budget is back.
+    // A minute later the budget is back, but the list is full of active rows.
     await age(peer, 61);
-    expect(await note(peer, "F99")).toBe(true);
+    expect(await note(peer, "F99")).toBe(false);
+  });
+
+  it("a sustained rotating flood leaves every party seen in the last 24 hours in place; a stale one can be replaced", async () => {
+    const peer = await newPeer();
+    // 100 genuine rows: 98 seen an hour ago, 2 seen 25 hours ago.
+    for (let i = 0; i < 100; i++) {
+      expect(await note(peer, `G${id(i).slice(1)}`)).toBe(true);
+      if (i % 10 === 9) await age(peer, 61);
+    }
+    await db.query(
+      `update public.emsp_ocpi_hub_refusals
+       set first_seen = now() - interval '25 hours', last_seen = now() - interval '25 hours'
+       where peer_id = $1 and party_id in ('G00', 'G01')`,
+      [peer],
+    );
+    await db.query(
+      `update public.emsp_ocpi_hub_refusals
+       set first_seen = now() - interval '1 hour', last_seen = now() - interval '1 hour'
+       where peer_id = $1 and party_id not in ('G00', 'G01')`,
+      [peer],
+    );
+    const active = (await rows(peer))
+      .map((r) => r.party_id)
+      .filter((p) => p !== "G00" && p !== "G01");
+    expect(active).toHaveLength(98);
+    // 30 windows of a new party on each of 20 calls.
+    let written = 0;
+    for (let w = 0; w < 30; w++) {
+      for (let i = 0; i < 20; i++)
+        if (await note(peer, `F${id(w * 20 + i).slice(1)}`)) written++;
+      await age(peer, 61);
+    }
+    // Only the two stale rows made way.
+    expect(written).toBe(2);
+    const kept = (await rows(peer)).map((r) => r.party_id);
+    expect(kept).toHaveLength(100);
+    expect(active.every((g) => kept.includes(g))).toBe(true);
+    expect(kept).not.toContain("G00");
+    expect(kept).not.toContain("G01");
   });
 
   it("calls racing for one peer cannot overshoot the budget or the cap", async () => {
@@ -624,19 +665,38 @@ describe("refused hub pushes (202611240002_hub_refusals)", () => {
         ),
       );
       expect(noted.filter(Boolean)).toHaveLength(10);
-      await age(peer, 61);
+      // A day on, so the cap has stale rows to replace from round 11.
+      await age(peer, 24 * 3_600 + 61);
     }
+    expect(await rows(peer)).toHaveLength(100);
+    // With every row seen within 24 hours, racing calls write nothing.
+    await db.query(
+      "update public.emsp_ocpi_hub_refusals set first_seen = now() - interval '1 hour', last_seen = now() - interval '1 hour' where peer_id = $1",
+      [peer],
+    );
+    const late = await Promise.all(
+      Array.from({ length: 30 }, (_, i) => note(peer, `L${id(i).slice(1)}`)),
+    );
+    expect(late.some(Boolean)).toBe(false);
     expect(await rows(peer)).toHaveLength(100);
   });
 
-  it("keeps at most 100 parties per peer, dropping the ones seen longest ago", async () => {
+  it("keeps at most 100 parties per peer, replacing only ones not seen for 24 hours", async () => {
     const peer = await newPeer();
     const other = await newPeer();
     await note(other, "OLD");
     // One second apart (so no two share a time), and a new minute every 10.
-    for (let i = 0; i < 103; i++) {
+    for (let i = 0; i < 100; i++) {
       expect(await note(peer, id(i))).toBe(true);
       await age(peer, i % 10 === 9 ? 61 : 1);
+    }
+    // All seen within 24 hours: a new party is dropped.
+    expect(await note(peer, "NEW")).toBe(false);
+    // A day later, new parties replace the ones seen longest ago.
+    await age(peer, 24 * 3_600);
+    for (let i = 100; i < 103; i++) {
+      expect(await note(peer, id(i))).toBe(true);
+      await age(peer, 1);
     }
     const kept = (await rows(peer)).map((r) => r.party_id);
     expect(kept).toHaveLength(100);

@@ -43,8 +43,12 @@ grant select, insert, update, delete on table public.emsp_ocpi_hub_refusals to s
 --   10 of the peer's rows were first seen in the last 60 seconds, so rotating the
 --   party on every request adds at most 10 rows (and drops at most 10 old ones) a
 --   minute;
--- - at most 100 rows per peer: a new row past that drops the peer's rows seen
---   longest ago.
+-- - at most 100 rows per peer: a new row past that replaces the peer's row seen
+--   longest ago, but never a row seen in the last 24 hours. When all 100 were seen
+--   in the last 24 hours, the new party is dropped (not written), so a flood cannot
+--   displace genuine rows that are still active.
+-- A row once refused by the routing check ('routing': the party itself sent the
+-- data) keeps that kind: a later 'path' refusal does not downgrade it.
 -- Calls for one peer run one at a time (a transaction lock per peer), so concurrent
 -- calls cannot overshoot the budget or the cap. Returns whether it wrote.
 create function public.emsp_ocpi_hub_refusal_note(
@@ -63,6 +67,8 @@ as $$
 declare
   v_now timestamptz := now();
   v_last timestamptz;
+  v_rows integer;
+  v_dropped integer;
   v_noted boolean := false;
 begin
   perform pg_advisory_xact_lock(
@@ -75,7 +81,7 @@ begin
     and r.party_id = p_party_id;
   if found then
     update public.emsp_ocpi_hub_refusals as r set
-      kind = p_kind,
+      kind = case when r.kind = 'routing' then 'routing' else p_kind end,
       module = p_module,
       other_party = p_other_party,
       times = r.times + greatest(p_times, 1),
@@ -91,23 +97,34 @@ begin
     where b.peer_id = p_peer_id
       and b.first_seen > v_now - interval '60 seconds'
   ) < 10 then
-    insert into public.emsp_ocpi_hub_refusals (
-      peer_id, country_code, party_id, kind, module, other_party, times, first_seen, last_seen
-    )
-    values (
-      p_peer_id, p_country_code, p_party_id, p_kind, p_module, p_other_party,
-      greatest(p_times, 1), v_now, v_now
-    );
-    v_noted := true;
-    delete from public.emsp_ocpi_hub_refusals as d
-    where d.peer_id = p_peer_id
-      and (d.country_code, d.party_id) not in (
-        select k.country_code, k.party_id
-        from public.emsp_ocpi_hub_refusals as k
-        where k.peer_id = p_peer_id
-        order by k.last_seen desc, k.country_code, k.party_id
-        limit 100
+    select count(*) into v_rows
+    from public.emsp_ocpi_hub_refusals as c
+    where c.peer_id = p_peer_id;
+    if v_rows >= 100 then
+      -- Make room by dropping rows not seen for 24 hours, the oldest first.
+      delete from public.emsp_ocpi_hub_refusals as d
+      where d.peer_id = p_peer_id
+        and (d.country_code, d.party_id) in (
+          select k.country_code, k.party_id
+          from public.emsp_ocpi_hub_refusals as k
+          where k.peer_id = p_peer_id
+            and k.last_seen < v_now - interval '24 hours'
+          order by k.last_seen, k.country_code, k.party_id
+          limit v_rows - 99
+        );
+      get diagnostics v_dropped = row_count;
+      v_rows := v_rows - v_dropped;
+    end if;
+    if v_rows < 100 then
+      insert into public.emsp_ocpi_hub_refusals (
+        peer_id, country_code, party_id, kind, module, other_party, times, first_seen, last_seen
+      )
+      values (
+        p_peer_id, p_country_code, p_party_id, p_kind, p_module, p_other_party,
+        greatest(p_times, 1), v_now, v_now
       );
+      v_noted := true;
+    end if;
   end if;
   return query select v_noted;
 end;

@@ -209,8 +209,16 @@ export function withOcpi(handler: OcpiHandler, options: OcpiRouteOptions) {
       res.headers.set("X-Correlation-ID", correlationId);
       return res;
     } catch (e) {
-      if (e instanceof RefusedPartyProblem && store && peer)
-        await noteRefused(store, peer, request, e.refused);
+      if (e instanceof RefusedPartyProblem && store && peer) {
+        // Noting must never change the answer: a throw here still gets the 403.
+        try {
+          await noteRefused(store, peer, request, e.refused);
+        } catch (noteError) {
+          console.error(
+            `Noting a refused push through peer ${peer.id} failed: ${logText(noteError)}`,
+          );
+        }
+      }
       if (e instanceof OcpiProblem) return problem(e);
       // Name the error, not its details: they may include peer data.
       console.error(
