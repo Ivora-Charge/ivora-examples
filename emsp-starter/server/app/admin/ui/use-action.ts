@@ -18,28 +18,26 @@ const FAILED: ActionResult = {
  * several actions on one thing, which shows the answer of the last one.
  */
 export function useRun() {
-  const { withSecret, check } = useAdmin();
+  const { check } = useAdmin();
   return useCallback(
     async <S extends ActionResult>(
       action: Action<S>,
       form?: FormData,
     ): Promise<S> => {
       try {
-        return check(await action({} as S, withSecret(form)));
+        return check(await action({} as S, form ?? new FormData()));
       } catch {
         return FAILED as S;
       }
     },
-    [withSecret, check],
+    [check],
   );
 }
 
 /**
- * Runs one admin server action for the signed-in admin: adds the tab's admin secret
- * (when one was given on the sign-in page), keeps the last answer, and ends the
- * sign-in for this tab when the server no longer accepts it. The actions and the
- * server's gate are the ones every admin form always used; only the secret field is
- * gone from the forms.
+ * Runs one admin server action for the signed-in admin: keeps the last answer, and
+ * ends the sign-in for this tab when the server no longer accepts it. The server knows
+ * the admin by a cookie, so the form carries only the action's own fields.
  */
 export function useAction<S extends ActionResult>(action: Action<S>) {
   const send = useRun();

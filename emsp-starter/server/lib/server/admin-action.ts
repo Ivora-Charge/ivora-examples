@@ -1,8 +1,8 @@
 import "server-only";
-import { headers } from "next/headers";
 import { currentAdmin } from "@/lib/accounts/admin-session";
 import { explain, explainMessage, UNEXPECTED } from "@/lib/admin/errors";
-import { adminClientKey, adminEnabled, checkAdminSecret } from "./admin";
+import { adminEnabled } from "./admin";
+import { endSecretSession, secretSession } from "./admin-secret-session";
 
 /**
  * What an admin form shows after an action. A failed one also has a code (the OCPI
@@ -20,26 +20,42 @@ export const field = (form: FormData, name: string) => {
   return typeof v === "string" ? v : "";
 };
 
-/** Who is asking, for the admin-secret rate limit (see adminClientKey). */
-async function clientKey(): Promise<string | null> {
-  try {
-    return adminClientKey(await headers());
-  } catch {
-    // Outside a request (tests): no per-client key.
-    return null;
-  }
-}
+/** What the gate answers when the admin secret is set and no admin is signed in. */
+const SIGNED_OUT = {
+  ok: false,
+  message: "Sign in as an admin.",
+  code: "signed_out",
+  nextStep: "Sign in (Account), then try again.",
+};
+const REFUSED = {
+  none: SIGNED_OUT,
+  wrong: SIGNED_OUT,
+  expired: {
+    ok: false,
+    message: "The admin-secret session has ended.",
+    code: "session_expired",
+    nextStep: "Sign in again (Account). The session lasts an hour.",
+  },
+  limited: {
+    ok: false,
+    message: "Too many wrong admin secrets. Try again in 15 minutes.",
+    code: "rate_limited",
+    nextStep: "Wait 15 minutes, or sign in as an admin by email instead.",
+  },
+} satisfies Record<string, AdminResult>;
 
 /**
  * Runs `fn` only for an admin: one signed in (Supabase Auth, listed in `emsp_admins`
- * with the role `admin`), or, while ADMIN_SECRET is set, anyone who gives it (rate
- * limited). Errors become a message for the form: errors `shown` accepts and demo-mode
- * refusals carry their own text, which never includes a token; anything else gets
- * `fallback`. Every failure gets a code and a next step. `fn` gets the actor for the
- * audit log: `admin:<user ID>`, or `admin:secret` for the ADMIN_SECRET.
+ * with the role `admin`), or, while ADMIN_SECRET is set, one with an admin-secret
+ * session from the sign-in page (lib/server/admin-secret-session.ts). The secret itself
+ * is taken on the sign-in page only: no field of `form` is read here. Errors become a
+ * message for the form: errors `shown` accepts and demo-mode refusals carry their own
+ * text, which never includes a token; anything else gets `fallback`. Every failure gets
+ * a code and a next step. `fn` gets the actor for the audit log: `admin:<user ID>`, or
+ * `admin:secret` for an admin-secret session.
  */
 export async function asAdmin<T extends AdminResult>(
-  form: FormData,
+  _form: FormData,
   fn: (actor: string) => Promise<T>,
   {
     shown,
@@ -65,25 +81,13 @@ export async function asAdmin<T extends AdminResult>(
         code: "admin_disabled",
         nextStep: "Sign in as an admin (Sign in, above).",
       };
-    const check = checkAdminSecret(
-      field(form, "adminSecret"),
-      await clientKey(),
-    );
-    if (check === "limited")
-      return {
-        ok: false,
-        message: "Too many wrong admin secrets. Try again in 15 minutes.",
-        code: "rate_limited",
-        nextStep: "Wait 15 minutes, or sign in as an admin instead.",
-      };
-    if (check !== "ok")
-      return {
-        ok: false,
-        message: "Wrong admin secret.",
-        code: "wrong_secret",
-        nextStep:
-          "Enter the server's ADMIN_SECRET, or leave it empty and sign in as an admin.",
-      };
+    const session = await secretSession();
+    if (session !== "ok") {
+      // A cookie that no longer works is dropped, so it is not sent (and counted) again.
+      if (session === "wrong" || session === "expired")
+        await endSecretSession();
+      return REFUSED[session];
+    }
   }
   try {
     // Who acted, for the audit log: the signed-in admin's user ID, never an email.

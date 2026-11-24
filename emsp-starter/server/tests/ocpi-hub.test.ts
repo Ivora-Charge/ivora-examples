@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
 import {
   hubPartyAction,
   listPeersAction,
@@ -69,6 +74,7 @@ import {
   LIVE_ENV,
   uninstallNetwork,
 } from "./support/network";
+import { resetRequest, signInWithSecret } from "./support/request";
 
 /** Test fixtures only: any parties will do; none of this is built into the server. */
 const A: Party = { countryCode: "ZZ", partyId: "AAA" };
@@ -163,6 +169,7 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  resetRequest();
   uninstallNetwork();
   setPeerStoreForTests(undefined);
   setTokenStoreForTests(undefined);
@@ -671,8 +678,8 @@ describe("trusted parties of a hub", () => {
 
   it("works from the admin actions (accept, offer, remove, list)", async () => {
     process.env.ADMIN_SECRET = "s".repeat(32);
-    const as = (f: Record<string, string>) =>
-      adminForm({ adminSecret: "s".repeat(32), ...f });
+    signInWithSecret();
+    const as = (f: Record<string, string>) => adminForm({ ...f });
     const offer = await hubPartyAction(
       {},
       as({ peerId: hubPeer.id, intent: "offer" }),
@@ -811,8 +818,8 @@ describe("pulls through a hub", () => {
 
   it("the admin pull goes through each trusted party, and says so with none", async () => {
     process.env.ADMIN_SECRET = "s".repeat(32);
+    signInWithSecret();
     const f = adminForm({
-      adminSecret: "s".repeat(32),
       peerId: hubPeer.id,
       intent: "full",
     });
@@ -1173,26 +1180,25 @@ describe("token pushes through a hub, to the hub's own party", () => {
     expect(hubRequests(A)).toEqual([]);
   });
 
-  it("is set from the admin action, which checks the secret, the mode and the peer", async () => {
+  it("is set from the admin action, which checks the session, the mode and the peer", async () => {
     process.env.ADMIN_SECRET = "s".repeat(32);
-    const as = (f: Record<string, string>) =>
-      adminForm({ adminSecret: "s".repeat(32), ...f });
+    const as = (f: Record<string, string>) => adminForm({ ...f });
     await setHubPushMode(hubPeer.id, "per_party", modeDeps());
     await driversWithTokens(2);
 
-    // A wrong secret changes nothing.
+    // Without a session nothing changes.
     expect(
       await hubPartyAction(
         {},
         adminForm({
-          adminSecret: "x".repeat(32),
           peerId: hubPeer.id,
           intent: "push_mode",
           mode: "hub",
         }),
       ),
-    ).toMatchObject({ ok: false, code: "wrong_secret" });
+    ).toMatchObject({ ok: false, code: "signed_out" });
     expect((await peers.getPeer(hubPeer.id))!.hubPushMode).toBe("per_party");
+    signInWithSecret();
 
     expect(
       await hubPartyAction(

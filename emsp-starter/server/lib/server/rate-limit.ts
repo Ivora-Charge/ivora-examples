@@ -10,6 +10,8 @@ import "server-only";
 export type RateLimit = {
   /** Null when allowed; else seconds until the client may try again. */
   check(client: string, now?: number): number | null;
+  /** The same answer as `check`, without counting a request. */
+  peek(client: string, now?: number): number | null;
   reset(): void;
 };
 
@@ -26,13 +28,15 @@ export function rateLimit({
   const hits = new Map<string, number[]>();
   const recent = (times: number[], now: number) =>
     times.filter((t) => now - t < windowMs);
+  const wait = (times: number[], now: number) =>
+    Math.max(1, Math.ceil((times[0] + windowMs - now) / 1000));
 
   return {
     check(client, now = Date.now()) {
       const times = recent(hits.get(client) ?? [], now);
       if (times.length >= limit) {
         hits.set(client, times);
-        return Math.max(1, Math.ceil((times[0] + windowMs - now) / 1000));
+        return wait(times, now);
       }
       times.push(now);
       // Re-insert, so the map's order is least recently used first.
@@ -46,6 +50,10 @@ export function rateLimit({
         }
       }
       return null;
+    },
+    peek(client, now = Date.now()) {
+      const times = recent(hits.get(client) ?? [], now);
+      return times.length >= limit ? wait(times, now) : null;
     },
     reset() {
       hits.clear();

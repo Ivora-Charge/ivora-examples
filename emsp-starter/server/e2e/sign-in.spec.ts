@@ -5,7 +5,7 @@ import { expectAccessible, goTo, signIn } from "./support";
 // Demo mode: no email is sent, the code is always 000000, and nobody is an admin.
 const schemes = ["light", "dark"] as const;
 
-test("demo: sign-in asks for the emailed code, not the link, and explains a missing code", async ({
+test("demo: sign-in asks for the emailed code, says the link works here too, and explains a missing code", async ({
   page,
 }) => {
   await page.goto("/admin/sign-in");
@@ -27,10 +27,18 @@ test("demo: sign-in asks for the emailed code, not the link, and explains a miss
     page.getByRole("heading", { name: "Type the code from the email" }),
   ).toBeVisible();
   await expect(
-    page.getByText("Type the code. Do not click the link in the email."),
+    page.getByText("A link in the email signs you in too"),
   ).toBeVisible();
+  // Another code for this address is possible once the server's cooldown is over.
+  await expect(page.getByText(/New code possible in 0:[0-5]\d/)).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Email me a new code" }),
+  ).toHaveCount(0);
   await page.getByText("The email has a link but no code").click();
-  await expect(page.getByText("{{ .Token }}")).toBeVisible();
+  await expect(page.getByText("{{ .Token }}", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("{{ .RedirectTo }}?token_hash={{ .TokenHash }}"),
+  ).toBeVisible();
   await expect(page.getByText("Magic Link template")).toBeVisible();
   for (const colorScheme of schemes) {
     await page.emulateMedia({ colorScheme });
@@ -56,27 +64,35 @@ test("demo: sign-in asks for the emailed code, not the link, and explains a miss
   }
 });
 
-test("demo: too many codes says wait and try again, and that the newest code still works", async ({
+test("demo: a second code too soon says whose limit it is and counts down the wait", async ({
   page,
 }) => {
   const email = `limit-${test.info().project.name}@example.com`;
   await page.goto("/admin/sign-in");
-  // This server sends at most 5 codes per address per hour: the sixth is refused.
-  for (let i = 0; i < 6; i += 1) {
+  // This server sends one code per address a minute: asked again at once, it says so.
+  for (let i = 0; i < 2; i += 1) {
     await page.getByLabel("Email").fill(email);
     await page.getByRole("button", { name: "Email me a code" }).click();
-    if (i < 5)
+    if (i < 1)
       await page.getByRole("button", { name: "Use another email" }).click();
   }
   await expect(
-    page.getByRole("heading", { name: "Too many sign-in attempts" }),
+    page.getByRole("heading", { name: "A code was just sent to this address" }),
   ).toBeVisible();
   const alert = page.locator(".msg[role=alert]");
-  await expect(alert).toContainText("Wait a while, then try again once.");
-  await expect(alert).toContainText("Whose limit:");
+  await expect(alert).toContainText("You can ask again in");
+  await expect(alert.locator(".big")).toHaveText(/^0:[0-5]\d$/);
+  await expect(alert).toContainText("Whose limit: this server's.");
+  await expect(alert).toContainText(
+    "one code per email address every 60 seconds",
+  );
   await expect(alert).toContainText(
     "the newest code still works until it expires",
   );
+  await expect(alert).toContainText("sign_in_limited");
+  // The clock runs.
+  const first = await alert.locator(".big").textContent();
+  await expect(alert.locator(".big")).not.toHaveText(first!, { timeout: 5000 });
   for (const colorScheme of schemes) {
     await page.emulateMedia({ colorScheme });
     await expectAccessible(page, `sign-in, limit, ${colorScheme}`);
@@ -85,9 +101,46 @@ test("demo: too many codes says wait and try again, and that the newest code sti
     .getByRole("button", { name: "Type a code I already have" })
     .click();
   await expect(page.getByLabel("6-digit code")).toBeVisible();
+  // The same wait holds the button that asks for a new code.
+  await expect(page.getByText(/New code possible in 0:[0-5]\d/)).toBeVisible();
 });
 
-test("demo: the admin secret is asked once, kept for the tab only, and never stored", async ({
+test("demo: the emailed link opens a button, never signs in by itself, and a refused link leaves the address bar", async ({
+  page,
+  context,
+}) => {
+  await page.goto("/admin/sign-in?token_hash=hash0123456789abcdef");
+  await expect(
+    page.getByRole("heading", { name: "Sign in with the link from the email" }),
+  ).toBeVisible();
+  await expect(
+    page.getByText("Opening the link alone signs nobody in"),
+  ).toBeVisible();
+  expect(await context.cookies()).toEqual([]);
+  for (const colorScheme of schemes) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `sign-in, link, ${colorScheme}`);
+  }
+  // Demo mode sends no email, so no link is a real one: the page says so and goes
+  // back to asking for an email.
+  await page.getByRole("button", { name: "Sign in", exact: true }).click();
+  const alert = page.locator(".msg[role=alert]");
+  await expect(alert).toContainText(
+    "This sign-in link is invalid or has expired.",
+  );
+  await expect(alert).toContainText("Ask for a new email below");
+  await expect(page.getByLabel("Email")).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/sign-in$/);
+  expect(await context.cookies()).toEqual([]);
+
+  // A token hash that is not one is not shown as a link at all.
+  await page.goto("/admin/sign-in?token_hash=nope");
+  await expect(
+    page.getByRole("heading", { name: "Sign in", level: 1 }),
+  ).toBeVisible();
+});
+
+test("demo: the admin secret is asked once and exchanged for a session cookie that scripts cannot read", async ({
   page,
   context,
 }) => {
@@ -95,6 +148,7 @@ test("demo: the admin secret is asked once, kept for the tab only, and never sto
   const alert = page.locator(".msg[role=alert]");
   await expect(alert).toContainText("That is not this server's admin secret.");
   await expect(alert).toContainText("wrong_secret");
+  expect(await context.cookies()).toEqual([]);
   for (const colorScheme of schemes) {
     await page.emulateMedia({ colorScheme });
     await expectAccessible(page, `sign-in, secret, ${colorScheme}`);
@@ -105,11 +159,25 @@ test("demo: the admin secret is asked once, kept for the tab only, and never sto
   await expect(
     page.getByRole("heading", { name: "Account", level: 1 }),
   ).toBeVisible();
-  await expect(page.getByText("In use for this tab")).toBeVisible();
+  await expect(page.getByText("Session in use")).toBeVisible();
   for (const colorScheme of schemes) {
     await page.emulateMedia({ colorScheme });
     await expectAccessible(page, `account, ${colorScheme}`);
   }
+
+  // One cookie: httpOnly, SameSite=Strict, Secure (a production build), for an hour.
+  const cookies = await context.cookies();
+  expect(cookies.map((c) => c.name)).toEqual(["emsp_admin_secret"]);
+  const [cookie] = cookies;
+  expect(cookie).toMatchObject({
+    httpOnly: true,
+    sameSite: "Strict",
+    secure: true,
+    path: "/",
+  });
+  const life = cookie.expires - Date.now() / 1000;
+  expect(life).toBeGreaterThan(55 * 60);
+  expect(life).toBeLessThanOrEqual(60 * 60 + 5);
 
   // Every admin page now opens its list without asking again.
   await goTo(page, "Peers");
@@ -118,7 +186,8 @@ test("demo: the admin secret is asked once, kept for the tab only, and never sto
   );
   await expect(page.getByLabel("Admin secret")).toHaveCount(0);
 
-  // Page memory only: nothing in storage or cookies, in the page's HTML or its URL.
+  // The secret is nowhere in the browser: not in storage, the cookie, the page or
+  // its URL. Page scripts cannot see the session cookie either.
   const stored = await page.evaluate(() =>
     JSON.stringify([
       { ...localStorage },
@@ -129,20 +198,25 @@ test("demo: the admin secret is asked once, kept for the tab only, and never sto
     ]),
   );
   expect(stored).not.toContain(E2E_ADMIN_SECRET);
-  expect(JSON.stringify(await context.cookies())).not.toContain(
-    E2E_ADMIN_SECRET,
+  expect(stored).not.toContain(cookie.value);
+  expect(JSON.stringify(cookies)).not.toContain(E2E_ADMIN_SECRET);
+  expect(await page.evaluate(() => document.cookie)).toBe("");
+
+  // A reload keeps the session: the list opens by itself again.
+  await page.reload();
+  await expect(page.getByRole("list", { name: "Peers" })).toContainText(
+    "Mock CPO (demo, built in)",
   );
 
-  // A reload forgets it: the page is back to the sign-in prompt.
-  await page.reload();
-  await expect(
-    page.getByRole("region", { name: "Sign in as an admin to see your peers" }),
-  ).toBeVisible();
-
-  // So does "Forget the secret".
-  await signIn(page);
-  await page.getByRole("button", { name: "Forget the secret" }).click();
+  // Signing out drops the cookie, and the pages are back to the sign-in prompt.
+  await goTo(page, "Account");
+  await page.getByRole("button", { name: "Sign out" }).click();
   await expect(
     page.getByRole("heading", { name: "Sign in", level: 1 }),
+  ).toBeVisible();
+  expect(await context.cookies()).toEqual([]);
+  await page.goto("/admin/peers");
+  await expect(
+    page.getByRole("region", { name: "Sign in as an admin to see your peers" }),
   ).toBeVisible();
 });

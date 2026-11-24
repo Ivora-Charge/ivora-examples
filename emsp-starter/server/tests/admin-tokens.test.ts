@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
+
 import {
   addRfidCardAction,
   changeTokenAction,
@@ -12,6 +18,8 @@ import { resetAdminLimitForTests } from "@/lib/server/admin";
 import { DEMO_DRIVER_REF, setTokenStoreForTests } from "@/lib/tokens/registry";
 import { MemoryTokenStore } from "@/lib/tokens/store";
 import { LIVE_ENV } from "./support/network";
+
+import { resetRequest, signInWithSecret } from "./support/request";
 
 const SECRET = "s".repeat(32);
 const saved = { ...process.env };
@@ -28,6 +36,7 @@ beforeEach(() => {
   for (const k of Object.keys(LIVE_ENV)) delete process.env[k];
   process.env.DEMO_MODE = "true";
   process.env.ADMIN_SECRET = SECRET;
+  signInWithSecret();
   setPeerStoreForTests(new MemoryPeerStore());
   fetchSpy = vi.fn(() => {
     throw new Error("no network in tests");
@@ -39,24 +48,23 @@ afterEach(() => {
   setPeerStoreForTests(undefined);
   setTokenStoreForTests(undefined);
   vi.unstubAllGlobals();
+  resetRequest();
   process.env = { ...saved };
 });
 
 describe("admin token actions (demo mode)", () => {
-  it("needs the admin secret", async () => {
+  it("needs an admin session", async () => {
+    resetRequest();
     expect(
-      await driverTokensAction(
-        {},
-        form({ driverRef: DEMO_DRIVER_REF, adminSecret: "wrong" }),
-      ),
-    ).toMatchObject({ ok: false, message: "Wrong admin secret." });
+      await driverTokensAction({}, form({ driverRef: DEMO_DRIVER_REF })),
+    ).toMatchObject({ ok: false, code: "signed_out" });
   });
 
   it("looks up the demo driver, issues, blocks and adds a card, pushing nothing", async () => {
     setTokenStoreForTests(new MemoryTokenStore());
     const created = await createAppTokenAction(
       {},
-      form({ driverRef: "driver-9", whitelist: "NEVER", adminSecret: SECRET }),
+      form({ driverRef: "driver-9", whitelist: "NEVER" }),
     );
     expect(created).toMatchObject({
       ok: true,
@@ -74,22 +82,19 @@ describe("admin token actions (demo mode)", () => {
     expect(
       await changeTokenAction(
         {},
-        form({ uid, type: "APP_USER", intent: "block", adminSecret: SECRET }),
+        form({ uid, type: "APP_USER", intent: "block" }),
       ),
     ).toMatchObject({
       ok: true,
       tokens: [{ status: "blocked", valid: false }],
     });
     expect(
-      await changeTokenAction(
-        {},
-        form({ uid, type: "CARD", intent: "block", adminSecret: SECRET }),
-      ),
+      await changeTokenAction({}, form({ uid, type: "CARD", intent: "block" })),
     ).toMatchObject({ ok: false, message: "Type must be APP_USER or RFID." });
     expect(
       await addRfidCardAction(
         {},
-        form({ driverRef: "nobody", uid: "0A0B0C0D", adminSecret: SECRET }),
+        form({ driverRef: "nobody", uid: "0A0B0C0D" }),
       ),
     ).toMatchObject({
       ok: false,
@@ -97,14 +102,9 @@ describe("admin token actions (demo mode)", () => {
         "This driver has no app token yet: create one first, then add the card.",
     });
     expect(
-      (
-        await driverTokensAction(
-          {},
-          form({ driverRef: "driver-9", adminSecret: SECRET }),
-        )
-      ).tokens,
+      (await driverTokensAction({}, form({ driverRef: "driver-9" }))).tokens,
     ).toHaveLength(1);
-    expect(await retryPushesAction({}, form({ adminSecret: SECRET }))).toEqual({
+    expect(await retryPushesAction({}, form({}))).toEqual({
       ok: true,
       message: "Demo mode: nothing is pushed to a CPO.",
     });
@@ -114,7 +114,7 @@ describe("admin token actions (demo mode)", () => {
   it("shows the sample driver's tokens in demo mode", async () => {
     const res = await driverTokensAction(
       {},
-      form({ driverRef: DEMO_DRIVER_REF, adminSecret: SECRET }),
+      form({ driverRef: DEMO_DRIVER_REF }),
     );
     expect(res.tokens?.map((t) => t.type)).toEqual(["APP_USER", "RFID"]);
   });

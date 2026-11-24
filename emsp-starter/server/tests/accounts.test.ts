@@ -1,18 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Server actions read the request's cookies and headers; tests set them here.
-const requestCookies = new Map<string, string>();
-vi.mock("next/headers", () => ({
-  cookies: async () => ({
-    get: (name: string) =>
-      requestCookies.has(name)
-        ? { name, value: requestCookies.get(name) }
-        : undefined,
-    set: (name: string, value: string) => requestCookies.set(name, value),
-    delete: (name: string) => requestCookies.delete(name),
-  }),
-  headers: async () => new Headers(),
-}));
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
 
 import { ADMIN_COOKIE, adminFromToken } from "@/lib/accounts/admin-session";
 import { clearUserCacheForTests } from "@/lib/accounts/api";
@@ -64,6 +56,8 @@ import {
   LIVE_ENV,
   uninstallNetwork,
 } from "./support/network";
+
+import { requestCookies } from "./support/request";
 
 const saved = { ...process.env };
 const KEY = "sk_test_mock0123456789";

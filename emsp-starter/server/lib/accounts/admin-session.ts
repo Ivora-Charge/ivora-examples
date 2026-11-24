@@ -1,5 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
+import { adminCookieFlags } from "@/lib/server/admin";
 import { userOf } from "./api";
 import type { AuthProvider } from "./auth";
 import { accountStore, authProvider } from "./registry";
@@ -47,13 +48,11 @@ export async function currentAdmin(): Promise<AdminIdentity | null> {
 }
 
 export async function setAdminCookie(token: string, expiresAt: string) {
-  (await cookies()).set(ADMIN_COOKIE, token, {
-    httpOnly: true,
-    sameSite: "strict",
-    secure: process.env.NODE_ENV === "production",
-    path: "/",
-    expires: new Date(expiresAt),
-  });
+  (await cookies()).set(
+    ADMIN_COOKIE,
+    token,
+    adminCookieFlags(new Date(expiresAt)),
+  );
 }
 
 export async function clearAdminCookie(): Promise<string | undefined> {

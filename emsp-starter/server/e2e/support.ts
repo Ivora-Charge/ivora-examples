@@ -4,8 +4,8 @@ import { E2E_ADMIN_SECRET } from "../playwright.config";
 
 /**
  * Demo mode has no admin accounts, so the e2e admin uses ADMIN_SECRET: typed once on
- * the sign-in page and kept in the page's memory. A reload (page.goto) forgets it, so
- * after signIn() move between pages with goTo(), which follows the menu's links.
+ * the sign-in page, which exchanges it for a session cookie. After signIn() move
+ * between pages with goTo(), which follows the menu's links as an admin would.
  */
 export async function signIn(page: Page, secret = E2E_ADMIN_SECRET) {
   await page.goto("/admin/sign-in");

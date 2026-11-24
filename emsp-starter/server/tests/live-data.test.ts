@@ -1,4 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
 import {
   listAdaptersAction,
   removeAdapterAction,
@@ -48,6 +53,7 @@ import {
   LIVE_ENV,
   uninstallNetwork,
 } from "./support/network";
+import { resetRequest, signInWithSecret } from "./support/request";
 
 const KEY = "iv_live_test-read-only-key-0123456789";
 const BASE = "https://api.cpo.example.test";
@@ -178,6 +184,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetRequest();
   uninstallNetwork();
   setLiveDataStoreForTests(undefined);
   setPeerStoreForTests(undefined);
@@ -1015,7 +1022,7 @@ describe("live-data admin actions", () => {
     setPeerStoreForTests(peers);
   });
 
-  it("need the admin secret", async () => {
+  it("need an admin session", async () => {
     process.env.ADMIN_SECRET = SECRET;
     for (const action of [
       setAdapterAction,
@@ -1023,21 +1030,21 @@ describe("live-data admin actions", () => {
       listAdaptersAction,
     ]) {
       resetAdminLimitForTests();
-      expect(await action({}, form({ adminSecret: "wrong" }))).toMatchObject({
+      expect(await action({}, form({}))).toMatchObject({
         ok: false,
-        message: "Wrong admin secret.",
+        code: "signed_out",
       });
     }
   });
 
   it("set, list and remove an adapter, never returning the key", async () => {
     process.env.ADMIN_SECRET = SECRET;
+    signInWithSecret();
     const peer = await peers.createPeer({
       label: "Example CPO",
       direction: "inbound",
     });
     const fields = {
-      adminSecret: SECRET,
       peerId: peer.id,
       kind: "ivora",
       baseUrl: BASE,
@@ -1047,7 +1054,7 @@ describe("live-data admin actions", () => {
     const set = await setAdapterAction({}, form(fields));
     expect(set).toMatchObject({ ok: true, adapters: [{ peerId: peer.id }] });
     expect(JSON.stringify(set)).not.toContain(KEY);
-    const list = await listAdaptersAction({}, form({ adminSecret: SECRET }));
+    const list = await listAdaptersAction({}, form({}));
     expect(list).toMatchObject({
       ok: true,
       adapters: [{ peerLabel: "Example CPO", kindLabel: "Ivora API" }],
@@ -1057,10 +1064,7 @@ describe("live-data admin actions", () => {
       await setAdapterAction({}, form({ ...fields, accountId: "x" })),
     ).toMatchObject({ ok: false, message: "Tenant ID is invalid." });
     expect(
-      await removeAdapterAction(
-        {},
-        form({ adminSecret: SECRET, peerId: peer.id }),
-      ),
+      await removeAdapterAction({}, form({ peerId: peer.id })),
     ).toMatchObject({ ok: true });
     expect(store.rows.size).toBe(0);
   });

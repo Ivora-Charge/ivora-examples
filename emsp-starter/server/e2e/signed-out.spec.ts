@@ -393,8 +393,9 @@ test("only the sign-in page is told whether the admin secret is set, and nothing
 test("with the admin secret, the pages say how to find what the server did not send", async ({
   page,
 }) => {
-  // The admin secret lives in the page's memory, which the server cannot see when it
-  // renders: the settings are not read, and the pages say how to check by hand.
+  // An admin-secret session is not a person on the admin list: the server renders the
+  // settings into a page for an email sign-in only, and the pages say how to check by
+  // hand.
   const wrong = SETUPS.find((s) => s.name === "misconfigured")!;
   await page.goto(`${wrong.url}${SIGN_IN}`);
   await page

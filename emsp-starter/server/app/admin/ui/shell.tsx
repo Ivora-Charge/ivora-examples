@@ -100,7 +100,7 @@ function Who() {
             ? ", admin. Account"
             : ", read only. Account"
           : hasSecret
-            ? " for this tab. Account"
+            ? " session. Account"
             : ". Account"}
       </span>
     </Link>
