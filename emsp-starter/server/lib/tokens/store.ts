@@ -129,6 +129,13 @@ export interface TokenStore {
   duePushes(now: string, limit: number): Promise<PendingPush[]>;
   /** How many pushes are owed, counting at most `max`. */
   countPendingPushes(max: number): Promise<number>;
+  /**
+   * Owes `peerId` every active token, due at `now`, through the outbox: the catch-up
+   * when a hub switches to pushes addressed to its own party. A token already owed to
+   * the peer stays one entry, so owing twice never pushes a token twice. Returns how
+   * many tokens are owed.
+   */
+  oweActive(peerId: string, now: string): Promise<number>;
 }
 
 const ms = (iso: string) => Date.parse(iso);
@@ -148,9 +155,12 @@ export class MemoryTokenStore implements TokenStore {
     return (await tokenReceivers(this.peers!)).map((p) => p.id);
   }
 
-  /** Owes `t` to `peerIds`: the database's emsp_tokens_owe_push trigger. */
-  private owe(t: DriverToken, peerIds: string[]) {
-    const due = ms(t.lastUpdated) + FIRST_PUSH_GRACE_MS;
+  /**
+   * Owes `t` to `peerIds`: the database's emsp_tokens_owe_push trigger (due after the
+   * first push's grace), or emsp_token_owe_active (due at `dueAt`).
+   */
+  private owe(t: DriverToken, peerIds: string[], dueAt?: string) {
+    const due = dueAt ? ms(dueAt) : ms(t.lastUpdated) + FIRST_PUSH_GRACE_MS;
     for (const peerId of peerIds) {
       const key = `${peerId}:${t.id}`;
       const held = this.pushes.get(key);
@@ -301,5 +311,15 @@ export class MemoryTokenStore implements TokenStore {
 
   async countPendingPushes(max: number) {
     return Math.min(max, this.pushes.size);
+  }
+
+  async oweActive(peerId: string, now: string) {
+    let owed = 0;
+    for (const t of this.tokens.values())
+      if (t.status === "active") {
+        this.owe(t, [peerId], now);
+        owed++;
+      }
+    return owed;
   }
 }

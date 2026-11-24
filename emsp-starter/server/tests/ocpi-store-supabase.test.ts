@@ -66,6 +66,17 @@ describe("Supabase peer store (PostgREST)", () => {
     expect(requests[1].headers.get("authorization")).toBe("Bearer a.b.c");
   });
 
+  it("reads a hub's push mode, and per_party where the column is not there yet", async () => {
+    // ROW is a row from before the 202611240001 migration: no hub_push_mode.
+    replies.push(Response.json([ROW]));
+    expect((await store.getPeer(ROW.id))!.hubPushMode).toBe("per_party");
+    replies.push(Response.json([{ ...ROW, hub_push_mode: "hub" }]));
+    expect((await store.getPeer(ROW.id))!.hubPushMode).toBe("hub");
+    replies.push(Response.json([]));
+    await store.updatePeer(ROW.id, { hubPushMode: "hub" }, "registered", 3);
+    expect(await requests[2].json()).toMatchObject({ hub_push_mode: "hub" });
+  });
+
   it("updates conditionally on the status, mapping columns", async () => {
     replies.push(Response.json([]));
     const res = await store.updatePeer(

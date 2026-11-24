@@ -17,11 +17,17 @@ import {
   SyncError,
   type SyncReport,
 } from "@/lib/locations/sync";
-import { acceptParty, offerFromHub, removeParty } from "@/lib/ocpi/hub";
+import {
+  acceptParty,
+  offerFromHub,
+  removeParty,
+  setHubPushMode,
+} from "@/lib/ocpi/hub";
 import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import { peerStore } from "@/lib/ocpi/registry";
-import type { HubParty, Peer } from "@/lib/ocpi/store";
+import type { HubParty, HubPushMode, Peer } from "@/lib/ocpi/store";
 import { assertLive, isDemo } from "@/lib/server/demo";
+import { tokenStore } from "@/lib/tokens/registry";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
 /** The last pull of one module from a peer. */
@@ -50,7 +56,7 @@ export type PeerSummary = {
   versionsUrl: string | null;
   parties: string[];
   /** A roaming hub: the parties behind it and whether the operator trusts them. */
-  hub?: { parties: HubParty[] };
+  hub?: { parties: HubParty[]; pushMode: HubPushMode };
   modules: string[];
   registeredAt: string | null;
   /** Per module this server pulls; only in the peer list. */
@@ -122,7 +128,9 @@ function summary(p: Peer): PeerSummary {
       (r) =>
         `${r.role} ${r.country_code}-${r.party_id} (${r.business_details.name})${isHubPeer(p) && r.role === "CPO" ? " declared by the hub, not trusted" : ""}`,
     ),
-    ...(isHubPeer(p) && { hub: { parties: p.hubParties } }),
+    ...(isHubPeer(p) && {
+      hub: { parties: p.hubParties, pushMode: p.hubPushMode },
+    }),
     modules: [...new Set(p.endpoints.map((e) => e.identifier))].sort(),
     registeredAt: p.registeredAt,
   };
@@ -302,8 +310,10 @@ async function purgeParty(
 
 /**
  * The CPO parties behind a roaming hub: accept one (a new one, or one the hub offered),
- * stop trusting one, or read the hub's client list for parties to offer. Nothing is
- * sent to or accepted from a party until it is accepted.
+ * stop trusting one, or read the hub's client list for parties to offer; or set how
+ * tokens are pushed to the hub (`push_mode`). Until a party is accepted we pull nothing
+ * from it, send it no command and accept nothing from it. Token pushes go to trusted
+ * parties only in per-party mode; in hub mode the hub decides who receives them.
  */
 export async function hubPartyAction(
   _prev: ActionState,
@@ -315,6 +325,22 @@ export async function hubPartyAction(
       return { ok: false, message: "Peer ID must be a UUID." };
     const deps = { store: peerStore(), actor: "admin" };
     const intent = field(form, "intent");
+    if (intent === "push_mode") {
+      const mode = field(form, "mode") as HubPushMode;
+      const { peer, owed, changed } = await setHubPushMode(id, mode, {
+        ...deps,
+        tokens: tokenStore(),
+      });
+      return {
+        ok: true,
+        message: !changed
+          ? `${peer.label} already pushes this way.`
+          : mode === "hub"
+            ? `Tokens now go to ${peer.label}'s own party, in one push; the hub decides who receives them. ${owed} active token(s) queued so the hub gets the full set once.`
+            : `Tokens now go to each trusted party behind ${peer.label}, one push each.`,
+        peer: summary(peer),
+      };
+    }
     if (intent === "offer") {
       const { peer, offered } = await offerFromHub(id, deps);
       return {

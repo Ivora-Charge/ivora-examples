@@ -26,6 +26,12 @@ export const isHubRoles = (roles: Pick<CredentialsRole, "role">[]): boolean =>
 export const isHubPeer = (peer: Pick<Peer, "roles">): boolean =>
   isHubRoles(peer.roles);
 
+/** The hub's own party: the first HUB role in its credentials. */
+export function hubParty(peer: Pick<Peer, "roles">): Party | undefined {
+  const r = peer.roles.find((r) => r.role === "HUB");
+  return r && party(r);
+}
+
 /** The hub's accepted parties. Empty for a peer that is not a hub. */
 export function trustedParties(
   peer: Pick<Peer, "roles" | "hubParties">,

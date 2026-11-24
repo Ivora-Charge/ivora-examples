@@ -98,6 +98,15 @@ export function createMockHub(options: MockHubOptions) {
           })),
         );
       const to = header(request, "to");
+      // A token push addressed to the hub's own party: the hub accepts it (what it does
+      // with it is its own business; the request is in hub.state.requests).
+      if (
+        to &&
+        key(to) === key(hubParty) &&
+        path.startsWith("/ocpi/2.2.1/tokens/") &&
+        (request.method === "PUT" || request.method === "PATCH")
+      )
+        return reply(undefined);
       const child = to && children.get(key(to));
       if (!child) {
         unroutable.push(`${request.method} ${path}`);

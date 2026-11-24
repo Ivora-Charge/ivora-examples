@@ -15,8 +15,8 @@ export type PeerDirection = "outbound" | "inbound";
 
 /**
  * A CPO party reachable through a hub peer. `offered`: the hub lists it, the operator
- * has not accepted it, so nothing is sent to it and nothing is accepted from it.
- * `trusted`: the operator accepted it.
+ * has not accepted it, so we pull nothing from it, send it no command (and no token in
+ * per-party mode) and accept nothing from it. `trusted`: the operator accepted it.
  */
 export type HubParty = {
   countryCode: string;
@@ -29,6 +29,12 @@ export type HubParty = {
   source: "admin" | "hubclientinfo" | "credentials";
   name?: string;
 };
+
+/**
+ * `hub`: one push to the hub's own HUB party, which distributes it. `per_party`: one
+ * push per trusted CPO party behind the hub.
+ */
+export type HubPushMode = "hub" | "per_party";
 
 export type Peer = {
   id: string;
@@ -43,6 +49,11 @@ export type Peer = {
   endpoints: Endpoint[];
   /** For a hub peer: the parties behind it (parties.ts). Empty for a direct CPO. */
   hubParties: HubParty[];
+  /**
+   * For a hub peer: how our token pushes are addressed (tokens/push.ts). New peers
+   * start with `hub`; hubs registered before this setting existed stay `per_party`.
+   */
+  hubPushMode: HubPushMode;
   /** The token we send to the peer, encrypted (tokens.ts). Never leaves the server. */
   tokenCiphertext: string | null;
   /**
@@ -66,6 +77,7 @@ export type PeerPatch = Partial<
     | "roles"
     | "endpoints"
     | "hubParties"
+    | "hubPushMode"
     | "tokenCiphertext"
     | "registeredAt"
     | "unregisteredAt"
@@ -162,6 +174,8 @@ export class MemoryPeerStore implements PeerStore {
       roles: [],
       endpoints: [],
       hubParties: [],
+      // Like the column default: a peer registered now starts with pushes to the hub.
+      hubPushMode: "hub",
       tokenCiphertext: null,
       rev: 0,
       createdAt: now,

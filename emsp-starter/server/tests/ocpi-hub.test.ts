@@ -27,7 +27,12 @@ import {
   invitePeer,
   rotateCredentials,
 } from "@/lib/ocpi/handshake";
-import { acceptParty, offerFromHub, removeParty } from "@/lib/ocpi/hub";
+import {
+  acceptParty,
+  offerFromHub,
+  removeParty,
+  setHubPushMode,
+} from "@/lib/ocpi/hub";
 import {
   capOffered,
   cpoParties,
@@ -866,8 +871,11 @@ describe("pulls through a hub", () => {
   });
 });
 
-describe("token pushes through a hub", () => {
+describe("token pushes through a hub, one per party", () => {
   const uidOf = async () => (await tokens.listByDriver(DRIVER))[0].uid;
+  beforeEach(async () => {
+    await setHubPushMode(hubPeer.id, "per_party", { store: peers, tokens });
+  });
 
   it("go only to trusted parties, one request each, addressed by OCPI-to", async () => {
     await accept(A);
@@ -900,7 +908,7 @@ describe("token pushes through a hub", () => {
     ).toBe(true);
   });
 
-  it("do not go to a hub with no trusted party, and a retry drops them", async () => {
+  it("do not go to a hub with no trusted party, and leave nothing to retry", async () => {
     await createAppToken(
       { driverRef: DRIVER },
       { tokens, peers, client, actor: "t" },
@@ -938,6 +946,296 @@ describe("token pushes through a hub", () => {
     ).rejects.toMatchObject({
       httpStatus: 403,
     });
+  });
+});
+
+describe("token pushes through a hub, to the hub's own party", () => {
+  const deps = () => ({ tokens, peers, client, actor: "t" });
+  const modeDeps = () => ({ store: peers, tokens });
+  /** Token PUTs addressed to the hub's own party (not those it routes on). */
+  const hubPuts = () =>
+    hub.hub.state.requests.filter(
+      (r) =>
+        r.method === "PUT" &&
+        r.path.includes("/tokens/") &&
+        r.headers["ocpi-to-party-id"] === "HUB",
+    );
+  const owedToHub = () =>
+    [...tokens.pushes.values()].filter((p) => p.peerId === hubPeer.id);
+  /** `n` drivers with an active app token each, made while the hub has no receiver role. */
+  const driversWithTokens = async (n: number) => {
+    const made = [];
+    for (let i = 0; i < n; i++)
+      made.push(
+        (await createAppToken({ driverRef: `driver-c${i}` }, deps())).token,
+      );
+    return made;
+  };
+  /** The push retry job, at `minutes` from now. */
+  const retry = (minutes = 0) =>
+    retryPendingPushes({
+      tokens,
+      peers,
+      client,
+      now: () => new Date(Date.now() + minutes * 60_000),
+    });
+
+  it("is the default for a new hub, and sends exactly one request per change", async () => {
+    expect(hubPeer.hubPushMode).toBe("hub");
+    await accept(A);
+    await accept(B);
+    const { token } = await createAppToken({ driverRef: DRIVER }, deps());
+    const puts = hubPuts();
+    expect(puts).toHaveLength(1);
+    expect(puts[0].path).toContain(`/tokens/ZZ/HUB/${token.uid}`);
+    expect(puts[0].headers).toMatchObject({
+      "ocpi-to-country-code": "ZZ",
+      "ocpi-to-party-id": "HUB",
+      "ocpi-from-country-code": "NL",
+      "ocpi-from-party-id": "ABC",
+    });
+    // Nothing went to the parties behind it.
+    expect(hubRequests(A)).toEqual([]);
+    expect(hubRequests(B)).toEqual([]);
+
+    await blockToken(token.uid, "APP_USER", deps());
+    const patches = hub.hub.state.requests.filter(
+      (r) => r.method === "PATCH" && r.path.includes("/tokens/"),
+    );
+    expect(patches).toHaveLength(1);
+    expect(patches[0].path).toContain(`/tokens/ZZ/HUB/${token.uid}`);
+  });
+
+  it("still pushes when the hub has no trusted party, and leaves nothing to retry", async () => {
+    await createAppToken({ driverRef: DRIVER }, deps());
+    expect(hubPuts()).toHaveLength(1);
+    expect(owedToHub()).toEqual([]);
+    expect(await retry(10)).toEqual({ sent: 0, failed: 0, dropped: 0 });
+    expect(hubPuts()).toHaveLength(1);
+  });
+
+  it("can be switched to per party, and the setting is validated and audited", async () => {
+    const { changed, owed } = await setHubPushMode(
+      hubPeer.id,
+      "per_party",
+      modeDeps(),
+    );
+    expect({ changed, owed }).toEqual({ changed: true, owed: 0 });
+    expect((await peers.getPeer(hubPeer.id))!.hubPushMode).toBe("per_party");
+    await createAppToken({ driverRef: DRIVER }, deps());
+    expect(hubPuts()).toHaveLength(0);
+    await expect(
+      setHubPushMode(hubPeer.id, "everyone" as never, modeDeps()),
+    ).rejects.toThrow(/hub or per_party/);
+    expect(
+      peers.auditLog.filter((a) => a.action === "ocpi.hub.push_mode_set"),
+    ).toMatchObject([
+      { subjectId: hubPeer.id, details: { mode: "per_party", from: "hub" } },
+    ]);
+  });
+
+  it("is refused for an unknown, unregistered or direct peer", async () => {
+    await expect(
+      setHubPushMode("00000000-0000-4000-8000-000000000000", "hub", modeDeps()),
+    ).rejects.toThrow(/No such peer/);
+    const pending = await peers.createPeer({
+      label: "Not yet",
+      direction: "outbound",
+    });
+    await expect(
+      setHubPushMode(pending.id, "per_party", modeDeps()),
+    ).rejects.toThrow(/not registered/);
+    const cpo = await connectToCpo(
+      {
+        label: "Direct CPO",
+        versionsUrl: direct.urls.versions,
+        tokenA: direct.issueTokenA(),
+      },
+      { store: peers, client },
+    );
+    await expect(setHubPushMode(cpo.id, "hub", modeDeps())).rejects.toThrow(
+      /not a roaming hub/,
+    );
+    expect(
+      peers.auditLog.some((a) => a.action === "ocpi.hub.push_mode_set"),
+    ).toBe(false);
+  });
+
+  it("switching from per party owes the hub every active token once", async () => {
+    await setHubPushMode(hubPeer.id, "per_party", modeDeps());
+    // No trusted party: in per-party mode the hub is owed nothing.
+    const made = await driversWithTokens(3);
+    const blocked = (await createAppToken({ driverRef: "driver-x" }, deps()))
+      .token;
+    await blockToken(blocked.uid, "APP_USER", deps());
+    expect(owedToHub()).toEqual([]);
+
+    const switched = await setHubPushMode(hubPeer.id, "hub", modeDeps());
+    expect(switched).toMatchObject({ changed: true, owed: 3 });
+    expect(
+      owedToHub()
+        .map((p) => p.tokenId)
+        .sort(),
+    ).toEqual(made.map((t) => t.id).sort());
+    expect(hubPuts()).toHaveLength(0);
+    expect(peers.auditLog.at(-1)).toMatchObject({
+      action: "ocpi.hub.push_mode_set",
+      details: { mode: "hub", from: "per_party", owed: 3 },
+    });
+
+    // The retry job sends each to the hub's own party, once.
+    expect(await retry()).toEqual({ sent: 3, failed: 0, dropped: 0 });
+    const puts = hubPuts();
+    expect(puts.map((r) => r.path.split("/").at(-1)).sort()).toEqual(
+      made.map((t) => t.uid).sort(),
+    );
+    for (const p of puts) expect(p.path).toContain("/tokens/ZZ/HUB/");
+    expect(owedToHub()).toEqual([]);
+    expect(await retry(10)).toEqual({ sent: 0, failed: 0, dropped: 0 });
+
+    // Choosing hub again changes nothing and owes nothing.
+    expect(await setHubPushMode(hubPeer.id, "hub", modeDeps())).toMatchObject({
+      changed: false,
+      owed: 0,
+    });
+    expect(owedToHub()).toEqual([]);
+    expect(hubPuts()).toHaveLength(3);
+  });
+
+  it("a catch-up push that fails is retried alone, never sent twice", async () => {
+    await setHubPushMode(hubPeer.id, "per_party", modeDeps());
+    const [first, second] = await driversWithTokens(2);
+    await setHubPushMode(hubPeer.id, "hub", modeDeps());
+    hub.hub.failNext(1);
+    expect(await retry()).toEqual({ sent: 1, failed: 1, dropped: 0 });
+    expect(owedToHub()).toHaveLength(1);
+    // Not due yet: nothing goes.
+    expect(await retry()).toEqual({ sent: 0, failed: 0, dropped: 0 });
+    // After the backoff, only the failed one goes again.
+    expect(await retry(2)).toEqual({ sent: 1, failed: 0, dropped: 0 });
+    expect(owedToHub()).toEqual([]);
+    expect(await retry(10)).toEqual({ sent: 0, failed: 0, dropped: 0 });
+    const sentFor = (uid: string) =>
+      hubPuts().filter((r) => r.path.endsWith(`/${uid}`)).length;
+    // One failed attempt and one landed for one token, one landed for the other.
+    expect([sentFor(first.uid), sentFor(second.uid)].sort()).toEqual([1, 2]);
+  });
+
+  it("a catch-up that cannot be queued leaves the mode as it was, and can be tried again", async () => {
+    await setHubPushMode(hubPeer.id, "per_party", modeDeps());
+    await driversWithTokens(2);
+    const broken = {
+      oweActive: async () => {
+        throw new Error("database down");
+      },
+    };
+    await expect(
+      setHubPushMode(hubPeer.id, "hub", { store: peers, tokens: broken }),
+    ).rejects.toThrow(/mode is unchanged/);
+    expect((await peers.getPeer(hubPeer.id))!.hubPushMode).toBe("per_party");
+    expect(owedToHub()).toEqual([]);
+    expect(await setHubPushMode(hubPeer.id, "hub", modeDeps())).toMatchObject({
+      changed: true,
+      owed: 2,
+    });
+    expect(await retry()).toMatchObject({ sent: 2, failed: 0 });
+    expect(hubPuts()).toHaveLength(2);
+  });
+
+  it("a push still owed from per-party mode goes to the hub's party after the switch", async () => {
+    await setHubPushMode(hubPeer.id, "per_party", modeDeps());
+    await accept(A);
+    hub.cpo(A).failNext(1);
+    const { token } = await createAppToken({ driverRef: DRIVER }, deps());
+    expect(owedToHub()).toHaveLength(1);
+    const before = hubRequests(A).length;
+
+    const switched = await setHubPushMode(hubPeer.id, "hub", modeDeps());
+    // The token was owed already: still one entry, and it is due now.
+    expect(switched.owed).toBe(1);
+    expect(owedToHub()).toHaveLength(1);
+    expect(await retry()).toEqual({ sent: 1, failed: 0, dropped: 0 });
+    expect(hubPuts().map((r) => r.path)).toEqual([
+      expect.stringContaining(`/tokens/ZZ/HUB/${token.uid}`),
+    ]);
+    expect(hubRequests(A)).toHaveLength(before);
+    expect(owedToHub()).toEqual([]);
+  });
+
+  it("switching back to per party owes nothing", async () => {
+    await driversWithTokens(2);
+    expect(hubPuts()).toHaveLength(2);
+    await accept(A);
+    const back = await setHubPushMode(hubPeer.id, "per_party", modeDeps());
+    expect(back).toMatchObject({ changed: true, owed: 0 });
+    expect(owedToHub()).toEqual([]);
+    expect(await retry(10)).toEqual({ sent: 0, failed: 0, dropped: 0 });
+    expect(hubRequests(A)).toEqual([]);
+  });
+
+  it("is set from the admin action, which checks the secret, the mode and the peer", async () => {
+    process.env.ADMIN_SECRET = "s".repeat(32);
+    const as = (f: Record<string, string>) =>
+      adminForm({ adminSecret: "s".repeat(32), ...f });
+    await setHubPushMode(hubPeer.id, "per_party", modeDeps());
+    await driversWithTokens(2);
+
+    // A wrong secret changes nothing.
+    expect(
+      await hubPartyAction(
+        {},
+        adminForm({
+          adminSecret: "x".repeat(32),
+          peerId: hubPeer.id,
+          intent: "push_mode",
+          mode: "hub",
+        }),
+      ),
+    ).toMatchObject({ ok: false, code: "wrong_secret" });
+    expect((await peers.getPeer(hubPeer.id))!.hubPushMode).toBe("per_party");
+
+    expect(
+      await hubPartyAction(
+        {},
+        as({ peerId: hubPeer.id, intent: "push_mode", mode: "all" }),
+      ),
+    ).toMatchObject({
+      ok: false,
+      message: "Push mode must be hub or per_party",
+    });
+
+    const cpo = await connectToCpo(
+      {
+        label: "Direct CPO",
+        versionsUrl: direct.urls.versions,
+        tokenA: direct.issueTokenA(),
+      },
+      { store: peers, client },
+    );
+    expect(
+      await hubPartyAction(
+        {},
+        as({ peerId: cpo.id, intent: "push_mode", mode: "hub" }),
+      ),
+    ).toMatchObject({ ok: false, message: "Direct CPO is not a roaming hub" });
+
+    const done = await hubPartyAction(
+      {},
+      as({ peerId: hubPeer.id, intent: "push_mode", mode: "hub" }),
+    );
+    expect(done).toMatchObject({
+      ok: true,
+      message: expect.stringContaining("2 active token(s) queued"),
+      peer: { hub: { pushMode: "hub" } },
+    });
+    expect(owedToHub()).toHaveLength(2);
+    expect(
+      await hubPartyAction(
+        {},
+        as({ peerId: hubPeer.id, intent: "push_mode", mode: "hub" }),
+      ),
+    ).toMatchObject({ ok: true, message: "Mock Hub already pushes this way." });
+    expect(owedToHub()).toHaveLength(2);
   });
 });
 

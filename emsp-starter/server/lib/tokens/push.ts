@@ -2,7 +2,7 @@ import "server-only";
 import { ocpiRequest, type ClientOptions } from "@/lib/ocpi/client";
 import { OcpiError } from "@/lib/ocpi/errors";
 import { ourParty } from "@/lib/ocpi/identity";
-import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
+import { hubParty, isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import type { Peer, PeerStore } from "@/lib/ocpi/store";
 import type { Token } from "@/lib/ocpi/token-objects";
 import { decryptToken } from "@/lib/ocpi/tokens";
@@ -15,6 +15,10 @@ import type { DriverToken, TokenStore } from "./store";
  *
  *   PUT   {receiver}/{country_code}/{party_id}/{token_uid}?type={type}   a new token
  *   PATCH {receiver}/{country_code}/{party_id}/{token_uid}?type={type}   changed fields
+ *
+ * Behind a hub the push is addressed (OCPI-to-* headers) either to the hub's own party,
+ * with that party in the URL path too, or to each trusted party behind it (the hub's
+ * token push mode, store.ts).
  *
  * Every registered peer with a tokens RECEIVER endpoint gets every change at once, in
  * parallel. The store owes each of them the new version in the same write as the
@@ -97,17 +101,26 @@ export async function tokenReceivers(peers: PeerStore): Promise<Peer[]> {
       p.status === "registered" &&
       p.tokenCiphertext &&
       tokensReceiver(p) &&
-      // A hub with no trusted party has nobody to send to.
-      (!isHubPeer(p) || trustedParties(p).length > 0),
+      // A hub in per-party mode with no trusted party has nobody to send to; in hub
+      // mode the push goes to the hub's own party, trusted parties or not.
+      (!isHubPeer(p) ||
+        (p.hubPushMode === "hub"
+          ? hubParty(p) !== undefined
+          : trustedParties(p).length > 0)),
   );
 }
 
 /**
  * Who a token goes to at this peer: its CPO party (a peer with only other roles gets
- * its first one), or, behind a hub, every trusted party, one request each.
+ * its first one); behind a hub, the hub's own HUB party (mode "hub": one request, the
+ * hub distributes it) or every trusted party, one request each (mode "per_party").
  */
 function recipients(peer: Peer): Party[] {
-  if (isHubPeer(peer)) return trustedParties(peer);
+  if (isHubPeer(peer)) {
+    if (peer.hubPushMode !== "hub") return trustedParties(peer);
+    const hub = hubParty(peer);
+    return hub ? [hub] : [];
+  }
   const to = peer.roles.find((r) => r.role === "CPO") ?? peer.roles[0];
   return [{ countryCode: to.country_code, partyId: to.party_id }];
 }
@@ -136,11 +149,14 @@ async function send(
           [...change.fields, "last_updated" as const].map((f) => [f, full[f]]),
         );
   // One request per recipient; the first failure fails the push and it is all retried.
-  for (const to of recipients(peer))
+  const toHub = isHubPeer(peer) && peer.hubPushMode === "hub";
+  for (const to of recipients(peer)) {
+    // In hub mode the path names the hub's own party; otherwise the token's own.
+    const at = toHub ? to : { countryCode: t.countryCode, partyId: t.partyId };
     await ocpiRequest(
       {
         method: change.method,
-        url: `${url.replace(/\/+$/, "")}/${[t.countryCode, t.partyId, t.uid].map(encodeURIComponent).join("/")}`,
+        url: `${url.replace(/\/+$/, "")}/${[at.countryCode, at.partyId, t.uid].map(encodeURIComponent).join("/")}`,
         query: { type: t.type },
         token: decryptToken(peer.tokenCiphertext!, peer.id),
         body,
@@ -150,6 +166,7 @@ async function send(
       },
       deps.client ?? PUSH_CLIENT,
     );
+  }
 }
 
 async function pushTo(

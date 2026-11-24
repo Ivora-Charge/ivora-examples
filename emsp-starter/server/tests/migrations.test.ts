@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { PGlite } from "@electric-sql/pglite";
 import { checkMigrations } from "../scripts/check-migrations/check.mjs";
 import { LEDGER_SQL } from "../scripts/migrate.mjs";
-import { asRole, migratedDatabase } from "./support/pglite";
+import { applyMigrations, asRole, migratedDatabase } from "./support/pglite";
 
 let db: PGlite;
 let legacy: PGlite;
@@ -398,6 +398,122 @@ describe("peer version counter (202611160002_peer_rev)", () => {
       `update public.emsp_ocpi_peers set label = 'Q' where id = '${id}'`,
     );
     expect(await rev()).toBe(2);
+  });
+});
+
+describe("hub push mode (202611240001_hub_push_mode)", () => {
+  const MIGRATION = "202611240001_hub_push_mode.sql";
+  const newPeer = async (on: PGlite, label = "Hub") =>
+    (
+      await on.query<{ id: string }>(
+        `insert into public.emsp_ocpi_peers (label, direction) values ($1, 'outbound') returning id`,
+        [label],
+      )
+    ).rows[0].id;
+  const modeOf = async (on: PGlite, id: string) =>
+    (
+      await on.query<{ hub_push_mode: string }>(
+        "select hub_push_mode from public.emsp_ocpi_peers where id = $1",
+        [id],
+      )
+    ).rows[0].hub_push_mode;
+
+  it("keeps every existing peer on per_party, and gives peers added after it hub", async () => {
+    const before = await migratedDatabase({ before: MIGRATION });
+    try {
+      const existing = await newPeer(before, "Existing hub");
+      await applyMigrations(before);
+      expect(await modeOf(before, existing)).toBe("per_party");
+      expect(await modeOf(before, await newPeer(before, "New hub"))).toBe(
+        "hub",
+      );
+    } finally {
+      await before.close();
+    }
+  });
+
+  it("accepts only a known mode", async () => {
+    const id = await newPeer(db);
+    expect(await modeOf(db, id)).toBe("hub");
+    await db.query(
+      "update public.emsp_ocpi_peers set hub_push_mode = 'per_party' where id = $1",
+      [id],
+    );
+    expect(await modeOf(db, id)).toBe("per_party");
+    await expect(
+      db.query(
+        "update public.emsp_ocpi_peers set hub_push_mode = 'all' where id = $1",
+        [id],
+      ),
+    ).rejects.toThrow(/check constraint/);
+  });
+
+  it("emsp_token_owe_active owes a peer each active token once, due at the time given", async () => {
+    const peer = await newPeer(db, "Catch-up hub");
+    const token = async (uid: string, status: string) =>
+      (
+        await db.query<{ id: string }>(
+          `insert into public.emsp_tokens
+             (country_code, party_id, uid, type, contract_id, driver_ref, group_id,
+              issuer, whitelist, status, last_updated)
+           values ('NL', 'ABC', $1, 'RFID', 'NLABCC00000001', 'catch-up', 'NLABCC00000001',
+                   'Example', 'NEVER', $2, '2026-10-21T10:00:00Z')
+           returning id`,
+          [uid, status],
+        )
+      ).rows[0].id;
+    const active = [
+      await token("CU000001", "active"),
+      await token("CU000002", "active"),
+    ];
+    const owe = async () =>
+      (
+        await db.query<{ n: number }>(
+          "select owed as n from public.emsp_token_owe_active($1, '2026-10-21T12:00:00Z')",
+          [peer],
+        )
+      ).rows[0].n;
+    const blocked = await token("CU000003", "blocked");
+    // Other tests in this file may have added tokens: count every active one.
+    const {
+      rows: [{ n: activeCount }],
+    } = await db.query<{ n: number }>(
+      "select count(*)::integer as n from public.emsp_tokens where status = 'active'",
+    );
+    expect(await owe()).toBe(activeCount);
+    expect(await owe()).toBe(activeCount);
+    const { rows } = await db.query<{
+      token_id: string;
+      attempts: number;
+      next_attempt_at: Date;
+    }>(
+      "select token_id, attempts, next_attempt_at from public.emsp_token_pushes where peer_id = $1",
+      [peer],
+    );
+    expect(rows).toHaveLength(activeCount);
+    const owed = rows.map((r) => r.token_id);
+    expect(owed).toEqual(expect.arrayContaining(active));
+    expect(owed).not.toContain(blocked);
+    for (const r of rows) {
+      expect(r.attempts).toBe(0);
+      expect(new Date(r.next_attempt_at).toISOString()).toBe(
+        "2026-10-21T12:00:00.000Z",
+      );
+    }
+  });
+
+  it("keeps the column and the catch-up closed to anon and authenticated", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await asRole(db, role, async () => {
+        await expect(
+          db.query("select hub_push_mode from public.emsp_ocpi_peers"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          db.query(
+            "select * from public.emsp_token_owe_active(gen_random_uuid(), now())",
+          ),
+        ).rejects.toThrow(/permission denied/);
+      });
   });
 });
 
