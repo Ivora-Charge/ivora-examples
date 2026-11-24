@@ -50,7 +50,20 @@ import {
 import { MAX_CREDENTIALS_ROLES, parseCredentials } from "@/lib/ocpi/schema";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import {
+  ABSENT_BACKOFF_MS,
+  moduleOf,
+  noteRefused,
+  pathParty,
+  REFUSAL_WRITE_WAIT_MS,
+  resetRefusalWritesForTests,
+} from "@/lib/ocpi/refusals";
+import { DatabaseRequestError } from "@/lib/server/supabase-rest";
+import {
+  MAX_NEW_REFUSED,
+  MAX_REFUSED,
   MemoryPeerStore,
+  REFUSAL_KEEP_MS,
+  REFUSAL_WINDOW_MS,
   type HubParty,
   type Peer,
   type PeerStore,
@@ -138,6 +151,7 @@ beforeEach(async () => {
   setLocationStoreForTests(locations);
   setCommandStoreForTests(commands);
   setSessionStoreForTests(sessions);
+  resetRefusalWritesForTests();
   setPreAuthForTests({
     async hold() {
       return { ok: true, reference: null };
@@ -1432,6 +1446,517 @@ describe("pushes received through a hub", () => {
     await expect(
       hub.cpo(A).putLocation(hub.cpo(A).state.locations[1], { push: true }),
     ).rejects.toMatchObject({ httpStatus: 403 });
+  });
+});
+
+describe("refused pushes through a hub are noted for its page", () => {
+  const HUB: Party = { countryCode: "ZZ", partyId: "HUB" };
+  const refusedB = () => peers.listRefusals(hubPeer.id);
+  const pushB = (loc = hub.cpo(B).state.locations[0]) =>
+    expect(rawPush(B, `locations/ZZ/BBB/${loc.id}`, loc)).rejects.toMatchObject(
+      { httpStatus: 403, statusCode: 2000 },
+    );
+
+  it("a refused push is noted once, counted after the window, and nothing of the request is kept", async () => {
+    await accept(A);
+    const note = vi.spyOn(peers, "noteRefusal");
+    let now = T0.getTime();
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await pushB();
+    expect(await refusedB()).toEqual([
+      {
+        ...B,
+        kind: "routing",
+        module: "locations",
+        times: 1,
+        firstSeen: T0.toISOString(),
+        lastSeen: T0.toISOString(),
+      },
+    ]);
+    // Within the window: refused as before, and no write at all.
+    now += 1_000;
+    await pushB();
+    now += 1_000;
+    await pushB();
+    expect(note).toHaveBeenCalledTimes(1);
+    expect((await refusedB())[0].times).toBe(1);
+    // After it: one write that counts the refusals in between too.
+    now = T0.getTime() + REFUSAL_WINDOW_MS + 1;
+    await pushB();
+    expect(note).toHaveBeenCalledTimes(2);
+    expect(await refusedB()).toEqual([
+      expect.objectContaining({
+        ...B,
+        times: 4,
+        firstSeen: T0.toISOString(),
+        lastSeen: new Date(now).toISOString(),
+      }),
+    ]);
+    // Only parties, the module, counts and times: no body, token or header value.
+    const row = JSON.stringify(await refusedB());
+    expect(row).not.toContain(hub.state.emsp!.token);
+    expect(row).not.toContain(hub.cpo(B).state.locations[0].id);
+    expect(locations.locations.size).toBe(0);
+  });
+
+  it("names the URL's party when the OCPI-from party is the hub's or a trusted one", async () => {
+    await accept(A);
+    const aLoc = hub.cpo(A).state.locations[0];
+    // A trusted party in OCPI-from, B in the path.
+    await expect(
+      rawPush(A, `locations/ZZ/BBB/${aLoc.id}`, { ...aLoc, party_id: "BBB" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await refusedB()).toEqual([
+      expect.objectContaining({ ...B, kind: "path", otherParty: "ZZ-AAA" }),
+    ]);
+    // The hub's own party in OCPI-from, an unknown party in the path.
+    await expect(
+      rawPush(HUB, `locations/ZZ/CCC/${aLoc.id}`, { ...aLoc, party_id: "CCC" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await refusedB()).toContainEqual(
+      expect.objectContaining({
+        countryCode: "ZZ",
+        partyId: "CCC",
+        kind: "path",
+        module: "locations",
+        otherParty: "ZZ-HUB",
+      }),
+    );
+  });
+
+  it("notes nothing for a GET, a trusted party, the hub's own party, our party or a direct peer", async () => {
+    await accept(A);
+    await accept(B);
+    const aLoc = hub.cpo(A).state.locations[0];
+    // Both trusted: A's objects under B's path are refused, but B is no one to accept.
+    await expect(
+      rawPush(A, `locations/ZZ/BBB/${aLoc.id}`, { ...aLoc, party_id: "BBB" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    // The hub's own party, writing under its own name.
+    await expect(
+      rawPush(HUB, `locations/ZZ/HUB/${aLoc.id}`, { ...aLoc, party_id: "HUB" }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    // A GET of an untrusted party.
+    await expect(
+      rawPush({ countryCode: "ZZ", partyId: "DDD" }, "tokens", undefined, {
+        method: "GET",
+      }),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await peers.listRefusals(hubPeer.id)).toEqual([]);
+    // A direct CPO's refused push is not a hub's.
+    const dp = await connectToCpo(
+      {
+        label: "Mock CPO",
+        versionsUrl: direct.urls.versions,
+        tokenA: direct.issueTokenA(),
+      },
+      { store: peers, client },
+    );
+    const loc = direct.state.locations[0];
+    await expect(
+      rawPush(
+        { countryCode: "ZZ", partyId: "EEE" },
+        `locations/ZZ/EEE/${loc.id}`,
+        loc,
+        {
+          token: direct.state.emsp!.token,
+        },
+      ),
+    ).rejects.toMatchObject({ httpStatus: 403 });
+    expect(await peers.listRefusals(dp.id)).toEqual([]);
+    expect(peers.refusals.size).toBe(0);
+  });
+
+  it("a failed write changes nothing for the sender: still 403, logged by name", async () => {
+    vi.spyOn(peers, "noteRefusal").mockRejectedValue(new Error("db down"));
+    await pushB();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Noting a refused push from ZZ-BBB .* failed: Error$/,
+      ),
+    );
+  });
+
+  it("keeps at most MAX_REFUSED parties per hub, replacing only ones not seen within REFUSAL_KEEP_MS", async () => {
+    // 7 seconds apart: under the budget of new parties per window.
+    const at = (i: number) => new Date(T0.getTime() + i * 7_000).toISOString();
+    const party = (i: number) => `${String(i).padStart(3, "0")}`;
+    for (let i = 0; i < MAX_REFUSED + 5; i++)
+      await peers.noteRefusal({
+        peerId: hubPeer.id,
+        countryCode: "ZZ",
+        partyId: party(i),
+        kind: "routing",
+        module: "locations",
+        times: 1,
+        at: at(i),
+      });
+    // All seen within REFUSAL_KEEP_MS: the 5 past the cap are dropped.
+    expect(peers.refusals.size).toBe(MAX_REFUSED);
+    expect(peers.refusals.has(`${hubPeer.id}|ZZ-${party(MAX_REFUSED)}`)).toBe(
+      false,
+    );
+    // A day later, new parties replace the ones seen longest ago.
+    for (let i = MAX_REFUSED; i < MAX_REFUSED + 5; i++)
+      expect(
+        await peers.noteRefusal({
+          peerId: hubPeer.id,
+          countryCode: "ZZ",
+          partyId: party(i),
+          kind: "routing",
+          module: "locations",
+          times: 1,
+          at: new Date(
+            Date.parse(at(i)) + REFUSAL_KEEP_MS + REFUSAL_WINDOW_MS,
+          ).toISOString(),
+        }),
+      ).toBe(true);
+    const kept = await peers.listRefusals(hubPeer.id);
+    expect(kept).toHaveLength(MAX_REFUSED);
+    expect(kept[0].partyId).toBe(party(MAX_REFUSED + 4));
+    expect(kept.map((r) => r.partyId)).not.toContain(party(4));
+    expect(kept.map((r) => r.partyId)).toContain(party(5));
+    expect(peers.refusals.size).toBe(MAX_REFUSED);
+    // Another hub's list is its own.
+    await peers.noteRefusal({
+      peerId: "other",
+      countryCode: "ZZ",
+      partyId: "ZZZ",
+      kind: "routing",
+      module: "locations",
+      times: 1,
+      at: at(0),
+    });
+    expect(await peers.listRefusals(hubPeer.id)).toHaveLength(MAX_REFUSED);
+  });
+
+  it("this process tracks a bounded number of parties", async () => {
+    const base = (await peers.getPeer(hubPeer.id))!;
+    const note = vi.spyOn(peers, "noteRefusal").mockResolvedValue(true);
+    const req = new Request(`${EMSP}/locations/ZZ/AAA/L1`, { method: "PUT" });
+    const id = (i: number) => i.toString(36).toUpperCase().padStart(3, "0");
+    // One party fewer than MAX_NEW_REFUSED at each of 112 hubs: no hub's budget binds.
+    const refuse = (i: number) =>
+      noteRefused(
+        peers,
+        { ...base, id: `hub-${Math.floor(i / (MAX_NEW_REFUSED - 1))}` },
+        req,
+        { party: { countryCode: "ZZ", partyId: id(i) }, kind: "routing" },
+        () => T0.getTime(),
+      );
+    // 1001 parties within one window: one write each, and the first is forgotten.
+    for (let i = 0; i <= 1_000; i++) await refuse(i);
+    expect(note).toHaveBeenCalledTimes(1_001);
+    // The forgotten one is written again; one still held is not.
+    await refuse(0);
+    await refuse(1_000);
+    expect(note).toHaveBeenCalledTimes(1_002);
+  });
+
+  it("a hub naming a new party on every request gets MAX_NEW_REFUSED new rows a window, and the others survive", async () => {
+    const peer = (await peers.getPeer(hubPeer.id))!;
+    let now = T0.getTime();
+    // Genuine refusals noted earlier.
+    const genuine = Array.from({ length: MAX_REFUSED - 5 }, (_, i) =>
+      i.toString(36).toUpperCase().padStart(3, "G"),
+    );
+    for (const [i, partyId] of genuine.entries()) {
+      now = T0.getTime() + i * 7_000;
+      await noteRefused(
+        peers,
+        peer,
+        new Request(`${EMSP}/locations/ZZ/${partyId}/L1`, { method: "PUT" }),
+        { party: { countryCode: "ZZ", partyId }, kind: "routing" },
+        () => now,
+      );
+    }
+    expect(peers.refusals.size).toBe(genuine.length);
+    // A flood: a new OCPI-from party on each request, 250 at once, twice in a window.
+    const note = vi.spyOn(peers, "noteRefusal");
+    now += REFUSAL_WINDOW_MS;
+    const flood = (from: number) =>
+      Promise.all(
+        Array.from({ length: 250 }, (_, i) => {
+          const partyId = `F${(from + i).toString(36).toUpperCase().padStart(2, "0")}`;
+          return noteRefused(
+            peers,
+            peer,
+            new Request(`${EMSP}/locations/ZZ/${partyId}/L1`, {
+              method: "PUT",
+            }),
+            { party: { countryCode: "ZZ", partyId }, kind: "routing" },
+            () => now,
+          );
+        }),
+      );
+    await flood(0);
+    expect(note).toHaveBeenCalledTimes(MAX_NEW_REFUSED);
+    now += REFUSAL_WINDOW_MS / 2;
+    await flood(250);
+    expect(note).toHaveBeenCalledTimes(MAX_NEW_REFUSED);
+    // 5 rows went in to fill the list; no genuine row (seen within a day) made way.
+    const kept = (await peers.listRefusals(hubPeer.id)).map((r) => r.partyId);
+    expect(kept).toHaveLength(MAX_REFUSED);
+    expect(genuine.filter((g) => kept.includes(g))).toHaveLength(
+      genuine.length,
+    );
+    // A party already listed is still counted under its own window.
+    await noteRefused(
+      peers,
+      peer,
+      new Request(`${EMSP}/locations/ZZ/${genuine.at(-1)}/L1`, {
+        method: "PUT",
+      }),
+      {
+        party: { countryCode: "ZZ", partyId: genuine.at(-1)! },
+        kind: "routing",
+      },
+      () => now,
+    );
+    expect(note).toHaveBeenCalledTimes(MAX_NEW_REFUSED + 1);
+    expect(
+      peers.refusals.get(`${hubPeer.id}|ZZ-${genuine.at(-1)}`)!.times,
+    ).toBe(2);
+    // The next window brings a new budget.
+    now += REFUSAL_WINDOW_MS;
+    await flood(500);
+    expect(note).toHaveBeenCalledTimes(2 * MAX_NEW_REFUSED + 1);
+  });
+
+  it("a sustained rotating flood over many windows leaves every party seen within REFUSAL_KEEP_MS in place", async () => {
+    const peer = (await peers.getPeer(hubPeer.id))!;
+    const refuse = (partyId: string, now: number) =>
+      noteRefused(
+        peers,
+        peer,
+        new Request(`${EMSP}/locations/ZZ/${partyId}/L1`, { method: "PUT" }),
+        { party: { countryCode: "ZZ", partyId }, kind: "routing" },
+        () => now,
+      );
+    // MAX_REFUSED genuine parties; the first two last seen more than a day ago.
+    let now = T0.getTime();
+    const genuine = Array.from({ length: MAX_REFUSED }, (_, i) =>
+      i.toString(36).toUpperCase().padStart(3, "G"),
+    );
+    for (const [i, partyId] of genuine.entries()) {
+      if (i === 2) now += REFUSAL_KEEP_MS - 30 * REFUSAL_WINDOW_MS;
+      now += 7_000;
+      await refuse(partyId, now);
+    }
+    const stale = genuine.slice(0, 2);
+    const active = genuine.slice(2);
+    expect(peers.refusals.size).toBe(MAX_REFUSED);
+    // 30 windows of a new party on each of 40 requests (1200 names, all valid).
+    const note = vi.spyOn(peers, "noteRefusal");
+    let flood = 0;
+    for (let w = 0; w < 30; w++) {
+      now += REFUSAL_WINDOW_MS;
+      for (let i = 0; i < 40; i++)
+        await refuse(
+          `F${(flood++).toString(36).toUpperCase().padStart(2, "0")}`,
+          now,
+        );
+    }
+    expect(note).toHaveBeenCalledTimes(30 * MAX_NEW_REFUSED);
+    const written = (
+      await Promise.all(note.mock.results.map((r) => r.value))
+    ).filter(Boolean).length;
+    // Only the two rows not seen for a day made way.
+    expect(written).toBe(stale.length);
+    const kept = (await peers.listRefusals(hubPeer.id)).map((r) => r.partyId);
+    expect(kept).toHaveLength(MAX_REFUSED);
+    expect(active.every((g) => kept.includes(g))).toBe(true);
+    expect(stale.some((g) => kept.includes(g))).toBe(false);
+  });
+
+  it("a 'routing' row is never downgraded to 'path'", async () => {
+    const base = {
+      peerId: hubPeer.id,
+      countryCode: "ZZ",
+      partyId: "BBB",
+      module: "locations",
+      times: 1,
+    };
+    await peers.noteRefusal({ ...base, kind: "routing", at: T0.toISOString() });
+    await peers.noteRefusal({
+      ...base,
+      kind: "path",
+      otherParty: "ZZ-AAA",
+      module: "sessions",
+      at: new Date(T0.getTime() + REFUSAL_WINDOW_MS).toISOString(),
+    });
+    expect(await refusedB()).toEqual([
+      expect.objectContaining({
+        kind: "routing",
+        module: "sessions",
+        otherParty: "ZZ-AAA",
+        times: 2,
+      }),
+    ]);
+    // A 'path' row becomes 'routing' once the party itself sends.
+    await peers.noteRefusal({
+      ...base,
+      partyId: "CCC",
+      kind: "path",
+      at: T0.toISOString(),
+    });
+    await peers.noteRefusal({
+      ...base,
+      partyId: "CCC",
+      kind: "routing",
+      at: new Date(T0.getTime() + REFUSAL_WINDOW_MS).toISOString(),
+    });
+    expect(peers.refusals.get(`${hubPeer.id}|ZZ-CCC`)!.kind).toBe("routing");
+  });
+
+  it("a store that throws synchronously still gets the sender its 403", async () => {
+    vi.spyOn(peers, "noteRefusal").mockImplementation(() => {
+      throw new Error("sync");
+    });
+    await pushB();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Noting a refused push from ZZ-BBB .* failed: Error$/,
+      ),
+    );
+  });
+
+  it("a throw from noting itself still gets the sender its 403", async () => {
+    const refusals = await import("@/lib/ocpi/refusals");
+    vi.spyOn(refusals, "noteRefused").mockImplementation(() => {
+      throw new Error("boom");
+    });
+    await pushB();
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /Noting a refused push through peer .* failed: Error$/,
+      ),
+    );
+  });
+
+  it("the store keeps the budget of new parties itself, also for concurrent writes", async () => {
+    // Without this process's check (many server instances): the store refuses too.
+    const results = await Promise.all(
+      Array.from({ length: 100 }, (_, i) =>
+        peers.noteRefusal({
+          peerId: hubPeer.id,
+          countryCode: "ZZ",
+          partyId: i.toString(36).toUpperCase().padStart(3, "N"),
+          kind: "routing",
+          module: "locations",
+          times: 1,
+          at: T0.toISOString(),
+        }),
+      ),
+    );
+    expect(results.filter(Boolean)).toHaveLength(MAX_NEW_REFUSED);
+    expect(peers.refusals.size).toBe(MAX_NEW_REFUSED);
+    // Another hub's budget is its own.
+    expect(
+      await peers.noteRefusal({
+        peerId: "other",
+        countryCode: "ZZ",
+        partyId: "ZZZ",
+        kind: "routing",
+        module: "locations",
+        times: 1,
+        at: T0.toISOString(),
+      }),
+    ).toBe(true);
+  });
+
+  it("the 403 does not wait for a slow write", async () => {
+    vi.spyOn(peers, "noteRefusal").mockReturnValue(new Promise(() => {}));
+    const started = performance.now();
+    await pushB();
+    const took = performance.now() - started;
+    expect(took).toBeGreaterThanOrEqual(REFUSAL_WRITE_WAIT_MS - 50);
+    expect(took).toBeLessThan(REFUSAL_WRITE_WAIT_MS + 1_000);
+  });
+
+  it("backs off for ABSENT_BACKOFF_MS once the table is missing (migration pending)", async () => {
+    const peer = (await peers.getPeer(hubPeer.id))!;
+    const note = vi
+      .spyOn(peers, "noteRefusal")
+      .mockRejectedValue(new DatabaseRequestError("refused", 404, "PGRST202"));
+    let now = T0.getTime();
+    const refuse = (partyId: string) =>
+      noteRefused(
+        peers,
+        peer,
+        new Request(`${EMSP}/locations/ZZ/${partyId}/L1`, { method: "PUT" }),
+        { party: { countryCode: "ZZ", partyId }, kind: "routing" },
+        () => now,
+      );
+    await refuse("AA1");
+    await refuse("AA2");
+    now += ABSENT_BACKOFF_MS - 1;
+    await refuse("AA3");
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledTimes(1);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining("Apply the pending database migration"),
+    );
+    now += 1;
+    await refuse("AA4");
+    expect(note).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads the module and URL party of a request", () => {
+    expect(moduleOf(`${EMSP}/sessions/zz/bbb/S1`)).toBe("sessions");
+    expect(moduleOf("https://x.example.test/")).toBe("other");
+    expect(pathParty(`${EMSP}/locations/zz/bbb/L1`)).toEqual(B);
+    expect(pathParty(`${EMSP}/cdrs`)).toBeUndefined();
+    expect(pathParty(`${EMSP}/locations/zzz/bbb/L1`)).toBeUndefined();
+  });
+
+  it("the hub page lists a refused party, and Accept this party trusts it through the audited action", async () => {
+    process.env.ADMIN_SECRET = "s".repeat(32);
+    signInWithSecret();
+    await pushB();
+    const listed = async () =>
+      (await listPeersAction({}, adminForm({}))).peers!.find(
+        (p) => p.id === hubPeer.id,
+      )!.hub!.refused;
+    expect(await listed()).toEqual([
+      expect.objectContaining({ ...B, kind: "routing", times: 1 }),
+    ]);
+    const acc = await hubPartyAction(
+      {},
+      adminForm({
+        peerId: hubPeer.id,
+        intent: "accept",
+        countryCode: "ZZ",
+        partyId: "BBB",
+        name: "",
+      }),
+    );
+    expect(acc).toMatchObject({ ok: true });
+    expect((await peers.getPeer(hubPeer.id))!.hubParties).toContainEqual(
+      expect.objectContaining({ ...B, status: "trusted", source: "admin" }),
+    );
+    expect(peers.auditLog.at(-1)).toMatchObject({
+      action: "ocpi.hub.party_trusted",
+      subjectId: hubPeer.id,
+      details: { party: "ZZ-BBB" },
+    });
+    // Trusted now: its row is gone (it no longer counts toward the cap), and its push
+    // goes through.
+    expect(peers.refusals.size).toBe(0);
+    expect(await listed()).toEqual([]);
+    await hub.cpo(B).putLocation(hub.cpo(B).state.locations[0], { push: true });
+    expect(locations.locations.size).toBe(1);
+  });
+
+  it("the peer list still loads when the refusals cannot be read (migration pending)", async () => {
+    process.env.ADMIN_SECRET = "s".repeat(32);
+    signInWithSecret();
+    vi.spyOn(peers, "listRefusals").mockRejectedValue(new Error("absent"));
+    const list = await listPeersAction({}, adminForm({}));
+    expect(list.ok).toBe(true);
+    expect(list.peers!.find((p) => p.id === hubPeer.id)!.hub!.refused).toEqual(
+      [],
+    );
   });
 });
 

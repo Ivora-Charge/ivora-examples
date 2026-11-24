@@ -44,3 +44,40 @@ test("live-admin: a hub with no trusted party says so, and Pull points at the fo
     await expectAccessible(page, `hub page, no trusted party, ${colorScheme}`);
   }
 });
+
+test("live-admin: a party the hub sent and we refused is listed, and Accept this party trusts it", async ({
+  page,
+}) => {
+  await signIn(page);
+  await goTo(page, "Peers");
+  await page
+    .getByRole("list", { name: "Peers" })
+    .getByRole("link", { name: /Example Roaming Hub/ })
+    .click();
+  const refused = page.getByRole("region", { name: /Refused/ });
+  await expect(
+    refused.getByText("A party sent us data and was refused: NL-XYZ"),
+  ).toBeVisible();
+  await expect(refused).toContainText("3 times, last at");
+  await expect(refused).toContainText(
+    "Its OCPI-from party is not trusted behind this hub.",
+  );
+  // A party the hub only named in the URL: its own headline, and nothing to accept.
+  await expect(
+    refused.getByText("A trusted party sent data naming BE-QQQ"),
+  ).toBeVisible();
+  await expect(
+    refused.getByRole("button", { name: /Accept this party BE-QQQ/ }),
+  ).toHaveCount(0);
+  for (const colorScheme of schemes) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(page, `hub page, a refused party, ${colorScheme}`);
+  }
+  // The same gated, audited action as the add-a-party form.
+  await refused
+    .getByRole("button", { name: "Accept this party NL-XYZ", exact: true })
+    .click();
+  await expect(
+    page.getByText("NL-XYZ is trusted through Example Roaming Hub."),
+  ).toBeVisible();
+});

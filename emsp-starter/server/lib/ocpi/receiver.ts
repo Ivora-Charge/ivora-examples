@@ -2,6 +2,7 @@ import "server-only";
 import { OcpiProblem } from "./errors";
 import { sameId } from "./locations";
 import { isCpoParty } from "./parties";
+import { RefusedPartyProblem } from "./refusals";
 import { readJson, type OcpiContext } from "./server";
 import { STATUS } from "./types";
 
@@ -30,7 +31,9 @@ export type ReceiverPath = {
 /**
  * The CPO party a push comes from: OCPI-from, which must be a CPO party of the calling
  * peer, and `party` (of the URL or the body) must be that same party. A peer with
- * several CPO parties cannot write one party's objects in the name of another.
+ * several CPO parties cannot write one party's objects in the name of another. A
+ * refusal names `party` as the refused one (a hub's page offers to accept it) and
+ * OCPI-from as the other.
  */
 export function pushingParty(
   ctx: OcpiContext,
@@ -40,20 +43,19 @@ export function pushingParty(
   const from = ctx.from;
   if (!from)
     throw invalid("Missing or invalid OCPI-from/OCPI-to routing headers");
+  const refused = { party, kind: "path" as const, other: from };
   if (!isCpoParty(ctx.peer, from))
-    throw new OcpiProblem(
-      403,
-      STATUS.CLIENT_ERROR,
+    throw new RefusedPartyProblem(
       "OCPI-from-country-code and OCPI-from-party-id are not a CPO party of this token",
+      refused,
     );
   if (
     !sameId(party.countryCode, from.countryCode) ||
     !sameId(party.partyId, from.partyId)
   )
-    throw new OcpiProblem(
-      403,
-      STATUS.CLIENT_ERROR,
+    throw new RefusedPartyProblem(
       `The country_code and party_id ${where} are not the OCPI-from party`,
+      refused,
     );
 }
 

@@ -1,6 +1,6 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
-import type { CredentialsRole, Endpoint } from "./types";
+import type { CredentialsRole, Endpoint, Party } from "./types";
 
 /**
  * The peer registry: every CPO this eMSP is connected to (or is connecting to), with
@@ -126,6 +126,56 @@ export type AuditEntry = {
 /** An audit log entry as read back, newest first. */
 export type AuditRecord = AuditEntry & { at: string };
 
+/**
+ * Why a hub's push was refused: `routing`, its OCPI-from party is not trusted behind
+ * the hub; `path`, the party of the URL or body is not the OCPI-from party.
+ */
+export type RefusalKind = "routing" | "path";
+
+/**
+ * Refused pushes of one party behind a hub peer (refusals.ts): who, why, how often and
+ * when. No request body, token, header value or IP address.
+ */
+export type HubRefusal = {
+  /** The refused party, upper case. */
+  countryCode: string;
+  partyId: string;
+  kind: RefusalKind;
+  /** The OCPI module of the last refused request. */
+  module: string;
+  /** The other party of the last refused request ("NL-HUB"), when the two differ. */
+  otherParty?: string;
+  /** Refusals counted: a lower bound (at most one write per party per window). */
+  times: number;
+  firstSeen: string;
+  lastSeen: string;
+};
+
+/**
+ * One write of `times` refusals of a party (refusals.ts). `at` is this process's clock:
+ * the memory store uses it, the database uses its own (now()).
+ */
+export type RefusalNote = Omit<
+  HubRefusal,
+  "firstSeen" | "lastSeen" | "otherParty"
+> & {
+  peerId: string;
+  otherParty?: string;
+  at: string;
+};
+
+/**
+ * Most refused parties kept per hub peer. A new party past that replaces the one seen
+ * longest ago, but never one seen within REFUSAL_KEEP_MS: then the new one is dropped.
+ */
+export const MAX_REFUSED = 100;
+/** A refused party seen this recently is never replaced by a new one (also in the SQL). */
+export const REFUSAL_KEEP_MS = 24 * 60 * 60_000;
+/** A party's refusals are written at most once per this window (also in the SQL). */
+export const REFUSAL_WINDOW_MS = 60_000;
+/** Most new refused parties a hub peer gets per REFUSAL_WINDOW_MS (also in the SQL). */
+export const MAX_NEW_REFUSED = 10;
+
 export interface PeerStore {
   createPeer(input: {
     label: string;
@@ -164,6 +214,19 @@ export interface PeerStore {
     limit: number,
     action?: string,
   ): Promise<AuditRecord[]>;
+  /**
+   * Notes refusals of a party behind a hub peer: a new row, or one more count on the
+   * party's row. Writes nothing (and returns false) within REFUSAL_WINDOW_MS of the
+   * row's last write, nor for a new party once the peer got MAX_NEW_REFUSED new rows
+   * within REFUSAL_WINDOW_MS; keeps at most MAX_REFUSED rows per peer, replacing only
+   * rows not seen within REFUSAL_KEEP_MS (else the new party is dropped). A 'routing'
+   * row keeps its kind.
+   */
+  noteRefusal(note: RefusalNote): Promise<boolean>;
+  /** Forgets a party's refusals at a hub peer (it was accepted). */
+  forgetRefusal(peerId: string, party: Party): Promise<void>;
+  /** A hub peer's refused parties, seen most recently first. */
+  listRefusals(peerId: string): Promise<HubRefusal[]>;
 }
 
 /** Peers in memory: for demo mode (nothing persists) and for tests. */
@@ -171,6 +234,7 @@ export class MemoryPeerStore implements PeerStore {
   readonly peers = new Map<string, Peer>();
   readonly tokens = new Map<string, IssuedToken & { revokedAt?: string }>();
   readonly auditLog: AuditRecord[] = [];
+  readonly refusals = new Map<string, HubRefusal & { peerId: string }>();
 
   async createPeer(input: {
     label: string;
@@ -276,5 +340,74 @@ export class MemoryPeerStore implements PeerStore {
       .reverse()
       .slice(0, limit)
       .map((e) => structuredClone(e));
+  }
+
+  async noteRefusal(note: RefusalNote) {
+    const key = `${note.peerId}|${note.countryCode}-${note.partyId}`;
+    const held = this.refusals.get(key);
+    const at = Date.parse(note.at);
+    if (held && at - Date.parse(held.lastSeen) < REFUSAL_WINDOW_MS)
+      return false;
+    if (
+      !held &&
+      [...this.refusals.values()].filter(
+        (r) =>
+          r.peerId === note.peerId &&
+          at - Date.parse(r.firstSeen) < REFUSAL_WINDOW_MS,
+      ).length >= MAX_NEW_REFUSED
+    )
+      return false;
+    // Synchronous from the checks to the write, so concurrent notes cannot overshoot
+    // the budget or the cap, nor drop each other's rows.
+    if (!held) {
+      const mine = this.sortedRefusals(note.peerId);
+      if (mine.length >= MAX_REFUSED) {
+        const stale = mine
+          .filter((r) => at - Date.parse(r.lastSeen) > REFUSAL_KEEP_MS)
+          .sort(
+            (a, b) =>
+              a.lastSeen.localeCompare(b.lastSeen) ||
+              a.countryCode.localeCompare(b.countryCode) ||
+              a.partyId.localeCompare(b.partyId),
+          )
+          .slice(0, mine.length - MAX_REFUSED + 1);
+        if (mine.length - stale.length >= MAX_REFUSED) return false;
+        for (const r of stale)
+          this.refusals.delete(`${note.peerId}|${r.countryCode}-${r.partyId}`);
+      }
+    }
+    const { at: seen, otherParty, ...rest } = note;
+    this.refusals.set(key, {
+      ...rest,
+      kind: held?.kind === "routing" ? "routing" : note.kind,
+      ...(otherParty && { otherParty }),
+      times: (held?.times ?? 0) + Math.max(1, note.times),
+      firstSeen: held?.firstSeen ?? seen,
+      lastSeen: seen,
+    });
+    return true;
+  }
+
+  private sortedRefusals(peerId: string) {
+    return [...this.refusals.values()]
+      .filter((r) => r.peerId === peerId)
+      .sort(
+        (a, b) =>
+          b.lastSeen.localeCompare(a.lastSeen) ||
+          a.countryCode.localeCompare(b.countryCode) ||
+          a.partyId.localeCompare(b.partyId),
+      );
+  }
+
+  async forgetRefusal(peerId: string, party: Party) {
+    this.refusals.delete(
+      `${peerId}|${party.countryCode.toUpperCase()}-${party.partyId.toUpperCase()}`,
+    );
+  }
+
+  async listRefusals(peerId: string) {
+    return this.sortedRefusals(peerId)
+      .slice(0, MAX_REFUSED)
+      .map(({ peerId: _, ...r }) => structuredClone(r));
   }
 }

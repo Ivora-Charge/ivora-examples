@@ -7,14 +7,17 @@ import {
 import type {
   AuditEntry,
   AuditRecord,
+  HubRefusal,
   IssuedToken,
   NewToken,
   Peer,
   PeerPatch,
   PeerStatus,
   PeerStore,
+  RefusalNote,
 } from "./store";
-import { tokenActive } from "./store";
+import { MAX_REFUSED, tokenActive } from "./store";
+import type { Party } from "./types";
 
 type PeerRow = {
   id: string;
@@ -79,7 +82,7 @@ const COLUMNS: Record<keyof PeerPatch, keyof PeerRow> = {
  */
 export class SupabasePeerStore implements PeerStore {
   private readonly rest: <T>(
-    method: "GET" | "POST" | "PATCH",
+    method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
   ) => Promise<T>;
@@ -256,6 +259,58 @@ export class SupabasePeerStore implements PeerStore {
       subjectId: r.subject_id ?? undefined,
       requestId: r.request_id ?? undefined,
       details: r.details,
+    }));
+  }
+
+  async noteRefusal(note: RefusalNote) {
+    const rows = await this.rest<{ noted: boolean }[]>(
+      "POST",
+      "rpc/emsp_ocpi_hub_refusal_note",
+      {
+        p_peer_id: note.peerId,
+        p_country_code: note.countryCode,
+        p_party_id: note.partyId,
+        p_kind: note.kind,
+        p_module: note.module,
+        p_other_party: note.otherParty ?? null,
+        p_times: Math.max(1, Math.trunc(note.times)),
+      },
+    );
+    return Boolean(rows[0]?.noted);
+  }
+
+  async forgetRefusal(peerId: string, party: Party) {
+    await this.rest(
+      "DELETE",
+      `emsp_ocpi_hub_refusals?peer_id=${eq(peerId)}&country_code=${eq(party.countryCode.toUpperCase())}&party_id=${eq(party.partyId.toUpperCase())}`,
+    );
+  }
+
+  async listRefusals(peerId: string): Promise<HubRefusal[]> {
+    const rows = await this.rest<
+      {
+        country_code: string;
+        party_id: string;
+        kind: HubRefusal["kind"];
+        module: string;
+        other_party: string | null;
+        times: number | string;
+        first_seen: string;
+        last_seen: string;
+      }[]
+    >(
+      "GET",
+      `emsp_ocpi_hub_refusals?peer_id=${eq(peerId)}&order=last_seen.desc,country_code.asc,party_id.asc&limit=${MAX_REFUSED}&select=country_code,party_id,kind,module,other_party,times,first_seen,last_seen`,
+    );
+    return rows.map((r) => ({
+      countryCode: r.country_code,
+      partyId: r.party_id,
+      kind: r.kind,
+      module: r.module,
+      ...(r.other_party && { otherParty: r.other_party }),
+      times: Number(r.times),
+      firstSeen: new Date(r.first_seen).toISOString(),
+      lastSeen: new Date(r.last_seen).toISOString(),
     }));
   }
 }

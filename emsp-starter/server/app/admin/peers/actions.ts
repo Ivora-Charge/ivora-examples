@@ -27,10 +27,17 @@ import {
   removeParty,
   setHubPushMode,
 } from "@/lib/ocpi/hub";
-import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
+import { isCpoParty, isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import { MIGRATION_PENDING, NO_TRUSTED_PARTY } from "./peer-view";
 import { peerStore } from "@/lib/ocpi/registry";
-import type { HubParty, HubPushMode, Peer } from "@/lib/ocpi/store";
+import type {
+  HubParty,
+  HubPushMode,
+  HubRefusal,
+  Peer,
+  PeerStore,
+} from "@/lib/ocpi/store";
+import { logText } from "@/lib/server/log-error";
 import { assertLive, isDemo } from "@/lib/server/demo";
 import { ABSENT_CODES, DatabaseRequestError } from "@/lib/server/supabase-rest";
 import { databaseCheck } from "@/lib/setup/database";
@@ -72,6 +79,12 @@ export type PeerSummary = {
     pushMode: HubPushMode;
     /** The hub's version details have a hubclientinfo Sender: it publishes a list of parties. */
     listsParties: boolean;
+    /**
+     * Parties not trusted behind the hub whose pushes were refused, seen most recently
+     * first (lib/ocpi/refusals.ts). Only in the peer list; a party trusted since is left
+     * out. Empty when the 202611240002 migration is not applied yet.
+     */
+    refused?: HubRefusal[];
   };
   modules: string[];
   registeredAt: string | null;
@@ -251,6 +264,27 @@ export async function managePeerAction(
   });
 }
 
+/**
+ * A hub's refused parties that are still not trusted. A read that fails (the table is
+ * not there before its migration) shows none rather than failing the peer list.
+ */
+async function refusedOf(store: PeerStore, p: Peer): Promise<HubRefusal[]> {
+  if (!isHubPeer(p)) return [];
+  try {
+    return (await store.listRefusals(p.id)).filter((r) => !isCpoParty(p, r));
+  } catch (e) {
+    if (!(
+      e instanceof DatabaseRequestError &&
+      e.code !== null &&
+      ABSENT_CODES.has(e.code)
+    ))
+      console.error(
+        `Reading the refused pushes of peer ${p.id} failed: ${logText(e)}`,
+      );
+    return [];
+  }
+}
+
 /** Every peer, with the last pull and its error per module, for the admin. */
 export async function listPeersAction(
   _prev: ActionState,
@@ -258,18 +292,23 @@ export async function listPeersAction(
 ): Promise<ActionState> {
   return asAdmin(form, async () => {
     const locations = locationStore();
+    const store = peerStore();
     const peers: PeerSummary[] = await Promise.all(
-      (await peerStore().listPeers()).map(async (p) => ({
-        ...summary(p),
-        sync: await Promise.all(
-          SYNC_MODULES.flatMap((m) =>
-            pullTargets(p).map(async (party) => {
-              const key = syncKey(m, party);
-              return moduleSync(key, await locations.getSyncState(p.id, key));
-            }),
+      (await store.listPeers()).map(async (p) => {
+        const s = summary(p);
+        if (s.hub) s.hub.refused = await refusedOf(store, p);
+        return {
+          ...s,
+          sync: await Promise.all(
+            SYNC_MODULES.flatMap((m) =>
+              pullTargets(p).map(async (party) => {
+                const key = syncKey(m, party);
+                return moduleSync(key, await locations.getSyncState(p.id, key));
+              }),
+            ),
           ),
-        ),
-      })),
+        };
+      }),
     );
     if (isDemo()) peers.unshift(DEMO_PEER);
     const failing = peers.filter((p) => p.sync?.some((m) => m.ok === false));

@@ -13,6 +13,7 @@ import type { ActionState, PeerSummary } from "@/app/admin/peers/actions";
 import { Refused } from "@/app/admin/peers/connect/connect";
 import {
   HubParties,
+  refusalReason,
   NoTrustedPartyMessage,
   Pulls,
   PushMode,
@@ -524,6 +525,63 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     );
     // No field asks for the hub's peer ID: the page knows which hub it is.
     expect(html).not.toMatch(/peer ID/i);
+  });
+
+  it("lists refused parties with when and why, and Accept this party sends the accept action", async () => {
+    const refused = [
+      {
+        countryCode: "NL",
+        partyId: "XYZ",
+        kind: "routing" as const,
+        module: "locations",
+        times: 3,
+        firstSeen: "2026-11-24T09:00:00.000Z",
+        lastSeen: "2026-11-24T10:30:00.000Z",
+      },
+      {
+        countryCode: "BE",
+        partyId: "QQQ",
+        kind: "path" as const,
+        module: "sessions",
+        otherParty: "NL-EXH",
+        times: 1,
+        firstSeen: "2026-11-24T08:00:00.000Z",
+        lastSeen: "2026-11-24T08:00:00.000Z",
+      },
+    ];
+    const html = renderToStaticMarkup(
+      createElement(HubParties, {
+        peer: { ...hub, hub: { ...hub.hub!, refused } },
+        send: async () => ({}),
+      }),
+    );
+    expect(html).toMatch(/Refused <span class="muted">2<\/span>/);
+    expect(html).toContain(
+      'A party sent us data and was refused: <span class="mono">NL-XYZ</span>',
+    );
+    expect(html).toContain(
+      "3 times, last at 2026-11-24 10:30 UTC (locations), first at 2026-11-24 09:00 UTC. Its OCPI-from party is not trusted behind this hub.",
+    );
+    expect(html).toContain(
+      "once, last at 2026-11-24 08:00 UTC (sessions), first at 2026-11-24 08:00 UTC. The request came from NL-EXH (OCPI-from); the URL or body named this party. It did not send the data itself, so there is nothing to accept.",
+    );
+    // A party only named by another sender: its own headline, and no Accept.
+    expect(html).toContain(
+      'A trusted party sent data naming <span class="mono">BE-QQQ</span>',
+    );
+    expect(html).not.toContain('refused: <span class="mono">BE-QQQ');
+    expect(html).toContain('Accept this party<span class="sr"> NL-XYZ</span>');
+    expect(html).not.toContain('Accept this party<span class="sr"> BE-QQQ');
+    expect(html).toContain("a count can be lower than what was sent");
+    // None refused: no section.
+    expect(
+      renderToStaticMarkup(
+        createElement(HubParties, { peer: hub, send: async () => ({}) }),
+      ),
+    ).not.toContain("was refused");
+    expect(refusalReason({ ...refused[0], otherParty: "NL-ABC" })).toContain(
+      "the URL named NL-ABC",
+    );
   });
 
   it("says a hub is idle until a party is trusted", () => {

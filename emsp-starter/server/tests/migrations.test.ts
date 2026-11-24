@@ -517,6 +517,254 @@ describe("hub push mode (202611240001_hub_push_mode)", () => {
   });
 });
 
+describe("refused hub pushes (202611240002_hub_refusals)", () => {
+  const newPeer = async () =>
+    (
+      await db.query<{ id: string }>(
+        `insert into public.emsp_ocpi_peers (label, direction) values ('Hub', 'outbound') returning id`,
+      )
+    ).rows[0].id;
+  const note = async (
+    peer: string,
+    party: string,
+    { times = 1, kind = "routing", other = null as string | null } = {},
+  ) =>
+    (
+      await db.query<{ noted: boolean }>(
+        "select noted from public.emsp_ocpi_hub_refusal_note($1, 'ZZ', $2, $3, 'locations', $4, $5)",
+        [peer, party, kind, other, times],
+      )
+    ).rows[0].noted;
+  // The function uses the database's clock: move a peer's rows into the past instead.
+  const age = (peer: string, seconds: number) =>
+    db.query(
+      `update public.emsp_ocpi_hub_refusals
+       set first_seen = first_seen - make_interval(secs => $2),
+           last_seen = last_seen - make_interval(secs => $2)
+       where peer_id = $1`,
+      [peer, seconds],
+    );
+  const rows = async (peer: string) =>
+    (
+      await db.query<{
+        party_id: string;
+        kind: string;
+        other_party: string | null;
+        times: string;
+        first_seen: Date;
+        last_seen: Date;
+      }>(
+        `select party_id, kind, other_party, times, first_seen, last_seen
+         from public.emsp_ocpi_hub_refusals where peer_id = $1
+         order by last_seen desc, party_id`,
+        [peer],
+      )
+    ).rows;
+  const id = (i: number) => i.toString(36).toUpperCase().padStart(3, "0");
+
+  it("notes a party once at the database's time, writes nothing within 60 seconds, and adds the count after", async () => {
+    const peer = await newPeer();
+    expect(await note(peer, "BBB")).toBe(true);
+    let [row] = await rows(peer);
+    expect(
+      Math.abs(new Date(row.first_seen).getTime() - Date.now()),
+    ).toBeLessThan(60_000);
+    await age(peer, 59);
+    expect(await note(peer, "BBB", { kind: "path" })).toBe(false);
+    [row] = await rows(peer);
+    expect(row).toMatchObject({ party_id: "BBB", kind: "routing" });
+    expect(Number(row.times)).toBe(1);
+    await age(peer, 1);
+    expect(
+      await note(peer, "BBB", { times: 3, kind: "path", other: "ZZ-AAA" }),
+    ).toBe(true);
+    [row] = await rows(peer);
+    // 'routing' is never downgraded to 'path'; the module and other party follow.
+    expect(row).toMatchObject({ kind: "routing", other_party: "ZZ-AAA" });
+    expect(Number(row.times)).toBe(4);
+    expect(
+      new Date(row.last_seen).getTime() - new Date(row.first_seen).getTime(),
+    ).toBeGreaterThanOrEqual(60_000);
+  });
+
+  it("gives a peer at most 10 new parties a minute: a rotating-party flood stops there, and the other rows survive", async () => {
+    const peer = await newPeer();
+    const other = await newPeer();
+    // 95 genuine rows, noted over the past hours.
+    for (let i = 0; i < 95; i++) {
+      expect(await note(peer, `G${id(i).slice(1)}`)).toBe(true);
+      if (i % 10 === 9) await age(peer, 61);
+    }
+    await age(peer, 3_600);
+    const genuine = (await rows(peer)).map((r) => r.party_id);
+    expect(genuine).toHaveLength(95);
+    // A new party on each of 50 calls: 10 rows, then nothing.
+    const flood = [];
+    for (let i = 0; i < 50; i++)
+      flood.push(await note(peer, `F${id(i).slice(1)}`));
+    // Room for 5; the genuine rows were seen within 24 hours, so none makes way.
+    expect(flood.filter(Boolean)).toHaveLength(5);
+    expect(flood.slice(5).some(Boolean)).toBe(false);
+    const kept = (await rows(peer)).map((r) => r.party_id);
+    expect(kept).toHaveLength(100);
+    expect(genuine.filter((g) => kept.includes(g))).toHaveLength(95);
+    // A party already listed still counts under its own window.
+    expect(await note(peer, genuine[0])).toBe(true);
+    // Another peer's budget is its own.
+    expect(await note(other, "OTH")).toBe(true);
+    // A minute later the budget is back, but the list is full of active rows.
+    await age(peer, 61);
+    expect(await note(peer, "F99")).toBe(false);
+  });
+
+  it("a sustained rotating flood leaves every party seen in the last 24 hours in place; a stale one can be replaced", async () => {
+    const peer = await newPeer();
+    // 100 genuine rows: 98 seen an hour ago, 2 seen 25 hours ago.
+    for (let i = 0; i < 100; i++) {
+      expect(await note(peer, `G${id(i).slice(1)}`)).toBe(true);
+      if (i % 10 === 9) await age(peer, 61);
+    }
+    await db.query(
+      `update public.emsp_ocpi_hub_refusals
+       set first_seen = now() - interval '25 hours', last_seen = now() - interval '25 hours'
+       where peer_id = $1 and party_id in ('G00', 'G01')`,
+      [peer],
+    );
+    await db.query(
+      `update public.emsp_ocpi_hub_refusals
+       set first_seen = now() - interval '1 hour', last_seen = now() - interval '1 hour'
+       where peer_id = $1 and party_id not in ('G00', 'G01')`,
+      [peer],
+    );
+    const active = (await rows(peer))
+      .map((r) => r.party_id)
+      .filter((p) => p !== "G00" && p !== "G01");
+    expect(active).toHaveLength(98);
+    // 30 windows of a new party on each of 20 calls.
+    let written = 0;
+    for (let w = 0; w < 30; w++) {
+      for (let i = 0; i < 20; i++)
+        if (await note(peer, `F${id(w * 20 + i).slice(1)}`)) written++;
+      await age(peer, 61);
+    }
+    // Only the two stale rows made way.
+    expect(written).toBe(2);
+    const kept = (await rows(peer)).map((r) => r.party_id);
+    expect(kept).toHaveLength(100);
+    expect(active.every((g) => kept.includes(g))).toBe(true);
+    expect(kept).not.toContain("G00");
+    expect(kept).not.toContain("G01");
+  });
+
+  it("calls racing for one peer cannot overshoot the budget or the cap", async () => {
+    const peer = await newPeer();
+    for (let round = 0; round < 12; round++) {
+      const noted = await Promise.all(
+        Array.from({ length: 30 }, (_, i) =>
+          note(peer, `R${id(round * 30 + i).slice(1)}`),
+        ),
+      );
+      expect(noted.filter(Boolean)).toHaveLength(10);
+      // A day on, so the cap has stale rows to replace from round 11.
+      await age(peer, 24 * 3_600 + 61);
+    }
+    expect(await rows(peer)).toHaveLength(100);
+    // With every row seen within 24 hours, racing calls write nothing.
+    await db.query(
+      "update public.emsp_ocpi_hub_refusals set first_seen = now() - interval '1 hour', last_seen = now() - interval '1 hour' where peer_id = $1",
+      [peer],
+    );
+    const late = await Promise.all(
+      Array.from({ length: 30 }, (_, i) => note(peer, `L${id(i).slice(1)}`)),
+    );
+    expect(late.some(Boolean)).toBe(false);
+    expect(await rows(peer)).toHaveLength(100);
+  });
+
+  it("keeps at most 100 parties per peer, replacing only ones not seen for 24 hours", async () => {
+    const peer = await newPeer();
+    const other = await newPeer();
+    await note(other, "OLD");
+    // One second apart (so no two share a time), and a new minute every 10.
+    for (let i = 0; i < 100; i++) {
+      expect(await note(peer, id(i))).toBe(true);
+      await age(peer, i % 10 === 9 ? 61 : 1);
+    }
+    // All seen within 24 hours: a new party is dropped.
+    expect(await note(peer, "NEW")).toBe(false);
+    // A day later, new parties replace the ones seen longest ago.
+    await age(peer, 24 * 3_600);
+    for (let i = 100; i < 103; i++) {
+      expect(await note(peer, id(i))).toBe(true);
+      await age(peer, 1);
+    }
+    const kept = (await rows(peer)).map((r) => r.party_id);
+    expect(kept).toHaveLength(100);
+    expect(kept[0]).toBe(id(102));
+    expect(kept).not.toContain(id(2));
+    expect(kept).toContain(id(3));
+    // Another peer's rows are not touched.
+    expect(await rows(other)).toHaveLength(1);
+  });
+
+  it("rejects malformed rows", async () => {
+    const peer = await newPeer();
+    const bad: [string, unknown[]][] = [
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'zz', 'BBB', 'routing', 'locations', null, 1)",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BB', 'routing', 'locations', null, 1)",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BBB', 'other', 'locations', null, 1)",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BBB', 'routing', 'Locations!', null, 1)",
+        [peer],
+      ],
+      [
+        "select public.emsp_ocpi_hub_refusal_note($1, 'ZZ', 'BBB', 'routing', 'locations', 'x', 1)",
+        [peer],
+      ],
+    ];
+    for (const [sql, args] of bad)
+      await expect(db.query(sql, args)).rejects.toThrow(/check constraint/);
+    await expect(
+      db.query(
+        "select public.emsp_ocpi_hub_refusal_note(gen_random_uuid(), 'ZZ', 'BBB', 'routing', 'locations', null, 1)",
+      ),
+    ).rejects.toThrow(/foreign key/);
+  });
+
+  it("is closed to anon and authenticated, and open to the service role", async () => {
+    for (const role of ["anon", "authenticated"] as const)
+      await asRole(db, role, async () => {
+        await expect(
+          db.query("select * from public.emsp_ocpi_hub_refusals"),
+        ).rejects.toThrow(/permission denied/);
+        await expect(
+          db.query(
+            "select public.emsp_ocpi_hub_refusal_note(gen_random_uuid(), 'ZZ', 'BBB', 'routing', 'locations', null, 1)",
+          ),
+        ).rejects.toThrow(/permission denied/);
+      });
+    const peer = await newPeer();
+    await asRole(db, "service_role", async () => {
+      expect(await note(peer, "SRV")).toBe(true);
+      expect(await rows(peer)).toHaveLength(1);
+      await db.query(
+        "delete from public.emsp_ocpi_hub_refusals where peer_id = $1",
+        [peer],
+      );
+      expect(await rows(peer)).toHaveLength(0);
+    });
+  });
+});
+
 describe("roaming hub parties (202611160001_hub_parties)", () => {
   const peer = async () =>
     (

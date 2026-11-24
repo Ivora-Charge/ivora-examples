@@ -84,4 +84,8 @@ export const MIGRATIONS: readonly ShippedMigration[] = [
     file: "202611240001_hub_push_mode.sql",
     probe: { table: "emsp_ocpi_peers", column: "hub_push_mode" },
   },
+  {
+    file: "202611240002_hub_refusals.sql",
+    probe: { table: "emsp_ocpi_hub_refusals", column: "peer_id" },
+  },
 ];

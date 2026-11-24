@@ -40,6 +40,7 @@ import {
 } from "../peer-view";
 
 type HubParty = NonNullable<PeerSummary["hub"]>["parties"][number];
+type Refusal = NonNullable<NonNullable<PeerSummary["hub"]>["refused"]>[number];
 type Send = (
   action: (prev: ActionState, form: FormData) => Promise<ActionState>,
   values: Record<string, string>,
@@ -140,6 +141,78 @@ export function PushMode({ peer, send }: { peer: PeerSummary; send: Send }) {
   );
 }
 
+const times = (n: number) => (n === 1 ? "once" : `${n} times`);
+
+/** Why a refused party's last push was refused, in words. */
+export function refusalReason(r: Refusal): string {
+  if (r.kind === "routing")
+    return `Its OCPI-from party is not trusted behind this hub${r.otherParty ? `; the URL named ${r.otherParty}` : ""}.`;
+  return `The request came from ${r.otherParty ?? "another party"} (OCPI-from); the URL or body named this party. It did not send the data itself, so there is nothing to accept.`;
+}
+
+/** The headline of a refused party: it sent data itself, or another party named it. */
+export function refusalHeadline(r: Refusal): string {
+  return r.kind === "routing"
+    ? "A party sent us data and was refused:"
+    : "A trusted party sent data naming";
+}
+
+/**
+ * Parties behind the hub whose pushes were refused because they are not trusted. Accept
+ * this party (the same action as the add-a-party form) only where the party sent the
+ * data itself (kind `routing`, it was the OCPI-from party); a party another sender only
+ * named in the URL or body (kind `path`) is listed without it.
+ */
+export function RefusedParties({
+  refused,
+  accept,
+}: {
+  refused: Refusal[];
+  accept: (r: Refusal) => unknown;
+}) {
+  const id = useId();
+  if (!refused.length) return null;
+  return (
+    <section className="stack" aria-labelledby={`${id}-r`}>
+      <h2 id={`${id}-r`}>
+        Refused <span className="muted">{refused.length}</span>
+      </h2>
+      <p className="muted">
+        Data for these parties came through the hub and was refused, because
+        they are not trusted. Accept one only if you have an agreement with it.
+        Each party is counted at most once a minute, so a count can be lower
+        than what was sent.
+      </p>
+      <ul className="list">
+        {refused.map((r) => (
+          <li className="item acts" key={code(r)}>
+            <Tile kind="todo" big={<Icon name="alert" />} />
+            <div className="what">
+              <h3>
+                {refusalHeadline(r)} <span className="mono">{code(r)}</span>
+              </h3>
+              <p className="meta">
+                {`${times(r.times)}, last at ${utc(r.lastSeen)} (${r.module}), first at ${utc(r.firstSeen)}. ${refusalReason(r)}`}
+              </p>
+            </div>
+            {r.kind === "routing" && (
+              <span className="end">
+                <button
+                  className="btn sm"
+                  type="button"
+                  onClick={() => accept(r)}
+                >
+                  Accept this party<span className="sr"> {code(r)}</span>
+                </button>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 /** The parties behind a hub: trusted and offered, with Accept and Remove on each row. */
 export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
   const id = useId();
@@ -220,6 +293,12 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
           <ul className="list">{trusted.map(row)}</ul>
         </section>
       )}
+      <RefusedParties
+        refused={peer.hub?.refused ?? []}
+        accept={(r) =>
+          act("accept", { countryCode: r.countryCode, partyId: r.partyId })
+        }
+      />
       <section className="stack" aria-labelledby={`${id}-o`}>
         <div className="row between">
           <h2 id={`${id}-o`}>
