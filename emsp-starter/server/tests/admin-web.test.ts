@@ -459,10 +459,10 @@ describe("sessions: live and recent, by peer, status and driver", () => {
     expect(other.listTotal).toBe(1);
   });
 
-  it("counts a search up to 1000 per status, then says 1000+", async () => {
+  it("counts a search up to 500 per status, then says 500+", async () => {
     const s = store();
     const [template] = [...s.sessions.values()];
-    for (let i = 0; i < 1001; i++)
+    for (let i = 0; i < 501; i++)
       await s.insertSession(
         PEER,
         {
@@ -480,21 +480,21 @@ describe("sessions: live and recent, by peer, status and driver", () => {
       );
     const all = await listSessionsAction({}, form({ status: "all" }));
     // No search: exact, uncapped counts.
-    expect(all.counts!.byStatus.COMPLETED).toBe(1003);
+    expect(all.counts!.byStatus.COMPLETED).toBe(503);
     expect(all.counts!.more).toEqual([]);
     const hit = await listSessionsAction(
       {},
       form({ status: "COMPLETED", search: "bulk" }),
     );
     expect(hit.counts).toMatchObject({
-      total: 1000,
-      byStatus: { COMPLETED: 1000, ACTIVE: 0 },
+      total: 500,
+      byStatus: { COMPLETED: 500, ACTIVE: 0 },
       more: ["COMPLETED"],
     });
-    expect(hit).toMatchObject({ listTotal: 1000, listTotalMore: true });
+    expect(hit).toMatchObject({ listTotal: 500, listTotalMore: true });
     // The list keeps its limit of 100.
     expect(hit.sessions).toHaveLength(100);
-    expect(hit.message).toMatch(/^100 of 1000\+ session\(s\)/);
+    expect(hit.message).toMatch(/^100 of 500\+ session\(s\)/);
     // A chip whose statuses were not capped says so exactly.
     const live = await listSessionsAction({}, form({ search: "bulk" }));
     expect(live).toMatchObject({ listTotal: 0 });
