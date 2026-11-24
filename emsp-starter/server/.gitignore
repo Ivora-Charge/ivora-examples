@@ -11,5 +11,3 @@ supabase/.temp
 .env.e2e.local
 !.env.e2e.example
 .vercel
-# Design mockups staged for preview deployments only (scripts/stage-design.mjs)
-public/design

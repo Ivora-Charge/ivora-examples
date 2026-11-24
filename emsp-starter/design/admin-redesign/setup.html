@@ -708,6 +708,88 @@ main:focus {
     margin-left: 4.625rem;
   }
 }
+/* A done stop on day one: one line, opened for its detail. */
+.stop.folded {
+  padding: 0;
+}
+.stop.folded summary {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.625rem 1rem;
+  border-radius: var(--r-lg);
+  list-style: none;
+  cursor: pointer;
+}
+.stop.folded summary::-webkit-details-marker {
+  display: none;
+}
+.stop.folded .what {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.125rem;
+}
+.stop.folded .h3 {
+  font-family: var(--f-heading);
+  font-weight: 800;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+.stop.folded .more {
+  padding: 0 1rem 0.875rem 4.625rem;
+  color: var(--c-muted);
+  font-size: 0.9375rem;
+}
+.tile.sm {
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: 0 0.5rem;
+}
+.tile.sm b {
+  font-size: 1.0625rem;
+}
+.tile.sm small {
+  margin-top: 0.125rem;
+  font-size: 0.625rem;
+}
+.tile.sm svg.i {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+/* A stop that needs you, but not first: its fix waits behind one line. */
+.fix .later > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.75rem;
+  color: var(--c-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+@media (min-width: 60rem) {
+  /* Open on a wide screen (kit.js), so there is nothing to show or hide. */
+  .fix .later > summary {
+    display: none;
+  }
+}
+.fix .later .in {
+  margin-top: 0.25rem;
+}
+.fix .later .in > * + * {
+  margin-top: 0.625rem;
+}
+/* What a check found, one line per thing. */
+.found {
+  display: grid;
+  gap: 0.5rem;
+}
+.found li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+}
 .fix > * + * {
   margin-top: 0.625rem;
 }
@@ -771,6 +853,9 @@ main:focus {
   min-width: 0;
   margin: 0;
   padding: 0.75rem 0.875rem;
+  /* Long lines wrap inside the box, so a phone shows all of what will be copied. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow-x: auto;
   font-family: var(--f-mono);
   font-weight: 500;
@@ -792,6 +877,17 @@ main:focus {
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
+}
+/* On a phone the button sits under the text, so the text gets the full width. */
+@media (max-width: 39.99rem) {
+  .copy {
+    flex-direction: column;
+  }
+  .copy button {
+    min-height: 2.75rem;
+    border-left: 0;
+    border-top: 1px solid var(--c-border);
+  }
 }
 .copy mark {
   padding: 0.0625rem 0.1875rem;
@@ -1358,12 +1454,12 @@ code.nw {
 }
 </style>
 </head>
-<body data-states="mid blank health late">
+<body data-states="mid env blank webhook peer health late">
 
 <div class="mock" role="region" aria-label="Mockup controls, not part of the design">
   <b>MOCKUP</b>
   <a href="index.html">All screens</a>
-  <a href="#mid" data-state="mid">Day one: setting up</a><a href="#blank" data-state="blank">Day one: just deployed</a><a href="#health" data-state="health">Day thirty: healthy</a><a href="#late" data-state="late">Day thirty: job stopped</a>
+  <a href="#mid" data-state="mid">Day one: setting up</a><a href="#env" data-state="env">1 Settings missing</a><a href="#blank" data-state="blank">2 Empty database</a><a href="#webhook" data-state="webhook">3 No webhook yet</a><a href="#peer" data-state="peer">6 No peer yet</a><a href="#health" data-state="health">Day thirty: healthy</a><a href="#late" data-state="late">Day thirty: job stopped</a>
   <span class="gap"></span>
   <button type="button" data-theme-set="auto">Auto</button>
   <button type="button" data-theme-set="light">Light</button>
@@ -1372,12 +1468,12 @@ code.nw {
 <nav aria-label="Skip"><a class="skip" href="#main">Skip to content</a></nav>
 <div class="app">
   <header class="topbar"><a class="logo" href="setup.html#health"><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><g transform="rotate(-12 24 24)"><path fill="var(--c-primary)" fill-rule="evenodd" d="M24 2.5c-9.7 0-17.5 7.6-17.5 17.1 0 12.2 15.1 24.6 16.4 25.6a1.8 1.8 0 0 0 2.2 0c1.3-1 16.4-13.4 16.4-25.600C41.5 10.1 33.7 2.5 24 2.500ZM17.6 12.400a2.4 2.4 0 0 1 2.4 2.400v7.400a2.4 2.4 0 0 1-4.8 0v-7.400a2.4 2.4 0 0 1 2.4-2.400Zm12.8 0a2.4 2.4 0 0 1 2.4 2.400v7.400a2.4 2.4 0 0 1-4.8 0v-7.400a2.4 2.4 0 0 1 2.4-2.400Z"/></g><circle cx="40.5" cy="40.5" r="5" fill="var(--c-flare)"/></svg><span class="word">kilolane</span><span class="role">Admin</span></a>
-    <a class="who" href="sign-in.html#signed-in" data-hide="mid blank"><span class="av" aria-hidden="true">A</span><span class="em">ana@example.com</span><span class="sr">, admin. Account</span></a>
-    <a class="who out" href="sign-in.html" data-show="mid blank">Sign in</a></header>
+    <a class="who" href="sign-in.html#signed-in" data-hide="env blank webhook mid"><span class="av" aria-hidden="true">A</span><span class="em">ana@example.com</span><span class="sr">, admin. Account</span></a>
+    <a class="who out" href="sign-in.html" data-show="env blank webhook mid">Sign in</a></header>
   <header class="rail">
     <a class="logo" href="setup.html#health"><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><g transform="rotate(-12 24 24)"><path fill="var(--c-primary)" fill-rule="evenodd" d="M24 2.5c-9.7 0-17.5 7.6-17.5 17.1 0 12.2 15.1 24.6 16.4 25.6a1.8 1.8 0 0 0 2.2 0c1.3-1 16.4-13.4 16.4-25.600C41.5 10.1 33.7 2.5 24 2.500ZM17.6 12.400a2.4 2.4 0 0 1 2.4 2.400v7.400a2.4 2.4 0 0 1-4.8 0v-7.400a2.4 2.4 0 0 1 2.4-2.400Zm12.8 0a2.4 2.4 0 0 1 2.4 2.400v7.400a2.4 2.4 0 0 1-4.8 0v-7.400a2.4 2.4 0 0 1 2.4-2.400Z"/></g><circle cx="40.5" cy="40.5" r="5" fill="var(--c-flare)"/></svg><span class="word">kilolane</span><span class="role">Admin</span></a>
     <nav aria-label="Admin">
-      <a href="setup.html#health" aria-current="page"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg><span data-show="mid blank">Setup</span><span data-hide="mid blank">Health</span><span class="count" data-show="mid">3<span class="sr"> to do</span></span><span class="count" data-show="blank">5<span class="sr"> to do</span></span><span class="count" data-show="late">1<span class="sr"> to do</span></span></a>
+      <a href="setup.html#health" aria-current="page"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg><span data-show="env blank webhook mid peer">Setup</span><span data-hide="env blank webhook mid peer">Health</span><span class="count" data-show="env">6<span class="sr"> to do</span></span><span class="count" data-show="blank">5<span class="sr"> to do</span></span><span class="count" data-show="webhook">4<span class="sr"> to do</span></span><span class="count" data-show="mid">3<span class="sr"> to do</span></span><span class="count" data-show="peer">1<span class="sr"> to do</span></span><span class="count" data-show="late">1<span class="sr"> to do</span></span></a>
       <p class="group">Network</p>
       <a href="peers.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 6.5 17M12 11.5l5.5 5.5"/></svg>Peers</a>
       <p class="group">Charging</p>
@@ -1390,11 +1486,11 @@ code.nw {
       <a href="#" aria-disabled="true" title="Not in this mockup"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>Drivers and tokens</a>
     </nav>
     <div class="foot">
-    <a class="who" href="sign-in.html#signed-in" data-hide="mid blank"><span class="av" aria-hidden="true">A</span><span class="em">ana@example.com</span><span class="sr">, admin. Account</span></a>
-    <a class="who out" href="sign-in.html" data-show="mid blank">Sign in</a></div>
+    <a class="who" href="sign-in.html#signed-in" data-hide="env blank webhook mid"><span class="av" aria-hidden="true">A</span><span class="em">ana@example.com</span><span class="sr">, admin. Account</span></a>
+    <a class="who out" href="sign-in.html" data-show="env blank webhook mid">Sign in</a></div>
   </header>
   <main id="main" tabindex="-1"><div class="page">
-<div data-show="blank mid">
+<div data-show="env blank webhook mid peer">
 <div class="head">
   <div>
     <p class="crumb">Setup</p>
@@ -1420,6 +1516,21 @@ code.nw {
   <div><h2>Not live: 1 of 6 done</h2><p>The server is running but has nowhere to store anything yet. Start at stop 2.</p></div>
 </section>
     
+<section class="hero " data-show="env" aria-label="Overall state">
+  <span class="tile  lg" aria-hidden="true"><b>0</b><small>of 6</small></span>
+  <div><h2>Demo mode: 0 of 6 done</h2><p>Two settings are missing or malformed, so nothing is stored yet. Start at stop 1.</p></div>
+</section>
+    
+<section class="hero " data-show="webhook" aria-label="Overall state">
+  <span class="tile  lg" aria-hidden="true"><b>2</b><small>of 6</small></span>
+  <div><h2>Setting up: 2 of 6 done</h2><p>Not live yet. Next: the payments webhook, at stop 3.</p></div>
+</section>
+    
+<section class="hero " data-show="peer" aria-label="Overall state">
+  <span class="tile  lg" aria-hidden="true"><b>5</b><small>of 6</small></span>
+  <div><h2>Almost live: 5 of 6 done</h2><p>Everything on this server is ready. Next: connect the first peer, at stop 6.</p></div>
+</section>
+    
 <section class="hero " data-show="mid" aria-label="Overall state">
   <span class="tile  lg" aria-hidden="true"><b>3</b><small>of 6</small></span>
   <div><h2>Setting up: 3 of 6 done</h2><p>Not live yet. Next: add the first admin, at stop 5.</p></div>
@@ -1435,16 +1546,14 @@ code.nw {
   <div><h2>Live, but card holds are refused</h2><p>The scheduled job stopped 12 minutes ago. See stop 4.</p></div>
 </section>
     <ol class="lane" data-show="blank" aria-label="Setup checklist">
-<li class="stop">
-  <div class="top">
-    <span class="tile ok " aria-hidden="true"><b>6</b><small>of 6</small></span>
-    <div class="what">
-      <p class="n row between"><span>1 · ENVIRONMENT</span><span class="state ok">Done</span></p>
-      <h3>Environment complete</h3>
-      <p>All six live-mode settings are present and well formed. This page only ever shows their names, never their values.</p>
-    </div>
-  </div>
-  
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>6</b><small>of 6</small></span>
+      <span class="what"><span class="n row between"><span>1 · ENVIRONMENT</span><span class="state ok">Done</span></span><span class="h3">Environment complete</span></span>
+    </summary>
+    <p class="more">All six live-mode settings are present and well formed. This page only ever shows their names, never their values.</p>
+  </details>
 </li>
 <li class="stop next">
   <div class="top">
@@ -1456,12 +1565,12 @@ code.nw {
     </div>
   </div>
   <div class="fix">
-      <p class="label">Fix</p>
-      <ol class="steps">
-        <li><p>From your machine, in <code>server/</code>, with <code>SUPABASE_DB_URL</code> in <code>.env.local</code>:</p><div class="copy"><pre aria-label="Command" tabindex="0">npm run db:migrate</pre><button type="button" data-copy>Copy</button></div></li>
-        <li><p>No database URL? Run the 13 files in <code>supabase/migrations</code> in the SQL editor, in file-name order.</p></li>
-        <li><p>Come back here. This page counts the applied migrations each time it opens.</p><p><a class="btn sm ghost" href="#mid" data-go="mid"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 0-14.5-4L4 8.500M4 4v4.500h4.500M4 13a8 8 0 0 0 14.5 4L20 15.500M20 20v-4.500h-4.5"/></svg>Check again</a></p></li>
-      </ol></div>
+    <p class="label">Fix</p>
+    <ol class="steps">
+      <li><p>From your machine, in <code>server/</code>, with <code>SUPABASE_DB_URL</code> in <code>.env.local</code>:</p><div class="copy"><pre aria-label="Command" tabindex="0">npm run db:migrate</pre><button type="button" data-copy>Copy</button></div></li>
+      <li><p>No database URL? Run the 13 files in <code>supabase/migrations</code> in the SQL editor, in file-name order.</p></li>
+      <li><p>Come back here. This page counts the applied migrations each time it opens.</p><p><a class="btn sm ghost" href="#webhook" data-go="webhook"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 0-14.5-4L4 8.500M4 4v4.500h4.500M4 13a8 8 0 0 0 14.5 4L20 15.500M20 20v-4.500h-4.5"/></svg>Check again</a></p></li>
+    </ol></div>
 </li>
 <li class="stop">
   <div class="top">
@@ -1507,80 +1616,71 @@ code.nw {
   </div>
   
 </li></ol>
-    <ol class="lane" data-show="mid" aria-label="Setup checklist">
-<li class="stop">
-  <div class="top">
-    <span class="tile ok " aria-hidden="true"><b>6</b><small>of 6</small></span>
-    <div class="what">
-      <p class="n row between"><span>1 · ENVIRONMENT</span><span class="state ok">Done</span></p>
-      <h3>Environment complete</h3>
-      <p>All six live-mode settings are present and well formed. This page only ever shows their names, never their values.</p>
-    </div>
-  </div>
-  
-</li>
-<li class="stop">
-  <div class="top">
-    <span class="tile ok " aria-hidden="true"><b>13</b><small>of 13</small></span>
-    <div class="what">
-      <p class="n row between"><span>2 · DATABASE</span><span class="state ok">Done</span></p>
-      <h3>Database migrated</h3>
-      <p>13 of 13 migrations applied. Newest: <code>202611160002_peer_rev</code>.</p>
-    </div>
-  </div>
-  
-</li>
-<li class="stop">
-  <div class="top">
-    <span class="tile ok " aria-hidden="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12.5 4.5 4.500L19 7.5"/></svg><small>2 min</small></span>
-    <div class="what">
-      <p class="n row between"><span>3 · PAYMENTS WEBHOOK</span><span class="state ok">Done</span></p>
-      <h3>Payments webhook verified</h3>
-      <p>The last signed event from the payment provider arrived 2 minutes ago and its signature matched (<code>payment_intent.succeeded</code>, test mode).</p>
-    </div>
-  </div>
-  
-</li>
-<li class="stop">
-  <div class="top">
-    <span class="tile todo " aria-hidden="true"><b>24</b><small>hours</small></span>
-    <div class="what">
-      <p class="n row between"><span>4 · SCHEDULED JOB</span><span class="state todo">Needs you</span></p>
-      <h3>The scheduled job runs once a day</h3>
-      <p>Last run: today, 04:00. That is enough to pull locations, but not for payments.</p>
-    </div>
-  </div>
-  <div class="fix">
-      <div class="msg limit" role="note">
-        <p class="t"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 9v4.500M12 17h.01"/><path d="M10.3 3.9 2.4 17.500A2 2 0 0 0 4.1 20.500h15.800a2 2 0 0 0 1.7-3L13.7 3.900a2 2 0 0 0-3.4 0z"/></svg><span>Free hosting limit: drivers cannot start a paid charge on this schedule.</span></p>
-        <p>A card hold is refused when the payment sweep is older than 5 minutes. Free plans on most hosts run scheduled jobs once a day at most, so holds are refused nearly all day.</p>
-      </div>
-      <p class="label">Fix: run it every minute</p>
-      <ol class="steps">
-        <li><p>On a paid hosting plan: set the schedule in <code>vercel.json</code> to <code class="nw">* * * * *</code> and redeploy.</p></li>
-        <li><p>Or keep free hosting and call the job from any scheduler, every minute:</p><div class="copy"><pre aria-label="Request" tabindex="0">GET https://charge.example.com/api/cron/ocpi-sync
-Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>Copy</button></div></li>
-      </ol></div>
-</li>
+    <ol class="lane" data-show="env" aria-label="Setup checklist">
 <li class="stop next">
   <div class="top">
-    <span class="tile todo " aria-hidden="true"><b>0</b><small>admins</small></span>
+    <span class="tile todo " aria-hidden="true"><b>4</b><small>of 6</small></span>
     <div class="what">
-      <p class="n row between"><span>5 · FIRST ADMIN</span><span class="state todo">Needs you</span></p>
-      <h3>No admin exists yet</h3>
-      <p>Nobody can sign in until one does. The first admin is added by hand, once, in this order.</p>
+      <p class="n row between"><span>1 · ENVIRONMENT</span><span class="state todo">Needs you</span></p>
+      <h3>Two settings need you</h3>
+      <p>Until all six are right, this server runs in demo mode with sample data and stores nothing. Names only are shown here, never values.</p>
     </div>
   </div>
   <div class="fix">
-      <p class="label">Fix</p>
-      <ol class="steps">
-        <li class="done"><p>Ask for a sign-in code with your email. This creates your user. Done for <strong>ana@example.com</strong>, 4 minutes ago.</p></li>
-        <li><p>Run this once in your database's SQL editor:</p><div class="copy"><pre aria-label="SQL statement" tabindex="0">insert into public.emsp_admins (user_id, role)
-select id, 'admin' from auth.users
-where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-copy>Copy</button></div></li>
-        <li><p>Sign in with the code from the email. If the code has expired by then, ask for a new one.</p><p><a class="btn sm" href="sign-in.html#first">Go to sign-in <svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></p></li>
-      </ol>
-      <p class="small muted">Used a different address? Ask for a code with it on the sign-in page and the statement here follows.</p></div>
+    <ul class="found">
+      <li><span class="state bad">Missing</span><span><code>OCPI_TOKEN_ENCRYPTION_KEY</code> is not set.</span></li>
+      <li><span class="state todo">Malformed</span><span><code>PUBLIC_BASE_URL</code> must be an <code>https://</code> origin.</span></li>
+    </ul>
+    <p class="label">Fix</p>
+    <ol class="steps">
+      <li><p>Make the key on your machine. Keep it: losing or changing it later locks out every stored peer token.</p><div class="copy"><pre aria-label="Command" tabindex="0">openssl rand -base64 32</pre><button type="button" data-copy>Copy</button></div></li>
+      <li><p>In your hosting project's environment variables, set <code>OCPI_TOKEN_ENCRYPTION_KEY</code> to that key, and <code>PUBLIC_BASE_URL</code> to this deployment's public address:</p><div class="copy"><pre aria-label="Public address" tabindex="0">https://charge.example.com</pre><button type="button" data-copy>Copy</button></div></li>
+      <li><p>Redeploy. A changed variable only reaches a new deployment.</p><p><a class="btn sm ghost" href="#blank" data-go="blank"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 0-14.5-4L4 8.500M4 4v4.500h4.500M4 13a8 8 0 0 0 14.5 4L20 15.500M20 20v-4.500h-4.5"/></svg>Check again</a></p></li>
+    </ol></div>
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile off " aria-hidden="true"><b>–</b></span>
+    <div class="what">
+      <p class="n row between"><span>2 · DATABASE</span><span class="state off">Waiting</span></p>
+      <h3>Not checked yet</h3>
+      <p>Waits for the environment.</p>
+    </div>
+  </div>
+  
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile off " aria-hidden="true"><b>–</b></span>
+    <div class="what">
+      <p class="n row between"><span>3 · PAYMENTS WEBHOOK</span><span class="state off">Waiting</span></p>
+      <h3>Payments webhook not checked yet</h3>
+      <p>Waits for the database.</p>
+    </div>
+  </div>
+  
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile off " aria-hidden="true"><b>–</b></span>
+    <div class="what">
+      <p class="n row between"><span>4 · SCHEDULED JOB</span><span class="state off">Waiting</span></p>
+      <h3>Scheduled job not checked yet</h3>
+      <p>Waits for the database.</p>
+    </div>
+  </div>
+  
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile off " aria-hidden="true"><b>–</b></span>
+    <div class="what">
+      <p class="n row between"><span>5 · FIRST ADMIN</span><span class="state off">Waiting</span></p>
+      <h3>No admin yet</h3>
+      <p>Waits for the database.</p>
+    </div>
+  </div>
+  
 </li>
 <li class="stop">
   <div class="top">
@@ -1592,6 +1692,250 @@ where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-co
     </div>
   </div>
   
+</li></ol>
+    <ol class="lane" data-show="webhook" aria-label="Setup checklist">
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>6</b><small>of 6</small></span>
+      <span class="what"><span class="n row between"><span>1 · ENVIRONMENT</span><span class="state ok">Done</span></span><span class="h3">Environment complete</span></span>
+    </summary>
+    <p class="more">All six live-mode settings are present and well formed. This page only ever shows their names, never their values.</p>
+  </details>
+</li>
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>13</b><small>of 13</small></span>
+      <span class="what"><span class="n row between"><span>2 · DATABASE</span><span class="state ok">Done</span></span><span class="h3">Database migrated</span></span>
+    </summary>
+    <p class="more">13 of 13 migrations applied. Newest: <code>202611160002_peer_rev</code>.</p>
+  </details>
+</li>
+<li class="stop next">
+  <div class="top">
+    <span class="tile todo " aria-hidden="true"><b>0</b><small>events</small></span>
+    <div class="what">
+      <p class="n row between"><span>3 · PAYMENTS WEBHOOK</span><span class="state todo">Needs you</span></p>
+      <h3>No signed payment event has arrived</h3>
+      <p>The payment provider has not reached this server yet, so a hold, capture or refund it reports would go unnoticed here. Do not take card payments until one signed event has arrived.</p>
+    </div>
+  </div>
+  <div class="fix">
+    <p class="label">Fix</p>
+    <ol class="steps">
+      <li><p>In the Stripe Dashboard of the network's account, add a webhook endpoint with this address:</p><div class="copy"><pre aria-label="Webhook endpoint address" tabindex="0">https://charge.example.com<wbr>/api/webhooks/stripe</pre><button type="button" data-copy>Copy</button></div></li>
+      <li><p>Subscribe it to these 11 events:</p><div class="copy"><pre aria-label="Events" tabindex="0">payment_intent.<wbr>amount_capturable_updated
+payment_intent.<wbr>canceled
+payment_intent.<wbr>succeeded
+payment_intent.<wbr>payment_failed
+charge.<wbr>refunded
+charge.<wbr>expired
+charge.<wbr>dispute.<wbr>created
+refund.<wbr>created
+refund.<wbr>updated
+refund.<wbr>failed
+setup_intent.<wbr>succeeded</pre><button type="button" data-copy>Copy</button></div></li>
+      <li><p>Copy the endpoint's signing secret (it starts with <code>whsec_</code>) into <code>STRIPE_WEBHOOK_SECRET</code> and redeploy.</p></li>
+      <li><p>Send a test event from the Dashboard, then check here.</p><p><a class="btn sm ghost" href="#mid" data-go="mid"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 11a8 8 0 0 0-14.5-4L4 8.500M4 4v4.500h4.500M4 13a8 8 0 0 0 14.5 4L20 15.500M20 20v-4.500h-4.5"/></svg>Check again</a></p></li>
+    </ol>
+    <p class="small muted">Events arrive but are refused? Then the signing secret is from another endpoint or from the other mode (test or live). Copy it again from this endpoint.</p></div>
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile todo " aria-hidden="true"><b>24</b><small>hours</small></span>
+    <div class="what">
+      <p class="n row between"><span>4 · SCHEDULED JOB</span><span class="state todo">Needs you</span></p>
+      <h3>The scheduled job runs once a day</h3>
+      <p>Last run: today, 04:00. That is enough to pull locations, but not for payments.</p>
+    </div>
+  </div>
+  <div class="fix">
+    <div class="msg limit" role="note">
+      <p class="t"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 9v4.500M12 17h.01"/><path d="M10.3 3.9 2.4 17.500A2 2 0 0 0 4.1 20.500h15.800a2 2 0 0 0 1.7-3L13.7 3.900a2 2 0 0 0-3.4 0z"/></svg><span>Free hosting limit: drivers cannot start a paid charge on this schedule.</span></p>
+      <p>A card hold is refused when the payment sweep is older than 5 minutes. Free plans on most hosts run scheduled jobs once a day at most, so holds are refused nearly all day.</p>
+    </div><details class="later"><summary>Show the fix</summary><div class="in">
+    <p class="label">Fix: run it every minute</p>
+    <ol class="steps">
+      <li><p>On a paid hosting plan: set the schedule in <code>vercel.json</code> to <code class="nw">* * * * *</code> and redeploy.</p></li>
+      <li><p>Or keep free hosting and call the job from any scheduler, every minute:</p><div class="copy"><pre aria-label="Request" tabindex="0">GET https://charge.example.com/api/cron/ocpi-sync
+Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>Copy</button></div></li>
+    </ol></div></details></div>
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile todo " aria-hidden="true"><b>0</b><small>admins</small></span>
+    <div class="what">
+      <p class="n row between"><span>5 · FIRST ADMIN</span><span class="state todo">Needs you</span></p>
+      <h3>No admin exists yet</h3>
+      <p>Nobody can sign in until one does. The first admin is added by hand, once, in this order.</p>
+    </div>
+  </div>
+  <div class="fix"><details class="later"><summary>Show the fix</summary><div class="in">
+    <p class="label">Fix</p>
+    <ol class="steps">
+      <li class="done"><p>Ask for a sign-in code with your email. This creates your user. Done for <strong>ana@example.com</strong>, 4 minutes ago.</p></li>
+      <li><p>Run this once in your database's SQL editor:</p><div class="copy"><pre aria-label="SQL statement" tabindex="0">insert into public.emsp_admins (user_id, role)
+select id, 'admin' from auth.users
+where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-copy>Copy</button></div></li>
+      <li><p>Sign in with the code from the email. If the code has expired by then, ask for a new one.</p><p><a class="btn sm" href="sign-in.html#first">Go to sign-in <svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></p></li>
+    </ol>
+    <p class="small muted">Used a different address? Ask for a code with it on the sign-in page and the statement here follows.</p></div></details></div>
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile off " aria-hidden="true"><b>–</b></span>
+    <div class="what">
+      <p class="n row between"><span>6 · FIRST PEER</span><span class="state off">Waiting</span></p>
+      <h3>No peer yet</h3>
+      <p>Waits for the first admin.</p>
+    </div>
+  </div>
+  
+</li></ol>
+    <ol class="lane" data-show="mid" aria-label="Setup checklist">
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>6</b><small>of 6</small></span>
+      <span class="what"><span class="n row between"><span>1 · ENVIRONMENT</span><span class="state ok">Done</span></span><span class="h3">Environment complete</span></span>
+    </summary>
+    <p class="more">All six live-mode settings are present and well formed. This page only ever shows their names, never their values.</p>
+  </details>
+</li>
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>13</b><small>of 13</small></span>
+      <span class="what"><span class="n row between"><span>2 · DATABASE</span><span class="state ok">Done</span></span><span class="h3">Database migrated</span></span>
+    </summary>
+    <p class="more">13 of 13 migrations applied. Newest: <code>202611160002_peer_rev</code>.</p>
+  </details>
+</li>
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12.5 4.5 4.500L19 7.5"/></svg><small>2 min</small></span>
+      <span class="what"><span class="n row between"><span>3 · PAYMENTS WEBHOOK</span><span class="state ok">Done</span></span><span class="h3">Payments webhook verified</span></span>
+    </summary>
+    <p class="more">The last signed event from the payment provider arrived 2 minutes ago and its signature matched (<code>payment_intent.succeeded</code>, test mode).</p>
+  </details>
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile todo " aria-hidden="true"><b>24</b><small>hours</small></span>
+    <div class="what">
+      <p class="n row between"><span>4 · SCHEDULED JOB</span><span class="state todo">Needs you</span></p>
+      <h3>The scheduled job runs once a day</h3>
+      <p>Last run: today, 04:00. That is enough to pull locations, but not for payments.</p>
+    </div>
+  </div>
+  <div class="fix">
+    <div class="msg limit" role="note">
+      <p class="t"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 9v4.500M12 17h.01"/><path d="M10.3 3.9 2.4 17.500A2 2 0 0 0 4.1 20.500h15.800a2 2 0 0 0 1.7-3L13.7 3.900a2 2 0 0 0-3.4 0z"/></svg><span>Free hosting limit: drivers cannot start a paid charge on this schedule.</span></p>
+      <p>A card hold is refused when the payment sweep is older than 5 minutes. Free plans on most hosts run scheduled jobs once a day at most, so holds are refused nearly all day.</p>
+    </div><details class="later"><summary>Show the fix</summary><div class="in">
+    <p class="label">Fix: run it every minute</p>
+    <ol class="steps">
+      <li><p>On a paid hosting plan: set the schedule in <code>vercel.json</code> to <code class="nw">* * * * *</code> and redeploy.</p></li>
+      <li><p>Or keep free hosting and call the job from any scheduler, every minute:</p><div class="copy"><pre aria-label="Request" tabindex="0">GET https://charge.example.com/api/cron/ocpi-sync
+Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>Copy</button></div></li>
+    </ol></div></details></div>
+</li>
+<li class="stop next">
+  <div class="top">
+    <span class="tile todo " aria-hidden="true"><b>0</b><small>admins</small></span>
+    <div class="what">
+      <p class="n row between"><span>5 · FIRST ADMIN</span><span class="state todo">Needs you</span></p>
+      <h3>No admin exists yet</h3>
+      <p>Nobody can sign in until one does. The first admin is added by hand, once, in this order.</p>
+    </div>
+  </div>
+  <div class="fix">
+    <p class="label">Fix</p>
+    <ol class="steps">
+      <li class="done"><p>Ask for a sign-in code with your email. This creates your user. Done for <strong>ana@example.com</strong>, 4 minutes ago.</p></li>
+      <li><p>Run this once in your database's SQL editor:</p><div class="copy"><pre aria-label="SQL statement" tabindex="0">insert into public.emsp_admins (user_id, role)
+select id, 'admin' from auth.users
+where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-copy>Copy</button></div></li>
+      <li><p>Sign in with the code from the email. If the code has expired by then, ask for a new one.</p><p><a class="btn sm" href="sign-in.html#first">Go to sign-in <svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></p></li>
+    </ol>
+    <p class="small muted">Used a different address? Ask for a code with it on the sign-in page and the statement here follows.</p></div>
+</li>
+<li class="stop">
+  <div class="top">
+    <span class="tile off " aria-hidden="true"><b>–</b></span>
+    <div class="what">
+      <p class="n row between"><span>6 · FIRST PEER</span><span class="state off">Waiting</span></p>
+      <h3>No peer yet</h3>
+      <p>Waits for the first admin.</p>
+    </div>
+  </div>
+  
+</li></ol>
+    <ol class="lane" data-show="peer" aria-label="Setup checklist">
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>6</b><small>of 6</small></span>
+      <span class="what"><span class="n row between"><span>1 · ENVIRONMENT</span><span class="state ok">Done</span></span><span class="h3">Environment complete</span></span>
+    </summary>
+    <p class="more">All six live-mode settings are present and well formed. This page only ever shows their names, never their values.</p>
+  </details>
+</li>
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>13</b><small>of 13</small></span>
+      <span class="what"><span class="n row between"><span>2 · DATABASE</span><span class="state ok">Done</span></span><span class="h3">Database migrated</span></span>
+    </summary>
+    <p class="more">13 of 13 migrations applied. Newest: <code>202611160002_peer_rev</code>.</p>
+  </details>
+</li>
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="m5 12.5 4.5 4.500L19 7.5"/></svg><small>40 s</small></span>
+      <span class="what"><span class="n row between"><span>3 · PAYMENTS WEBHOOK</span><span class="state ok">Done</span></span><span class="h3">Payments webhook verified</span></span>
+    </summary>
+    <p class="more">The last signed event arrived 40 seconds ago and its signature matched (<code>setup_intent.succeeded</code>, live mode).</p>
+  </details>
+</li>
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>1</b><small>min</small></span>
+      <span class="what"><span class="n row between"><span>4 · SCHEDULED JOB</span><span class="state ok">Done</span></span><span class="h3">The scheduled job runs every minute</span></span>
+    </summary>
+    <p class="more">Last run 25 seconds ago. The payment sweep is 25 seconds old, so card holds are accepted.</p>
+  </details>
+</li>
+<li class="stop folded">
+  <details>
+    <summary class="top">
+      <span class="tile ok sm" aria-hidden="true"><b>1</b><small>admin</small></span>
+      <span class="what"><span class="n row between"><span>5 · FIRST ADMIN</span><span class="state ok">Done</span></span><span class="h3">First admin added</span></span>
+    </summary>
+    <p class="more">ana@example.com (admin), signed in now.</p>
+  </details>
+</li>
+<li class="stop next">
+  <div class="top">
+    <span class="tile todo " aria-hidden="true"><b>0</b><small>peers</small></span>
+    <div class="what">
+      <p class="n row between"><span>6 · FIRST PEER</span><span class="state todo">Needs you</span></p>
+      <h3>No peer yet</h3>
+      <p>A peer is a CPO or a roaming hub you exchange data with. Until one is connected, the drivers' map is empty and nobody can charge.</p>
+    </div>
+  </div>
+  <div class="fix">
+    <p class="label">Fix</p>
+    <ol class="steps">
+      <li><p>Ask the CPO or the hub for two things: its <strong>versions URL</strong> and a <strong>one-time token</strong>. A hub shows both in its portal.</p></li>
+      <li><p>Connect. The form first asks who gave you the token, a hub or a CPO, and uses the right words for each.</p><p><a class="btn sm" href="connect.html#choose">Connect a peer <svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14M13 6l6 6-6 6"/></svg></a></p></li>
+      <li><p>For a hub, accept the parties you trade with afterwards. This stop turns to Done when the first peer shows as Registered.</p></li>
+    </ol>
+    <p class="small muted">A CPO that wants to register with you instead? <a href="connect.html#choose">Connect</a> also makes a one-time token to send to them.</p></div>
 </li></ol>
     <ol class="lane" data-show="health" aria-label="Setup checklist">
 <li class="stop">
@@ -1742,7 +2086,7 @@ Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>C
     <h3>This deployment</h3>
     <dl class="facts small" style="margin-top:0.75rem">
       <dt>Mode</dt>
-      <dd><span data-show="blank mid"><span class="state todo">Setting up</span></span><span data-show="health late"><span class="state ok">Live</span></span></dd>
+      <dd><span data-show="env"><span class="state off">Demo</span></span><span data-show="blank webhook mid peer"><span class="state todo">Setting up</span></span><span data-show="health late"><span class="state ok">Live</span></span></dd>
       <dt>Role</dt><dd>eMSP, OCPI 2.2.1</dd>
       <dt>Party</dt><dd><code>NL-KLO</code></dd>
       <dt>Address</dt><dd><code>charge.example.com</code></dd>
@@ -1751,8 +2095,9 @@ Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>C
   <section class="card">
     <h3>Limits here</h3>
     <ul class="stack tight small" style="margin-top:0.75rem">
-      <li data-show="blank mid"><strong>Scheduled job: once a day.</strong> Card holds need it every minute.</li>
-      <li data-show="health"><strong>Scheduled job: every minute.</strong> Holds are refused if it is more than 5 minutes late.</li>
+      <li data-show="env blank"><strong>Scheduled job: not checked yet.</strong> Card holds need it every minute.</li>
+      <li data-show="webhook mid"><strong>Scheduled job: once a day.</strong> Card holds need it every minute.</li>
+      <li data-show="peer health"><strong>Scheduled job: every minute.</strong> Holds are refused if it is more than 5 minutes late.</li>
       <li data-show="late"><strong>Scheduled job: 12 minutes late.</strong> Holds are refused until it runs.</li>
       <li><strong>Sign-in codes:</strong> 5 per email address per hour.</li>
       <li><strong>Admin sessions:</strong> one hour, then sign in again.</li>
@@ -1762,7 +2107,7 @@ Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>C
 </aside>
 </div></div></main>
   <nav class="tabs" aria-label="Admin, phone">
-    <a href="setup.html#health" aria-current="page"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg><span class="count" data-show="mid">3<span class="sr"> to do</span></span><span class="count" data-show="blank">5<span class="sr"> to do</span></span><span class="count" data-show="late">1<span class="sr"> to do</span></span></span><span data-show="mid blank">Setup</span><span data-hide="mid blank">Health</span></a>
+    <a href="setup.html#health" aria-current="page"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg><span class="count" data-show="env">6<span class="sr"> to do</span></span><span class="count" data-show="blank">5<span class="sr"> to do</span></span><span class="count" data-show="webhook">4<span class="sr"> to do</span></span><span class="count" data-show="mid">3<span class="sr"> to do</span></span><span class="count" data-show="peer">1<span class="sr"> to do</span></span><span class="count" data-show="late">1<span class="sr"> to do</span></span></span><span data-show="env blank webhook mid peer">Setup</span><span data-hide="env blank webhook mid peer">Health</span></a>
     <a href="peers.html"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 6.5 17M12 11.5l5.5 5.5"/></svg></span>Peers</a>
     <a href="sessions.html"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>Sessions</a>
     <a href="#" aria-disabled="true" title="Not in this mockup"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2H5a2 2 0 0 1-2-2z"/><path d="M16.5 14h.01"/></svg></span>Money</a>
@@ -1832,7 +2177,9 @@ Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>C
   document.addEventListener("click", (e) => {
     const t = e.target instanceof Element ? e.target : null;
     if (!t) return;
-    const go = t.closest("[data-go]");
+    // Only a button or a link moves to another state. A form says where its submit
+    // leads with data-submit-go, so a click or tap in one of its fields changes nothing.
+    const go = t.closest("a[data-go], button[data-go]");
     if (go) {
       e.preventDefault();
       location.hash = go.dataset.go;
@@ -1857,8 +2204,12 @@ Authorization: Bearer &lt;CRON_SECRET&gt;</pre><button type="button" data-copy>C
   for (const f of document.querySelectorAll("form"))
     f.addEventListener("submit", (e) => {
       e.preventDefault();
-      if (f.dataset.go) location.hash = f.dataset.go;
+      if (f.dataset.submitGo) location.hash = f.dataset.submitGo;
     });
+
+  // A fix that waits behind "Show the fix" on a phone is open where there is room.
+  if (matchMedia("(min-width: 60rem)").matches)
+    for (const d of document.querySelectorAll("details.later")) d.open = true;
 
   // A wait that counts down, as the real page would from the server's Retry-After.
   for (const el of document.querySelectorAll("[data-countdown]")) {

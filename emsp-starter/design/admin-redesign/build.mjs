@@ -63,10 +63,22 @@ ${body}
 `;
 }
 
+// Only buttons and links may move a screen to another state: a data-go on a form (or
+// on anything a field sits in) would switch states on a tap in the field.
+function onlyControlsGo(file, html) {
+  for (const [tag] of html.matchAll(/<[a-z][^>]*\sdata-go=[^>]*>/g))
+    if (!/^<(a|button)\s/.test(tag))
+      throw new Error(`${file}: data-go is only for <a> and <button>: ${tag}`);
+  return html;
+}
+
 for (const s of screens)
   writeFileSync(
     here(`${s.file}.html`),
-    page({ ...s, body: shell({ ...s, states: s.states }) }),
+    onlyControlsGo(
+      s.file,
+      page({ ...s, body: shell({ ...s, states: s.states }) }),
+    ),
   );
 writeFileSync(here("index.html"), page(index(screens)));
 console.log(`built ${screens.length + 1} files`);

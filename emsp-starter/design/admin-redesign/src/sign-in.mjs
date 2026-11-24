@@ -51,25 +51,26 @@ export const signIn = {
     "not-admin",
     "secret",
   ],
+  setupCount: { first: 3 },
   body: `
 <div style="max-width:30rem;margin:0 auto" class="stack">
 
   <div data-show="email" class="stack">
     ${head(["Admin"], "Sign in", "No password. We email you a 6-digit code.")}
-    <form class="card form" data-go="code">
+    <form class="card form" data-submit-go="code">
       <div class="field">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" autocomplete="email" value="ana@example.com" required>
       </div>
       <button class="btn wide" type="submit">Email me a code</button>
     </form>
-    <p class="small muted">Only people on the admin list can sign in. Nobody on it yet? <a href="setup.html">Setup, stop 5</a> shows how to add the first admin.</p>
+    <p class="small muted">Only people on the admin list can sign in. Nobody on it yet? <a href="setup.html#mid">Setup, stop 5</a> shows how to add the first admin.</p>
     <p class="small muted">This deployment also has an admin secret set, for demos: <a href="#secret">use the admin secret instead</a>.</p>
   </div>
 
   <div data-show="code" class="stack">
     ${head(["Admin", "Sign in"], "Type the code from the email")}
-    <form class="card form" data-go="signed-in">
+    <form class="card form" data-submit-go="signed-in">
       ${codeField("")}
       <button class="btn wide" type="submit">Sign in</button>
       <div class="row between small">
@@ -113,7 +114,7 @@ export const signIn = {
         <li><p>Run this once in your database's SQL editor:</p>${copy(SQL, "SQL statement")}</li>
         <li><p>Then type the code from the email here.</p></li>
       </ol>
-      <form class="form" data-go="signed-in">
+      <form class="form" data-submit-go="signed-in">
         ${codeField("-first")}
         <button class="btn wide" type="submit">Sign in</button>
       </form>
@@ -130,7 +131,7 @@ export const signIn = {
 
   <div data-show="secret" class="stack">
     ${head(["Admin", "Sign in"], "Sign in with the admin secret", "For demo deployments, and for the time before the first admin exists.")}
-    <form class="card form" data-go="signed-in">
+    <form class="card form" data-submit-go="signed-in">
       <div class="field">
         <label for="secret">Admin secret</label>
         <input id="secret" name="secret" type="password" autocomplete="off" aria-describedby="secret-hint">

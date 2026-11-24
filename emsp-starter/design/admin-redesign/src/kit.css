@@ -686,6 +686,88 @@ main:focus {
     margin-left: 4.625rem;
   }
 }
+/* A done stop on day one: one line, opened for its detail. */
+.stop.folded {
+  padding: 0;
+}
+.stop.folded summary {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.625rem 1rem;
+  border-radius: var(--r-lg);
+  list-style: none;
+  cursor: pointer;
+}
+.stop.folded summary::-webkit-details-marker {
+  display: none;
+}
+.stop.folded .what {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.125rem;
+}
+.stop.folded .h3 {
+  font-family: var(--f-heading);
+  font-weight: 800;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+.stop.folded .more {
+  padding: 0 1rem 0.875rem 4.625rem;
+  color: var(--c-muted);
+  font-size: 0.9375rem;
+}
+.tile.sm {
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: 0 0.5rem;
+}
+.tile.sm b {
+  font-size: 1.0625rem;
+}
+.tile.sm small {
+  margin-top: 0.125rem;
+  font-size: 0.625rem;
+}
+.tile.sm svg.i {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+/* A stop that needs you, but not first: its fix waits behind one line. */
+.fix .later > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.75rem;
+  color: var(--c-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+@media (min-width: 60rem) {
+  /* Open on a wide screen (kit.js), so there is nothing to show or hide. */
+  .fix .later > summary {
+    display: none;
+  }
+}
+.fix .later .in {
+  margin-top: 0.25rem;
+}
+.fix .later .in > * + * {
+  margin-top: 0.625rem;
+}
+/* What a check found, one line per thing. */
+.found {
+  display: grid;
+  gap: 0.5rem;
+}
+.found li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+}
 .fix > * + * {
   margin-top: 0.625rem;
 }
@@ -749,6 +831,9 @@ main:focus {
   min-width: 0;
   margin: 0;
   padding: 0.75rem 0.875rem;
+  /* Long lines wrap inside the box, so a phone shows all of what will be copied. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow-x: auto;
   font-family: var(--f-mono);
   font-weight: 500;
@@ -770,6 +855,17 @@ main:focus {
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
+}
+/* On a phone the button sits under the text, so the text gets the full width. */
+@media (max-width: 39.99rem) {
+  .copy {
+    flex-direction: column;
+  }
+  .copy button {
+    min-height: 2.75rem;
+    border-left: 0;
+    border-top: 1px solid var(--c-border);
+  }
 }
 .copy mark {
   padding: 0.0625rem 0.1875rem;

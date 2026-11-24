@@ -88,7 +88,9 @@ const counts = (setupCount) =>
     .join("");
 /** "Setup" until the six checks pass, "Health" from then on. */
 const setupLabel = (setupCount) => {
-  const early = ["mid", "blank"].filter((s) => s in setupCount).join(" ");
+  const early = ["env", "blank", "webhook", "mid", "peer", "first"]
+    .filter((s) => s in setupCount)
+    .join(" ");
   return early
     ? `<span data-show="${early}">Setup</span><span data-hide="${early}">Health</span>`
     : "Health";

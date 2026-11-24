@@ -53,7 +53,9 @@
   document.addEventListener("click", (e) => {
     const t = e.target instanceof Element ? e.target : null;
     if (!t) return;
-    const go = t.closest("[data-go]");
+    // Only a button or a link moves to another state. A form says where its submit
+    // leads with data-submit-go, so a click or tap in one of its fields changes nothing.
+    const go = t.closest("a[data-go], button[data-go]");
     if (go) {
       e.preventDefault();
       location.hash = go.dataset.go;
@@ -78,8 +80,12 @@
   for (const f of document.querySelectorAll("form"))
     f.addEventListener("submit", (e) => {
       e.preventDefault();
-      if (f.dataset.go) location.hash = f.dataset.go;
+      if (f.dataset.submitGo) location.hash = f.dataset.submitGo;
     });
+
+  // A fix that waits behind "Show the fix" on a phone is open where there is room.
+  if (matchMedia("(min-width: 60rem)").matches)
+    for (const d of document.querySelectorAll("details.later")) d.open = true;
 
   // A wait that counts down, as the real page would from the server's Retry-After.
   for (const el of document.querySelectorAll("[data-countdown]")) {

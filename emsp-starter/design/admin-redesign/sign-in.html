@@ -708,6 +708,88 @@ main:focus {
     margin-left: 4.625rem;
   }
 }
+/* A done stop on day one: one line, opened for its detail. */
+.stop.folded {
+  padding: 0;
+}
+.stop.folded summary {
+  display: flex;
+  align-items: center;
+  gap: 0.875rem;
+  padding: 0.625rem 1rem;
+  border-radius: var(--r-lg);
+  list-style: none;
+  cursor: pointer;
+}
+.stop.folded summary::-webkit-details-marker {
+  display: none;
+}
+.stop.folded .what {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 0.125rem;
+}
+.stop.folded .h3 {
+  font-family: var(--f-heading);
+  font-weight: 800;
+  font-size: 1rem;
+  line-height: 1.25;
+}
+.stop.folded .more {
+  padding: 0 1rem 0.875rem 4.625rem;
+  color: var(--c-muted);
+  font-size: 0.9375rem;
+}
+.tile.sm {
+  width: 2.75rem;
+  height: 2.75rem;
+  margin: 0 0.5rem;
+}
+.tile.sm b {
+  font-size: 1.0625rem;
+}
+.tile.sm small {
+  margin-top: 0.125rem;
+  font-size: 0.625rem;
+}
+.tile.sm svg.i {
+  width: 1.125rem;
+  height: 1.125rem;
+}
+/* A stop that needs you, but not first: its fix waits behind one line. */
+.fix .later > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  min-height: 2.75rem;
+  color: var(--c-primary);
+  font-weight: 600;
+  cursor: pointer;
+}
+@media (min-width: 60rem) {
+  /* Open on a wide screen (kit.js), so there is nothing to show or hide. */
+  .fix .later > summary {
+    display: none;
+  }
+}
+.fix .later .in {
+  margin-top: 0.25rem;
+}
+.fix .later .in > * + * {
+  margin-top: 0.625rem;
+}
+/* What a check found, one line per thing. */
+.found {
+  display: grid;
+  gap: 0.5rem;
+}
+.found li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.25rem 0.625rem;
+}
 .fix > * + * {
   margin-top: 0.625rem;
 }
@@ -771,6 +853,9 @@ main:focus {
   min-width: 0;
   margin: 0;
   padding: 0.75rem 0.875rem;
+  /* Long lines wrap inside the box, so a phone shows all of what will be copied. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   overflow-x: auto;
   font-family: var(--f-mono);
   font-weight: 500;
@@ -792,6 +877,17 @@ main:focus {
   font-size: 0.875rem;
   font-weight: 600;
   cursor: pointer;
+}
+/* On a phone the button sits under the text, so the text gets the full width. */
+@media (max-width: 39.99rem) {
+  .copy {
+    flex-direction: column;
+  }
+  .copy button {
+    min-height: 2.75rem;
+    border-left: 0;
+    border-top: 1px solid var(--c-border);
+  }
 }
 .copy mark {
   padding: 0.0625rem 0.1875rem;
@@ -1377,7 +1473,7 @@ code.nw {
   <header class="rail">
     <a class="logo" href="setup.html#health"><svg viewBox="0 0 48 48" aria-hidden="true" focusable="false"><g transform="rotate(-12 24 24)"><path fill="var(--c-primary)" fill-rule="evenodd" d="M24 2.5c-9.7 0-17.5 7.6-17.5 17.1 0 12.2 15.1 24.6 16.4 25.6a1.8 1.8 0 0 0 2.2 0c1.3-1 16.4-13.4 16.4-25.600C41.5 10.1 33.7 2.5 24 2.500ZM17.6 12.400a2.4 2.4 0 0 1 2.4 2.400v7.400a2.4 2.4 0 0 1-4.8 0v-7.400a2.4 2.4 0 0 1 2.4-2.400Zm12.8 0a2.4 2.4 0 0 1 2.4 2.400v7.400a2.4 2.4 0 0 1-4.8 0v-7.400a2.4 2.4 0 0 1 2.4-2.400Z"/></g><circle cx="40.5" cy="40.5" r="5" fill="var(--c-flare)"/></svg><span class="word">kilolane</span><span class="role">Admin</span></a>
     <nav aria-label="Admin">
-      <a href="setup.html#health"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg>Health</a>
+      <a href="setup.html#health"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg><span data-show="first">Setup</span><span data-hide="first">Health</span><span class="count" data-show="first">3<span class="sr"> to do</span></span></a>
       <p class="group">Network</p>
       <a href="peers.html"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 6.5 17M12 11.5l5.5 5.5"/></svg>Peers</a>
       <p class="group">Charging</p>
@@ -1406,14 +1502,14 @@ code.nw {
   </div>
   
 </div>
-    <form class="card form" data-go="code">
+    <form class="card form" data-submit-go="code">
       <div class="field">
         <label for="email">Email</label>
         <input id="email" name="email" type="email" autocomplete="email" value="ana@example.com" required>
       </div>
       <button class="btn wide" type="submit">Email me a code</button>
     </form>
-    <p class="small muted">Only people on the admin list can sign in. Nobody on it yet? <a href="setup.html">Setup, stop 5</a> shows how to add the first admin.</p>
+    <p class="small muted">Only people on the admin list can sign in. Nobody on it yet? <a href="setup.html#mid">Setup, stop 5</a> shows how to add the first admin.</p>
     <p class="small muted">This deployment also has an admin secret set, for demos: <a href="#secret">use the admin secret instead</a>.</p>
   </div>
 
@@ -1427,7 +1523,7 @@ code.nw {
   </div>
   
 </div>
-    <form class="card form" data-go="signed-in">
+    <form class="card form" data-submit-go="signed-in">
       
 <div class="field">
   <label for="code">6-digit code</label>
@@ -1517,7 +1613,7 @@ select id, 'admin' from auth.users
 where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-copy>Copy</button></div></li>
         <li><p>Then type the code from the email here.</p></li>
       </ol>
-      <form class="form" data-go="signed-in">
+      <form class="form" data-submit-go="signed-in">
         
 <div class="field">
   <label for="code-first">6-digit code</label>
@@ -1575,7 +1671,7 @@ where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-co
   </div>
   
 </div>
-    <form class="card form" data-go="signed-in">
+    <form class="card form" data-submit-go="signed-in">
       <div class="field">
         <label for="secret">Admin secret</label>
         <input id="secret" name="secret" type="password" autocomplete="off" aria-describedby="secret-hint">
@@ -1611,7 +1707,7 @@ where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-co
   </div>
 </div></div></main>
   <nav class="tabs" aria-label="Admin, phone">
-    <a href="setup.html#health"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg></span>Health</a>
+    <a href="setup.html#health"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 6h3M4 12h3M4 18h3M11 6h9M11 12h9M11 18h9"/></svg><span class="count" data-show="first">3<span class="sr"> to do</span></span></span><span data-show="first">Setup</span><span data-hide="first">Health</span></a>
     <a href="peers.html"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="5" r="2.5"/><circle cx="5" cy="19" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M12 7.5v4M12 11.5 6.5 17M12 11.5l5.5 5.5"/></svg></span>Peers</a>
     <a href="sessions.html"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M13 2 4 14h7l-1 8 9-12h-7z"/></svg></span>Sessions</a>
     <a href="#" aria-disabled="true" title="Not in this mockup"><span class="ic"><svg class="i" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M3 7a2 2 0 0 1 2-2h13v4"/><path d="M3 7v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V11a2 2 0 0 0-2-2H5a2 2 0 0 1-2-2z"/><path d="M16.5 14h.01"/></svg></span>Money</a>
@@ -1681,7 +1777,9 @@ where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-co
   document.addEventListener("click", (e) => {
     const t = e.target instanceof Element ? e.target : null;
     if (!t) return;
-    const go = t.closest("[data-go]");
+    // Only a button or a link moves to another state. A form says where its submit
+    // leads with data-submit-go, so a click or tap in one of its fields changes nothing.
+    const go = t.closest("a[data-go], button[data-go]");
     if (go) {
       e.preventDefault();
       location.hash = go.dataset.go;
@@ -1706,8 +1804,12 @@ where email = '<mark>ana@example.com</mark>';</pre><button type="button" data-co
   for (const f of document.querySelectorAll("form"))
     f.addEventListener("submit", (e) => {
       e.preventDefault();
-      if (f.dataset.go) location.hash = f.dataset.go;
+      if (f.dataset.submitGo) location.hash = f.dataset.submitGo;
     });
+
+  // A fix that waits behind "Show the fix" on a phone is open where there is room.
+  if (matchMedia("(min-width: 60rem)").matches)
+    for (const d of document.querySelectorAll("details.later")) d.open = true;
 
   // A wait that counts down, as the real page would from the server's Retry-After.
   for (const el of document.querySelectorAll("[data-countdown]")) {

@@ -95,7 +95,7 @@ const progress = (now, fail = false) => {
 };
 
 const hubForm = (retry) => `
-<form class="card form" data-go="hub-working">
+<form class="card form" data-submit-go="hub-working">
   <div class="field">
     <label for="name${retry}">Name</label>
     <input id="name${retry}" name="label" value="Example Roaming Hub" maxlength="100" required aria-describedby="name-h${retry}">
