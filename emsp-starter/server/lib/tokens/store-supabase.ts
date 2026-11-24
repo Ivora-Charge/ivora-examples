@@ -44,6 +44,8 @@ type PushRow = {
   attempts: number;
   last_error: string;
   next_attempt_at: string;
+  /** Absent before the 202611250001 migration. */
+  push_gen?: number | string;
 };
 
 /** Postgres returns `+00:00`; the rest of the server works with `Z` ISO strings. */
@@ -77,6 +79,7 @@ const push = (r: PushRow): PendingPush => ({
   attempts: r.attempts,
   lastError: r.last_error,
   nextAttemptAt: iso(r.next_attempt_at),
+  pushGen: Number(r.push_gen ?? 0),
 });
 
 const ORDER = "order=last_updated.asc,id.asc";
@@ -213,10 +216,11 @@ export class SupabaseTokenStore implements TokenStore {
     peerId: string,
     tokenId: string,
     pushedLastUpdated: string,
+    pushGen: number | null,
   ) {
     await this.rest(
       "DELETE",
-      `emsp_token_pushes?peer_id=${eq(peerId)}&token_id=${eq(tokenId)}&token_last_updated=lte.${enc(pushedLastUpdated)}`,
+      `emsp_token_pushes?peer_id=${eq(peerId)}&token_id=${eq(tokenId)}&token_last_updated=lte.${enc(pushedLastUpdated)}${pushGen === null ? "" : `&push_gen=lte.${Math.trunc(pushGen)}`}`,
       undefined,
       "return=minimal",
     );
@@ -236,14 +240,5 @@ export class SupabaseTokenStore implements TokenStore {
       `emsp_token_pushes?select=token_id&limit=${max}`,
     );
     return rows.length;
-  }
-
-  async oweActive(peerId: string, now: string) {
-    const [row] = await this.rest<{ owed: number | string }[]>(
-      "POST",
-      "rpc/emsp_token_owe_active",
-      { p_peer_id: peerId, p_now: now },
-    );
-    return Number(row?.owed ?? 0);
   }
 }

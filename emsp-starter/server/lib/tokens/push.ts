@@ -192,7 +192,14 @@ async function pushTo(
       await send(peer, sent, { method: "PUT" }, deps, now);
     }
     // Clears what the peer is owed only up to the version sent: a newer one stays queued.
-    await deps.tokens.pushSucceeded(peer.id, t.id, sent.lastUpdated);
+    // Nor one owed in a later push generation: the hub's mode was switched meanwhile and
+    // the switch owes the token again, to be sent the new way.
+    await deps.tokens.pushSucceeded(
+      peer.id,
+      t.id,
+      sent.lastUpdated,
+      peer.pushGen,
+    );
     return { peerId: peer.id, label: peer.label, ok: true };
   } catch (e) {
     const error = errorText(e);
@@ -245,11 +252,13 @@ export async function retryPendingPushes(
     const peer = peers.get(p.peerId);
     const t = await deps.tokens.getTokenById(p.tokenId);
     if (!peer || !t) {
-      // Cleared whatever version it was owed.
+      // Cleared whatever version it was owed, in any push generation (null: no
+      // generation check, so this works before the 202611250001 migration too).
       await deps.tokens.pushSucceeded(
         p.peerId,
         p.tokenId,
         "9999-12-31T23:59:59.000Z",
+        null,
       );
       report.dropped++;
       continue;

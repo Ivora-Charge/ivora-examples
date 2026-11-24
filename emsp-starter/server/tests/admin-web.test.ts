@@ -1169,13 +1169,10 @@ describe("the admin gate on reconciliation, audit, driver and refund actions", (
         },
       ],
     });
-    // The column of the push-mode migration is missing: the save is refused as
-    // "no such column".
-    const save = peers.updatePeer.bind(peers);
-    peers.updatePeer = async (id, patch, ...rest) => {
-      if ("hubPushMode" in patch)
-        throw new DatabaseRequestError("no such column", 400, "PGRST204");
-      return save(id, patch, ...rest);
+    // The switch function of the push-mode migration is missing: the save is refused as
+    // "no such function".
+    peers.setHubPushMode = async () => {
+      throw new DatabaseRequestError("no such function", 404, "PGRST202");
     };
     setDatabaseCheckForTests(async () => ({
       state: "pending",

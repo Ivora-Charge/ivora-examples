@@ -65,6 +65,7 @@ const peer = (id: string, countryCode: string, partyId: string): Peer => ({
   unregisteredAt: null,
   hubParties: [],
   hubPushMode: "hub",
+  pushGen: 0,
 });
 const peerA = peer(A, "ZZ", "MCK");
 const peerB = peer(B, "YY", "TWO");
