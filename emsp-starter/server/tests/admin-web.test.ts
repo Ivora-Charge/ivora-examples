@@ -51,6 +51,8 @@ import {
 } from "@/lib/ocpi/errors";
 import { setPeerStoreForTests } from "@/lib/ocpi/registry";
 import { MemoryPeerStore } from "@/lib/ocpi/store";
+import { DatabaseRequestError } from "@/lib/server/supabase-rest";
+import { setDatabaseCheckForTests } from "@/lib/setup/database";
 import {
   setPaymentStoreForTests,
   setStripeForTests,
@@ -1147,6 +1149,55 @@ describe("the admin gate on reconciliation, audit, driver and refund actions", (
       });
       expect((await peers.getPeer(hub.id))!.hubPushMode).toBe("hub");
     } finally {
+      setTokenStoreForTests(undefined);
+    }
+  });
+
+  it("hubPartyAction push_mode: a pending migration is named, with the code the selector links from", async () => {
+    process.env.DEMO_MODE = "false";
+    Object.assign(process.env, LIVE_ENV);
+    const hub = await peers.createPeer({ label: "Hub", direction: "outbound" });
+    await peers.updatePeer(hub.id, {
+      status: "registered",
+      hubPushMode: "per_party",
+      roles: [
+        {
+          role: "HUB",
+          country_code: "ZZ",
+          party_id: "HUB",
+          business_details: { name: "Hub" },
+        },
+      ],
+    });
+    // The column of the push-mode migration is missing: the save is refused as
+    // "no such column".
+    const save = peers.updatePeer.bind(peers);
+    peers.updatePeer = async (id, patch, ...rest) => {
+      if ("hubPushMode" in patch)
+        throw new DatabaseRequestError("no such column", 400, "PGRST204");
+      return save(id, patch, ...rest);
+    };
+    setDatabaseCheckForTests(async () => ({
+      state: "pending",
+      shipped: 2,
+      applied: 1,
+      pending: ["202611240001_hub_push_mode.sql"],
+      newest: "202611240001_hub_push_mode.sql",
+    }));
+    setTokenStoreForTests(new MemoryTokenStore());
+    try {
+      delete process.env.ADMIN_SECRET;
+      signIn("admin");
+      const r = await hubPartyAction(
+        {},
+        raw({ peerId: hub.id, intent: "push_mode", mode: "hub" }),
+      );
+      expect(r).toMatchObject({ ok: false, code: "migration_pending" });
+      expect(r.message).toContain("202611240001_hub_push_mode.sql");
+      expect(r.nextStep).toContain("Setup");
+      expect((await peers.getPeer(hub.id))!.hubPushMode).toBe("per_party");
+    } finally {
+      setDatabaseCheckForTests(undefined);
       setTokenStoreForTests(undefined);
     }
   });

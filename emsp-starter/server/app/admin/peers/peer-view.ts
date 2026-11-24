@@ -76,3 +76,7 @@ export function sinceDay(iso: string | undefined): string {
         timeZone: "UTC",
       });
 }
+
+/** Codes of two answers the hub page words itself (see actions.ts). */
+export const NO_TRUSTED_PARTY = "no_trusted_party";
+export const MIGRATION_PENDING = "migration_pending";

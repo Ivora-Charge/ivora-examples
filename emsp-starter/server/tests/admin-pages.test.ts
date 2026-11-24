@@ -11,7 +11,13 @@ import {
 } from "@/app/admin/payments/request-id";
 import type { ActionState, PeerSummary } from "@/app/admin/peers/actions";
 import { Refused } from "@/app/admin/peers/connect/connect";
-import { HubParties, Pulls, PushMode } from "@/app/admin/peers/[id]/peer-page";
+import {
+  HubParties,
+  NoTrustedPartyMessage,
+  Pulls,
+  PushMode,
+  PushPendingNote,
+} from "@/app/admin/peers/[id]/peer-page";
 import { PeerList, PeerRow } from "@/app/admin/peers/peer-list";
 import { moduleName, viewOf } from "@/app/admin/peers/peer-view";
 import { tokenRefused } from "@/app/admin/peers/refused";
@@ -433,6 +439,7 @@ describe("peers: a row and a hub's page, from the peer list", () => {
   const hub = peer({
     hub: {
       pushMode: "hub",
+      listsParties: true,
       parties: [
         {
           countryCode: "DE",
@@ -522,7 +529,9 @@ describe("peers: a row and a hub's page, from the peer list", () => {
   it("says a hub is idle until a party is trusted", () => {
     const html = renderToStaticMarkup(
       createElement(HubParties, {
-        peer: peer({ hub: { parties: [], pushMode: "hub" } }),
+        peer: peer({
+          hub: { parties: [], pushMode: "hub", listsParties: true },
+        }),
         send: async () => ({}),
       }),
     );
@@ -531,7 +540,9 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     expect(html).toContain("tokens already go to the hub");
     const perParty = renderToStaticMarkup(
       createElement(HubParties, {
-        peer: peer({ hub: { parties: [], pushMode: "per_party" } }),
+        peer: peer({
+          hub: { parties: [], pushMode: "per_party", listsParties: true },
+        }),
         send: async () => ({}),
       }),
     );
@@ -565,6 +576,7 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     const withDate = peer({
       hub: {
         pushMode: "hub",
+        listsParties: true,
         parties: [
           {
             countryCode: "DE",
@@ -637,6 +649,65 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     const detail = renderToStaticMarkup(createElement(Pulls, { peer: failed }));
     expect(detail).toContain("4 times in a row");
     expect(detail).toContain("5b2e0b3c-2d6e-4f65-a8ef-6a8f1c0f9d11");
+  });
+
+  it("says no party is trusted when Pull is pressed, and links to the add-a-party form", () => {
+    const html = renderToStaticMarkup(
+      createElement(NoTrustedPartyMessage, {
+        state: {
+          ok: false,
+          message: "No party behind Example Roaming Hub is trusted yet.",
+          code: "no_trusted_party",
+          nextStep: "Accept a party, then pull again.",
+        },
+      }),
+    );
+    expect(html).toContain("No party behind Example Roaming Hub is trusted");
+    expect(html).toContain('href="#add-party"');
+    expect(html).not.toContain("Check the fields above");
+    const other = renderToStaticMarkup(
+      createElement(NoTrustedPartyMessage, {
+        state: { ok: false, message: "x", code: "invalid_input" },
+      }),
+    );
+    expect(other).toBe("");
+  });
+
+  it("says a hub with no client list publishes none, and does not offer to read it", () => {
+    const render = (listsParties: boolean) =>
+      renderToStaticMarkup(
+        createElement(HubParties, {
+          peer: peer({
+            hub: { parties: [], pushMode: "hub", listsParties },
+          }),
+          send: async () => ({}),
+        }),
+      );
+    const none = render(false);
+    expect(none).toContain(
+      "This hub does not publish a list of parties: add the party your hub contact gave you.",
+    );
+    expect(none).not.toContain("Read the hub&#x27;s list again");
+    expect(none).toContain('id="add-party"');
+    expect(none).toMatch(/<details[^>]*id="add-party"[^>]*open=""/);
+    const lists = render(true);
+    expect(lists).toContain("Read the hub&#x27;s list again");
+    expect(lists).not.toContain("does not publish a list");
+  });
+
+  it("tells the Send tokens selector's user a migration is pending, with a link to Setup", () => {
+    const html = renderToStaticMarkup(
+      createElement(PushPendingNote, {
+        state: { ok: false, code: "migration_pending" },
+      }),
+    );
+    expect(html).toContain("a database migration is pending");
+    expect(html).toContain('href="/#stop-2"');
+    expect(
+      renderToStaticMarkup(
+        createElement(PushPendingNote, { state: { ok: true } }),
+      ),
+    ).toBe("");
   });
 
   it("shows the Token pushes card with the hub's mode selected, and sends a change", async () => {

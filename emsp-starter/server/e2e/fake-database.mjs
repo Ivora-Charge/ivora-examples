@@ -20,7 +20,14 @@ const peer = (n, status = "registered") => ({
   status,
   versions_url: `https://cpo-${n}.example.com/ocpi/versions`,
   version: "2.2.1",
-  roles: [{ role: "CPO", country_code: "NL", party_id: `EX${n}` }],
+  roles: [
+    {
+      role: "CPO",
+      country_code: "NL",
+      party_id: `EX${n}`,
+      business_details: { name: `Example CPO ${n}` },
+    },
+  ],
   endpoints: [],
   hub_parties: [],
   hub_push_mode: "per_party",
@@ -30,6 +37,29 @@ const peer = (n, status = "registered") => ({
   updated_at: ago(3_600 * n),
   registered_at: status === "registered" ? ago(3_600 * n) : null,
   unregistered_at: null,
+});
+// A registered roaming hub with no trusted party, and version details without a
+// hubclientinfo module (the hub page's "no party is trusted yet" state).
+const hub = () => ({
+  ...peer(9),
+  id: "00000000-0000-4000-8000-0000000000a1",
+  label: "Example Roaming Hub",
+  versions_url: "https://hub.example.com/ocpi/versions",
+  roles: [
+    {
+      role: "HUB",
+      country_code: "NL",
+      party_id: "EXH",
+      business_details: { name: "Example Roaming Hub" },
+    },
+  ],
+  endpoints: [
+    {
+      identifier: "locations",
+      role: "SENDER",
+      url: "https://hub.example.com/ocpi/2.2.1/locations",
+    },
+  ],
 });
 const audit = (action, seconds, details = {}) => ({
   occurred_at: ago(seconds),
@@ -63,7 +93,7 @@ const DATABASES = {
   }),
   "db-three.example.org": () => ({
     admins: 1,
-    peers: [peer(8)],
+    peers: [peer(8), hub()],
     events: [{ type: "charge.refunded", received_at: ago(90) }],
     sweeps: [{ swept_at: ago(15) }],
     audit: [audit("job.run", 300, { ok: true, since_last_s: 60 })],
@@ -79,7 +109,10 @@ function answer(url) {
       return Array.from({ length: state.admins }, () => ({ role: "admin" }));
     if (table === "emsp_ocpi_peers") {
       const status = url.searchParams.get("status")?.replace(/^eq\./, "");
-      return state.peers.filter((row) => !status || row.status === status);
+      const id = url.searchParams.get("id")?.replace(/^eq\./, "");
+      return state.peers.filter(
+        (row) => (!status || row.status === status) && (!id || row.id === id),
+      );
     }
     if (table === "emsp_stripe_events") return state.events;
     if (table === "emsp_payment_sweeps") return state.sweeps;
