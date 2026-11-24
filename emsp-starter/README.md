@@ -32,7 +32,7 @@ The admin web:
 | -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
 | ![Sessions, live and recent, light mode](server/docs/admin-sessions-desktop-light.png) | ![CDR reconciliation per peer, dark mode](server/docs/admin-reconciliation-desktop-dark.png) | ![Overview with the OCPI identity, dark mode](server/docs/admin-overview-phone-dark.png) |
 
-More in the [app README](app/README.md) and the [server README](server/README.md#admin-web).
+More in the [app README](app/README.md) and the [server README](server/README.md#admin-web). A redesign of the admin web is proposed as mockups in [`design/admin-redesign/`](design/admin-redesign/README.md); it is not built yet.
 
 ## Why two packages
 
