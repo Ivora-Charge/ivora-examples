@@ -12,7 +12,11 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
-import { listPeersAction, syncPeerAction } from "@/app/admin/peers/actions";
+import {
+  hubPartyAction,
+  listPeersAction,
+  syncPeerAction,
+} from "@/app/admin/peers/actions";
 import { paymentAuditAction, refundAction } from "@/app/admin/payments/actions";
 import { requestIdSpent } from "@/app/admin/payments/request-id";
 import { reconcileAction } from "@/app/admin/reconciliation/actions";
@@ -65,7 +69,8 @@ import { DemoModeError } from "@/lib/server/demo";
 import { setSessionStoreForTests } from "@/lib/sessions/registry";
 import { MemorySessionStore } from "@/lib/sessions/store";
 import { driverStanding } from "@/lib/tokens/authorize";
-import { DEMO_DRIVER_REF } from "@/lib/tokens/registry";
+import { DEMO_DRIVER_REF, setTokenStoreForTests } from "@/lib/tokens/registry";
+import { MemoryTokenStore } from "@/lib/tokens/store";
 import { LIVE_ENV } from "./support/network";
 
 const SECRET = "s".repeat(32);
@@ -863,6 +868,50 @@ describe("the admin gate on reconciliation, audit, driver and refund actions", (
       expect(GATE).not.toContain(r.code);
     });
   }
+
+  it("hubPartyAction push_mode: refuses a wrong secret and a viewer, lets an admin in", async () => {
+    // A registered hub, kept on per-party pushes; demo mode is off for this one.
+    process.env.DEMO_MODE = "false";
+    Object.assign(process.env, LIVE_ENV);
+    const hub = await peers.createPeer({ label: "Hub", direction: "outbound" });
+    await peers.updatePeer(hub.id, {
+      status: "registered",
+      hubPushMode: "per_party",
+      roles: [
+        {
+          role: "HUB",
+          country_code: "ZZ",
+          party_id: "HUB",
+          business_details: { name: "Hub" },
+        },
+      ],
+    });
+    setTokenStoreForTests(new MemoryTokenStore());
+    try {
+      const pushMode = (fields: Record<string, string> = {}) =>
+        hubPartyAction(
+          {},
+          raw({ peerId: hub.id, intent: "push_mode", mode: "hub", ...fields }),
+        );
+      expect(await pushMode({ adminSecret: "x".repeat(32) })).toMatchObject({
+        ok: false,
+        code: "wrong_secret",
+      });
+      delete process.env.ADMIN_SECRET;
+      signIn("viewer");
+      expect(await pushMode()).toMatchObject({ ok: false, code: "read_only" });
+      expect((await peers.getPeer(hub.id))!.hubPushMode).toBe("per_party");
+
+      signIn("admin");
+      expect(await pushMode()).toMatchObject({
+        ok: true,
+        peer: { hub: { pushMode: "hub" } },
+      });
+      expect((await peers.getPeer(hub.id))!.hubPushMode).toBe("hub");
+    } finally {
+      setTokenStoreForTests(undefined);
+    }
+  });
 
   it("records the signed-in admin, not the secret, on a refund", async () => {
     delete process.env.ADMIN_SECRET;

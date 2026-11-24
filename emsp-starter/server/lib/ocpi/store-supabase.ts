@@ -26,7 +26,8 @@ type PeerRow = {
   roles: Peer["roles"];
   endpoints: Peer["endpoints"];
   hub_parties: Peer["hubParties"];
-  hub_push_mode: Peer["hubPushMode"];
+  /** Absent before the 202611240001 migration. */
+  hub_push_mode?: Peer["hubPushMode"];
   token_ciphertext: string | null;
   rev: number;
   created_at: string;
@@ -45,7 +46,8 @@ const toPeer = (r: PeerRow): Peer => ({
   roles: r.roles,
   endpoints: r.endpoints,
   hubParties: r.hub_parties ?? [],
-  hubPushMode: r.hub_push_mode ?? "hub",
+  // Before the 202611240001 migration there is no column: every hub pushes per party.
+  hubPushMode: r.hub_push_mode ?? "per_party",
   tokenCiphertext: r.token_ciphertext,
   rev: Number(r.rev),
   createdAt: r.created_at,

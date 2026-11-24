@@ -44,13 +44,35 @@ alter default privileges in schema public grant all on functions to anon, authen
  */
 export async function migratedDatabase({
   legacyDefaults = false,
-}: { legacyDefaults?: boolean } = {}): Promise<PGlite> {
+  before,
+}: {
+  legacyDefaults?: boolean;
+  /** Stops before this migration file, to test an upgrade with `applyMigrations`. */
+  before?: string;
+} = {}): Promise<PGlite> {
   const db = new PGlite();
   await db.exec(SUPABASE_STUB);
   if (legacyDefaults) await db.exec(LEGACY_DEFAULTS);
+  await db.exec(LEDGER_SQL);
+  await applyMigrations(db, { before });
+  return db;
+}
+
+/**
+ * Applies, in one transaction, the migrations not yet in the ledger (those before
+ * `before`, if given), the way `npm run db:migrate` does.
+ */
+export async function applyMigrations(
+  db: PGlite,
+  { before }: { before?: string } = {},
+): Promise<void> {
+  const { rows } = await db.query<{ filename: string }>(
+    "select filename from public.emsp_schema_migrations",
+  );
+  const done = new Set(rows.map((r) => r.filename));
   await db.transaction(async (tx) => {
-    await tx.exec(LEDGER_SQL);
     for (const file of await listMigrations(MIGRATIONS)) {
+      if (done.has(file) || (before && file >= before)) continue;
       const sql = await readFile(new URL(file, MIGRATIONS), "utf8");
       await tx.exec(stripTransaction(sql));
       await tx.query(
@@ -59,7 +81,6 @@ export async function migratedDatabase({
       );
     }
   });
-  return db;
 }
 
 /** Runs `fn` as a database role, then switches back. */

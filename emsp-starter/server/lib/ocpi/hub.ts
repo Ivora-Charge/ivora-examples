@@ -1,6 +1,8 @@
 import "server-only";
 import { randomUUID } from "node:crypto";
 import { assertLive } from "@/lib/server/demo";
+import { tokensReceiver } from "@/lib/tokens/push";
+import type { TokenStore } from "@/lib/tokens/store";
 import { ocpiPages, type ClientOptions } from "./client";
 import { OcpiError } from "./errors";
 import { HandshakeError } from "./handshake";
@@ -22,9 +24,14 @@ import { sameParty, type Party } from "./types";
  * A hub's credentials name the hub itself (role HUB). The CPOs it connects us to come
  * from the operator: `acceptParty` adds a party as trusted. The hub's own client list
  * (the hubclientinfo module, OCPI 2.2.1 section 7) can offer parties (`offerFromHub`),
- * but an offered party is not trusted: nothing is sent to it and nothing is accepted
- * from it until the operator accepts it. Party IDs are never built in: they come from
- * the operator or from the hub's list.
+ * but an offered party is not trusted: we pull nothing from it, send it no command and
+ * accept nothing from it until the operator accepts it. Party IDs are never built in:
+ * they come from the operator or from the hub's list.
+ *
+ * Token pushes depend on the hub's push mode (`setHubPushMode`). With `per_party` each
+ * trusted party gets its own push. With `hub` one push goes to the hub's own party and
+ * the hub decides who receives it; the trusted list then limits only pulls, commands
+ * and what we accept.
  */
 
 export type HubDeps = {
@@ -151,7 +158,8 @@ export async function acceptParty(
 
 /**
  * The operator stops trusting a party (or dismisses an offered one): it is removed from
- * the list, so nothing is sent to it and its pushes are refused at once. `purge`
+ * the list, so it is no longer pulled from or sent commands (nor tokens, in per-party
+ * mode), and its pushes are refused at once. `purge`
  * removes what we cached of it (locations, tariffs).
  */
 export async function removeParty(
@@ -311,26 +319,51 @@ export async function offerFromHub(
  * How token pushes to a hub are addressed: to the hub's own party (`hub`) or to each
  * trusted party behind it (`per_party`). Pushes already owed are sent the new way on
  * their next try.
+ *
+ * Switching from `per_party` to `hub` owes the hub every active token through the
+ * outbox (the catch-up), so the hub gets the full set once; the retry job sends them,
+ * and later changes go out as usual. Switching back needs no catch-up: the trusted
+ * parties got every change through the hub. If the catch-up cannot be queued, the mode
+ * is set back and the error thrown, so trying again owes the set once, not twice.
  */
 export async function setHubPushMode(
   peerId: string,
   mode: HubPushMode,
-  deps: HubDeps,
-): Promise<Peer> {
+  deps: HubDeps & { tokens: Pick<TokenStore, "oweActive">; now?: () => Date },
+): Promise<{ peer: Peer; owed: number; changed: boolean }> {
   if (mode !== "hub" && mode !== "per_party")
     throw new HandshakeError("Push mode must be hub or per_party");
-  await hubPeer(deps.store, peerId);
+  const peer = await hubPeer(deps.store, peerId);
+  const from = peer.hubPushMode;
+  if (from === mode) return { peer, owed: 0, changed: false };
   const updated = await deps.store.updatePeer(
     peerId,
     { hubPushMode: mode },
     "registered",
+    peer.rev,
   );
   if (!updated) throw new HandshakeError("The peer changed; try again");
+  let owed = 0;
+  if (mode === "hub" && updated.tokenCiphertext && tokensReceiver(updated)) {
+    try {
+      owed = await deps.tokens.oweActive(
+        peerId,
+        (deps.now?.() ?? new Date()).toISOString(),
+      );
+    } catch {
+      await deps.store
+        .updatePeer(peerId, { hubPushMode: from }, "registered", updated.rev)
+        .catch(() => null);
+      throw new HandshakeError(
+        "Could not queue the hub's tokens; the mode is unchanged, try again",
+      );
+    }
+  }
   await deps.store.audit({
     actor: deps.actor ?? "admin",
     action: "ocpi.hub.push_mode_set",
     subjectId: peerId,
-    details: { mode },
+    details: { mode, from, owed },
   });
-  return updated;
+  return { peer: updated, owed, changed: true };
 }

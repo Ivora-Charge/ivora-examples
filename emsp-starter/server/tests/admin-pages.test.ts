@@ -11,7 +11,7 @@ import {
 } from "@/app/admin/payments/request-id";
 import type { ActionState, PeerSummary } from "@/app/admin/peers/actions";
 import { Refused } from "@/app/admin/peers/connect/connect";
-import { HubParties } from "@/app/admin/peers/[id]/peer-page";
+import { HubParties, PushMode } from "@/app/admin/peers/[id]/peer-page";
 import { PeerList } from "@/app/admin/peers/peer-list";
 import { moduleName, viewOf } from "@/app/admin/peers/peer-view";
 import { tokenRefused } from "@/app/admin/peers/refused";
@@ -262,7 +262,9 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     expect(html).toContain('Remove<span class="sr"> Riverside EV</span>');
     expect(html).toContain('Accept<span class="sr"> Lakeview Power</span>');
     expect(html).toContain('Accept<span class="sr"> BE-MSQ</span>');
-    expect(html).toContain("Not trusted: nothing is sent or accepted.");
+    expect(html).toContain(
+      "Not trusted: nothing is pulled from it, no command is sent to it and nothing it sends is accepted.",
+    );
     expect(html).toContain("Read the hub&#x27;s list again");
     expect(html).toContain("Add a party the hub does not list");
     expect(html).toContain(
@@ -281,6 +283,54 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     );
     expect(html).toContain("Connected, but idle: no party is trusted yet.");
     expect(html).toContain("Accept the CPOs you have an agreement with.");
+    expect(html).toContain("tokens already go to the hub");
+    const perParty = renderToStaticMarkup(
+      createElement(HubParties, {
+        peer: peer({ hub: { parties: [], pushMode: "per_party" } }),
+        send: async () => ({}),
+      }),
+    );
+    expect(perParty).toContain(
+      "Pulls and token pushes start with the first one.",
+    );
+  });
+
+  it("words a party's trust by the push mode", () => {
+    const render = (pushMode: "hub" | "per_party") =>
+      renderToStaticMarkup(
+        createElement(HubParties, {
+          peer: { ...hub, hub: { ...hub.hub!, pushMode } },
+          send: async () => ({}),
+        }),
+      );
+    const toHub = render("hub");
+    expect(toHub).toContain("Trusted: pulled from and sent commands");
+    expect(toHub).toContain("Tokens still reach it if the hub passes them on.");
+    expect(toHub).not.toContain("nothing is sent or accepted");
+    expect(toHub).toContain(
+      "send them no command and refuse what arrives in their name.",
+    );
+    const each = render("per_party");
+    expect(each).toContain("Trusted: pulled from, sent commands and tokens");
+    expect(each).toContain("send them no command or token and refuse");
+    expect(each).not.toContain("Tokens still reach it");
+  });
+
+  it("shows the Token pushes card with the hub's mode selected, and sends a change", async () => {
+    const html = (pushMode: "hub" | "per_party") =>
+      renderToStaticMarkup(
+        createElement(PushMode, {
+          peer: { ...hub, hub: { ...hub.hub!, pushMode } },
+          send: async () => ({}),
+        }),
+      );
+    const toHub = html("hub");
+    expect(toHub).toContain("Token pushes");
+    expect(toHub).toMatch(/<option value="hub" selected="">/);
+    expect(toHub).toContain("the hub decides which CPOs receive it");
+    const each = html("per_party");
+    expect(each).toMatch(/<option value="per_party" selected="">/);
+    expect(each).toContain("queues every active token for the hub once");
   });
 });
 

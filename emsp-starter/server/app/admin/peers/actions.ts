@@ -27,6 +27,7 @@ import { isHubPeer, trustedParties } from "@/lib/ocpi/parties";
 import { peerStore } from "@/lib/ocpi/registry";
 import type { HubParty, HubPushMode, Peer } from "@/lib/ocpi/store";
 import { assertLive, isDemo } from "@/lib/server/demo";
+import { tokenStore } from "@/lib/tokens/registry";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
 
 /** The last pull of one module from a peer. */
@@ -309,8 +310,10 @@ async function purgeParty(
 
 /**
  * The CPO parties behind a roaming hub: accept one (a new one, or one the hub offered),
- * stop trusting one, or read the hub's client list for parties to offer. Nothing is
- * sent to or accepted from a party until it is accepted.
+ * stop trusting one, or read the hub's client list for parties to offer; or set how
+ * tokens are pushed to the hub (`push_mode`). Until a party is accepted we pull nothing
+ * from it, send it no command and accept nothing from it. Token pushes go to trusted
+ * parties only in per-party mode; in hub mode the hub decides who receives them.
  */
 export async function hubPartyAction(
   _prev: ActionState,
@@ -324,13 +327,17 @@ export async function hubPartyAction(
     const intent = field(form, "intent");
     if (intent === "push_mode") {
       const mode = field(form, "mode") as HubPushMode;
-      const peer = await setHubPushMode(id, mode, deps);
+      const { peer, owed, changed } = await setHubPushMode(id, mode, {
+        ...deps,
+        tokens: tokenStore(),
+      });
       return {
         ok: true,
-        message:
-          mode === "hub"
-            ? `Tokens now go to ${peer.label}'s own party, in one push.`
-            : `Tokens now go to each trusted party behind ${peer.label}.`,
+        message: !changed
+          ? `${peer.label} already pushes this way.`
+          : mode === "hub"
+            ? `Tokens now go to ${peer.label}'s own party, in one push; the hub decides who receives them. ${owed} active token(s) queued so the hub gets the full set once.`
+            : `Tokens now go to each trusted party behind ${peer.label}, one push each.`,
         peer: summary(peer),
       };
     }

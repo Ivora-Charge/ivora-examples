@@ -237,4 +237,13 @@ export class SupabaseTokenStore implements TokenStore {
     );
     return rows.length;
   }
+
+  async oweActive(peerId: string, now: string) {
+    const [row] = await this.rest<{ owed: number | string }[]>(
+      "POST",
+      "rpc/emsp_token_owe_active",
+      { p_peer_id: peerId, p_now: now },
+    );
+    return Number(row?.owed ?? 0);
+  }
 }

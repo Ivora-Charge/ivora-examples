@@ -46,9 +46,9 @@ const SOURCE: Record<HubParty["source"], string> = {
 };
 
 /** How our token pushes reach the hub: one push to its own party, or one per party. */
-function PushMode({ peer, send }: { peer: PeerSummary; send: Send }) {
+export function PushMode({ peer, send }: { peer: PeerSummary; send: Send }) {
   const id = useId();
-  const mode = peer.hub?.pushMode ?? "hub";
+  const mode = peer.hub?.pushMode ?? "per_party";
   return (
     <section className="card stack" aria-labelledby={`${id}-h`}>
       <h2 className="h3" id={`${id}-h`}>
@@ -58,6 +58,11 @@ function PushMode({ peer, send }: { peer: PeerSummary; send: Send }) {
         Some hubs expect our tokens addressed to the hub itself and hand them on
         to the CPOs; others want one push for each CPO party. Use the one your
         hub documents.
+      </p>
+      <p className="small muted">
+        {mode === "hub"
+          ? "Each change goes to the hub once and the hub decides which CPOs receive it. The trusted parties below limit pulls, commands and what we accept, not who gets our tokens."
+          : "Each change goes to every trusted party below, one push each. Switching to the hub's own party queues every active token for the hub once, so it gets the full set."}
       </p>
       <div className="field">
         <label htmlFor={`${id}-mode`}>Send tokens</label>
@@ -86,6 +91,7 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
   const parties = peer.hub?.parties ?? [];
   const trusted = parties.filter((p) => p.status === "trusted");
   const offered = parties.filter((p) => p.status === "offered");
+  const perParty = peer.hub?.pushMode === "per_party";
   const act = (intent: string, p?: HubParty | Record<string, string>) =>
     send(hubPartyAction, {
       peerId: peer.id,
@@ -111,8 +117,8 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
           </h3>
           <p className="meta">
             {p.status === "trusted"
-              ? `Trusted: pulled from, and tokens pushed to when pushing per party. ${SOURCE[p.source]}`
-              : `${SOURCE[p.source]} Not trusted: nothing is sent or accepted.`}
+              ? `Trusted: ${perParty ? "pulled from, sent commands and tokens" : "pulled from and sent commands"}, and what it sends is accepted. ${SOURCE[p.source]}`
+              : `${SOURCE[p.source]} Not trusted: nothing is pulled from it, no command is sent to it and nothing it sends is accepted.${perParty ? "" : " Tokens still reach it if the hub passes them on."}`}
           </p>
         </div>
         <span className="end">
@@ -143,7 +149,11 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
         <Message
           kind="wait"
           title="Connected, but idle: no party is trusted yet."
-          nextStep="Accept the CPOs you have an agreement with. Pulls start with the first one; token pushes go to the hub itself unless you chose one push per party."
+          nextStep={
+            perParty
+              ? "Accept the CPOs you have an agreement with. Pulls and token pushes start with the first one."
+              : "Accept the CPOs you have an agreement with. Pulls start with the first one; tokens already go to the hub, which decides who receives them."
+          }
         />
       )}
       {trusted.length > 0 && (
@@ -169,8 +179,7 @@ export function HubParties({ peer, send }: { peer: PeerSummary; send: Send }) {
           </button>
         </div>
         <p className="muted">
-          The hub lists these CPOs. Offered is not trusted: we send them nothing
-          and refuse what arrives in their name until you accept.
+          {`The hub lists these CPOs. Offered is not trusted: until you accept, we pull nothing from them, send them no command${perParty ? " or token" : ""} and refuse what arrives in their name.`}
         </p>
         {offered.length > 0 ? (
           <ul className="list">{offered.map(row)}</ul>

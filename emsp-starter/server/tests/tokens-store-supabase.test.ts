@@ -226,6 +226,42 @@ describe("Supabase token store on PGlite", () => {
     expect(await store.countPendingPushes(10)).toBe(0);
   });
 
+  it("owes a peer every active token at once (the hub catch-up), never twice", async () => {
+    const a = (await store.insertToken(token({ uid: "0A0B0C01" })))!;
+    const b = (await store.insertToken(token({ uid: "0A0B0C02" })))!;
+    const c = (await store.insertToken(token({ uid: "0A0B0C03" })))!;
+    await store.updateToken(
+      c.id,
+      { status: "blocked", lastUpdated: "2026-10-21T10:00:01.000Z" },
+      c.revision,
+    );
+    // PEER is not a receiver: nothing was owed by the inserts.
+    expect(await store.countPendingPushes(10)).toBe(0);
+    const now = "2026-10-21T12:00:00.000Z";
+    expect(await store.oweActive(PEER, now)).toBe(2);
+    const due = await store.duePushes(now, 10);
+    expect(due.map((p) => p.tokenId).sort()).toEqual([a.id, b.id].sort());
+    for (const p of due)
+      expect(p).toMatchObject({
+        peerId: PEER,
+        attempts: 0,
+        nextAttemptAt: now,
+      });
+    // Again (a retried switch): still one entry per token, a failure's count kept.
+    await store.pushFailed({
+      peerId: PEER,
+      tokenId: a.id,
+      tokenLastUpdated: a.lastUpdated,
+      error: "HTTP 503",
+      now,
+    });
+    expect(await store.oweActive(PEER, now)).toBe(2);
+    expect(await store.countPendingPushes(10)).toBe(2);
+    expect(
+      (await store.duePushes(now, 10)).find((p) => p.tokenId === a.id),
+    ).toMatchObject({ attempts: 1, tokenLastUpdated: a.lastUpdated });
+  });
+
   it("owes every insert and change to registered peers with a tokens Receiver, in the same write", async () => {
     await addReceiver();
     const t = (await store.insertToken(token()))!;
