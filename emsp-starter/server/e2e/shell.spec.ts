@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { expectAccessible, goTo, signIn, type Place } from "./support";
 
 // Runs on the desktop and mobile projects (see playwright.config.ts).
-test("demo: Setup shows a visitor the sign-in prompt only", async ({
+test("demo: Setup shows a visitor six names, none done, and the sign-in prompt", async ({
   page,
 }) => {
   await page.goto("/");
@@ -14,7 +14,15 @@ test("demo: Setup shows a visitor the sign-in prompt only", async ({
   ).toBeVisible();
   await expect(page).toHaveTitle(/^Setup · /);
 
-  // Signed out: one prompt with a link, no stop, no setting's name, no secret field.
+  // Demo mode has no admin, so a visitor sees the six stops by name, none done.
+  const progress = page.getByRole("list", { name: "Setup progress" });
+  await expect(progress.getByRole("listitem")).toHaveCount(6);
+  await expect(progress.getByText("Not done")).toHaveCount(6);
+  await expect(progress).toContainText("4 · SCHEDULED JOB");
+  await expect(
+    page.getByRole("heading", { name: "Setup so far: 0 of 6 done" }),
+  ).toBeVisible();
+  // Then one prompt with a link: no fix, no setting's name, no secret field.
   await expect(
     page.getByRole("heading", {
       name: "Sign in as an admin to see this deployment's setup",
@@ -47,34 +55,27 @@ test("demo: Setup shows a signed-in admin the six stops and the OCPI version", a
   await signIn(page);
   await goTo(page, "Setup");
 
-  // Demo mode is never called live, and the hero counts only what is confirmed.
+  // Demo mode is never called live or Health, and nothing in it counts as done.
   const hero = page.getByRole("region", { name: "Overall state" });
-  await expect(hero).toContainText("Demo mode: sample data, nothing stored");
+  await expect(hero).toContainText("Demo mode: 0 of 6 done");
   await expect(page.getByText("Live", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Health" })).toHaveCount(0);
 
   const lane = page.getByRole("list", { name: "Setup checklist" });
   await expect(lane.locator("> li")).toHaveCount(6);
-  // The settings are read for an email sign-in only. With the admin secret stop 1
-  // cannot check which setting keeps the server in demo mode, and says so.
-  await expect(lane.locator("#stop-1")).toContainText("Cannot check from here");
-  await expect(lane.locator("#stop-1")).toContainText(
-    "only to an admin signed in by email",
+  // The setup status read answers the admin secret too: stop 1 names what keeps
+  // this server in demo mode, by name only.
+  const first = lane.locator("#stop-1");
+  await expect(first).toContainText("settings need you");
+  await expect(first).toContainText("EMSP_COUNTRY_CODE is not set.");
+  await expect(first).toContainText("DEMO_MODE is set");
+  await expect(first).toContainText("openssl rand -base64 32");
+  // Every later stop waits for the environment: demo mode has nothing behind them.
+  for (const stop of ["#stop-2", "#stop-3", "#stop-4", "#stop-5"])
+    await expect(lane.locator(stop)).toContainText("Waiting");
+  await expect(lane.locator("#stop-2")).toContainText(
+    "No database in demo mode",
   );
-  await expect(lane.locator("#stop-1")).not.toContainText("is not set");
-  // A stop that needs a server read that does not exist yet says so, with its fix.
-  const database = lane.locator("#stop-2");
-  await expect(database).toContainText("Cannot check from here");
-  if (await database.getByText("Show the fix").isVisible())
-    await database.getByText("Show the fix").click();
-  await expect(database).toContainText("npm run db:migrate");
-  // The payment and job settings are read for an email sign-in only: with the admin
-  // secret these stops cannot check, and still show their fix.
-  for (const stop of ["#stop-3", "#stop-4"]) {
-    await expect(lane.locator(stop)).toContainText("Cannot check from here");
-    await expect(lane.locator(stop)).toContainText(
-      "only for an admin signed in by email",
-    );
-  }
   await expect(lane.locator("#stop-6")).toContainText("The mock CPO stands in");
 
   const about = page.getByRole("complementary", {

@@ -9,8 +9,10 @@ import {
   type CommandDeps,
 } from "@/lib/commands/manage";
 import { stopCodeOf } from "@/lib/driver-app/charges";
+import { peerStore } from "@/lib/ocpi/registry";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { noteWebhook, WEBHOOK_FAILED, WEBHOOK_REFUSED } from "@/lib/setup/log";
 import { listCards, removeCard, setDefaultCard, setupCard } from "./cards";
 import { commandDepsOf } from "./listen";
 import { paymentDeps, type PaymentDeps } from "./registry";
@@ -202,11 +204,14 @@ export async function stripeWebhookRoute(request: Request): Promise<Response> {
     return Response.json({ error: "Too large" }, { status: 413, headers });
   if (
     !verifySignature(payload, request.headers.get("stripe-signature"), secret)
-  )
+  ) {
+    // For the Setup page: when a request was last refused (thinned, time only).
+    await noteWebhook({ peers: peerStore() }, WEBHOOK_REFUSED);
     return Response.json(
       { error: "Invalid signature" },
       { status: 400, headers },
     );
+  }
   const event = parseEvent(payload);
   if (!event)
     return Response.json({ error: "Invalid event" }, { status: 400, headers });
@@ -215,6 +220,7 @@ export async function stripeWebhookRoute(request: Request): Promise<Response> {
     return Response.json({ received: true, outcome }, { headers });
   } catch {
     // Logged by handleEvent, by name only. Stripe delivers it again.
+    await noteWebhook({ peers: peerStore() }, WEBHOOK_FAILED);
     return Response.json(
       { error: "Something went wrong" },
       { status: 500, headers },

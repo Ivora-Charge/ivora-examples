@@ -29,7 +29,16 @@ import ConnectPage from "@/app/admin/peers/connect/page";
 import PeersPage from "@/app/admin/peers/page";
 import TokensPage from "@/app/admin/tokens/page";
 import SetupPage from "@/app/page";
-import { firstAdmin, Setup, type SetupFacts } from "@/app/setup";
+import {
+  buildStops,
+  firstAdmin,
+  Setup,
+  StatusView,
+  type SetupFacts,
+} from "@/app/setup";
+import { SignIn } from "@/app/admin/sign-in/sign-in-form";
+import { passes, STOP_NAMES, type SetupStatus } from "@/lib/setup/checks";
+import { readSetupStatus } from "@/lib/setup/status";
 import { AuthRateLimitedError, type AuthProvider } from "@/lib/accounts/auth";
 import {
   requestCode,
@@ -44,6 +53,12 @@ import {
   LIVE_REQUIRED,
   missingForLive,
 } from "@/lib/server/config";
+
+// The sign-in form asks for the router; nothing here navigates.
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ refresh() {}, push() {}, replace() {} }),
+  usePathname: () => "/",
+}));
 
 // Who the server finds signed in by email: nobody, unless a test says otherwise.
 const signedInAdmin = vi.hoisted(() => ({
@@ -473,27 +488,57 @@ describe("peer page: one action at a time", () => {
 });
 
 describe("setup: nothing for a visitor who is not signed in", () => {
-  const read = {
-    missing: [] as string[],
-    errors: [] as string[],
-    malformed: 0,
-    baseUrl: "https://emsp.example.com",
-    stripeKey: false,
-    webhookSecret: false,
-    cronSecret: false,
-    holds: ["€25.00"],
-  };
+  const read = { baseUrl: "https://emsp.example.com", holds: ["€25.00"] };
   const facts = (
     settings: SetupFacts["settings"],
     demo = false,
+    publicView: SetupFacts["publicView"] = null,
   ): SetupFacts => ({
     demo,
-    required: 6,
     codesPerHour: 5,
     version: "2.2.1",
     party: "NL-EXA",
     settings,
+    publicView,
   });
+  const T = "2026-11-24T12:00:00.000Z";
+  const ago = (ms: number) => new Date(Date.parse(T) - ms).toISOString();
+  /** A live deployment where all six checks pass. */
+  const healthy = (over: Partial<SetupStatus> = {}): SetupStatus => ({
+    checkedAt: T,
+    demo: false,
+    environment: {
+      required: 6,
+      missing: [],
+      malformed: [],
+      malformedRequired: 0,
+      demoForced: false,
+      stripeKey: true,
+      webhookSecret: true,
+      cronSecret: true,
+    },
+    database: {
+      state: "ok",
+      shipped: 14,
+      applied: 14,
+      pending: [],
+      newest: "202611240001_hub_push_mode.sql",
+    },
+    webhook: {
+      lastSigned: { at: ago(120_000), result: "handled" },
+      lastRefused: null,
+    },
+    job: {
+      runs: [{ at: ago(600_000), ok: true, sinceLastS: 60 }],
+      sweptAt: ago(40_000),
+    },
+    admins: 2,
+    peers: { total: 3, registered: 3, hubs: 1, trustedParties: 2 },
+    ...over,
+  });
+  const view = (status: SetupStatus, who: Who = ana, f = facts(read)) =>
+    page(who, createElement(StatusView, { facts: f, status }));
+  const NONE = STOP_NAMES.map((name) => ({ name, pass: false }));
 
   // A deployment with unset live-mode settings and malformed optional ones.
   const MALFORMED = {
@@ -532,15 +577,19 @@ describe("setup: nothing for a visitor who is not signed in", () => {
       "codesPerHour",
       "demo",
       "party",
-      "required",
+      "publicView",
       "settings",
       "version",
     ]);
+    // Demo mode has no admin, so the public view is there: six names, none done.
+    expect(sent.publicView).toEqual(NONE);
     const data = JSON.stringify(element.props);
     // No environment variable's name, whatever it is called.
     expect(data).not.toMatch(/[A-Z][A-Z0-9]+_[A-Z0-9_]+/);
     for (const e of errors) expect(data).not.toContain(e);
-    expect(data).not.toMatch(
+    // Beside the six fixed names, nothing about payments, the job or a secret.
+    const rest = JSON.stringify({ ...sent, publicView: null });
+    expect(rest).not.toMatch(
       /must |missing|errors|malformed|stripe|webhook|cron|hold|secret/i,
     );
     // And the page as rendered for them.
@@ -550,21 +599,22 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     expect(html).not.toMatch(/must |is not set|Malformed|Missing|secret/i);
   });
 
-  it("the server reads the settings for an admin signed in by email", async () => {
+  it("the server reads the address and the hold for an admin signed in by email, and no public view", async () => {
     for (const name of LIVE_REQUIRED) delete process.env[name];
     Object.assign(process.env, MALFORMED);
     signedInAdmin.current = { userId: "u1", ...ana! };
     const element = await SetupPage();
     const sent = (element.props as { facts: SetupFacts }).facts;
-    expect(sent.settings?.missing).toEqual([...LIVE_REQUIRED]);
-    expect(sent.settings?.errors.join(" ")).toContain("STRIPE_SECRET_KEY");
-    expect(sent.settings?.stripeKey).toBe(false);
+    expect(Object.keys(sent.settings!).sort()).toEqual(["baseUrl", "holds"]);
+    expect(sent.publicView).toBeNull();
     expect(sent.party).toMatch(/^[A-Z]{2}-/);
-    const html = page(ana, element);
+    // What the stops found comes from the status read, by name only.
+    const status = await readSetupStatus();
+    const html = view(status, ana, sent);
     expect(html).toContain("<code>PUBLIC_BASE_URL</code> is not set");
     expect(html).toContain("<code>HOLD_AMOUNTS</code>");
-    // Names only: no value reaches the page.
-    expect(JSON.stringify(element.props)).not.toContain(MALFORMED.ADMIN_SECRET);
+    for (const sentToPage of [element.props, status])
+      expect(JSON.stringify(sentToPage)).not.toContain(MALFORMED.ADMIN_SECRET);
   });
 
   it("no page's shared data says whether the admin secret is set", () => {
@@ -580,40 +630,268 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     ]);
   });
 
-  it("shows the sign-in prompt only, even if the page were given the settings", () => {
+  it("the layout reads no setup status: only a signed-in admin's page asks for it", () => {
+    const layout = readFileSync(join(__dirname, "../app/layout.tsx"), "utf8");
+    expect(layout).not.toMatch(/readSetupStatus|publicSetupView|lib\/setup/);
+    // The full read has two callers: the admin action and the public view's own code.
+    const users = files(join(__dirname, "../app")).filter((f) =>
+      /readSetupStatus/.test(readFileSync(f, "utf8")),
+    );
+    expect(users.map((f) => f.split("/app/")[1])).toEqual([
+      "admin/setup/actions.ts",
+    ]);
+  });
+
+  it("shows the sign-in prompt only once an admin exists, even if the page were given the settings", () => {
     const html = page(null, createElement(Setup, { facts: facts(read) }));
     expect(html).toContain("Sign in as an admin to see this deployment");
     expect(html).toContain('href="/admin/sign-in"');
     expect(html).not.toMatch(/STRIPE|CRON_SECRET|Setup checklist|NL-EXA/);
+    expect(html).not.toMatch(/Setup progress|Not done|Scheduled job/i);
     expect(html).not.toMatch(/<input|<ol/);
   });
 
+  it("before the first admin: the six names, Done or Not done, the prompt, and nothing else", () => {
+    const stops = STOP_NAMES.map((name, i) => ({ name, pass: i < 2 }));
+    const html = page(
+      null,
+      createElement(Setup, { facts: facts(read, false, stops) }),
+    );
+    expect(html).toContain("Setup so far: 2 of 6 done");
+    for (const name of STOP_NAMES) expect(html).toContain(name.toUpperCase());
+    expect(html.match(/>Done</g)).toHaveLength(2);
+    expect(html.match(/>Not done</g)).toHaveLength(4);
+    expect(html).toContain("Sign in as an admin to see this deployment");
+    // No fix, no setting, no address, no identity, no field.
+    expect(html).not.toMatch(/[A-Z][A-Z0-9]+_[A-Z0-9_]+/);
+    expect(html).not.toMatch(/NL-EXA|emsp\.example|€|npm run|openssl|<input/);
+    expect(html).not.toContain("Setup checklist");
+    // The text of the view, less the fixed names and the count of them: no other
+    // digit, so no time and no count of anything.
+    let text = html
+      .replace(/<[^>]+>/g, " ")
+      .replaceAll("&#x27;", "'")
+      .replace("Setup so far: 2 of 6 done", "")
+      .replace("6-digit code", "");
+    for (const [i, name] of STOP_NAMES.entries())
+      text = text.replace(`${i + 1} · ${name.toUpperCase()}`, "");
+    expect(text).not.toMatch(/\d/);
+  });
+
   it("shows a signed-in admin the stops, with the unset settings by name", () => {
-    const html = page(ana, createElement(Setup, { facts: facts(read) }));
+    const html = view(
+      healthy({
+        environment: {
+          ...healthy().environment,
+          stripeKey: false,
+          cronSecret: false,
+        },
+      }),
+    );
     expect(html).toContain("Setup checklist");
     expect(html).toContain("Environment complete");
     expect(html).toContain("<code>STRIPE_SECRET_KEY</code>");
     expect(html).toContain("<code>CRON_SECRET</code> is not set");
+    expect(html).toContain("Setting up: 4 of 6 done");
+    expect(html).toContain("https://emsp.example.com/api/webhooks/stripe");
   });
 
-  it("says 'cannot check from here' where the settings were not read", () => {
-    // An admin-secret sign-in: the server did not see it when it rendered.
-    const html = page(ana, createElement(Setup, { facts: facts(null) }));
-    expect(html).not.toContain("is not set, so the job never runs");
-    expect(html).not.toContain("Payments are not set up");
-    expect(html.match(/Cannot check from here/g)?.length).toBeGreaterThan(2);
-    // Out of demo mode the environment is known to be complete without reading it.
-    expect(html).toContain("Environment complete");
+  it("an admin-secret sign-in gets the stops, with a placeholder for the address", () => {
+    // The server did not see the secret when it rendered: no address, no party.
+    const html = view(
+      healthy({ webhook: { lastSigned: null, lastRefused: null } }),
+      null,
+      { ...facts(null), party: null },
+    );
+    expect(html).toContain("No signed payment event has arrived");
+    expect(html).toContain("https://&lt;this deployment&gt;/api/webhooks/");
+    expect(html).not.toContain("emsp.example.com");
+    expect(html).toContain("<code>GET /api/v1/status</code>");
   });
 
-  it("cannot check the environment in demo mode without the settings", () => {
-    const html = page(ana, createElement(Setup, { facts: facts(null, true) }));
-    expect(html).toContain("1 · ENVIRONMENT");
-    expect(html).not.toContain("Environment complete");
-    expect(html).not.toMatch(/settings? needs? you/);
-    expect(html).toContain("only to an admin signed in by");
+  it("is called Health, with every stop open, once all six checks pass", () => {
+    const html = view(healthy());
+    expect(html).toContain("<h1>Everything is working</h1>");
+    expect(html).toContain("<span>Health</span>");
+    expect(html).toContain('aria-label="Health checks"');
+    expect(html).toContain("<h2>Live</h2>");
+    expect(html.match(/<details open="">/g)).toHaveLength(6);
+    expect(html).toContain("All 14 migrations this build ships are applied");
+    expect(html).toContain("The job runs every minute");
+    expect(html).toContain("2 users are on the admin list");
+    expect(html).not.toContain("Get this network live");
+    // One failing check and it is Setup again.
+    const late = view(
+      healthy({ job: { runs: healthy().job!.runs, sweptAt: ago(720_000) } }),
+    );
+    expect(late).toContain("Get this network live");
+    expect(late).toContain("The job stopped 12 minutes ago");
+    expect(late).toContain("payment_sweep_stale");
+    expect(late).toContain("Live, but card holds are refused");
+  });
+
+  it("a stop reads Done exactly when its check passes", () => {
+    const h = healthy();
+    const who = { admin: ana, lastEmail: null, hasSecret: false };
+    const cases: Partial<SetupStatus>[] = [
+      {},
+      { demo: true, database: null },
+      { database: { ...h.database!, state: "empty", applied: 0 } },
+      {
+        database: {
+          ...h.database!,
+          state: "pending",
+          applied: 13,
+          pending: ["202611240001_hub_push_mode.sql"],
+        },
+      },
+      { database: { ...h.database!, state: "unreachable", applied: 0 } },
+      { environment: { ...h.environment, webhookSecret: false } },
+      { webhook: null },
+      { webhook: { lastSigned: null, lastRefused: { at: ago(5_000) } } },
+      {
+        webhook: {
+          lastSigned: { at: ago(5_000), result: "failed" },
+          lastRefused: null,
+        },
+      },
+      {
+        webhook: {
+          lastSigned: h.webhook!.lastSigned,
+          lastRefused: { at: ago(1_000) },
+        },
+      },
+      { environment: { ...h.environment, cronSecret: false } },
+      { job: null },
+      { job: { runs: [], sweptAt: null } },
+      { job: { runs: [], sweptAt: ago(30_000) } },
+      { job: { runs: [], sweptAt: ago(900_000) } },
+      { job: { runs: h.job!.runs, sweptAt: ago(900_000) } },
+      {
+        job: {
+          runs: [{ at: ago(60_000), ok: false, sinceLastS: 60 }],
+          sweptAt: ago(30_000),
+        },
+      },
+      {
+        job: {
+          runs: [{ at: ago(60_000), ok: true, sinceLastS: 86_400 }],
+          sweptAt: ago(30_000),
+        },
+      },
+      {
+        job: {
+          runs: [{ at: ago(86_400_000), ok: true, sinceLastS: 86_400 }],
+          sweptAt: ago(80_000_000),
+        },
+      },
+      { admins: 0 },
+      { admins: null },
+      { peers: null },
+      { peers: { total: 1, registered: 0, hubs: 0, trustedParties: 0 } },
+    ];
+    for (const change of cases) {
+      const status = healthy(change);
+      const stops = buildStops(status, facts(read, status.demo), who);
+      expect(
+        stops.map((stop) => stop.kind === "ok"),
+        JSON.stringify(change),
+      ).toEqual(passes(status, Date.parse(T)));
+      // Every stop that is not done says what it is, and renders.
+      expect(view(status)).toContain("1 · ENVIRONMENT");
+    }
+  });
+
+  it("words the database, webhook and job stops for what was found", () => {
+    const h = healthy();
+    // With no tables nothing else can be read (lib/setup/status.ts).
+    const empty = view(
+      healthy({
+        database: { ...h.database!, state: "empty", applied: 0 },
+        webhook: null,
+        job: null,
+        admins: 0,
+        peers: { total: 0, registered: 0, hubs: 0, trustedParties: 0 },
+      }),
+    );
+    expect(empty).toContain("The database has no tables");
+    expect(empty).toContain("Not live: 1 of 6 done");
+    expect(empty).toContain("npm run db:migrate");
+    const pending = view(
+      healthy({
+        database: {
+          ...h.database!,
+          state: "pending",
+          applied: 13,
+          pending: ["202611240001_hub_push_mode.sql"],
+        },
+      }),
+    );
+    expect(pending).toContain("One migration is pending");
+    expect(pending).toContain("<code>202611240001_hub_push_mode.sql</code>");
+    const refused = view(
+      healthy({
+        webhook: { lastSigned: null, lastRefused: { at: ago(300_000) } },
+      }),
+    );
+    expect(refused).toContain("the signature does not match");
+    expect(refused).toContain("5 minutes ago (2026-11-24 11:55 UTC)");
+    const daily = view(
+      healthy({
+        job: {
+          runs: [{ at: ago(3_600_000), ok: true, sinceLastS: 86_400 }],
+          sweptAt: ago(3_600_000),
+        },
+      }),
+    );
+    expect(daily).toContain("The job runs once a day: card holds are refused");
+    expect(daily).toContain("Free hosting limit");
+    const none = view(healthy({ admins: 0 }));
+    expect(none).toContain("No admin exists yet");
+    expect(none).toContain("insert into public.emsp_admins");
+    expect(none).toContain("Almost live: 5 of 6 done");
+  });
+
+  it("in demo mode every later stop waits for the environment", () => {
+    const status = healthy({
+      demo: true,
+      database: null,
+      environment: {
+        ...healthy().environment,
+        missing: ["OCPI_TOKEN_ENCRYPTION_KEY"],
+        demoForced: true,
+      },
+    });
+    const html = view(status, ana, facts(read, true));
+    expect(html).toContain("Demo mode: 0 of 6 done");
+    expect(html).toContain("One setting needs you");
     expect(html).toContain("openssl rand -base64 32");
-    expect(html.match(/Cannot check from here/g)?.length).toBeGreaterThan(3);
+    expect(html).toContain("<code>DEMO_MODE</code> is set");
+    expect(html.match(/>Waiting</g)).toHaveLength(5);
+    expect(html).toContain("The mock CPO stands in");
+  });
+
+  it("the sign-in page in demo mode says whether the admin secret is set, and only that", () => {
+    const signIn = (secretEnabled: boolean) =>
+      renderToStaticMarkup(
+        createElement(AdminProvider, {
+          admin: null,
+          demo: true,
+          children: createElement(SignIn, { codesPerHour: 5, secretEnabled }),
+        }),
+      );
+    const without = signIn(false);
+    expect(without).toContain("ADMIN_SECRET is not set on this server");
+    expect(without).not.toContain("Use the admin secret instead");
+    const withSecret = signIn(true);
+    expect(withSecret).not.toContain("is not set on this server");
+    // The one variable the page names is that one, with or without it.
+    for (const html of [without, withSecret])
+      expect(
+        [...new Set(html.match(/[A-Z][A-Z0-9]+_[A-Z0-9_]+/g) ?? [])].filter(
+          (name) => name !== "ADMIN_SECRET",
+        ),
+      ).toEqual([]);
   });
 
   // Every other page whose server part reads the configuration.
@@ -694,7 +972,7 @@ describe("setup: nothing for a visitor who is not signed in", () => {
   });
 
   it("names the admin secret at stop 5 only to whoever signed in with it", () => {
-    const demo = facts(null, true);
+    const demo = healthy({ demo: true, database: null });
     const without = firstAdmin(demo, null, null, false);
     expect(String(without.text)).not.toMatch(/secret/i);
     expect(String(firstAdmin(demo, null, null, true).text)).toContain(

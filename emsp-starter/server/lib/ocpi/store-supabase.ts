@@ -206,7 +206,12 @@ export class SupabasePeerStore implements PeerStore {
     await this.rest("POST", "emsp_audit_log", {
       actor: entry.actor,
       action: entry.action,
-      subject_type: entry.subjectId ? "ocpi_peer" : null,
+      // Setup's own entries (lib/setup/log.ts) are about no peer.
+      subject_type: !entry.subjectId
+        ? null
+        : entry.subjectId.startsWith("setup:")
+          ? "setup"
+          : "ocpi_peer",
       subject_id: entry.subjectId ?? null,
       request_id: entry.requestId ?? null,
       details: entry.details ?? {},

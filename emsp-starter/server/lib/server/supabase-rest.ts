@@ -8,17 +8,22 @@ import { outboundFetch } from "./demo";
  */
 export type SupabaseTransport = typeof outboundFetch;
 
-export function supabaseRest(
+/**
+ * One request, answered as it came: for a caller that needs the status of a refusal
+ * (the database check tells "no such table" from "no answer"). Nothing is thrown for a
+ * status; a request that gets no answer rejects.
+ */
+export function supabaseRequest(
   url: string,
   serviceRoleKey: string,
   transport: SupabaseTransport = outboundFetch,
 ) {
-  return async function rest<T>(
+  return function request(
     method: "GET" | "POST" | "PATCH" | "DELETE",
     path: string,
     body?: unknown,
     prefer?: string,
-  ): Promise<T> {
+  ): Promise<Response> {
     const headers: Record<string, string> = {
       apikey: serviceRoleKey,
       Accept: "application/json",
@@ -29,14 +34,30 @@ export function supabaseRest(
       headers.Authorization = `Bearer ${serviceRoleKey}`;
     if (body !== undefined) headers["Content-Type"] = "application/json";
     if (prefer) headers.Prefer = prefer;
-    const table = path.split("?")[0];
-    const res = await transport(`${url.replace(/\/+$/, "")}/rest/v1/${path}`, {
+    return transport(`${url.replace(/\/+$/, "")}/rest/v1/${path}`, {
       method,
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
       redirect: "error",
       signal: AbortSignal.timeout(10_000),
     });
+  };
+}
+
+export function supabaseRest(
+  url: string,
+  serviceRoleKey: string,
+  transport: SupabaseTransport = outboundFetch,
+) {
+  const request = supabaseRequest(url, serviceRoleKey, transport);
+  return async function rest<T>(
+    method: "GET" | "POST" | "PATCH" | "DELETE",
+    path: string,
+    body?: unknown,
+    prefer?: string,
+  ): Promise<T> {
+    const table = path.split("?")[0];
+    const res = await request(method, path, body, prefer);
     if (!res.ok) {
       await res.body?.cancel();
       throw new Error(

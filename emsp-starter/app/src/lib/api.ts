@@ -22,9 +22,12 @@ import type {
   SearchResult,
 } from "./types";
 
-/** `GET /api/v1/status` on the server. */
+/**
+ * `GET /api/v1/status` on the server. "setup": out of demo mode, but its database is
+ * not ready yet, so it is not live; the app shows no demo banner for it.
+ */
 export type Status = {
-  mode: "demo" | "live";
+  mode: "demo" | "live" | "setup";
   name: string;
   ocpi: { version: string; country_code: string; party_id: string };
 };

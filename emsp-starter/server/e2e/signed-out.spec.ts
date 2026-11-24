@@ -2,14 +2,14 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type APIRequestContext } from "@playwright/test";
 import { E2E_ADMIN_SECRET, SETUPS, type Setup } from "../playwright.config";
-import { goTo } from "./support";
+import { expectAccessible, goTo } from "./support";
 
 /**
  * What a visitor who is not signed in is sent. The rule: the sign-in prompt, and
  * nothing about this deployment's configuration.
  *
  * It is tested without knowing what a leak would look like. The same build runs under
- * five configurations (playwright.config.ts). Every page of the app is fetched from
+ * six configurations (playwright.config.ts). Every page of the app is fetched from
  * each, as HTML with its inline page data and as the page data a client navigation
  * fetches, and the answers must be the same, byte for byte. A page that hands a
  * visitor anything read from the configuration (a value, an address, "is it set")
@@ -22,7 +22,15 @@ import { goTo } from "./support";
  *   three demo setups (defaults; unset and malformed; everything set and well formed)
  *   and two live ones that differ in every setting. Across the modes, the page as
  *   shown, less the banner, must still be the same.
- * - On the sign-in page only, whether the admin secret is offered (`secretEnabled`).
+ * - On the sign-in page only, whether the admin secret is offered (`secretEnabled`);
+ *   in demo mode without it, the page says so in words ("ADMIN_SECRET is not set on
+ *   this server"): the same one bit.
+ * - On Setup only, and only before the first admin exists: the six stops' fixed names
+ *   and whether each is done. The two live setups without an admin hold different
+ *   facts (peers, times, events, which secrets are set) behind the same six answers,
+ *   and must still be sent the same bytes. Demo mode never has an admin, so its three
+ *   setups show the six names with none done. Once an admin exists ("live-admin"),
+ *   Setup is the sign-in prompt alone again.
  */
 
 /** Every page of the app, found on disk: a new page is covered without listing it. */
@@ -81,6 +89,22 @@ const sameRequest = (data: string) =>
     /(\["\$","\$L[0-9a-f]+",)"[\w-]{21}[a-z]"(?=,\{"children")/g,
     '$1"REQUEST"',
   );
+
+/** Setup's list for a visitor before the first admin exists, taken out. */
+const lessProgress = (html: string) =>
+  html.replace(
+    /<section class="stack" aria-labelledby="progress-h">.*?<\/section>/s,
+    "",
+  );
+
+const STOPS = [
+  "Environment",
+  "Database",
+  "Payments webhook",
+  "Scheduled job",
+  "First admin",
+  "First peer",
+];
 
 /** The page as shown before any script runs, less the demo banner. */
 const shown = (html: string) =>
@@ -148,6 +172,8 @@ test("every signed-out page is the same whatever the deployment's configuration"
       for (const path of ROUTES) {
         // Whether the admin secret is offered is the sign-in page's to say.
         if (path === SIGN_IN && other.secret !== first.secret) continue;
+        // Before and after the first admin, Setup differs: tested on its own below.
+        if (path === "/" && other.admin !== first.admin) continue;
         const what = `${path}: ${first.name} and ${other.name}`;
         const a = sent.get(first.name)!.get(path)!;
         const b = sent.get(other.name)!.get(path)!;
@@ -169,18 +195,124 @@ test("every signed-out page is the same whatever the deployment's configuration"
       expectNoHints(data, `${what} (page data)`, setup);
     }
 
-  // Across the modes, a visitor is shown the same page but for the banner.
+  // Across the modes, a visitor is shown the same page but for the banner, and on
+  // Setup but for the six names with their answers.
   const demo = sent.get("demo")!;
-  const live = sent.get("live-a")!;
-  for (const path of ROUTES) {
-    // The sign-in page words its admin-secret step for a demo.
-    if (path === SIGN_IN) continue;
-    expect(demo.get(path)!.html, path).toContain('class="demo-banner"');
-    expect(live.get(path)!.html, path).not.toContain("demo-banner");
-    expect(
-      shown(live.get(path)!.html),
-      `${path}: demo and live, as shown`,
-    ).toBe(shown(demo.get(path)!.html));
+  for (const name of ["live-a", "live-admin"]) {
+    const live = sent.get(name)!;
+    for (const path of ROUTES) {
+      // The sign-in page words its admin-secret step for a demo.
+      if (path === SIGN_IN) continue;
+      expect(demo.get(path)!.html, path).toContain('class="demo-banner"');
+      expect(live.get(path)!.html, path).not.toContain("demo-banner");
+      expect(
+        lessProgress(shown(live.get(path)!.html)),
+        `${path}: demo and ${name}, as shown`,
+      ).toBe(lessProgress(shown(demo.get(path)!.html)));
+    }
+  }
+});
+
+/** The six stops a setup's visitor should be told, or null for none. */
+const expectedView = (setup: Setup) =>
+  setup.admin
+    ? null
+    : STOPS.map((name, i) => ({
+        name,
+        // Demo: none. The live setups without an admin: environment, database, peer.
+        pass: setup.mode === "live" && [0, 1, 5].includes(i),
+      }));
+
+test("before the first admin a visitor is told six names and done or not; after it, nothing", async ({
+  request,
+  page,
+}) => {
+  test.setTimeout(120_000);
+  for (const setup of SETUPS) {
+    const what = `${setup.name} /`;
+    const view = expectedView(setup);
+    const html = await (await request.get(`${setup.url}/`)).text();
+    const data = plain(
+      await (
+        await request.get(`${setup.url}/`, { headers: { RSC: "1" } })
+      ).text(),
+    );
+    // What the server hands the page: exactly the view, or none.
+    expect(data, what).toContain(`"publicView":${JSON.stringify(view)}`);
+    expect(plain(html), what).toContain(`"publicView":${JSON.stringify(view)}`);
+    const text = shown(html)
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s+/g, " ");
+    if (!view) {
+      // An admin exists: the view is gone, names and all.
+      expect(text, what).not.toMatch(/Setup so far|Not done|No admin exists/);
+      for (const name of STOPS.slice(1))
+        expect(text.toLowerCase(), what).not.toContain(name.toLowerCase());
+      expect(html, what).not.toContain("Setup progress");
+      continue;
+    }
+    const done = view.filter((stop) => stop.pass).length;
+    expect(text, what).toContain(`Setup so far: ${done} of 6 done`);
+    for (const [i, stop] of view.entries())
+      expect(text, what).toContain(
+        `${i + 1} · ${stop.name.toUpperCase()} ${stop.pass ? "Done" : "Not done"}`,
+      );
+    for (const body of [html, data]) {
+      // No time and nothing of what the database stand-in holds.
+      expect(body, what).not.toMatch(/\d{4}-\d\d-\d\dT\d\d:/);
+      expect(body, what).not.toMatch(
+        /Example CPO|cpo-\d|payment_intent|charge\.refunded|job\.run|webhook\.refused|since_last/,
+      );
+      expect(body, what).not.toMatch(/\.sql|emsp_|migrat/i);
+    }
+  }
+
+  // As a visitor sees it, in a browser: the list, then the sign-in prompt.
+  const fresh = SETUPS.find((s) => s.name === "live-b")!;
+  await page.goto(`${fresh.url}/`);
+  const progress = page.getByRole("list", { name: "Setup progress" });
+  await expect(progress.getByRole("listitem")).toHaveCount(6);
+  await expect(progress.getByText("Not done")).toHaveCount(3);
+  await expect(
+    page.getByRole("heading", {
+      name: "Sign in as an admin to see this deployment's setup",
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("list", { name: "Setup checklist" })).toHaveCount(
+    0,
+  );
+  // The menu calls it Setup for every visitor.
+  await expect(page.getByRole("link", { name: "Health" })).toHaveCount(0);
+  for (const colorScheme of ["light", "dark"] as const) {
+    await page.emulateMedia({ colorScheme });
+    await expectAccessible(
+      page,
+      `setup, before the first admin, ${colorScheme}`,
+    );
+  }
+  const after = SETUPS.find((s) => s.name === "live-admin")!;
+  await page.goto(`${after.url}/`);
+  await expect(
+    page.getByRole("heading", {
+      name: "Sign in as an admin to see this deployment's setup",
+    }),
+  ).toBeVisible();
+  await expect(page.getByRole("list", { name: "Setup progress" })).toHaveCount(
+    0,
+  );
+});
+
+test("the status API says live only where the database check passes, and nothing more", async ({
+  request,
+}) => {
+  for (const setup of SETUPS) {
+    const body = await (await request.get(`${setup.url}/api/v1/status`)).json();
+    expect(Object.keys(body).sort(), setup.name).toEqual([
+      "mode",
+      "name",
+      "ocpi",
+    ]);
+    expect(body.mode, setup.name).toBe(setup.mode);
   }
 });
 
@@ -194,16 +326,36 @@ test("only the sign-in page is told whether the admin secret is set, and nothing
       const body = plain(await res.text());
       const what = `${setup.name} sign-in`;
       expect(body, what).toContain(`"secretEnabled":${setup.secret}`);
-      expect(body.match(VARIABLE) ?? [], what).toEqual([]);
-      expect(body, what).not.toMatch(ERROR_TEXT);
+      // A demo without the admin secret says so in words: the same bit, by name.
+      // In the HTML, that is: the page data carries the flag alone.
+      const says =
+        setup.mode === "demo" && !setup.secret && !("RSC" in headers);
+      expect(
+        body.includes("ADMIN_SECRET is not set on this server"),
+        what,
+      ).toBe(says);
+      expect(
+        (body.match(VARIABLE) ?? []).filter(
+          (name) => !(says && name === "ADMIN_SECRET"),
+        ),
+        what,
+      ).toEqual([]);
+      // That sentence aside, nothing reads like a setting's error.
+      expect(
+        body.replaceAll("ADMIN_SECRET is not set on this server", ""),
+        what,
+      ).not.toMatch(ERROR_TEXT);
       expect(body, what).not.toMatch(
         /stripeKey|stripeSet|webhookSecret|cronSecret|"missing"/,
       );
       if (setup.mode === "live" && !("RSC" in headers)) bodies.push(body);
     }
-  // The two live setups differ on this page by that flag and what it shows, only.
-  expect(bodies.length).toBe(2);
+  // The live setups (live-a, live-b, live-admin) differ on this page by that flag and
+  // what it shows, only: the two with the secret set are sent the same bytes, whether
+  // an admin exists or not.
+  expect(bodies.length).toBe(3);
   expect(bodies[0]).not.toBe(bodies[1]);
+  expect(bodies[2]).toBe(bodies[0]);
 });
 
 test("with the admin secret, the pages say how to find what the server did not send", async ({
@@ -222,13 +374,17 @@ test("with the admin secret, the pages say how to find what the server did not s
     page.getByRole("heading", { name: "Account", level: 1 }),
   ).toBeVisible();
   await goTo(page, "Setup");
+  // The setup status is an admin action, and the secret is this server's admin gate:
+  // the stops say what they found, by name. What the server renders into the page
+  // (its address, its party, the hold) it still sends to an email sign-in only.
   const stop = page.locator("#stop-1");
-  await expect(stop).toContainText("Cannot check from here");
-  await expect(stop).toContainText("only to an admin signed in by email");
+  await expect(stop).toContainText("settings need you");
+  await expect(stop).toContainText("PUBLIC_BASE_URL is not set.");
+  await expect(stop).toContainText("HOLD_AMOUNTS must be");
   const main = page.getByRole("main");
-  await expect(main).not.toContainText(/is not set\.|Malformed|must be/);
-  for (const name of ["PUBLIC_BASE_URL", "HOLD_AMOUNTS", "RESEND_API_KEY"])
-    await expect(main).not.toContainText(name);
+  await expect(main).not.toContainText(/localhost|Hold per charge/);
+  for (const value of Object.values(wrong.env))
+    if (value.length > 3) await expect(main).not.toContainText(value);
   // Nor our OCPI party: the page names the public API that answers it.
   const about = page.getByRole("complementary", {
     name: "About this deployment",

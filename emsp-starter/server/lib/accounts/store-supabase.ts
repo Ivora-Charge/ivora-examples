@@ -111,4 +111,12 @@ export class SupabaseAccountStore implements AccountStore {
     );
     return row?.role ?? null;
   }
+
+  async countAdmins(): Promise<number> {
+    const rows = await this.rest<unknown[]>(
+      "GET",
+      "emsp_admins?select=role&limit=1000",
+    );
+    return rows.length;
+  }
 }

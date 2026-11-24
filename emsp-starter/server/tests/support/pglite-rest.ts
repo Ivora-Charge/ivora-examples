@@ -27,9 +27,15 @@ export function pgliteRest(db: PGlite) {
         ? new Response(null, { status: 204 })
         : Response.json(rows);
     } catch (e) {
+      // Like PostgREST: Postgres's error code with the message (42P01 for a table
+      // that does not exist, 42703 for a column), and its own for a function.
+      const code =
+        e && typeof e === "object" && "code" in e && typeof e.code === "string"
+          ? e.code
+          : undefined;
       return Response.json(
-        { message: e instanceof Error ? e.message : String(e) },
-        { status: 400 },
+        { code, message: e instanceof Error ? e.message : String(e) },
+        { status: code === "PGRST202" ? 404 : 400 },
       );
     }
   };
@@ -155,7 +161,8 @@ async function rpc(
      where n.nspname = 'public' and p.proname = $1`,
     [name],
   );
-  if (!fn) throw new Error(`No function ${name}`);
+  if (!fn)
+    throw Object.assign(new Error(`No function ${name}`), { code: "PGRST202" });
   // proargnames also lists OUT columns (returns table); the inputs come first.
   const names = fn.names.slice(0, fn.types.length).map(ident);
   const record = names.map((n, i) => `${n} ${fn.types[i]}`).join(", ");

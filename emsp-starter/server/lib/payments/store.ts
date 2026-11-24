@@ -234,6 +234,8 @@ export interface PaymentStore {
   hasEvent(id: string): Promise<boolean>;
   /** Records a handled Stripe event: true the first time, false for a redelivery. */
   recordEvent(id: string, type: string): Promise<boolean>;
+  /** The newest handled Stripe event: its type and when it came. Null: none yet. */
+  lastEvent(): Promise<{ type: string; receivedAt: string } | null>;
   /** Records that the payment sweep (the cron route) finished a pass at `now`. */
   markSwept(now: string): Promise<void>;
   /** When the payment sweep last finished a pass; null if it never did. */
@@ -254,6 +256,7 @@ export class MemoryPaymentStore implements PaymentStore {
   readonly payments = new Map<string, Payment>();
   readonly refunds = new Map<string, Refund>();
   readonly events = new Set<string>();
+  newestEvent: { type: string; receivedAt: string } | null = null;
   sweptAt: string | null = null;
 
   constructor(private readonly cdrs: () => Iterable<StoredCdr> = () => []) {}
@@ -430,10 +433,15 @@ export class MemoryPaymentStore implements PaymentStore {
     return this.events.has(id);
   }
 
-  async recordEvent(id: string) {
+  async recordEvent(id: string, type = "") {
     if (this.events.has(id)) return false;
     this.events.add(id);
+    this.newestEvent = { type, receivedAt: new Date().toISOString() };
     return true;
+  }
+
+  async lastEvent() {
+    return this.newestEvent && { ...this.newestEvent };
   }
 
   async markSwept(now: string) {
