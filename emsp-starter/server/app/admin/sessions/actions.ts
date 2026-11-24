@@ -51,12 +51,12 @@ export type SessionsState = {
   /**
    * What the peer, driver and search filters match, whatever the status chip and
    * "started before": the chips' numbers. `total` is the sum of the statuses. With a
-   * search term each status is counted up to 1000, and `more` names those with more.
+   * search term each status is counted up to 500 (`SESSION_SEARCH_COUNT_CAP`), and `more` names those with more.
    */
   counts?: SessionCounts;
   /** What the status chip, peer, driver and search match: the "128" of "8 of 128". */
   listTotal?: number;
-  /** The list total is a capped count: there are more ("8 of 1000+"). */
+  /** The list total is a capped count: there are more ("8 of 500+"). */
   listTotalMore?: boolean;
   /**
    * When the list is full: where the next page starts, as a UTC timestamp (the
