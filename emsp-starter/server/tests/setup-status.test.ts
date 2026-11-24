@@ -521,6 +521,7 @@ describe("the setup status read", () => {
     // A refusal alone does not fail the stop: anyone can send one.
     expect(passes(s, T0)[2]).toBe(true);
     // A signed event that failed here, after the last handled one.
+    // Wall clock on purpose: peers.audit() stamps the entry with the real time.
     payments.newestEvent!.receivedAt = new Date(
       Date.now() - 3_600_000,
     ).toISOString();
@@ -770,7 +771,7 @@ describe("recording job runs", () => {
     expect(
       await recordJobRun(
         { peers: broken },
-        { ok: false, startedAt: new Date(), sweptBefore: null },
+        { ok: false, startedAt: new Date(now), sweptBefore: null },
       ),
     ).toBe(false);
     log.mockRestore();
@@ -1097,7 +1098,7 @@ describe("the public view, before the first admin", () => {
     });
     await recordJobRun(
       { peers },
-      { ok: true, startedAt: new Date(), sweptBefore: payments.sweptAt },
+      { ok: true, startedAt: new Date(now), sweptBefore: payments.sweptAt },
     );
     Object.assign(process.env, {
       EMSP_COUNTRY_CODE: "DE",
