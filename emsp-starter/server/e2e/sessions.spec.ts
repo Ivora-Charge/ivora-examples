@@ -38,9 +38,19 @@ test("demo: the session list opens by itself; filters are chips; a table on desk
   const rows = table.locator("tbody tr");
   await expect(rows).toHaveCount(3);
   await expect(rows.first()).toContainText("Mock CPO (demo)");
-  // No counts or search the server does not give.
-  await expect(page.getByRole("searchbox")).toHaveCount(0);
-  await expect(chips).not.toContainText(/\d/);
+  // Each chip has the server's count, and the list says how many of them it shows.
+  await expect(chips.getByRole("button", { name: "All" })).toHaveText("All 3");
+  await expect(chips.getByRole("button", { name: "Charging now" })).toHaveText(
+    "Charging now 1",
+  );
+  await expect(chips.getByRole("button", { name: "Finished" })).toHaveText(
+    "Finished 2",
+  );
+  await expect(chips.getByRole("button", { name: "Starting" })).toHaveText(
+    "Starting 0",
+  );
+  const foot = page.locator(".foot [role=status]");
+  await expect(foot).toContainText("3 of 3 shown, newest first");
 
   // The same markup: column headers on a wide screen, one card per row on a phone.
   const header = table.getByRole("columnheader", { name: "Peer" });
@@ -87,6 +97,27 @@ test("demo: the session list opens by itself; filters are chips; a table on desk
 
   await page.getByRole("button", { name: "Clear all filters" }).click();
   await expect(rows).toHaveCount(3);
+
+  // Search runs on the server: it narrows the list and the chips' counts.
+  const search = page.getByRole("searchbox", { name: "Search" });
+  // "More filters" is still open from above.
+  await expect(search).toBeVisible();
+  await expect(search).toHaveAttribute("maxlength", "64");
+  await page.getByLabel("Started before").fill("");
+  await search.fill("no-such-session");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(
+    page.getByRole("heading", { name: "No sessions match" }),
+  ).toBeVisible();
+  await expect(chips.getByRole("button", { name: "All" })).toHaveText("All 0");
+  await search.fill("a,b");
+  await page.getByRole("button", { name: "Apply filters" }).click();
+  await expect(page.locator(".msg[role=alert]")).toContainText(
+    "Search takes up to 64",
+  );
+  await page.getByRole("button", { name: "Clear all filters" }).click();
+  await expect(rows).toHaveCount(3);
+  await expect(foot).toContainText("3 of 3 shown");
 });
 
 test("OCPI sessions and CDRs endpoints refuse unknown tokens", async ({

@@ -7,10 +7,10 @@ import { Head, Icon, Message, Result, State, Tile, utc } from "../ui/kit";
 import { ago, Gated, OurParty, OurVersionsUrl } from "../ui/parts";
 import { useList } from "../ui/use-action";
 import { listPeersAction, type PeerSummary } from "./actions";
-import { moduleName, viewOf } from "./peer-view";
+import { inARow, moduleName, sendTheCpo, viewOf } from "./peer-view";
 
 /** A peer is a row you open; its actions are on its own page. */
-function PeerRow({ peer }: { peer: PeerSummary }) {
+export function PeerRow({ peer }: { peer: PeerSummary }) {
   const v = viewOf(peer);
   const total = v.trusted + v.offered;
   const tile =
@@ -64,9 +64,9 @@ function PeerRow({ peer }: { peer: PeerSummary }) {
         <div key={m.module} style={{ marginTop: "0.5rem" }}>
           <Message
             kind="bad"
-            title={`${moduleName(m.module)} pull from ${peer.label} failed ${ago(m.lastPullAt)}: ${m.error}`}
+            title={`${moduleName(m.module)} pull from ${peer.label} failed ${ago(m.lastPullAt)}${inARow(m) ? `, ${inARow(m)}` : ""}: ${m.error}`}
             code={m.code}
-            nextStep={m.nextStep}
+            nextStep={[m.nextStep, sendTheCpo(m)].filter(Boolean).join(" ")}
           />
         </div>
       ))}

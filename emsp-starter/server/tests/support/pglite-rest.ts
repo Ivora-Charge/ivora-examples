@@ -2,10 +2,11 @@ import type { PGlite, Transaction } from "@electric-sql/pglite";
 
 /**
  * Just enough of Supabase's Data API (PostgREST) over PGlite for the stores' requests:
- * GET, PATCH and DELETE with eq/lt/gte/lte/in/is filters and `select` (GET also with
- * `order`, `limit` and `offset`); POST inserts with
- * `on_conflict` and `resolution=ignore-duplicates`; and POST rpc/<function> with named
- * arguments. Each request runs in its own transaction as service_role, like PostgREST,
+ * GET, PATCH and DELETE with eq/lt/gte/lte/in/is filters, an `or=(...)` of ilike
+ * filters (on a column or a `column->>key` of a json one) and `select` (GET also with
+ * `order`, `limit` and `offset`); HEAD with `Prefer: count=exact`, answered in
+ * Content-Range with no body; POST inserts with `on_conflict` and
+ * `resolution=ignore-duplicates`; and POST rpc/<function> with named arguments. Each request runs in its own transaction as service_role, like PostgREST,
  * so grants and row locks are Postgres's own. Requests from concurrent callers
  * interleave between requests, which is where lost updates happen.
  */
@@ -23,9 +24,14 @@ export function pgliteRest(db: PGlite) {
         if (path.startsWith("rpc/")) return rpc(tx, path.slice(4), body ?? {});
         return table(tx, method, path, url.searchParams, body, prefer);
       });
-      return rows === undefined
-        ? new Response(null, { status: 204 })
-        : Response.json(rows);
+      if (rows === undefined) return new Response(null, { status: 204 });
+      // Like PostgREST: a HEAD answers with the count alone, and no body.
+      if (!Array.isArray(rows))
+        return new Response(null, {
+          status: 200,
+          headers: { "Content-Range": `*/${rows.count}` },
+        });
+      return Response.json(rows);
     } catch (e) {
       // Like PostgREST: Postgres's error code with the message (42P01 for a table
       // that does not exist, 42703 for a column), and its own for a function.
@@ -46,7 +52,29 @@ const ident = (s: string) => {
   return `"${s}"`;
 };
 
-const RESERVED = new Set(["select", "on_conflict", "limit", "offset", "order"]);
+const RESERVED = new Set([
+  "select",
+  "on_conflict",
+  "limit",
+  "offset",
+  "order",
+  "or",
+]);
+
+/** `(driver_ref.ilike."*x*",data->>evse_uid.ilike."*x*")`, as one SQL condition. */
+function orFilter(value: string, args: unknown[]): string {
+  const re = /([a-z_]+)(?:->>([a-z_]+))?\.ilike\."([^"]*)"/g;
+  const terms = [...value.matchAll(re)];
+  if (!terms.length || !/^\(.*\)$/.test(value))
+    throw new Error("Unsupported or filter");
+  return `(${terms
+    .map(([, col, key, pattern]) => {
+      args.push(pattern.replaceAll("*", "%"));
+      const what = key ? `${ident(col)}->>'${key}'` : ident(col);
+      return `${what} ilike $${args.length}`;
+    })
+    .join(" or ")})`;
+}
 
 /** `order=a.asc,b.desc`, `limit` and `offset` of a GET. */
 function paging(params: URLSearchParams): string {
@@ -73,6 +101,10 @@ function paging(params: URLSearchParams): string {
 function where(params: URLSearchParams, args: unknown[]): string {
   const out: string[] = [];
   for (const [column, filter] of params) {
+    if (column === "or") {
+      out.push(orFilter(filter, args));
+      continue;
+    }
     if (RESERVED.has(column)) continue;
     const dot = filter.indexOf(".");
     const op = filter.slice(0, dot);
@@ -117,7 +149,15 @@ async function table(
   const t = `public.${ident(name)}`;
   const args: unknown[] = [];
   let sql: string;
-  if (method === "GET") {
+  if (method === "HEAD") {
+    if (!prefer.includes("count=exact"))
+      throw new Error("Unsupported HEAD without count=exact");
+    const { rows } = await tx.query<{ n: string }>(
+      `select count(*) as n from ${t}${where(params, args)}`,
+      args,
+    );
+    return { count: Number(rows[0].n) };
+  } else if (method === "GET") {
     const ret = returning(params).replace(" returning ", "");
     sql = `select ${ret} from ${t}${where(params, args)}${paging(params)}`;
   } else if (method === "DELETE") {

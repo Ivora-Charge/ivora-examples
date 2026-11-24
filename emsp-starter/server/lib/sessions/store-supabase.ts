@@ -3,17 +3,23 @@ import { randomUUID } from "node:crypto";
 import { toE4 } from "@/lib/locations/pricing";
 import type { Cdr, Session } from "@/lib/ocpi/session-objects";
 import {
+  DatabaseRequestError,
   eq,
   inList,
+  supabaseRequest,
   supabaseRest,
   type SupabaseTransport,
 } from "@/lib/server/supabase-rest";
-import type {
-  CdrKey,
+import {
+  SESSION_SEARCH_COUNT_CAP,
+  SESSION_STATUSES,
+  type CdrKey,
   CdrSource,
   NewCdr,
   ReconciliationQuery,
   ReconciliationRow,
+  SessionCountQuery,
+  SessionCounts,
   SessionKey,
   SessionListQuery,
   SessionStore,
@@ -21,6 +27,23 @@ import type {
   StoredCdr,
   StoredSession,
 } from "./store";
+import { checkedSearchTerm } from "./statuses";
+
+/**
+ * Part of a driver reference, session ID, charger or location, any letter case.
+ * `checkedSearchTerm` throws for anything but letters, digits, spaces and
+ * `. : @ / + - _`, whatever the caller checked: no comma, parenthesis, quote or
+ * backslash can end the quoted value or the `or=(...)`, and no `*` or `%` can widen
+ * the pattern. Only `_` still means something in it: any one character.
+ */
+const searchFilter = (term: string) => {
+  const like = `"*${checkedSearchTerm(term)}*"`;
+  return `or=${encodeURIComponent(
+    `(${["driver_ref", "session_id", "data->>evse_uid", "data->>location_id"]
+      .map((c) => `${c}.ilike.${like}`)
+      .join(",")})`,
+  )}`;
+};
 
 type SessionRow = {
   id: string;
@@ -124,6 +147,7 @@ const sessionFilter = (k: SessionKey) =>
  */
 export class SupabaseSessionStore implements SessionStore {
   private readonly rest: ReturnType<typeof supabaseRest>;
+  private readonly request: ReturnType<typeof supabaseRequest>;
 
   constructor(
     url: string,
@@ -131,6 +155,7 @@ export class SupabaseSessionStore implements SessionStore {
     transport?: SupabaseTransport,
   ) {
     this.rest = supabaseRest(url, serviceRoleKey, transport);
+    this.request = supabaseRequest(url, serviceRoleKey, transport);
   }
 
   private async sessions(filter: string): Promise<StoredSession[]> {
@@ -266,11 +291,86 @@ export class SupabaseSessionStore implements SessionStore {
     return rows.length > 0;
   }
 
-  listSessions(q: SessionListQuery) {
-    const filters = [
+  /** The peer, driver and search filters, shared by the list and the counts. */
+  private matchFilters(q: SessionCountQuery) {
+    return [
       q.peerId && `peer_id=${eq(q.peerId)}`,
-      q.statuses && `status=${inList([...q.statuses])}`,
       q.driverRef && `driver_ref=${eq(q.driverRef)}`,
+      q.search && searchFilter(q.search),
+    ];
+  }
+
+  /**
+   * One count per status, asked together: five requests, apart from the list's own.
+   * Without a search term each is a HEAD request with `Prefer: count=exact`, so the
+   * database counts and no row is sent. With one, each reads at most
+   * SESSION_SEARCH_COUNT_CAP + 1 row IDs instead, so a search never makes the
+   * database count every row that matches; a status with more says so in `more`.
+   */
+  async countSessions(q: SessionCountQuery): Promise<SessionCounts> {
+    const filters = this.matchFilters(q);
+    const counts = await Promise.all(
+      SESSION_STATUSES.map(async (status) => {
+        const where = [...filters, `status=eq.${status}`];
+        if (q.search) {
+          const path = [
+            ...where,
+            "select=id",
+            `limit=${SESSION_SEARCH_COUNT_CAP + 1}`,
+          ]
+            .filter(Boolean)
+            .join("&");
+          const ids = await this.rest<{ id: string }[]>(
+            "GET",
+            `emsp_sessions?${path}`,
+          );
+          return [status, ids.length] as const;
+        }
+        const res = await this.request(
+          "HEAD",
+          `emsp_sessions?${where.filter(Boolean).join("&")}`,
+          undefined,
+          "count=exact",
+        );
+        if (!res.ok)
+          throw new DatabaseRequestError(
+            `Database request failed: HEAD emsp_sessions (HTTP ${res.status})`,
+            res.status,
+            null,
+          );
+        // Content-Range: "*/42", "0-41/42", or "*/0" when nothing matches.
+        const n = Number(
+          /\/(\d+)$/.exec(res.headers.get("Content-Range") ?? "")?.[1],
+        );
+        if (!Number.isInteger(n))
+          throw new DatabaseRequestError(
+            "Database request failed: HEAD emsp_sessions (no count)",
+            res.status,
+            null,
+          );
+        return [status, n] as const;
+      }),
+    );
+    const more = counts
+      .filter(([, n]) => q.search && n > SESSION_SEARCH_COUNT_CAP)
+      .map(([status]) => status);
+    const byStatus = Object.fromEntries(
+      counts.map(([status, n]) => [
+        status,
+        Math.min(n, q.search ? SESSION_SEARCH_COUNT_CAP : n),
+      ]),
+    );
+    return {
+      total: Object.values(byStatus).reduce((a, b) => a + b, 0),
+      byStatus,
+      more,
+    };
+  }
+
+  async listSessions(q: SessionListQuery) {
+    const filters = [
+      ...this.matchFilters(q),
+      q.statuses && `status=${inList([...q.statuses])}`,
       q.before && `start_date_time=lt.${encodeURIComponent(q.before)}`,
     ].filter(Boolean);
     return this.sessions(

@@ -406,8 +406,15 @@ export async function pullModule(
     const error = message(e);
     const codes =
       e instanceof OcpiError
-        ? { statusCode: e.statusCode, httpStatus: e.httpStatus }
+        ? {
+            statusCode: e.statusCode,
+            httpStatus: e.httpStatus,
+            requestId: e.requestId,
+          }
         : {};
+    // Failures in a row: one more than the last result's, unless that one succeeded.
+    const last = held.lastResult;
+    const failures = last && !last.ok ? (last.failures ?? 1) + 1 : 1;
     // Keep the run, parked, so the next call resumes at the page that failed.
     const r = state.run;
     if (r)
@@ -426,6 +433,8 @@ export async function pullModule(
               error,
               ...(codes.statusCode && { statusCode: codes.statusCode }),
               ...(codes.httpStatus && { httpStatus: codes.httpStatus }),
+              failures,
+              ...(codes.requestId && { requestId: codes.requestId }),
             },
           },
           r.id,

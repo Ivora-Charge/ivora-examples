@@ -41,8 +41,21 @@ const ocpiNextStep = (statusCode: number) =>
       ? OCPI_NEXT_STEP[3000]
       : OCPI_NEXT_STEP[2000]);
 
-const UNAUTHORIZED =
-  "The CPO refused our token. Rotate tokens (CPO peers); if that is refused too, register at the CPO again with a new Token A.";
+/**
+ * Which token the CPO refused: the one-time token of a first registration (nothing is
+ * stored yet), or the permanent token of a registered peer. Unknown when the code
+ * cannot tell, and the next step then covers both.
+ */
+export type TokenContext = "one-time" | "permanent";
+
+const UNAUTHORIZED = {
+  unknown:
+    "The CPO refused our token. Rotate tokens (CPO peers); if that is refused too, register at the CPO again with a new Token A.",
+  "one-time":
+    "The CPO refused the one-time token. Get a new one-time token (Token A) from the CPO and register again; it works once and expires.",
+  permanent:
+    "The CPO refused our permanent token. Rotate tokens (CPO peers), then register again with a new one-time token if that is refused too.",
+} as const;
 const NO_RESPONSE: Explained = {
   code: "no_ocpi_response",
   nextStep:
@@ -76,11 +89,12 @@ export const UNEXPECTED: Explained = {
 export function explainStatus(
   statusCode?: number,
   httpStatus?: number,
+  token?: TokenContext,
 ): Explained | null {
   if (httpStatus === 401 || httpStatus === 403)
     return {
       code: statusCode ? `OCPI ${statusCode}` : `HTTP ${httpStatus}`,
-      nextStep: UNAUTHORIZED,
+      nextStep: UNAUTHORIZED[token ?? "unknown"],
     };
   if (statusCode)
     return { code: `OCPI ${statusCode}`, nextStep: ocpiNextStep(statusCode) };
@@ -100,13 +114,17 @@ export function explainStatus(
  * "OCPI status 2001" and "HTTP 401" into its messages, which handshake and pull errors
  * (and the stored result of the last pull) keep.
  */
-export function explainMessage(message: string): Explained {
+export function explainMessage(
+  message: string,
+  token?: TokenContext,
+): Explained {
   if (message.startsWith("Demo mode:")) return DEMO_MODE;
   const ocpi = /OCPI status (\d{4})/.exec(message);
   const http = /HTTP (\d{3})/.exec(message);
   const known = explainStatus(
     ocpi ? Number(ocpi[1]) : undefined,
     http ? Number(http[1]) : undefined,
+    token,
   );
   if (known) return known;
   if (/\brefused: /.test(message)) return NOT_SENT;
@@ -121,24 +139,29 @@ export function explainMessage(message: string): Explained {
   return INVALID_INPUT;
 }
 
-/** The code and next step of anything an admin action threw. */
-export function explain(e: unknown): Explained {
+/**
+ * The code and next step of anything an admin action threw. `token` says which token a
+ * refusal (HTTP 401 or 403) is about: "one-time" while registering at a CPO, "permanent"
+ * for a registered peer.
+ */
+export function explain(e: unknown, token?: TokenContext): Explained {
   if (e && typeof e === "object" && "code" in e && e.code === "demo_mode")
     return DEMO_MODE;
   if (e instanceof OcpiUnauthorizedError)
-    return explainStatus(e.statusCode, e.httpStatus ?? 401)!;
+    return explainStatus(e.statusCode, e.httpStatus ?? 401, token)!;
   if (e instanceof OcpiNotSentError) return NOT_SENT;
   if (e instanceof OcpiTransportError)
-    return explainStatus(undefined, e.httpStatus) ?? NO_RESPONSE;
+    return explainStatus(undefined, e.httpStatus, token) ?? NO_RESPONSE;
   if (e instanceof OcpiError)
-    return explainStatus(e.statusCode, e.httpStatus) ?? NO_RESPONSE;
+    return explainStatus(e.statusCode, e.httpStatus, token) ?? NO_RESPONSE;
   if (!(e instanceof Error)) return UNEXPECTED;
   if (e instanceof SyncError)
     return (
-      explainStatus(e.statusCode, e.httpStatus) ?? explainMessage(e.message)
+      explainStatus(e.statusCode, e.httpStatus, token) ??
+      explainMessage(e.message, token)
     );
   if (e.name === "PaymentError") return explainPayment(e);
-  return explainMessage(e.message);
+  return explainMessage(e.message, token);
 }
 
 function explainPayment(e: Error): Explained {

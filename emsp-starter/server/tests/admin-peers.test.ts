@@ -255,6 +255,9 @@ describe("admin peer actions", () => {
     expect(res.ok).toBe(false);
     expect(res.message).toMatch(/refused our token \(HTTP 401\)/);
     expect(res.message).not.toContain("not-the-right-token");
+    // A first registration was refused: its one-time token, not a permanent one.
+    expect(res.nextStep).toMatch(/new one-time token/);
+    expect(res.nextStep).not.toMatch(/Rotate/);
   });
 
   it("rejects a malformed peer ID", async () => {

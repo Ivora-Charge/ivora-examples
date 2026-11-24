@@ -3,6 +3,14 @@ import { randomUUID } from "node:crypto";
 import { toE4 } from "@/lib/locations/pricing";
 import { dateTimeMs } from "@/lib/ocpi/locations";
 import type { Cdr, Session } from "@/lib/ocpi/session-objects";
+import {
+  type SessionCounts,
+  checkedSearchTerm,
+  matchesSearch,
+  OPEN_SESSION_STATUSES,
+  SESSION_SEARCH_COUNT_CAP,
+  SESSION_STATUSES,
+} from "./statuses";
 
 /**
  * Our drivers' sessions and CDRs, per CPO peer, keyed like OCPI: the CPO party's country
@@ -129,10 +137,31 @@ export type SessionListQuery = {
   /** Any of these statuses; all when unset. */
   statuses?: readonly string[];
   driverRef?: string;
+  /**
+   * Part of a driver reference, session ID, charger (EVSE UID) or location ID, any
+   * letter case; `_` matches any one character. Use `sessionSearchTerm` on what the
+   * admin typed: a store throws, without asking the database, for a term that
+   * `sessionSearchTerm` would not return unchanged.
+   */
+  search?: string;
   /** Only sessions that started before this (exclusive): the next page. */
   before?: string;
   limit: number;
 };
+
+/** The filters a count shares with the list: everything but status, page and size. */
+export type SessionCountQuery = Pick<
+  SessionListQuery,
+  "peerId" | "driverRef" | "search"
+>;
+
+export {
+  OPEN_SESSION_STATUSES,
+  SESSION_SEARCH_COUNT_CAP,
+  SESSION_STATUSES,
+  sessionSearchTerm,
+  type SessionCounts,
+} from "./statuses";
 
 export interface SessionStore {
   getSession(key: SessionKey): Promise<StoredSession | null>;
@@ -169,6 +198,8 @@ export interface SessionStore {
   reconcile(query: ReconciliationQuery): Promise<ReconciliationRow[]>;
   /** Sessions, newest start first. */
   listSessions(query: SessionListQuery): Promise<StoredSession[]>;
+  /** The totals behind the list, in one call. */
+  countSessions(query: SessionCountQuery): Promise<SessionCounts>;
 }
 
 const e4 = (n: number) => Number(toE4(n));
@@ -179,8 +210,6 @@ export const inRange = (dateTime: string, q: ReconciliationQuery) => {
   const t = dateTimeMs(dateTime);
   return t >= Date.parse(q.from) && t < Date.parse(q.to);
 };
-/** Sessions still running, or about to. */
-export const OPEN_SESSION_STATUSES = ["ACTIVE", "PENDING", "RESERVATION"];
 const OPEN = OPEN_SESSION_STATUSES;
 /** Byte order, like the database's `collate "C"`. */
 export const byCode = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -318,14 +347,51 @@ export class MemorySessionStore implements SessionStore {
       if (s.id === id) Object.assign(s, { stopReason: reason, updatedAt: now });
   }
 
+  private matches(s: StoredSession, q: SessionCountQuery) {
+    const term = q.search;
+    return (
+      (!q.peerId || s.peerId === q.peerId) &&
+      (!q.driverRef || s.driverRef === q.driverRef) &&
+      (!term ||
+        [
+          s.driverRef,
+          s.session.id,
+          s.session.evse_uid,
+          s.session.location_id,
+        ].some((v) => v != null && matchesSearch(v, term)))
+    );
+  }
+
+  async countSessions(q: SessionCountQuery): Promise<SessionCounts> {
+    if (q.search) checkedSearchTerm(q.search);
+    const byStatus: Record<string, number> = Object.fromEntries(
+      SESSION_STATUSES.map((st) => [st, 0]),
+    );
+    for (const s of this.sessions.values())
+      if (this.matches(s, q)) byStatus[s.session.status]++;
+    // The same cap as the database store's, so both answer alike.
+    const more: string[] = [];
+    if (q.search)
+      for (const st of SESSION_STATUSES)
+        if (byStatus[st] > SESSION_SEARCH_COUNT_CAP) {
+          byStatus[st] = SESSION_SEARCH_COUNT_CAP;
+          more.push(st);
+        }
+    return {
+      total: Object.values(byStatus).reduce((a, b) => a + b, 0),
+      byStatus,
+      more,
+    };
+  }
+
   async listSessions(q: SessionListQuery) {
+    if (q.search) checkedSearchTerm(q.search);
     const before = q.before ? Date.parse(q.before) : Infinity;
     return [...this.sessions.values()]
       .filter(
         (s) =>
-          (!q.peerId || s.peerId === q.peerId) &&
+          this.matches(s, q) &&
           (!q.statuses || q.statuses.includes(s.session.status)) &&
-          (!q.driverRef || s.driverRef === q.driverRef) &&
           dateTimeMs(s.session.start_date_time) < before,
       )
       .sort(

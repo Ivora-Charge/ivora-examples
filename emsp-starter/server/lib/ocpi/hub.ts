@@ -38,6 +38,8 @@ export type HubDeps = {
   store: PeerStore;
   client?: ClientOptions;
   actor?: string;
+  /** The clock, for tests. */
+  now?: () => Date;
 };
 
 const COUNTRY = /^[A-Za-z]{2}$/;
@@ -120,6 +122,10 @@ export async function acceptParty(
         status: "trusted",
         source: held?.source ?? "admin",
         ...((name ?? held?.name) && { name: name ?? held?.name }),
+        // Accepting a trusted party again does not restart its "trusted since".
+        ...(held?.status === "trusted"
+          ? held.trustedAt && { trustedAt: held.trustedAt }
+          : { trustedAt: (deps.now?.() ?? new Date()).toISOString() }),
       };
       return {
         hubParties: [

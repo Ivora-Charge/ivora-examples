@@ -13,6 +13,11 @@ export class OcpiError extends Error {
       httpStatus?: number;
       /** `GET host/path`, without the query string. */
       request: string;
+      /**
+       * The X-Request-ID of the request that failed (a new one per attempt), for the
+       * admin to give the CPO. Set by the client; never a secret.
+       */
+      requestId?: string;
     },
   ) {
     super(message);
@@ -23,6 +28,9 @@ export class OcpiError extends Error {
   }
   get httpStatus() {
     return this.details.httpStatus;
+  }
+  get requestId() {
+    return this.details.requestId;
   }
 }
 

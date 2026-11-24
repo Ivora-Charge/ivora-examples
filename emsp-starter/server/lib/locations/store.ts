@@ -67,6 +67,13 @@ export type SyncResult = {
   /** The peer's OCPI status_code and HTTP status, when it answered with an error. */
   statusCode?: number;
   httpStatus?: number;
+  /**
+   * Failed pulls in a row, this one included (1 for the first). Only on a failed
+   * result; the next good pull starts again from none.
+   */
+  failures?: number;
+  /** The X-Request-ID of the request the peer failed, when it was one of ours. */
+  requestId?: string;
 };
 
 export type SyncState = {
