@@ -214,6 +214,28 @@ export async function removeParty(
   return updated;
 }
 
+/**
+ * The operator dismisses a refused party from a hub's list (the row only: the party
+ * stays untrusted and its pushes are refused as before, and a later refusal adds it
+ * again). Same gate as accepting; audited. Makes room on a full list.
+ */
+export async function dismissRefusal(
+  peerId: string,
+  input: { countryCode: string; partyId: string },
+  deps: HubDeps,
+): Promise<Peer> {
+  const peer = await hubPeer(deps.store, peerId);
+  const party = partyInput(input);
+  await deps.store.forgetRefusal(peerId, party);
+  await deps.store.audit({
+    actor: deps.actor ?? "admin",
+    action: "ocpi.hub.refusal_dismissed",
+    subjectId: peerId,
+    details: { party: idOf(party) },
+  });
+  return peer;
+}
+
 const CLIENT_STATUS = ["CONNECTED", "OFFLINE", "PLANNED", "SUSPENDED"];
 
 /** CPO parties of a hubclientinfo list; entries that are not valid are skipped. */

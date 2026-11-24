@@ -178,6 +178,21 @@ export type RefusalNote = Omit<
 export const MAX_REFUSED = 100;
 /** A refused party seen this recently is never replaced by a new one (also in the SQL). */
 export const REFUSAL_KEEP_MS = 24 * 60 * 60_000;
+/**
+ * Whether a hub's refused-party list is full: MAX_REFUSED rows, none replaceable (all
+ * seen within REFUSAL_KEEP_MS, 24 h counted in: a row is replaceable only once it is
+ * strictly older). A new party is then dropped, so the list says it is full. Worked out
+ * from the rows, no column; `rows` is what listRefusals returned.
+ */
+export function refusalListFull(
+  rows: { lastSeen: string }[],
+  nowMs: number,
+): boolean {
+  return (
+    rows.length >= MAX_REFUSED &&
+    rows.every((r) => nowMs - Date.parse(r.lastSeen) <= REFUSAL_KEEP_MS)
+  );
+}
 /** A party's refusals are written at most once per this window (also in the SQL). */
 export const REFUSAL_WINDOW_MS = 60_000;
 /** Most new refused parties a hub peer gets per REFUSAL_WINDOW_MS (also in the SQL). */

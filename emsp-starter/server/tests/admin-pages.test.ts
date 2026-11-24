@@ -573,6 +573,18 @@ describe("peers: a row and a hub's page, from the peer list", () => {
     expect(html).toContain('Accept this party<span class="sr"> NL-XYZ</span>');
     expect(html).not.toContain('Accept this party<span class="sr"> BE-QQQ');
     expect(html).toContain("a count can be lower than what was sent");
+    // Dismiss on every row, Accept only where the party sent the data.
+    expect(html).toContain('Dismiss<span class="sr"> NL-XYZ</span>');
+    expect(html).toContain('Dismiss<span class="sr"> BE-QQQ</span>');
+    expect(html).not.toContain("This list is full");
+    const full = renderToStaticMarkup(
+      createElement(HubParties, {
+        peer: { ...hub, hub: { ...hub.hub!, refused, refusedFull: true } },
+        send: async () => ({}),
+      }),
+    );
+    expect(full).toContain("This list is full");
+    expect(full).toContain("accept or dismiss a row");
     // None refused: no section.
     expect(
       renderToStaticMarkup(

@@ -6,7 +6,9 @@ import { ourParty } from "./identity";
 import { isCpoParty, isHubPeer } from "./parties";
 import {
   MAX_NEW_REFUSED,
+  MAX_REFUSED,
   REFUSAL_WINDOW_MS,
+  refusalListFull,
   type Peer,
   type PeerStore,
   type RefusalKind,
@@ -125,6 +127,8 @@ type State = {
   fresh: Map<string, number[]>;
   /** No write before this time (the migration is pending). */
   absentUntilMs: number;
+  /** Per peer: when a dropped new party was last logged as a full list. */
+  fullLogged: Map<string, number>;
 };
 const holder = globalThis as unknown as { __emspRefusals?: State };
 const state = (): State =>
@@ -132,6 +136,7 @@ const state = (): State =>
     writes: new Map(),
     fresh: new Map(),
     absentUntilMs: 0,
+    fullLogged: new Map(),
   });
 
 /** Tests only: forget this process's write times and back-off. */
@@ -158,6 +163,34 @@ function takeNew(peerId: string, ms: number): boolean {
   fresh.set(peerId, recent);
   while (fresh.size > MAX_TRACKED) fresh.delete(fresh.keys().next().value!);
   return true;
+}
+
+/**
+ * After a new party was not written: when the cause is a full list (not the budget of
+ * new parties), logs it, at most once per REFUSAL_WINDOW_MS per hub. Names the hub and
+ * the count, never the party. The list is read only when a log is due. Never throws.
+ */
+async function logIfFull(
+  store: PeerStore,
+  peerId: string,
+  ms: number,
+): Promise<void> {
+  const { fullLogged } = state();
+  const last = fullLogged.get(peerId);
+  if (last !== undefined && ms - last < REFUSAL_WINDOW_MS) return;
+  // Claimed before the read, so concurrent drops read the list once.
+  fullLogged.delete(peerId);
+  fullLogged.set(peerId, ms);
+  while (fullLogged.size > MAX_TRACKED)
+    fullLogged.delete(fullLogged.keys().next().value!);
+  try {
+    if (refusalListFull(await store.listRefusals(peerId), ms))
+      console.error(
+        `The refused-party list of peer ${peerId} is full (${MAX_REFUSED} parties, all seen in the last 24 hours): new refused parties are dropped. Dismiss or accept rows on the hub's page to make room.`,
+      );
+  } catch {
+    // The list is only read for this log line; a failed read says nothing.
+  }
 }
 
 const isAbsent = (e: unknown) =>
@@ -216,7 +249,9 @@ export async function noteRefused(
       }),
     )
     .then(
-      () => undefined,
+      (noted) => {
+        if (!noted && !held) return logIfFull(store, peer.id, ms);
+      },
       (e: unknown) => {
         const absent = isAbsent(e);
         if (absent) st.absentUntilMs = ms + ABSENT_BACKOFF_MS;
