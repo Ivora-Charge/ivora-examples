@@ -49,6 +49,8 @@ export interface AccountStore {
   adminRole(userId: string): Promise<AdminRole | null>;
   /** How many users are on the admin list, whatever their role (at most 1,000). */
   countAdmins(): Promise<number>;
+  /** Whether anyone is on the admin list, by reading at most one row of it. */
+  hasAdmin(): Promise<boolean>;
 }
 
 /** Accounts in memory: for demo mode (nothing persists) and for tests. */
@@ -104,5 +106,9 @@ export class MemoryAccountStore implements AccountStore {
 
   async countAdmins() {
     return this.admins.size;
+  }
+
+  async hasAdmin() {
+    return this.admins.size > 0;
   }
 }

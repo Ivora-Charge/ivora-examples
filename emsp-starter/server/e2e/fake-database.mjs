@@ -77,12 +77,19 @@ function answer(url) {
   const rows = (() => {
     if (table === "emsp_admins")
       return Array.from({ length: state.admins }, () => ({ role: "admin" }));
-    if (table === "emsp_ocpi_peers") return state.peers;
+    if (table === "emsp_ocpi_peers") {
+      const status = url.searchParams.get("status")?.replace(/^eq\./, "");
+      return state.peers.filter((row) => !status || row.status === status);
+    }
     if (table === "emsp_stripe_events") return state.events;
     if (table === "emsp_payment_sweeps") return state.sweeps;
     if (table === "emsp_audit_log") {
       const subject = url.searchParams.get("subject_id")?.replace(/^eq\./, "");
-      return state.audit.filter((row) => row.subject_id === subject);
+      // Setup's entries have the type "setup"; a read that asks for another gets none.
+      const type = url.searchParams.get("subject_type")?.replace(/^eq\./, "");
+      return state.audit.filter(
+        (row) => row.subject_id === subject && type === "setup",
+      );
     }
     // Any other table, and every function: there, and empty.
     return [];

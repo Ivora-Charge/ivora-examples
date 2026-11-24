@@ -1,6 +1,8 @@
 import "server-only";
 import { config } from "@/lib/server/config";
 import {
+  ABSENT_CODES,
+  errorCode,
   supabaseRequest,
   type SupabaseTransport,
 } from "@/lib/server/supabase-rest";
@@ -28,18 +30,11 @@ export type DatabaseCheck = {
 };
 
 /**
- * How PostgREST and Postgres say "that table, column or function does not exist":
- * PGRST202 (no such function), PGRST204 (no such column), PGRST205 (no such table),
- * and Postgres's 42P01, 42703 and 42883 for the same three.
+ * How long a probe may take. Shorter than the stores' requests: the public status API
+ * and the Setup page a visitor gets wait for the check, and a database that does not
+ * answer must not hold them. Past it, the answer is "unreachable".
  */
-const ABSENT = new Set([
-  "PGRST202",
-  "PGRST204",
-  "PGRST205",
-  "42P01",
-  "42703",
-  "42883",
-]);
+export const PROBE_TIMEOUT_MS = 2_500;
 
 /** True: applied. False: not applied. Null: the answer says nothing about the schema. */
 async function probe(
@@ -55,12 +50,8 @@ async function probe(
       await res.body?.cancel();
       return true;
     }
-    const body = (await res.json().catch(() => null)) as {
-      code?: unknown;
-    } | null;
-    return typeof body?.code === "string" && ABSENT.has(body.code)
-      ? false
-      : null;
+    const code = await errorCode(res);
+    return code !== null && ABSENT_CODES.has(code) ? false : null;
   } catch {
     return null;
   }
@@ -69,11 +60,13 @@ async function probe(
 export async function checkDatabase(
   transport?: SupabaseTransport,
   migrations: readonly ShippedMigration[] = MIGRATIONS,
+  timeoutMs = PROBE_TIMEOUT_MS,
 ): Promise<DatabaseCheck> {
   const request = supabaseRequest(
     config.supabaseUrl,
     config.supabaseServiceRoleKey,
     transport,
+    timeoutMs,
   );
   const found = await Promise.all(migrations.map((m) => probe(request, m)));
   const base = {
@@ -94,15 +87,20 @@ export async function checkDatabase(
 
 /**
  * The check, remembered for a while per server process: the public status API asks on
- * every call and must not turn each into 14 database reads. A passing check is kept
- * for five minutes (migrations do not come undone), any other for 15 seconds. An
- * admin's Setup page asks afresh.
+ * every call and must not turn each into a round of database reads. A passing check
+ * is kept for five minutes (migrations do not come undone), any other for 15 seconds.
+ *
+ * Callers that arrive while a round of probes is under way wait for that round and
+ * share its answer, so any number of concurrent calls costs one round. An admin's
+ * Setup page asks afresh: past what is remembered, but it too joins a round already
+ * under way rather than start a second.
  */
 const PASS_TTL_MS = 5 * 60_000;
 const OTHER_TTL_MS = 15_000;
 
 const holder = globalThis as unknown as {
   __emspDatabaseCheck?: { at: number; key: string; check: DatabaseCheck };
+  __emspDatabaseCheckFlight?: { key: string; round: Promise<DatabaseCheck> };
   __emspDatabaseCheckOverride?: () => Promise<DatabaseCheck>;
 };
 
@@ -120,9 +118,21 @@ export async function databaseCheck({
     now - kept.at < (kept.check.state === "ok" ? PASS_TTL_MS : OTHER_TTL_MS)
   )
     return kept.check;
-  const check = await (holder.__emspDatabaseCheckOverride ?? checkDatabase)();
-  holder.__emspDatabaseCheck = { at: now, key, check };
-  return check;
+  const flying = holder.__emspDatabaseCheckFlight;
+  if (flying?.key === key) return flying.round;
+  // Started through a promise, so a check that throws at once is shared the same way.
+  const round = Promise.resolve()
+    .then(() => (holder.__emspDatabaseCheckOverride ?? checkDatabase)())
+    .then((check) => {
+      holder.__emspDatabaseCheck = { at: now, key, check };
+      return check;
+    })
+    .finally(() => {
+      if (holder.__emspDatabaseCheckFlight?.round === round)
+        holder.__emspDatabaseCheckFlight = undefined;
+    });
+  holder.__emspDatabaseCheckFlight = { key, round };
+  return round;
 }
 
 /** Tests only: use `check` instead of the database, and forget what was remembered. */
@@ -131,4 +141,5 @@ export function setDatabaseCheckForTests(
 ) {
   holder.__emspDatabaseCheckOverride = check;
   holder.__emspDatabaseCheck = undefined;
+  holder.__emspDatabaseCheckFlight = undefined;
 }

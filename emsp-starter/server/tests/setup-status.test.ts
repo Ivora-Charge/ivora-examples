@@ -36,6 +36,9 @@ import { SWEEP_MAX_AGE_MS } from "@/lib/payments/hold";
 import { setPaymentStoreForTests } from "@/lib/payments/registry";
 import { MemoryPaymentStore } from "@/lib/payments/store";
 import { resetAdminLimitForTests } from "@/lib/server/admin";
+import { DatabaseRequestError } from "@/lib/server/supabase-rest";
+import { SupabaseAccountStore } from "@/lib/accounts/store-supabase";
+import { SupabasePeerStore } from "@/lib/ocpi/store-supabase";
 import { publicStatus } from "@/lib/server/status";
 import {
   HOLD_SWEEP_MAX_AGE_MS,
@@ -49,6 +52,7 @@ import {
 import {
   checkDatabase,
   databaseCheck,
+  PROBE_TIMEOUT_MS,
   setDatabaseCheckForTests,
   type DatabaseCheck,
 } from "@/lib/setup/database";
@@ -56,6 +60,7 @@ import {
   JOB_SAMPLE_MS,
   JOB_SUBJECT,
   listJobRuns,
+  flushWebhookNotesForTests,
   noteWebhook,
   recordJobRun,
   REFUSED_SAMPLE_MS,
@@ -63,8 +68,9 @@ import {
   WEBHOOK_REFUSED,
   WEBHOOK_SUBJECT,
 } from "@/lib/setup/log";
-import { ADMINS_MIGRATION, MIGRATIONS } from "@/lib/setup/migrations";
+import { MIGRATIONS } from "@/lib/setup/migrations";
 import {
+  PUBLIC_VIEW_TTL_MS,
   publicSetupView,
   readSetupStatus,
   resetPublicSetupViewForTests,
@@ -92,6 +98,7 @@ const EMPTY: DatabaseCheck = {
   applied: 0,
   pending: FILES,
 };
+const ADMINS_MIGRATION = "202610220007_accounts_payments.sql";
 const UNREACHABLE: DatabaseCheck = {
   ...OK,
   state: "unreachable",
@@ -193,7 +200,6 @@ describe("shipped migrations", () => {
       .filter((f) => f.endsWith(".sql"))
       .sort();
     expect(FILES).toEqual(onDisk);
-    expect(FILES).toContain(ADMINS_MIGRATION);
   });
 
   describe("on PGlite", () => {
@@ -215,6 +221,39 @@ describe("shipped migrations", () => {
         expect(check.state).toBe(i + 1 === FILES.length ? "ok" : "pending");
       }
     }, 120_000);
+
+    it("the admin list of a database without its table is empty, by the list's own answer", async () => {
+      // Every migration before the one that creates emsp_admins.
+      db = await migratedDatabase({ before: ADMINS_MIGRATION });
+      const transport = pgliteRest(db);
+      const real = (): SetupDeps =>
+        deps({
+          accounts: new SupabaseAccountStore(
+            LIVE.SUPABASE_URL,
+            "test-key",
+            transport,
+          ),
+          peers: new SupabasePeerStore(
+            LIVE.SUPABASE_URL,
+            "test-key",
+            transport,
+          ),
+          database: () => checkDatabase(transport),
+        });
+      const status = await readSetupStatus(real());
+      expect(status.database?.state).toBe("pending");
+      expect(status.admins).toBe(0);
+      expect(await publicSetupView(real())).toHaveLength(6);
+      // With the table and someone on it, the view is gone.
+      await applyMigrations(db);
+      await db.exec(
+        `insert into public.emsp_admins (user_id, role)
+         values ('11111111-1111-4111-8111-111111111111', 'viewer')`,
+      );
+      resetPublicSetupViewForTests();
+      expect(await publicSetupView(real())).toBeNull();
+      expect((await readSetupStatus(real())).admins).toBe(1);
+    }, 60_000);
 
     it("needs no ledger: files run by hand in the SQL editor count too", async () => {
       db = await migratedDatabase();
@@ -259,6 +298,87 @@ describe("shipped migrations", () => {
     expect(calls).toBe(3);
     await databaseCheck({ now: T0 + 10 * 60_000 });
     expect(calls).toBe(4);
+  });
+});
+
+describe("the database check under load", () => {
+  it("concurrent callers share one round of probes, cold and failing alike", async () => {
+    let rounds = 0;
+    setDatabaseCheckForTests(async () => {
+      rounds += 1;
+      await new Promise((r) => setTimeout(r, 10));
+      return database;
+    });
+    const many = (at: number, fresh = false) =>
+      Promise.all(
+        Array.from({ length: 40 }, () => databaseCheck({ now: at, fresh })),
+      );
+    database = EMPTY;
+    for (const check of await many(T0)) expect(check.state).toBe("empty");
+    expect(rounds).toBe(1);
+    // Kept for 15 seconds while it fails, then one round again, not 40.
+    await many(T0 + 14_000);
+    expect(rounds).toBe(1);
+    await many(T0 + 16_000);
+    expect(rounds).toBe(2);
+    // Callers who ask afresh share a round too.
+    await many(T0 + 17_000, true);
+    expect(rounds).toBe(3);
+    // Through the public status API: 40 calls, one round.
+    database = OK;
+    setDatabaseCheckForTests(async () => {
+      rounds += 1;
+      await new Promise((r) => setTimeout(r, 10));
+      return database;
+    });
+    const answers = await Promise.all(
+      Array.from({ length: 40 }, () => publicStatus()),
+    );
+    expect(new Set(answers.map((a) => a.mode))).toEqual(new Set(["live"]));
+    expect(rounds).toBe(4);
+  });
+
+  it("a round is one request per shipped migration", async () => {
+    let requests = 0;
+    const check = await checkDatabase(async () => {
+      requests += 1;
+      return Response.json([]);
+    });
+    expect(check.state).toBe("ok");
+    expect(requests).toBe(FILES.length);
+  });
+
+  it("a check that throws is shared and not remembered", async () => {
+    let rounds = 0;
+    setDatabaseCheckForTests(async () => {
+      rounds += 1;
+      throw new Error("down");
+    });
+    const results = await Promise.allSettled(
+      Array.from({ length: 5 }, () => databaseCheck({ now: T0 })),
+    );
+    expect(results.every((r) => r.status === "rejected")).toBe(true);
+    expect(rounds).toBe(1);
+    expect(await publicStatus()).toMatchObject({ mode: "setup" });
+    expect(rounds).toBe(2);
+  });
+
+  it("gives a database that does not answer a short time, then says unreachable", async () => {
+    expect(PROBE_TIMEOUT_MS).toBeLessThanOrEqual(3_000);
+    const signals: AbortSignal[] = [];
+    // Never answers; ends when the request's own time limit ends it.
+    const silent = (_: string | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        signals.push(init!.signal!);
+        init!.signal!.addEventListener("abort", () =>
+          reject(init!.signal!.reason),
+        );
+      });
+    const started = Date.now();
+    const check = await checkDatabase(silent, MIGRATIONS, 40);
+    expect(check).toEqual(UNREACHABLE);
+    expect(Date.now() - started).toBeLessThan(1_500);
+    expect(signals).toHaveLength(FILES.length);
   });
 });
 
@@ -371,19 +491,22 @@ describe("the setup status read", () => {
     expect(log.mock.calls.join(" ")).toContain("the admin list failed: Error");
     expect(log.mock.calls.join(" ")).not.toContain("sk_test_");
     log.mockRestore();
-    // With the admin migration pending, the list is known to be empty.
+    // The admin list itself is asked: "no such table" is an empty list, and nothing
+    // is concluded from another table's probe.
     database = { ...OK, state: "pending", pending: [ADMINS_MIGRATION] };
-    const pending = await readSetupStatus(
+    const refusing = (code: string | null) =>
       deps({
         accounts: {
           countAdmins: async () => {
-            throw new Error("no such table");
+            throw new DatabaseRequestError("refused", 404, code);
           },
         } as never,
-      }),
-    );
+      });
+    expect((await readSetupStatus(refusing("PGRST205"))).admins).toBe(0);
+    expect((await readSetupStatus(refusing("42P01"))).admins).toBe(0);
     vi.spyOn(console, "error").mockImplementation(() => {});
-    expect(pending.admins).toBe(0);
+    expect((await readSetupStatus(refusing("42501"))).admins).toBeNull();
+    expect((await readSetupStatus(refusing(null))).admins).toBeNull();
     vi.restoreAllMocks();
   });
 
@@ -593,6 +716,24 @@ describe("recording job runs", () => {
     expect(s.job?.runs).toHaveLength(1);
     expect(s.job?.runs[0]).toMatchObject({ ok: true, sinceLastS: 61 });
     expect(Date.now() - Date.parse(s.job!.sweptAt!)).toBeLessThan(5_000);
+    // The read of the last sweep failing does not stop the jobs: the sweep still runs.
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    const real = payments.lastSweptAt.bind(payments);
+    let first = true;
+    payments.lastSweptAt = async () => {
+      if (first) {
+        first = false;
+        throw new Error("down");
+      }
+      return real();
+    };
+    const before = payments.sweptAt;
+    await new Promise((r) => setTimeout(r, 5));
+    expect((await call()).status).toBe(200);
+    expect(Date.parse(payments.sweptAt!)).toBeGreaterThan(Date.parse(before!));
+    expect(log.mock.calls.join(" ")).toContain("last payment sweep failed");
+    log.mockRestore();
+    payments.lastSweptAt = real;
     // In demo mode the job pulls nothing and records nothing.
     process.env.DEMO_MODE = "true";
     const demoPeers = new MemoryPeerStore();
@@ -626,6 +767,7 @@ describe("recording refused webhook requests", () => {
       expect((await post(payload, sign(payload, "whsec_wrong"))).status).toBe(
         400,
       );
+    await flushWebhookNotesForTests();
     expect(peers.auditLog).toHaveLength(1);
     expect(peers.auditLog[0]).toEqual({
       actor: "stripe-webhook",
@@ -672,9 +814,37 @@ describe("recording refused webhook requests", () => {
       (await post(payload, sign(payload, SECRETS.STRIPE_WEBHOOK_SECRET)))
         .status,
     ).toBe(500);
+    await flushWebhookNotesForTests();
     log.mockRestore();
     const s = await readSetupStatus(deps());
     expect(s.webhook?.lastSigned?.result).toBe("failed");
+  });
+
+  it("the answer never waits for the note, and is the same when it cannot be written", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    // A database that never answers the note's read.
+    peers.listAudit = () => new Promise(() => {});
+    expect((await post(payload, sign(payload, "whsec_wrong"))).status).toBe(
+      400,
+    );
+    payments.recordEvent = async () => {
+      throw new Error("down");
+    };
+    expect(
+      (await post(payload, sign(payload, SECRETS.STRIPE_WEBHOOK_SECRET)))
+        .status,
+    ).toBe(500);
+    // One that refuses it.
+    resetWebhookNotesForTests();
+    peers.listAudit = async () => {
+      throw new Error("down");
+    };
+    expect((await post(payload, sign(payload, "whsec_wrong"))).status).toBe(
+      400,
+    );
+    await flushWebhookNotesForTests();
+    expect(peers.auditLog).toEqual([]);
+    log.mockRestore();
   });
 });
 
@@ -721,12 +891,16 @@ describe("the public view, before the first admin", () => {
       PUBLIC_BASE_URL: "https://other.example.net",
       HOLD_AMOUNTS: "EUR:3000",
     });
+    resetPublicSetupViewForTests();
     expect(JSON.stringify(await publicSetupView(deps()))).toBe(one);
   });
 
   it("says pass or fail per stop as the facts change", async () => {
-    const pass = async () =>
-      (await publicSetupView(deps()))!.map((stop) => stop.pass);
+    // Worked out anew each time, as by a server process that kept nothing.
+    const pass = async () => {
+      resetPublicSetupViewForTests();
+      return (await publicSetupView(deps()))!.map((stop) => stop.pass);
+    };
     expect(await pass()).toEqual([true, true, false, false, false, false]);
     database = EMPTY;
     expect(await pass()).toEqual([true, false, false, false, false, false]);
@@ -739,34 +913,132 @@ describe("the public view, before the first admin", () => {
     expect(await pass()).toEqual([true, true, false, false, false, true]);
   });
 
-  it("is gone the moment an admin exists, whatever their role", async () => {
+  it("is gone once an admin exists, whatever their role", async () => {
     await healthyButAdmin();
-    expect(await publicSetupView(deps())).not.toBeNull();
     accounts.admins.set("u1", "viewer");
+    // The first time the server works it out, it is gone.
     expect(await publicSetupView(deps())).toBeNull();
     // And stays gone without asking again for a minute.
-    const asked = vi.spyOn(accounts, "countAdmins");
+    const asked = vi.spyOn(accounts, "hasAdmin");
+    now += 30_000;
     expect(await publicSetupView(deps())).toBeNull();
     expect(asked).not.toHaveBeenCalled();
+  });
+
+  it("outlives the first admin by at most the time it is kept", async () => {
+    await healthyButAdmin();
+    expect(await publicSetupView(deps())).not.toBeNull();
+    accounts.admins.set("u1", "admin");
+    now += PUBLIC_VIEW_TTL_MS - 1;
+    expect(await publicSetupView(deps())).not.toBeNull();
+    now += 1;
+    expect(await publicSetupView(deps())).toBeNull();
+    // Removing the admin does not bring it back for a minute.
+    accounts.admins.clear();
+    now += 59_000;
+    expect(await publicSetupView(deps())).toBeNull();
+  });
+
+  it("any number of visitors at once cost one round of small reads", async () => {
+    await healthyButAdmin();
+    let checks = 0;
+    const d = deps({
+      database: async () => {
+        checks += 1;
+        await new Promise((r) => setTimeout(r, 5));
+        return database;
+      },
+    });
+    const reads = [
+      vi.spyOn(accounts, "hasAdmin"),
+      vi.spyOn(peers, "hasRegisteredPeer"),
+      vi.spyOn(payments, "lastEvent"),
+      vi.spyOn(payments, "lastSweptAt"),
+    ];
+    const audit = vi.spyOn(peers, "listAudit");
+    // Whole tables are never read for a visitor.
+    const rows = [
+      vi.spyOn(peers, "listPeers"),
+      vi.spyOn(accounts, "countAdmins"),
+    ];
+    const views = await Promise.all(
+      Array.from({ length: 40 }, () => publicSetupView(d)),
+    );
+    for (const view of views) expect(view).toEqual(views[0]);
+    expect(views[0]).toHaveLength(6);
+    for (const read of reads) expect(read).toHaveBeenCalledTimes(1);
+    // The job runs and the webhook notes: a few rows each.
+    expect(audit).toHaveBeenCalledTimes(2);
+    for (const [, limit] of audit.mock.calls)
+      expect(limit).toBeLessThanOrEqual(20);
+    for (const read of rows) expect(read).not.toHaveBeenCalled();
+    // The database check is asked for twice in the round; the real one remembers.
+    expect(checks).toBe(2);
+    // While the answer is kept, visitors cost nothing at all.
+    now += PUBLIC_VIEW_TTL_MS - 1;
+    await Promise.all(Array.from({ length: 40 }, () => publicSetupView(d)));
+    for (const read of reads) expect(read).toHaveBeenCalledTimes(1);
+    expect(checks).toBe(2);
+    // Then one more round.
+    now += 1;
+    await Promise.all(Array.from({ length: 40 }, () => publicSetupView(d)));
+    for (const read of reads) expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not wait for a database that does not answer", async () => {
+    await healthyButAdmin();
+    const hanging = deps({
+      accounts: { hasAdmin: () => new Promise<boolean>(() => {}) } as never,
+    });
+    const started = Date.now();
+    const views = await Promise.all(
+      Array.from({ length: 10 }, () =>
+        publicSetupView(hanging, { deadlineMs: 30 }),
+      ),
+    );
+    expect(views).toEqual(Array(10).fill(null));
+    expect(Date.now() - started).toBeLessThan(1_000);
+    // "Cannot tell" is kept too: the next visitor does not wait at all.
+    const asked = vi.spyOn(peers, "hasRegisteredPeer");
+    expect(await publicSetupView(deps())).toBeNull();
+    expect(asked).not.toHaveBeenCalled();
+    now += PUBLIC_VIEW_TTL_MS;
+    expect(await publicSetupView(deps())).not.toBeNull();
   });
 
   it("is not shown when the server cannot tell that no admin exists", async () => {
     const log = vi.spyOn(console, "error").mockImplementation(() => {});
     await healthyButAdmin();
+    const view = (d: SetupDeps) => {
+      resetPublicSetupViewForTests();
+      return publicSetupView(d);
+    };
     // The database does not answer.
     database = UNREACHABLE;
-    expect(await publicSetupView(deps())).toBeNull();
-    // The admin list cannot be read.
+    expect(await view(deps())).toBeNull();
+    // The admin list cannot be read: an error, or a refusal that is not "no table".
     database = OK;
-    const unreadable = {
-      countAdmins: async () => {
-        throw new Error("down");
-      },
-    } as never;
-    expect(await publicSetupView(deps({ accounts: unreadable }))).toBeNull();
+    for (const error of [
+      new Error("down"),
+      new DatabaseRequestError("refused", 401, null),
+      new DatabaseRequestError("refused", 403, "42501"),
+    ]) {
+      const unreadable = {
+        hasAdmin: async () => {
+          throw error;
+        },
+      } as never;
+      expect(await view(deps({ accounts: unreadable }))).toBeNull();
+    }
+    // With the admin table's migration pending the list is still asked, not assumed
+    // empty from another table's probe.
+    database = { ...OK, state: "pending", pending: [ADMINS_MIGRATION] };
+    accounts.admins.set("u1", "admin");
+    expect(await view(deps())).toBeNull();
+    accounts.admins.clear();
     // The check itself fails.
     expect(
-      await publicSetupView(
+      await view(
         deps({
           database: async () => {
             throw new Error("down");
@@ -775,6 +1047,16 @@ describe("the public view, before the first admin", () => {
       ),
     ).toBeNull();
     log.mockRestore();
+  });
+
+  it("is shown for a database whose admin table does not exist yet", async () => {
+    database = { ...OK, state: "pending", pending: [ADMINS_MIGRATION] };
+    const none = {
+      hasAdmin: async () => {
+        throw new DatabaseRequestError("refused", 404, "PGRST205");
+      },
+    } as never;
+    expect(await publicSetupView(deps({ accounts: none }))).toHaveLength(6);
   });
 
   it("in demo mode: six names, none done, whatever is configured", async () => {
@@ -786,6 +1068,7 @@ describe("the public view, before the first admin", () => {
     process.env.DEMO_MODE = "";
     for (const name of Object.keys(LIVE_ENV)) process.env[name] = "";
     process.env.STRIPE_SECRET_KEY = "bad";
+    resetPublicSetupViewForTests();
     expect(await publicSetupView(deps())).toEqual(none);
   });
 
@@ -857,5 +1140,40 @@ describe("the setup status action", () => {
     // A session that is not on the admin list is a visitor.
     accounts.admins.clear();
     expect((await setupStatusAction({}, form())).status).toBeUndefined();
+  });
+});
+
+describe("what the reads ask the database for", () => {
+  const asked: string[] = [];
+  const transport = async (input: string | URL) => {
+    asked.push(String(input).replace("https://db.example.test/rest/v1/", ""));
+    return Response.json([]);
+  };
+  const URL_ = "https://db.example.test";
+
+  it("setup's audit entries by subject type and id, so the index is used", async () => {
+    asked.length = 0;
+    const store = new SupabasePeerStore(URL_, "test-key", transport);
+    await listJobRuns({ peers: store });
+    await store.listAudit("11111111-1111-4111-8111-111111111111", 5);
+    expect(asked[0]).toMatch(
+      /^emsp_audit_log\?subject_type=eq\.setup&subject_id=eq\.setup%3Ajob&order=occurred_at\.desc,id\.desc&limit=5&/,
+    );
+    // Any other subject is asked for as before.
+    expect(asked[1]).toMatch(/^emsp_audit_log\?subject_id=eq\.1111/);
+  });
+
+  it("one row to know whether there is an admin, or a registered peer", async () => {
+    asked.length = 0;
+    await new SupabaseAccountStore(URL_, "test-key", transport).hasAdmin();
+    await new SupabasePeerStore(
+      URL_,
+      "test-key",
+      transport,
+    ).hasRegisteredPeer();
+    expect(asked).toEqual([
+      "emsp_admins?select=role&limit=1",
+      "emsp_ocpi_peers?status=eq.registered&select=id&limit=1",
+    ]);
   });
 });

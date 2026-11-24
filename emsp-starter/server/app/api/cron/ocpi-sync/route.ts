@@ -76,9 +76,13 @@ export async function GET(request: Request) {
     );
   const startedAt = new Date();
   // When the payment sweep last finished, before this run: how long the job was away.
-  const sweptBefore = await paymentDeps("cron")
-    .payments.lastSweptAt()
-    .catch(() => null);
+  // Read on its own: a failure here must not stop the jobs below.
+  let sweptBefore: string | null = null;
+  try {
+    sweptBefore = await paymentDeps("cron").payments.lastSweptAt();
+  } catch (e) {
+    failed("read of the last payment sweep", e);
+  }
   let ok = true;
   let tokens: { expired: number; pushes: unknown } | undefined;
   try {

@@ -56,6 +56,9 @@ const toPeer = (r: PeerRow): Peer => ({
   unregisteredAt: r.unregistered_at,
 });
 
+/** Setup's own audit subjects (lib/setup/log.ts): "setup:job" and the like. */
+const isSetupSubject = (subjectId: string) => subjectId.startsWith("setup:");
+
 const COLUMNS: Record<keyof PeerPatch, keyof PeerRow> = {
   label: "label",
   status: "status",
@@ -124,6 +127,14 @@ export class SupabasePeerStore implements PeerStore {
       "emsp_ocpi_peers?select=*&order=created_at.asc",
     );
     return rows.map(toPeer);
+  }
+
+  async hasRegisteredPeer() {
+    const rows = await this.rest<unknown[]>(
+      "GET",
+      "emsp_ocpi_peers?status=eq.registered&select=id&limit=1",
+    );
+    return rows.length > 0;
   }
 
   async updatePeer(
@@ -209,7 +220,7 @@ export class SupabasePeerStore implements PeerStore {
       // Setup's own entries (lib/setup/log.ts) are about no peer.
       subject_type: !entry.subjectId
         ? null
-        : entry.subjectId.startsWith("setup:")
+        : isSetupSubject(entry.subjectId)
           ? "setup"
           : "ocpi_peer",
       subject_id: entry.subjectId ?? null,
@@ -230,7 +241,9 @@ export class SupabasePeerStore implements PeerStore {
       }[]
     >(
       "GET",
-      `emsp_audit_log?subject_id=${eq(subjectId)}&order=occurred_at.desc,id.desc&limit=${Math.max(1, Math.floor(limit))}&select=occurred_at,actor,action,subject_id,request_id,details`,
+      // Setup's entries are asked for with their type too, the leading column of the
+      // index on (subject_type, subject_id, occurred_at).
+      `emsp_audit_log?${isSetupSubject(subjectId) ? "subject_type=eq.setup&" : ""}subject_id=${eq(subjectId)}&order=occurred_at.desc,id.desc&limit=${Math.max(1, Math.floor(limit))}&select=occurred_at,actor,action,subject_id,request_id,details`,
     );
     return rows.map((r) => ({
       at: new Date(r.occurred_at).toISOString(),

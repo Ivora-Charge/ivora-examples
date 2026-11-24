@@ -119,4 +119,12 @@ export class SupabaseAccountStore implements AccountStore {
     );
     return rows.length;
   }
+
+  async hasAdmin(): Promise<boolean> {
+    const rows = await this.rest<unknown[]>(
+      "GET",
+      "emsp_admins?select=role&limit=1",
+    );
+    return rows.length > 0;
+  }
 }

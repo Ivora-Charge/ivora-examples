@@ -11,9 +11,15 @@ import { expectAccessible, goTo } from "./support";
  * It is tested without knowing what a leak would look like. The same build runs under
  * six configurations (playwright.config.ts). Every page of the app is fetched from
  * each, as HTML with its inline page data and as the page data a client navigation
- * fetches, and the answers must be the same, byte for byte. A page that hands a
- * visitor anything read from the configuration (a value, an address, "is it set")
- * differs between two of them and fails, whatever the thing is called.
+ * fetches, and the answers must be the same: every byte of one is in the other. A page
+ * that hands a visitor anything read from the configuration (a value, an address, "is
+ * it set") differs between two of them and fails, whatever the thing is called.
+ *
+ * Only the order of the stream is not compared. The framework sends the page data in
+ * rows as they become ready and cuts the HTML's copy of it into scripts where it
+ * likes, so two answers of one server can differ in that. The comparison is of the
+ * page as rendered (the HTML with those scripts taken out, byte for byte) and of the
+ * page data decoded into its rows, whatever order they came in (`rendered`, `rows`).
  *
  * The documented differences, and the only ones allowed:
  * - The mode, which `GET /api/v1/status` answers to anyone. Demo mode shows its banner
@@ -28,7 +34,7 @@ import { expectAccessible, goTo } from "./support";
  * - On Setup only, and only before the first admin exists: the six stops' fixed names
  *   and whether each is done. The two live setups without an admin hold different
  *   facts (peers, times, events, which secrets are set) behind the same six answers,
- *   and must still be sent the same bytes. Demo mode never has an admin, so its three
+ *   and must still be sent the same page and the same page data. Demo mode never has an admin, so its three
  *   setups show the six names with none done. Once an admin exists ("live-admin"),
  *   Setup is the sign-in prompt alone again.
  */
@@ -89,6 +95,31 @@ const sameRequest = (data: string) =>
     /(\["\$","\$L[0-9a-f]+",)"[\w-]{21}[a-z]"(?=,\{"children")/g,
     '$1"REQUEST"',
   );
+
+// A script that carries a piece of the page data in the HTML: a JSON string.
+const DATA_SCRIPT =
+  /<script>self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)<\/script>/g;
+
+/** The HTML as rendered: all of it but the scripts that carry the page data. */
+const rendered = (html: string) => html.replaceAll(DATA_SCRIPT, "");
+
+/** The page data the HTML carries, decoded and put together again. */
+const inlineData = (html: string) =>
+  [...html.matchAll(DATA_SCRIPT)]
+    .map((m) => JSON.parse(m[1]) as string)
+    .join("");
+
+/** Page data as its rows, in an order that does not depend on when each was sent. */
+const rows = (data: string) => data.split("\n").sort();
+
+/** Two answers to the same page are the same, but for the order of the stream. */
+function expectSame(b: Wire, a: Wire, what: string) {
+  expect(rendered(b.html), `${what} (HTML)`).toBe(rendered(a.html));
+  expect(rows(inlineData(b.html)), `${what} (page data in the HTML)`).toEqual(
+    rows(inlineData(a.html)),
+  );
+  expect(rows(b.data), `${what} (page data)`).toEqual(rows(a.data));
+}
 
 /** Setup's list for a visitor before the first admin exists, taken out. */
 const lessProgress = (html: string) =>
@@ -177,8 +208,9 @@ test("every signed-out page is the same whatever the deployment's configuration"
         const what = `${path}: ${first.name} and ${other.name}`;
         const a = sent.get(first.name)!.get(path)!;
         const b = sent.get(other.name)!.get(path)!;
-        expect(b.html, `${what} (HTML)`).toBe(a.html);
-        expect(b.data, `${what} (page data)`).toBe(a.data);
+        expectSame(b, a, what);
+        // The comparison looked at page data, not at nothing.
+        expect(inlineData(a.html).length, what).toBeGreaterThan(100);
       }
   }
 

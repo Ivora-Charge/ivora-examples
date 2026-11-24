@@ -1,4 +1,5 @@
 import "server-only";
+import { after } from "next/server";
 import type { PeerStore } from "@/lib/ocpi/store";
 import type { JobRun } from "./checks";
 
@@ -91,29 +92,33 @@ export async function listJobRuns(deps: Deps, limit = 5): Promise<JobRun[]> {
 // flood of unsigned requests costs no database read either.
 const holder = globalThis as unknown as {
   __emspWebhookNoted?: Record<string, number>;
+  __emspWebhookPending?: Set<Promise<unknown>>;
 };
+const pending = () => (holder.__emspWebhookPending ??= new Set());
 
-/**
- * Records that a payment webhook request was refused for its signature
- * (WEBHOOK_REFUSED), or was signed but could not be handled (WEBHOOK_FAILED). Thinned
- * per server process and, across processes, by the newest entry of its kind. Never
- * throws.
- */
-export async function noteWebhook(
-  deps: Deps,
-  action: typeof WEBHOOK_REFUSED | typeof WEBHOOK_FAILED,
-): Promise<boolean> {
-  const every =
-    action === WEBHOOK_REFUSED ? REFUSED_SAMPLE_MS : FAILED_SAMPLE_MS;
-  const now = nowOf(deps).getTime();
+type WebhookNote = typeof WEBHOOK_REFUSED | typeof WEBHOOK_FAILED;
+const sampleMs = (action: WebhookNote) =>
+  action === WEBHOOK_REFUSED ? REFUSED_SAMPLE_MS : FAILED_SAMPLE_MS;
+
+/** Whether this process may record `action` now; if so, it counts as recorded. */
+function due(action: WebhookNote, now: number): boolean {
   const noted = (holder.__emspWebhookNoted ??= {});
-  if (noted[action] !== undefined && now - noted[action] < every) return false;
+  if (noted[action] !== undefined && now - noted[action] < sampleMs(action))
+    return false;
   noted[action] = now;
+  return true;
+}
+
+async function writeNote(
+  deps: Deps,
+  action: WebhookNote,
+  now: number,
+): Promise<boolean> {
   try {
     const last = (await deps.peers.listAudit(WEBHOOK_SUBJECT, 10)).find(
       (e) => e.action === action,
     );
-    if (last && now - Date.parse(last.at) < every) return false;
+    if (last && now - Date.parse(last.at) < sampleMs(action)) return false;
     await deps.peers.audit({
       actor: "stripe-webhook",
       action,
@@ -124,6 +129,58 @@ export async function noteWebhook(
     failed("the webhook outcome", e);
     return false;
   }
+}
+
+/**
+ * Records that a payment webhook request was refused for its signature
+ * (WEBHOOK_REFUSED), or was signed but could not be handled (WEBHOOK_FAILED). Thinned
+ * per server process and, across processes, by the newest entry of its kind. Never
+ * throws.
+ */
+export async function noteWebhook(
+  deps: Deps,
+  action: WebhookNote,
+): Promise<boolean> {
+  const now = nowOf(deps).getTime();
+  return due(action, now) ? writeNote(deps, action, now) : false;
+}
+
+/** How long the response's function is kept for a note written after the response. */
+export const NOTE_WAIT_MS = 3_000;
+
+/**
+ * `noteWebhook` for the webhook route: the answer to the sender never waits for the
+ * note. The per-process limit is checked at once; the database read and write run
+ * once the response has been sent (Next's `after`, which keeps a serverless function
+ * for it, for at most NOTE_WAIT_MS), or outside a request just start. Never throws.
+ */
+export function noteWebhookLater(deps: Deps, action: WebhookNote): void {
+  const now = nowOf(deps).getTime();
+  if (!due(action, now)) return;
+  const run = () => {
+    const note = writeNote(deps, action, now).finally(() =>
+      pending().delete(note),
+    );
+    pending().add(note);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    return Promise.race([
+      note,
+      new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, NOTE_WAIT_MS);
+        timer.unref?.();
+      }),
+    ]).finally(() => clearTimeout(timer));
+  };
+  try {
+    after(run);
+  } catch {
+    void run();
+  }
+}
+
+/** Waits for the notes started so far (tests). */
+export async function flushWebhookNotesForTests(): Promise<void> {
+  while (pending().size) await Promise.all([...pending()]);
 }
 
 /** The newest refused request and the newest failed signed event, if any. */
@@ -138,4 +195,5 @@ export async function lastWebhookNotes(
 
 export function resetWebhookNotesForTests() {
   holder.__emspWebhookNoted = undefined;
+  holder.__emspWebhookPending = undefined;
 }

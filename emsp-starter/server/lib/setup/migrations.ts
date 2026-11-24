@@ -85,6 +85,3 @@ export const MIGRATIONS: readonly ShippedMigration[] = [
     probe: { table: "emsp_ocpi_peers", column: "hub_push_mode" },
   },
 ];
-
-/** The migration that creates the admin list (`emsp_admins`). */
-export const ADMINS_MIGRATION = "202610220007_accounts_payments.sql";

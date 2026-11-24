@@ -12,7 +12,11 @@ import { stopCodeOf } from "@/lib/driver-app/charges";
 import { peerStore } from "@/lib/ocpi/registry";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
-import { noteWebhook, WEBHOOK_FAILED, WEBHOOK_REFUSED } from "@/lib/setup/log";
+import {
+  noteWebhookLater,
+  WEBHOOK_FAILED,
+  WEBHOOK_REFUSED,
+} from "@/lib/setup/log";
 import { listCards, removeCard, setDefaultCard, setupCard } from "./cards";
 import { commandDepsOf } from "./listen";
 import { paymentDeps, type PaymentDeps } from "./registry";
@@ -188,6 +192,15 @@ export const paymentsRoute = (request: Request) =>
 /** Most a webhook body may be. Stripe's events are far smaller. */
 const WEBHOOK_MAX_BYTES = 512 * 1024;
 
+/** Notes a refused or failed request for the Setup page; never changes the answer. */
+function noteLater(action: typeof WEBHOOK_REFUSED | typeof WEBHOOK_FAILED) {
+  try {
+    noteWebhookLater({ peers: peerStore() }, action);
+  } catch {
+    // Not recorded: the answer to the sender is the same.
+  }
+}
+
 /** POST /api/webhooks/stripe: signature checked, each event handled once. */
 export async function stripeWebhookRoute(request: Request): Promise<Response> {
   const headers = { "Cache-Control": "no-store" };
@@ -205,8 +218,9 @@ export async function stripeWebhookRoute(request: Request): Promise<Response> {
   if (
     !verifySignature(payload, request.headers.get("stripe-signature"), secret)
   ) {
-    // For the Setup page: when a request was last refused (thinned, time only).
-    await noteWebhook({ peers: peerStore() }, WEBHOOK_REFUSED);
+    // For the Setup page: when a request was last refused (thinned, time only),
+    // written after this answer has gone.
+    noteLater(WEBHOOK_REFUSED);
     return Response.json(
       { error: "Invalid signature" },
       { status: 400, headers },
@@ -220,7 +234,7 @@ export async function stripeWebhookRoute(request: Request): Promise<Response> {
     return Response.json({ received: true, outcome }, { headers });
   } catch {
     // Logged by handleEvent, by name only. Stripe delivers it again.
-    await noteWebhook({ peers: peerStore() }, WEBHOOK_FAILED);
+    noteLater(WEBHOOK_FAILED);
     return Response.json(
       { error: "Something went wrong" },
       { status: 500, headers },
