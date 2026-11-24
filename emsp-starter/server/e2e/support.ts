@@ -4,8 +4,8 @@ import { E2E_ADMIN_SECRET } from "../playwright.config";
 
 /**
  * Demo mode has no admin accounts, so the e2e admin uses ADMIN_SECRET: typed once on
- * the sign-in page and kept in the page's memory. A reload (page.goto) forgets it, so
- * after signIn() move between pages with goTo(), which follows the menu's links.
+ * the sign-in page, which exchanges it for a session cookie. After signIn() move
+ * between pages with goTo(), which follows the menu's links as an admin would.
  */
 export async function signIn(page: Page, secret = E2E_ADMIN_SECRET) {
   await page.goto("/admin/sign-in");
@@ -59,6 +59,9 @@ export async function goTo(page: Page, place: Place) {
 
 /** Axe (WCAG 2.1 A and AA) on the page as it is now, and no sideways scroll. */
 export async function expectAccessible(page: Page, label: string) {
+  // A navigation swaps the document's title a moment after the new page shows: wait
+  // for it, or axe can find the page between two titles.
+  await expect(page, label).toHaveTitle(/\S/);
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
     .analyze();

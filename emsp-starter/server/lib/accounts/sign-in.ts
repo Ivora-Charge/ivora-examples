@@ -27,7 +27,11 @@ import type { AccountStore, Driver } from "./store";
  *
  * Both are rate limited in this server process, per email address, per client address
  * (when a trusted one is known; see clientAddress) and in total; Supabase Auth adds its
- * own limits on emails sent. A limit answers SignInError 429.
+ * own limits on emails sent. A limit answers SignInError 429, which says whose limit it
+ * was and how long it lasts (`limit`), for a page that explains it.
+ *
+ * Admin sign-in also waits RESEND_COOLDOWN_MS between two codes for one address, so its
+ * page can show when a new code is possible instead of sending a request that fails.
  */
 export const SIGN_IN_LIMITS = {
   code: {
@@ -55,16 +59,42 @@ const limiters = {
   },
 };
 
+/**
+ * The shortest time between two admin sign-in codes for one address. The same as
+ * Supabase Auth's default minimum interval between two emails to one user.
+ */
+export const RESEND_COOLDOWN_MS = 60_000;
+const resendCooldown = rateLimit({ limit: 1, windowMs: RESEND_COOLDOWN_MS });
+
 export function resetSignInLimitsForTests() {
   for (const group of Object.values(limiters))
     for (const l of Object.values(group)) l.reset();
+  resendCooldown.reset();
 }
+
+/**
+ * Whose limit refused a sign-in request: this server's count per email address, per
+ * client address or in total, this server's wait between two codes for one address, or
+ * the email service's own limit.
+ */
+export type LimitSource =
+  "email" | "client" | "total" | "cooldown" | "email_service";
+
+export type SignInLimit = {
+  /** What was limited: asking for a code, or trying one. */
+  on: "code" | "verify";
+  source: LimitSource;
+  /** Seconds until it lifts; null when the email service did not say. */
+  retryAfter: number | null;
+};
 
 export class SignInError extends Error {
   constructor(
     message: string,
     readonly httpStatus = 400,
     readonly retryAfter?: number,
+    /** Set on a 429: the limit that refused the request. */
+    readonly limit?: SignInLimit,
   ) {
     super(message);
     this.name = "SignInError";
@@ -93,46 +123,92 @@ export function normaliseEmail(input: unknown): string {
 const emailKey = (email: string) =>
   createHash("sha256").update(email).digest("base64url");
 
-function limit(
-  group: (typeof limiters)["code"],
-  email: string,
-  client: string | null,
-) {
-  const waits = [
-    group.perEmail.check(emailKey(email)),
-    client === null ? null : group.perClient.check(client),
-    group.total.check("*"),
-  ].filter((w): w is number => w !== null);
-  if (waits.length)
-    throw new SignInError(
-      "Too many sign-in attempts. Try again later.",
-      429,
-      Math.max(...waits),
-    );
+const LIMITED = "Too many sign-in attempts. Try again later.";
+
+/** Counts the request against all three limits; refused by the one that lasts longest. */
+function limit(on: SignInLimit["on"], email: string, client: string | null) {
+  const group = limiters[on];
+  const waits: [LimitSource, number | null][] = [
+    ["email", group.perEmail.check(emailKey(email))],
+    ["client", client === null ? null : group.perClient.check(client)],
+    ["total", group.total.check("*")],
+  ];
+  let worst: { source: LimitSource; retryAfter: number } | undefined;
+  for (const [source, wait] of waits)
+    if (wait !== null && (!worst || wait > worst.retryAfter))
+      worst = { source, retryAfter: wait };
+  if (worst)
+    throw new SignInError(LIMITED, 429, worst.retryAfter, { on, ...worst });
 }
 
-/** Sends the sign-in email. Answers the same for every valid address. */
+/** The email service refused: its wait when it gave one, else a minute for the header. */
+function serviceLimit(e: AuthRateLimitedError, on: SignInLimit["on"]) {
+  return new SignInError(e.message, 429, e.retryAfter ?? 60, {
+    on,
+    source: "email_service",
+    retryAfter: e.retryAfter ?? null,
+  });
+}
+
+/**
+ * Sends the sign-in email. Answers the same for every valid address: `resendAfter`,
+ * the seconds until this server takes another request for the address, comes from
+ * request counts alone, never from whether the address has an account.
+ *
+ * `resendCooldown` (admin sign-in) refuses a second code for the address within
+ * RESEND_COOLDOWN_MS, before the request counts against the hourly limits.
+ * `redirectTo` is where the email's link leads, if the template has one; the default is
+ * AUTH_REDIRECT_URL, the driver app.
+ */
 export async function requestCode(
   input: { email: unknown },
   client: string | null,
   deps: Pick<SignInDeps, "auth">,
-): Promise<void> {
+  options: { resendCooldown?: boolean; redirectTo?: string } = {},
+): Promise<{ resendAfter: number }> {
   const email = normaliseEmail(input.email);
-  limit(limiters.code, email, client);
+  const key = emailKey(email);
+  if (options.resendCooldown) {
+    const wait = resendCooldown.peek(key);
+    if (wait !== null)
+      throw new SignInError(LIMITED, 429, wait, {
+        on: "code",
+        source: "cooldown",
+        retryAfter: wait,
+      });
+  }
+  limit("code", email, client);
+  if (options.resendCooldown) resendCooldown.check(key);
   try {
-    await deps.auth.sendCode(email, config.authRedirectUrl);
+    await deps.auth.sendCode(
+      email,
+      options.redirectTo ?? config.authRedirectUrl,
+    );
   } catch (e) {
-    if (e instanceof AuthRateLimitedError)
-      throw new SignInError(e.message, 429, 60);
+    if (e instanceof AuthRateLimitedError) throw serviceLimit(e, "code");
     // The same answer as a success: whether an email exists is not ours to tell.
     console.error(
       `Sending a sign-in code failed: ${e instanceof Error ? e.name : "unknown error"}`,
     );
   }
+  const group = limiters.code;
+  return {
+    resendAfter: Math.max(
+      options.resendCooldown ? (resendCooldown.peek(key) ?? 0) : 0,
+      group.perEmail.peek(key) ?? 0,
+      client === null ? 0 : (group.perClient.peek(client) ?? 0),
+      group.total.peek("*") ?? 0,
+    ),
+  };
 }
 
 const CODE = /^[0-9]{6,10}$/;
 const TOKEN_HASH = /^[A-Za-z0-9_-]{16,128}$/;
+const LINK_REFUSED = "This sign-in link is invalid or has expired.";
+
+/** Whether `value` has the form of an emailed link's token hash. Says nothing more. */
+export const isTokenHash = (value: unknown): value is string =>
+  typeof value === "string" && TOKEN_HASH.test(value);
 
 /** Parses what the app sent back: an email and code, or a link's token hash. */
 function proofOf(input: {
@@ -142,10 +218,7 @@ function proofOf(input: {
 }): Proof {
   if (typeof input.tokenHash === "string" && input.tokenHash) {
     if (!TOKEN_HASH.test(input.tokenHash))
-      throw new SignInError(
-        "This sign-in link is invalid or has expired.",
-        401,
-      );
+      throw new SignInError(LINK_REFUSED, 401);
     return { tokenHash: input.tokenHash };
   }
   const email = normaliseEmail(input.email);
@@ -200,21 +273,21 @@ export async function verifyProof(
   deps: Pick<SignInDeps, "auth">,
 ): Promise<AuthSession> {
   const proof = proofOf(input);
-  limit(
-    limiters.verify,
-    "tokenHash" in proof ? proof.tokenHash : proof.email,
-    client,
-  );
+  limit("verify", "tokenHash" in proof ? proof.tokenHash : proof.email, client);
   let session: AuthSession | null;
   try {
     session = await deps.auth.verify(proof);
   } catch (e) {
-    if (e instanceof AuthRateLimitedError)
-      throw new SignInError(e.message, 429, 60);
+    if (e instanceof AuthRateLimitedError) throw serviceLimit(e, "verify");
     throw e;
   }
   if (!session)
-    throw new SignInError("Wrong or expired code. Ask for a new one.", 401);
+    throw new SignInError(
+      "tokenHash" in proof
+        ? LINK_REFUSED
+        : "Wrong or expired code. Ask for a new one.",
+      401,
+    );
   return session;
 }
 

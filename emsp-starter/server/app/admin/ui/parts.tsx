@@ -23,7 +23,7 @@ export function Gate({ what }: { what: string }) {
       <h2 id="gate-h">Sign in as an admin to {what}</h2>
       <p>
         {ended
-          ? "Your sign-in has ended, so this page shows nothing. Admin sessions last about an hour; an admin secret is forgotten when the page reloads."
+          ? "Your sign-in has ended, so this page shows nothing. Admin sessions last about an hour, by email and with the admin secret alike."
           : "This page shows nothing until an admin is signed in. Signing in takes an email address and the 6-digit code we send to it."}
       </p>
       <Link className="btn" href="/admin/sign-in">

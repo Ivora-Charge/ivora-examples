@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
+
 import {
   connectPeerAction,
   invitePeerAction,
@@ -14,6 +20,7 @@ import {
   ADMIN_LIMIT,
   checkAdminSecret,
   isAdminSecret,
+  issueSecretSession,
   resetAdminLimitForTests,
 } from "@/lib/server/admin";
 import {
@@ -23,6 +30,8 @@ import {
   uninstallNetwork,
   LIVE_ENV,
 } from "./support/network";
+
+import { resetRequest, signInWithSecret } from "./support/request";
 
 const SECRET = "s".repeat(32);
 const saved = { ...process.env };
@@ -52,6 +61,7 @@ afterEach(() => {
   setPeerStoreForTests(undefined);
   setLocationStoreForTests(undefined);
   uninstallNetwork();
+  resetRequest();
   process.env = { ...saved };
 });
 
@@ -60,10 +70,8 @@ describe("admin secret (temporary admin gate)", () => {
     expect(isAdminSecret("")).toBe(false);
     process.env.ADMIN_SECRET = "short";
     expect(isAdminSecret("short")).toBe(false);
-    const res = await invitePeerAction(
-      {},
-      form({ label: "x", adminSecret: "short" }),
-    );
+    expect(issueSecretSession()).toBeNull();
+    const res = await invitePeerAction({}, form({ label: "x" }));
     expect(res).toMatchObject({
       ok: false,
       message: expect.stringMatching(/disabled/),
@@ -71,7 +79,7 @@ describe("admin secret (temporary admin gate)", () => {
     expect(store.peers.size).toBe(0);
   });
 
-  it("refuses every action with a wrong or missing secret", async () => {
+  it("refuses every action without a session, whatever the form carries", async () => {
     process.env.ADMIN_SECRET = SECRET;
     for (const action of [
       connectPeerAction,
@@ -82,11 +90,12 @@ describe("admin secret (temporary admin gate)", () => {
       resetAdminLimitForTests();
       expect(await action({}, form({ label: "x" }))).toMatchObject({
         ok: false,
-        message: "Wrong admin secret.",
+        code: "signed_out",
       });
+      // The secret itself in a form opens nothing: the gate reads no field.
       expect(
-        await action({}, form({ label: "x", adminSecret: `${SECRET}x` })),
-      ).toMatchObject({ ok: false });
+        await action({}, form({ label: "x", adminSecret: SECRET })),
+      ).toMatchObject({ ok: false, code: "signed_out" });
     }
     expect(store.peers.size).toBe(0);
   });
@@ -113,30 +122,42 @@ describe("admin secret (temporary admin gate)", () => {
 
   it("without a client address, only the total cap applies", async () => {
     process.env.ADMIN_SECRET = SECRET;
-    const wrong = form({ adminSecret: "wrong" });
-    // The action runs outside a request here: no trusted address, no per-client key.
-    for (let i = 0; i < ADMIN_LIMIT.perClient + 1; i++)
-      expect((await listPeersAction({}, wrong)).message).toBe(
-        "Wrong admin secret.",
-      );
-    for (let i = ADMIN_LIMIT.perClient + 1; i < ADMIN_LIMIT.total; i++)
-      await listPeersAction({}, wrong);
-    expect(
-      (await listPeersAction({}, form({ adminSecret: SECRET }))).message,
-    ).toMatch(/Too many wrong admin secrets/);
+    for (let i = 0; i < ADMIN_LIMIT.total - 1; i++)
+      expect(checkAdminSecret("wrong", null)).toBe("wrong");
+    // No per-client count: 49 wrong secrets from nowhere in particular lock nobody.
+    expect(checkAdminSecret(SECRET, null)).toBe("ok");
+    expect(checkAdminSecret("wrong", null)).toBe("wrong");
+    expect(checkAdminSecret(SECRET, null)).toBe("limited");
+  });
+
+  it("counts a session of another secret apart from wrong secrets: the gate refuses it, then pauses sessions, and the secret still works", async () => {
+    const forged = () => {
+      process.env.ADMIN_SECRET = "x".repeat(32);
+      signInWithSecret();
+      process.env.ADMIN_SECRET = SECRET;
+    };
+    for (let i = 0; i < ADMIN_LIMIT.total; i++) {
+      forged();
+      expect((await listPeersAction({}, form({}))).code).toBe("signed_out");
+    }
+    // 50 that did not check out: now not even a valid session is accepted.
+    signInWithSecret();
+    expect((await listPeersAction({}, form({}))).code).toBe("session_limited");
+    // None was a wrong secret. A right one also starts the sessions' count afresh.
+    expect(checkAdminSecret(SECRET, null)).toBe("ok");
+    signInWithSecret();
+    expect((await listPeersAction({}, form({}))).ok).toBe(true);
   });
 });
 
 describe("admin peer actions", () => {
   beforeEach(() => {
     process.env.ADMIN_SECRET = SECRET;
+    signInWithSecret();
   });
 
   it("in demo mode, invites but refuses to contact a CPO", async () => {
-    const invited = await invitePeerAction(
-      {},
-      form({ label: "Some CPO", adminSecret: SECRET }),
-    );
+    const invited = await invitePeerAction({}, form({ label: "Some CPO" }));
     expect(invited).toMatchObject({
       ok: true,
       tokenA: expect.stringMatching(/^[\w-]{43}$/),
@@ -149,7 +170,6 @@ describe("admin peer actions", () => {
         label: "CPO",
         versionsUrl: "https://cpo.example.test/ocpi/versions",
         tokenA: "a",
-        adminSecret: SECRET,
       }),
     );
     expect(connected).toMatchObject({
@@ -175,7 +195,6 @@ describe("admin peer actions", () => {
         label: "Mock CPO",
         versionsUrl: cpo.urls.versions,
         tokenA,
-        adminSecret: SECRET,
       }),
     );
     expect(connected).toMatchObject({
@@ -196,7 +215,7 @@ describe("admin peer actions", () => {
     });
     const id = connected.peer!.id;
 
-    const listed = await listPeersAction({}, form({ adminSecret: SECRET }));
+    const listed = await listPeersAction({}, form({}));
     expect(listed.peers).toHaveLength(1);
     // Summaries carry no token material.
     expect(JSON.stringify(listed)).not.toMatch(/v1:|ciphertext/i);
@@ -204,7 +223,7 @@ describe("admin peer actions", () => {
 
     const rotated = await managePeerAction(
       {},
-      form({ peerId: id, intent: "rotate", adminSecret: SECRET }),
+      form({ peerId: id, intent: "rotate" }),
     );
     expect(rotated).toMatchObject({
       ok: true,
@@ -212,7 +231,7 @@ describe("admin peer actions", () => {
     });
     const gone = await managePeerAction(
       {},
-      form({ peerId: id, intent: "unregister", adminSecret: SECRET }),
+      form({ peerId: id, intent: "unregister" }),
     );
     expect(gone).toMatchObject({ ok: true, peer: { status: "unregistered" } });
     expect(cpo.state.emsp).toBeUndefined();
@@ -231,7 +250,6 @@ describe("admin peer actions", () => {
         label: "Mock CPO",
         versionsUrl: cpo.urls.versions,
         tokenA: "not-the-right-token",
-        adminSecret: SECRET,
       }),
     );
     expect(res.ok).toBe(false);
@@ -241,10 +259,7 @@ describe("admin peer actions", () => {
 
   it("rejects a malformed peer ID", async () => {
     expect(
-      await managePeerAction(
-        {},
-        form({ peerId: "../x", intent: "rotate", adminSecret: SECRET }),
-      ),
+      await managePeerAction({}, form({ peerId: "../x", intent: "rotate" })),
     ).toMatchObject({ ok: false, message: "Peer ID must be a UUID." });
   });
 });

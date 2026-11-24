@@ -5,16 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PGlite } from "@electric-sql/pglite";
 
 // Server actions read the request's cookies (the admin session); tests set them here.
-const requestCookies = new Map<string, string>();
-vi.mock("next/headers", () => ({
-  cookies: async () => ({
-    get: (name: string) =>
-      requestCookies.has(name)
-        ? { name, value: requestCookies.get(name) }
-        : undefined,
-  }),
-  headers: async () => new Headers(),
-}));
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
 
 import { setupStatusAction } from "@/app/admin/setup/actions";
 import * as cronRoute from "@/app/api/cron/ocpi-sync/route";
@@ -84,6 +78,7 @@ import { MemorySessionStore } from "@/lib/sessions/store";
 import { setTokenStoreForTests } from "@/lib/tokens/registry";
 import { MemoryTokenStore } from "@/lib/tokens/store";
 import { LIVE_ENV } from "./support/network";
+import { requestCookies, signInWithSecret } from "./support/request";
 import { applyMigrations, migratedDatabase } from "./support/pglite";
 import { pgliteRest } from "./support/pglite-rest";
 
@@ -1319,13 +1314,14 @@ describe("the setup status action", () => {
   it("answers nobody who is not signed in: no status, before or after the first admin", async () => {
     for (const admins of [0, 1]) {
       if (admins) accounts.admins.set("u9", "admin");
-      for (const values of [{}, { adminSecret: "wrong" }] as Record<
-        string,
-        string
-      >[]) {
+      // The secret in a form field is not a sign-in: no action reads it.
+      for (const values of [
+        {},
+        { adminSecret: SECRETS.ADMIN_SECRET },
+      ] as Record<string, string>[]) {
         const answer = await setupStatusAction({}, form(values));
         expect(answer.ok).toBe(false);
-        expect(answer.code).toBe("wrong_secret");
+        expect(answer.code).toBe("signed_out");
         expect(answer.status).toBeUndefined();
         expect(Object.keys(answer).sort()).toEqual([
           "code",
@@ -1337,17 +1333,16 @@ describe("the setup status action", () => {
     }
     // Without ADMIN_SECRET on the server there is no secret to try.
     process.env.ADMIN_SECRET = "";
-    const answer = await setupStatusAction({}, form({ adminSecret: "x" }));
+    const answer = await setupStatusAction({}, form());
     expect(answer).toMatchObject({ ok: false, code: "admin_disabled" });
     expect(answer.status).toBeUndefined();
   });
 
-  it("answers a signed-in admin, a read-only one too, and the admin secret", async () => {
-    const secret = await setupStatusAction(
-      {},
-      form({ adminSecret: SECRETS.ADMIN_SECRET }),
-    );
+  it("answers a signed-in admin, a read-only one too, and an admin-secret session", async () => {
+    signInWithSecret();
+    const secret = await setupStatusAction({}, form());
     expect(secret.status?.admins).toBe(0);
+    requestCookies.clear();
     for (const role of ["admin", "viewer"] as const) {
       signIn(role);
       const answer = await setupStatusAction({}, form());

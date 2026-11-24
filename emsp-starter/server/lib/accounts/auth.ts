@@ -25,12 +25,22 @@ export type AuthSession = {
 /** What a driver sends back from the email: the code, or the link's token hash. */
 export type Proof = { email: string; code: string } | { tokenHash: string };
 
-/** Supabase's own limit on emails or attempts was hit: try again later. */
+/**
+ * Supabase's own limit on emails or attempts was hit: try again later. `retryAfter` is
+ * its `Retry-After` in seconds, when it sent one.
+ */
 export class AuthRateLimitedError extends Error {
-  constructor() {
+  constructor(readonly retryAfter?: number) {
     super("Too many sign-in attempts. Try again later.");
     this.name = "AuthRateLimitedError";
   }
+}
+
+/** A `Retry-After` header as whole seconds (1 second to a day), or undefined. */
+function retryAfterOf(header: string | null): number | undefined {
+  if (!header || !/^\s*\d{1,6}\s*$/.test(header)) return undefined;
+  const seconds = Number(header);
+  return seconds >= 1 && seconds <= 86_400 ? seconds : undefined;
 }
 
 export interface AuthProvider {
@@ -122,7 +132,10 @@ export class SupabaseAuth implements AuthProvider {
     } catch {
       json = undefined;
     }
-    if (res.status === 429) throw new AuthRateLimitedError();
+    if (res.status === 429)
+      throw new AuthRateLimitedError(
+        retryAfterOf(res.headers.get("retry-after")),
+      );
     if (res.status >= 500)
       throw new Error(
         `Auth request failed: ${method} ${path.split("?")[0]} (HTTP ${res.status})`,

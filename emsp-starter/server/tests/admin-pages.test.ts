@@ -17,9 +17,10 @@ import { moduleName, viewOf } from "@/app/admin/peers/peer-view";
 import { tokenRefused } from "@/app/admin/peers/refused";
 import { FindReport } from "@/app/admin/problems/problem-admin";
 import {
+  clock,
   firstAdminSql,
-  LIMITED_MESSAGE,
-  signInProblem,
+  limitWords,
+  type Limits,
 } from "@/app/admin/sign-in/states";
 import { TokenByUid } from "@/app/admin/tokens/token-admin";
 import { AdminProvider, type Who } from "@/app/admin/ui/admin-context";
@@ -36,15 +37,19 @@ import {
   StatusView,
   type SetupFacts,
 } from "@/app/setup";
-import { SignIn } from "@/app/admin/sign-in/sign-in-form";
+import {
+  LimitNotice,
+  NotAdmin,
+  SignIn,
+} from "@/app/admin/sign-in/sign-in-form";
+import SignInPage from "@/app/admin/sign-in/page";
 import { passes, STOP_NAMES, type SetupStatus } from "@/lib/setup/checks";
 import { readSetupStatus } from "@/lib/setup/status";
-import { AuthRateLimitedError, type AuthProvider } from "@/lib/accounts/auth";
 import {
-  requestCode,
-  resetSignInLimitsForTests,
+  RESEND_COOLDOWN_MS,
   SIGN_IN_LIMITS,
-  SignInError,
+  type LimitSource,
+  type SignInLimit,
 } from "@/lib/accounts/sign-in";
 import type { AdminIdentity } from "@/lib/accounts/admin-session";
 import { explainMessage } from "@/lib/admin/errors";
@@ -66,6 +71,8 @@ const signedInAdmin = vi.hoisted(() => ({
 }));
 vi.mock("@/app/admin/ui/current-admin", () => ({
   requestAdmin: async () => signedInAdmin.current,
+  // A visitor without an admin-secret session cookie.
+  requestSecretState: async () => "none",
 }));
 
 /**
@@ -93,33 +100,160 @@ const files = (dir: string): string[] =>
         : [],
   );
 
-describe("sign-in page: what today's answers mean", () => {
-  afterEach(() => resetSignInLimitsForTests());
+const LIMITS: Limits = {
+  counts: SIGN_IN_LIMITS,
+  cooldown: RESEND_COOLDOWN_MS / 1000,
+};
 
-  it("reads both rate limits as 'wait and try again'", async () => {
-    // The email service's limit and this server's end as the same sentence today.
-    expect(signInProblem(new AuthRateLimitedError().message)).toBe("limited");
-    resetSignInLimitsForTests();
-    const auth = { sendCode: async () => {} } as unknown as AuthProvider;
-    let refused: unknown;
-    for (let i = 0; i <= SIGN_IN_LIMITS.code.perEmail.limit; i += 1)
-      await requestCode({ email: "ana@example.com" }, null, { auth }).catch(
-        (e) => (refused = e),
-      );
-    expect(refused).toBeInstanceOf(SignInError);
-    expect((refused as SignInError).message).toBe(LIMITED_MESSAGE);
-    expect(signInProblem((refused as SignInError).message)).toBe("limited");
+describe("sign-in page: a limit explains itself", () => {
+  const SOURCES: LimitSource[] = [
+    "email",
+    "client",
+    "total",
+    "cooldown",
+    "email_service",
+  ];
+  const notice = (limit: SignInLimit, left: number | null, code?: string) =>
+    renderToStaticMarkup(
+      createElement(LimitNotice, { limit, limits: LIMITS, left, code }),
+    );
+
+  it("has its own words for every source, for codes and for tries", () => {
+    const seen = new Set<string>();
+    for (const on of ["code", "verify"] as const)
+      for (const source of SOURCES) {
+        const words = limitWords({ on, source, retryAfter: 10 }, LIMITS);
+        for (const text of Object.values(words)) expect(text).toMatch(/\S/);
+        expect(words.whose).toMatch(
+          source === "email_service"
+            ? /^your email service's \(Supabase Auth\), not this server's\./
+            : /^this server's\./,
+        );
+        // The cooldown is about codes alone: it reads the same for both.
+        if (source !== "cooldown" || on === "code") {
+          expect(seen.has(words.title), words.title).toBe(false);
+          seen.add(words.title);
+        }
+      }
+    expect(seen.size).toBe(9);
   });
 
-  it("reads the admin-list refusal, and nothing else, as 'not an admin'", () => {
-    expect(
-      readFileSync(join(__dirname, "../app/admin/sign-in/actions.ts"), "utf8"),
-    ).toContain('message: "This account is not an admin."');
-    expect(signInProblem("This account is not an admin.")).toBe("not_admin");
-    expect(signInProblem("Wrong or expired code. Ask for a new one.")).toBe(
-      "other",
+  it("names this server's own numbers, from the code that enforces them", () => {
+    const { code, verify } = SIGN_IN_LIMITS;
+    const whose = (on: "code" | "verify", source: LimitSource) =>
+      limitWords({ on, source, retryAfter: 1 }, LIMITS).whose;
+    expect(whose("code", "email")).toContain(
+      `at most ${code.perEmail.limit} codes per email address per hour`,
     );
-    expect(signInProblem(undefined)).toBe("other");
+    expect(whose("code", "client")).toContain(
+      `at most ${code.perClient.limit} requests for a code per hour`,
+    );
+    expect(whose("code", "total")).toContain(
+      `at most ${code.total.limit} codes per hour in total`,
+    );
+    expect(whose("code", "cooldown")).toContain("every 60 seconds");
+    expect(whose("verify", "email")).toContain(
+      `at most ${verify.perEmail.limit} tries per email address per 15 minutes`,
+    );
+    expect(whose("verify", "client")).toContain(
+      `at most ${verify.perClient.limit} tries per 15 minutes`,
+    );
+    expect(whose("verify", "total")).toContain(
+      `at most ${verify.total.limit} tries per 15 minutes in total`,
+    );
+  });
+
+  it("shows the wait as a clock, its source, what still works, the code and the next step", () => {
+    const html = notice(
+      { on: "code", source: "email", retryAfter: 2292 },
+      2292,
+      "sign_in_limited",
+    );
+    expect(html).toContain("You can ask again in");
+    expect(html).toContain(">38:12<");
+    expect(html).toContain("<strong>Whose limit:</strong> this server");
+    expect(html).toContain("the newest code still works until it expires");
+    expect(html).toContain("<code>sign_in_limited</code>");
+    expect(html).toContain("Type the newest code you have");
+    // Once the wait is over it says so.
+    expect(
+      notice({ on: "code", source: "email", retryAfter: 2292 }, 0),
+    ).toContain("The wait is over: you can ask again now.");
+    // Tries: nothing works until then, a right code included.
+    const tries = notice(
+      { on: "verify", source: "email", retryAfter: 900 },
+      900,
+    );
+    expect(tries).toContain("You can try again in");
+    expect(tries).toContain(">15:00<");
+    expect(tries).toContain("no code is taken, a right one included");
+  });
+
+  it("says so when the email service gave no wait, and never shows a made-up one", () => {
+    const html = notice(
+      { on: "code", source: "email_service", retryAfter: null },
+      null,
+      "email_service_limited",
+    );
+    expect(html).toContain("The email service did not say for how long.");
+    expect(html).not.toMatch(/class="big"/);
+    expect(html).toContain("your email service&#x27;s (Supabase Auth)");
+    expect(html).toContain("connect your own mail provider in Supabase");
+    expect(html).toContain("<code>email_service_limited</code>");
+  });
+
+  it("writes seconds as a clock", () => {
+    expect(clock(52)).toBe("0:52");
+    expect(clock(2292)).toBe("38:12");
+    expect(clock(60)).toBe("1:00");
+    expect(clock(3600)).toBe("1:00:00");
+    expect(clock(3725.2)).toBe("1:02:06");
+    expect(clock(-3)).toBe("0:00");
+  });
+});
+
+describe("sign-in page: not an admin, or no admin yet", () => {
+  const page = (noAdmins: boolean | undefined, proof?: "code" | "link") =>
+    renderToStaticMarkup(
+      createElement(NotAdmin, {
+        email: "ana@example.com",
+        noAdmins,
+        proof,
+        resend: createElement("button", null, "Email me a new code"),
+      }),
+    );
+
+  it("with an empty admin list, shows the first admin's statement instead of 'not an admin'", () => {
+    const html = page(true);
+    expect(html).toContain("No admin exists yet");
+    expect(html).toContain("This is a new deployment.");
+    expect(html).toContain("where email = &#x27;ana@example.com&#x27;;");
+    expect(html).toContain("Email me a new code");
+    expect(html).not.toContain("is not an admin");
+    expect(html).not.toContain("Ask an admin");
+    expect(page(true, "link")).toContain("The link was right");
+  });
+
+  it("with admins on the list, says to ask one, without the statement", () => {
+    const html = page(false);
+    expect(html).toContain("Not on the admin list");
+    expect(html).toContain(
+      "The code was right, but ana@example.com is not an admin.",
+    );
+    expect(html).toContain("Ask an admin of this network to add you");
+    expect(html).toContain("<code>not_an_admin</code>");
+    expect(html).not.toContain("insert into");
+    expect(html).not.toContain("No admin exists yet");
+  });
+
+  it("when the server did not say, shows both next steps", () => {
+    const html = page(undefined);
+    expect(html).toContain("is not an admin");
+    expect(html).toContain("No admin exists yet?");
+    expect(html).toContain(
+      "The server did not say whether the admin list is empty",
+    );
+    expect(html).toContain("where email = &#x27;ana@example.com&#x27;;");
   });
 
   it("writes the first admin's statement for the address used, safely quoted", () => {
@@ -132,16 +266,89 @@ describe("sign-in page: what today's answers mean", () => {
   });
 });
 
-describe("admin secret: asked once, kept in page memory only", () => {
+describe("sign-in page: the emailed link", () => {
+  const HASH = "hash0123456789abcdef";
+  const render = async (query?: Record<string, string | string[]>) =>
+    renderToStaticMarkup(
+      createElement(AdminProvider, {
+        admin: null,
+        demo: false,
+        children: await SignInPage({
+          searchParams: query && Promise.resolve(query),
+        }),
+      }),
+    );
+
+  it("opened with a token hash, offers one button and signs nobody in by itself", async () => {
+    const html = await render({ token_hash: HASH });
+    expect(html).toContain("Sign in with the link from the email");
+    expect(html).toContain("Opening the link alone signs nobody in");
+    expect(html).toMatch(
+      /<button class="btn wide" type="submit">Sign in<\/button>/,
+    );
+    expect(html).not.toContain("Email me a code");
+  });
+
+  it("without one, or with a malformed one, is the email step", async () => {
+    const queries: (Record<string, string | string[]> | undefined)[] = [
+      undefined,
+      {},
+      { token_hash: "short" },
+      { token_hash: "<script>alert(1)</script>0123" },
+      { token_hash: [HASH, HASH] },
+      { code: HASH },
+    ];
+    for (const query of queries) {
+      const html = await render(query);
+      expect(html).toContain("Email me a code");
+      expect(html).not.toContain("Sign in with the link from the email");
+      expect(html).not.toContain("script>alert");
+    }
+  });
+
+  it("the code step says the link works here too, and how to set the template", () => {
+    const src = readFileSync(
+      join(__dirname, "../app/admin/sign-in/sign-in-form.tsx"),
+      "utf8",
+    );
+    expect(src).toContain("A link in the email signs you in too");
+    expect(src).toContain("{{ .RedirectTo }}?token_hash={{ .TokenHash }}");
+    expect(src).toContain("{{ .Token }}");
+    expect(src).not.toContain("Do not click the link");
+  });
+});
+
+describe("admin secret: asked once, exchanged for a session, in no form", () => {
   const app = files(join(__dirname, "../app")).map(
     (f) => [f, readFileSync(f, "utf8")] as const,
   );
 
   it("no page has a field for it except the sign-in page", () => {
     const withField = app
-      .filter(([, src]) => /name="adminSecret"|Admin secret<\/label>/.test(src))
+      .filter(([, src]) => /Admin secret<\/label>/.test(src))
       .map(([f]) => f.split("/app/")[1]);
     expect(withField).toEqual(["admin/sign-in/sign-in-form.tsx"]);
+  });
+
+  it("no page or action sends or reads the secret as a form field", () => {
+    const asField = /["'`]adminSecret["'`]/;
+    for (const [f, src] of app) expect(src, f).not.toMatch(asField);
+    for (const f of files(join(__dirname, "../lib")))
+      expect(readFileSync(f, "utf8"), f).not.toMatch(asField);
+  });
+
+  it("the page keeps no secret: nothing in its shared state, and the field is cleared", () => {
+    const context = readFileSync(
+      join(__dirname, "../app/admin/ui/admin-context.tsx"),
+      "utf8",
+    );
+    expect(context).not.toMatch(/useRef|withSecret|setSecret/);
+    const signIn = readFileSync(
+      join(__dirname, "../app/admin/sign-in/sign-in-form.tsx"),
+      "utf8",
+    );
+    expect(signIn).toContain("onSend={trySecret} clearOnOk");
+    expect(signIn).toContain("adminSecretSignInAction({}, form)");
   });
 
   it("no page uses browser storage or sets a cookie from script", () => {
@@ -149,6 +356,29 @@ describe("admin secret: asked once, kept in page memory only", () => {
       expect(src, f).not.toMatch(
         /(localStorage|sessionStorage|indexedDB)\s*[.[]|document\.cookie\s*=/,
       );
+  });
+
+  it("a session shows as signed in, and a visitor's page says nothing of one", () => {
+    const account = (secret: boolean) =>
+      renderToStaticMarkup(
+        createElement(AdminProvider, {
+          admin: null,
+          secret,
+          demo: false,
+          children: createElement(SignIn, {
+            limits: LIMITS,
+            secretEnabled: true,
+          }),
+        }),
+      );
+    const signedIn = account(true);
+    expect(signedIn).toContain("Session in use");
+    expect(signedIn).toContain("An hour from sign-in");
+    expect(signedIn).toContain("Sign out");
+    expect(signedIn).not.toContain("Email me a code");
+    const visitor = account(false);
+    expect(visitor).toContain("Email me a code");
+    expect(visitor).not.toContain("Session in use");
   });
 });
 
@@ -877,7 +1107,7 @@ describe("setup: nothing for a visitor who is not signed in", () => {
         createElement(AdminProvider, {
           admin: null,
           demo: true,
-          children: createElement(SignIn, { codesPerHour: 5, secretEnabled }),
+          children: createElement(SignIn, { limits: LIMITS, secretEnabled }),
         }),
       );
     const without = signIn(false);

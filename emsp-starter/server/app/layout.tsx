@@ -2,7 +2,7 @@ import type { Metadata, Viewport } from "next";
 import type { ReactNode } from "react";
 import { brand, cssVariables } from "@/brand";
 import { fontFamilies } from "@/brand/fonts";
-import { requestAdmin } from "./admin/ui/current-admin";
+import { requestAdmin, requestSecretSession } from "./admin/ui/current-admin";
 import { isDemo } from "@/lib/server/demo";
 import { AdminProvider } from "./admin/ui/admin-context";
 import { SetupProvider } from "./admin/ui/setup-context";
@@ -37,6 +37,8 @@ export default async function RootLayout({
   const demo = isDemo();
   // Only who is signed in reaches the page: the email and role, never the token.
   const admin = await requestAdmin();
+  // An admin-secret session, for the shell alone: a yes or no, never the cookie.
+  const secret = !admin && (await requestSecretSession());
   return (
     <html lang="en">
       <head>
@@ -59,6 +61,7 @@ export default async function RootLayout({
         )}
         <AdminProvider
           admin={admin && { email: admin.email, role: admin.role }}
+          secret={secret}
           demo={demo}
         >
           <SetupProvider>

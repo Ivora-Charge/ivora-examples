@@ -1,16 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-// Server actions read the request's cookies (the admin session); tests set them here.
-const requestCookies = new Map<string, string>();
-vi.mock("next/headers", () => ({
-  cookies: async () => ({
-    get: (name: string) =>
-      requestCookies.has(name)
-        ? { name, value: requestCookies.get(name) }
-        : undefined,
-  }),
-  headers: async () => new Headers(),
-}));
+// Server actions read the request's cookies (the admin sessions); tests set them here.
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
 
 import {
   hubPartyAction,
@@ -73,6 +67,12 @@ import { DEMO_DRIVER_REF, setTokenStoreForTests } from "@/lib/tokens/registry";
 import { MemoryTokenStore } from "@/lib/tokens/store";
 import { LIVE_ENV } from "./support/network";
 
+import {
+  requestCookies,
+  resetRequest,
+  signInWithSecret,
+} from "./support/request";
+
 const SECRET = "s".repeat(32);
 const PEER = "8b0f0b5e-3c47-4c1e-9d55-4f1f0f8d2b11";
 const OTHER = "0c5c1f0e-77a2-4f7e-8f2c-5d0a3e9b6c22";
@@ -82,8 +82,7 @@ let fetchSpy: ReturnType<typeof vi.fn>;
 
 const form = (fields: Record<string, string>) => {
   const f = new FormData();
-  for (const [k, v] of Object.entries({ adminSecret: SECRET, ...fields }))
-    f.set(k, v);
+  for (const [k, v] of Object.entries(fields)) f.set(k, v);
   return f;
 };
 
@@ -92,6 +91,8 @@ beforeEach(() => {
   for (const k of Object.keys(LIVE_ENV)) delete process.env[k];
   process.env.DEMO_MODE = "true";
   process.env.ADMIN_SECRET = SECRET;
+  // Signed in with the admin secret, as the sign-in page does it.
+  signInWithSecret();
   peers = new MemoryPeerStore();
   setPeerStoreForTests(peers);
   fetchSpy = vi.fn(() => {
@@ -108,7 +109,7 @@ afterEach(() => {
   setAccountStoreForTests(undefined);
   setAuthProviderForTests(undefined);
   setStripeForTests(undefined);
-  requestCookies.clear();
+  resetRequest();
   vi.unstubAllGlobals();
   process.env = { ...saved };
   expect(fetchSpy).not.toHaveBeenCalled();
@@ -181,8 +182,11 @@ describe("an OCPI error code and a next step on every error", () => {
   });
 
   it("puts one on every refusal of the admin gate and every failed action", async () => {
+    resetRequest();
+    const signedOut = await listSessionsAction({}, form({}));
+    signInWithSecret();
     for (const result of [
-      await listSessionsAction({}, form({ adminSecret: "wrong" })),
+      signedOut,
       await listSessionsAction({}, form({ peerId: "not-a-uuid" })),
       await syncPeerAction({}, form({ peerId: PEER })),
       await reconcileAction({}, form({ from: "2026-13-01", to: "2026-10-01" })),
@@ -191,6 +195,7 @@ describe("an OCPI error code and a next step on every error", () => {
       expect(result.code).toMatch(/\S/);
       expect(result.nextStep).toMatch(/\S/);
     }
+    // The session was made from the secret: without the secret it opens nothing.
     delete process.env.ADMIN_SECRET;
     expect(await listSessionsAction({}, form({}))).toMatchObject({
       ok: false,
@@ -806,7 +811,9 @@ describe("refunds: partial or full, with a reason and an audit log", () => {
       { ok: false, code: "unexpected" },
       { ok: false, code: "invalid_input" },
       { ok: false, code: "above_captured" },
-      { ok: false, code: "wrong_secret" },
+      { ok: false, code: "signed_out" },
+      { ok: false, code: "session_expired" },
+      { ok: false, code: "session_limited" },
     ])
       expect(requestIdSpent(r)).toBe(false);
   });
@@ -837,22 +844,40 @@ describe("the admin gate on reconciliation, audit, driver and refund actions", (
     requestCookies.set(ADMIN_COOKIE, token);
     return { user, accounts };
   }
-  const GATE = ["wrong_secret", "read_only", "admin_disabled", "rate_limited"];
+  const GATE = [
+    "signed_out",
+    "session_expired",
+    "read_only",
+    "admin_disabled",
+    "rate_limited",
+  ];
 
   for (const [name, action] of Object.entries(actions)) {
-    it(`${name}: refuses a missing or wrong secret and a viewer, lets an admin in`, async () => {
+    it(`${name}: refuses no session, a session of another secret and a viewer, lets an admin in`, async () => {
       setPaymentStoreForTests(new MemoryPaymentStore());
+      resetRequest();
       expect(await action({}, raw({}))).toMatchObject({
         ok: false,
-        code: "wrong_secret",
+        code: "signed_out",
       });
-      expect(
-        await action({}, raw({ adminSecret: "x".repeat(32) })),
-      ).toMatchObject({ ok: false, code: "wrong_secret" });
+      // The secret in a form field opens nothing: no action reads it.
+      expect(await action({}, raw({ adminSecret: SECRET }))).toMatchObject({
+        ok: false,
+        code: "signed_out",
+      });
+      // A session signed with another secret.
+      process.env.ADMIN_SECRET = "x".repeat(32);
+      signInWithSecret();
+      process.env.ADMIN_SECRET = SECRET;
+      expect(await action({}, raw({}))).toMatchObject({
+        ok: false,
+        code: "signed_out",
+      });
 
       // Without ADMIN_SECRET, nobody gets in without signing in.
+      signInWithSecret();
       delete process.env.ADMIN_SECRET;
-      expect(await action({}, raw({ adminSecret: SECRET }))).toMatchObject({
+      expect(await action({}, raw({}))).toMatchObject({
         ok: false,
         code: "admin_disabled",
       });
@@ -869,7 +894,7 @@ describe("the admin gate on reconciliation, audit, driver and refund actions", (
     });
   }
 
-  it("hubPartyAction push_mode: refuses a wrong secret and a viewer, lets an admin in", async () => {
+  it("hubPartyAction push_mode: refuses the secret in a form and a viewer, lets an admin in", async () => {
     // A registered hub, kept on per-party pushes; demo mode is off for this one.
     process.env.DEMO_MODE = "false";
     Object.assign(process.env, LIVE_ENV);
@@ -893,9 +918,10 @@ describe("the admin gate on reconciliation, audit, driver and refund actions", (
           {},
           raw({ peerId: hub.id, intent: "push_mode", mode: "hub", ...fields }),
         );
-      expect(await pushMode({ adminSecret: "x".repeat(32) })).toMatchObject({
+      resetRequest();
+      expect(await pushMode({ adminSecret: SECRET })).toMatchObject({
         ok: false,
-        code: "wrong_secret",
+        code: "signed_out",
       });
       delete process.env.ADMIN_SECRET;
       signIn("viewer");

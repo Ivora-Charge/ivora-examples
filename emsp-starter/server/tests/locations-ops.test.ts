@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
+
 import * as cronRoute from "@/app/api/cron/ocpi-sync/route";
 import * as searchRoute from "@/app/api/v1/locations/route";
 import { syncPeerAction } from "@/app/admin/peers/actions";
@@ -29,6 +35,8 @@ import {
   LIVE_ENV,
   uninstallNetwork,
 } from "./support/network";
+
+import { resetRequest, signInWithSecret } from "./support/request";
 
 const SECRET = "s".repeat(32);
 const CRON = "c".repeat(40);
@@ -70,6 +78,7 @@ const oldCpo = async (r: Request) => {
 beforeEach(() => {
   resetAdminLimitForTests();
   Object.assign(process.env, LIVE_ENV, { ADMIN_SECRET: SECRET });
+  signInWithSecret();
   delete process.env.DEMO_MODE;
   delete process.env.CRON_SECRET;
   peers = new MemoryPeerStore();
@@ -95,6 +104,7 @@ afterEach(() => {
   setTokenStoreForTests(undefined);
   setCommandStoreForTests(undefined);
   setPaymentStoreForTests(undefined);
+  resetRequest();
   process.env = { ...saved };
   vi.restoreAllMocks();
 });
@@ -114,7 +124,7 @@ describe("admin: pull locations and tariffs", () => {
     const peer = await connect();
     const res = await syncPeerAction(
       {},
-      form({ peerId: peer.id, intent: "changes", adminSecret: SECRET }),
+      form({ peerId: peer.id, intent: "changes" }),
     );
     expect(res).toEqual({
       ok: true,
@@ -123,24 +133,25 @@ describe("admin: pull locations and tariffs", () => {
     expect(locations.locations.size).toBe(6);
     const again = await syncPeerAction(
       {},
-      form({ peerId: peer.id, intent: "full", adminSecret: SECRET }),
+      form({ peerId: peer.id, intent: "full" }),
     );
     expect(again.ok).toBe(true);
   });
 
-  it("needs the admin secret and a peer ID, and is refused in demo mode", async () => {
+  it("needs an admin session and a peer ID, and is refused in demo mode", async () => {
     const peer = await connect();
-    expect(
-      await syncPeerAction({}, form({ peerId: peer.id, adminSecret: "wrong" })),
-    ).toMatchObject({ ok: false, message: "Wrong admin secret." });
-    expect(
-      await syncPeerAction({}, form({ peerId: "x", adminSecret: SECRET })),
-    ).toMatchObject({ ok: false, message: "Peer ID must be a UUID." });
+    resetRequest();
+    expect(await syncPeerAction({}, form({ peerId: peer.id }))).toMatchObject({
+      ok: false,
+      code: "signed_out",
+    });
+    signInWithSecret();
+    expect(await syncPeerAction({}, form({ peerId: "x" }))).toMatchObject({
+      ok: false,
+      message: "Peer ID must be a UUID.",
+    });
     process.env.DEMO_MODE = "true";
-    const demo = await syncPeerAction(
-      {},
-      form({ peerId: peer.id, adminSecret: SECRET }),
-    );
+    const demo = await syncPeerAction({}, form({ peerId: peer.id }));
     expect(demo).toMatchObject({
       ok: false,
       message:

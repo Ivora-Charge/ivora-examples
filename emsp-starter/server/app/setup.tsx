@@ -45,9 +45,8 @@ export type SetupFacts = {
   party: string | null;
   /**
    * Sent by the server only to an admin signed in by email (the session cookie), and
-   * null for everyone else. An admin-secret sign-in lives in the page's memory, which
-   * the server cannot see when it renders, so the fixes then show a placeholder for
-   * the address.
+   * null for everyone else, an admin-secret session included, so the fixes then show
+   * a placeholder for the address.
    */
   settings: SetupSettings | null;
   /** Null for a signed-in admin, and for everyone once an admin exists. */

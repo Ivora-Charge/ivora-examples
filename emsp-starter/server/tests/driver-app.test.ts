@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // Admin actions read the request's cookies and headers; tests set none.
-vi.mock("next/headers", () => ({
-  cookies: async () => ({ get: () => undefined }),
-  headers: async () => new Headers(),
-}));
+vi.mock(
+  "next/headers",
+  async () => (await import("./support/request")).nextHeaders,
+);
 
 import { clearUserCacheForTests } from "@/lib/accounts/api";
 import { DEMO_CODE, DemoAuth } from "@/lib/accounts/auth";
@@ -73,6 +73,7 @@ import {
   LIVE_ENV,
   uninstallNetwork,
 } from "./support/network";
+import { resetRequest, signInWithSecret } from "./support/request";
 
 const saved = { ...process.env };
 let accounts: MemoryAccountStore;
@@ -185,6 +186,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  resetRequest();
   setAccountStoreForTests(undefined);
   setTokenStoreForTests(undefined);
   setPeerStoreForTests(undefined);
@@ -902,11 +904,8 @@ describe("report a problem", () => {
     });
 
     process.env.ADMIN_SECRET = "a".repeat(40);
-    const secret = { adminSecret: "a".repeat(40) };
-    const list = await listProblemsAction(
-      {},
-      form({ ...secret, status: "open" }),
-    );
+    signInWithSecret();
+    const list = await listProblemsAction({}, form({ status: "open" }));
     expect(list).toMatchObject({
       ok: true,
       reports: [
@@ -917,19 +916,16 @@ describe("report a problem", () => {
         }),
       ],
     });
-    const shown = await showProblemAction({}, form({ ...secret, reportId }));
+    const shown = await showProblemAction({}, form({ reportId }));
     expect(shown.report!.photo).toBe(`data:image/jpeg;base64,${JPEG}`);
-    expect(
-      (await resolveProblemAction({}, form({ ...secret, reportId }))).ok,
-    ).toBe(true);
-    expect(
-      (await resolveProblemAction({}, form({ ...secret, reportId }))).ok,
-    ).toBe(false);
+    expect((await resolveProblemAction({}, form({ reportId }))).ok).toBe(true);
+    expect((await resolveProblemAction({}, form({ reportId }))).ok).toBe(false);
     expect(await app.getReport(reportId)).toMatchObject({
       status: "resolved",
       resolvedBy: "admin:secret",
     });
-    // Without the secret or an admin session, nothing.
+    // Without an admin session, nothing.
+    resetRequest();
     expect((await listProblemsAction({}, form({ status: "open" }))).ok).toBe(
       false,
     );

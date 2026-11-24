@@ -10,16 +10,19 @@ test.skip(!process.env.SCREENSHOT, "only with SCREENSHOT=1");
 // Chromium sometimes fails the first capture of a cold server; a picture is safe to retake.
 test.describe.configure({ retries: 2 });
 
+/** Brings a page to what its picture shows. `key` differs for every picture taken. */
+type Show = (page: Page, key: string) => Promise<void>;
+
 /** Signed in with the demo's admin secret, on a place of the menu, with its list open. */
 const at =
-  (place: Place, ready: (page: Page) => Promise<void>) =>
-  async (page: Page) => {
+  (place: Place, ready: (page: Page) => Promise<void>): Show =>
+  async (page) => {
     await signIn(page);
     await goTo(page, place);
     await ready(page);
   };
 
-const PAGES: [string, (page: Page) => Promise<void>][] = [
+const PAGES: [string, Show][] = [
   [
     "setup",
     at("Setup", async (page) => {
@@ -28,9 +31,10 @@ const PAGES: [string, (page: Page) => Promise<void>][] = [
   ],
   [
     "sign-in",
-    async (page) => {
+    async (page, key) => {
       await page.goto("/admin/sign-in");
-      await page.getByLabel("Email").fill("ana@example.com");
+      // One address per picture: the server sends an address one code a minute.
+      await page.getByLabel("Email").fill(`ana+${key}@example.com`);
       await page.getByRole("button", { name: "Email me a code" }).click();
       await expect(page.getByLabel("6-digit code")).toBeVisible();
     },
@@ -109,7 +113,10 @@ for (const scheme of ["light", "dark"] as const)
   for (const [name, show] of PAGES)
     test(`screenshot: admin ${name}, ${scheme}`, async ({ page }, info) => {
       await page.emulateMedia({ colorScheme: scheme });
-      await show(page);
+      await show(
+        page,
+        `${info.project.name}-${scheme}${info.retry ? `-${info.retry}` : ""}`,
+      );
       await page.evaluate(() => document.fonts.ready);
       // No focus ring or caret on the picture.
       await page.evaluate(() =>
