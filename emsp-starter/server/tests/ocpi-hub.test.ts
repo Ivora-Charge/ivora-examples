@@ -1315,6 +1315,90 @@ describe("token pushes through a hub, to the hub's own party", () => {
     expect(owedToHub()).toEqual([]);
   });
 
+  it("a retry round under way during the switch cannot clear what the switch owes", async () => {
+    await setHubPushMode(hubPeer.id, "per_party", modeDeps());
+    await accept(A);
+    // The first push fails, so the token waits for the retry round.
+    hub.cpo(A).failNext(1);
+    const { token } = await createAppToken({ driverRef: DRIVER }, deps());
+    expect(owedToHub().map((p) => p.tokenId)).toEqual([token.id]);
+    const before = hubRequests(A).length;
+    // The round read the hub in per-party mode; the switch lands after its request
+    // went out, before it clears the outbox row.
+    const clear = tokens.pushSucceeded.bind(tokens);
+    const spy = vi
+      .spyOn(tokens, "pushSucceeded")
+      .mockImplementationOnce(async (...args) => {
+        await setHubPushMode(hubPeer.id, "hub", modeDeps());
+        await clear(...args);
+      });
+    expect(await retry(60)).toMatchObject({ sent: 1, failed: 0 });
+    expect(spy).toHaveBeenCalled();
+    expect(hubRequests(A).length).toBeGreaterThan(before);
+    expect(hubPuts()).toHaveLength(0);
+    // Still owed, in the switch's generation; the next round sends it to the hub's party.
+    const gen = (await peers.getPeer(hubPeer.id))!.pushGen;
+    expect(owedToHub()).toMatchObject([{ tokenId: token.id, pushGen: gen }]);
+    expect(await retry(60)).toMatchObject({ sent: 1, failed: 0 });
+    expect(hubPuts()).toHaveLength(1);
+    expect(owedToHub()).toEqual([]);
+  });
+
+  it("hub, per party, then hub again: each switch raises the generation and the last catches up", async () => {
+    await driversWithTokens(2);
+    await retry(60);
+    expect(owedToHub()).toEqual([]);
+    const start = (await peers.getPeer(hubPeer.id))!;
+    expect(start.hubPushMode).toBe("hub");
+    expect(
+      await setHubPushMode(hubPeer.id, "per_party", modeDeps()),
+    ).toMatchObject({ changed: true, owed: 0 });
+    expect(owedToHub()).toEqual([]);
+    expect(await setHubPushMode(hubPeer.id, "hub", modeDeps())).toMatchObject({
+      changed: true,
+      owed: 2,
+    });
+    const end = (await peers.getPeer(hubPeer.id))!;
+    expect(end.pushGen).toBe(start.pushGen! + 2);
+    expect(owedToHub().every((p) => p.pushGen === end.pushGen)).toBe(true);
+    expect(
+      peers.auditLog
+        .filter((a) => a.action === "ocpi.hub.push_mode_set")
+        .slice(-2)
+        .map((a) => a.details),
+    ).toEqual([
+      { mode: "per_party", from: "hub", owed: 0 },
+      { mode: "hub", from: "per_party", owed: 2 },
+    ]);
+  });
+
+  it("the store refuses to switch a peer that is not a roaming hub", async () => {
+    const cpo = await peers.createPeer({ label: "CPO", direction: "outbound" });
+    await peers.updatePeer(cpo.id, {
+      status: "registered",
+      hubPushMode: "per_party",
+      roles: [
+        {
+          role: "CPO",
+          country_code: "ZZ",
+          party_id: "CPO",
+          business_details: { name: "CPO" },
+        },
+      ],
+    });
+    const peer = (await peers.getPeer(cpo.id))!;
+    await expect(
+      peers.setHubPushMode({
+        peerId: cpo.id,
+        mode: "hub",
+        ifRev: peer.rev,
+        now: new Date().toISOString(),
+        actor: "t",
+      }),
+    ).rejects.toThrow(/not a roaming hub/);
+    expect(await peers.getPeer(cpo.id)).toEqual(peer);
+  });
+
   it("a push still owed from per-party mode goes to the hub's party after the switch", async () => {
     await setHubPushMode(hubPeer.id, "per_party", modeDeps());
     await accept(A);

@@ -81,9 +81,6 @@ export type PendingPush = {
   pushGen: number;
 };
 
-/** A push generation no peer reaches: clears an owed push of any generation. */
-export const ANY_PUSH_GEN = Number.MAX_SAFE_INTEGER;
-
 /** Longest wait between retries of a failed push. */
 export const MAX_PUSH_BACKOFF_MS = 6 * 60 * 60 * 1000;
 

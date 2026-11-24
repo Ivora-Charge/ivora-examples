@@ -9,7 +9,7 @@ import { decryptToken } from "@/lib/ocpi/tokens";
 import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 import { isDemo } from "@/lib/server/demo";
 import { logText } from "@/lib/server/log-error";
-import { ANY_PUSH_GEN, type DriverToken, type TokenStore } from "./store";
+import type { DriverToken, TokenStore } from "./store";
 
 /**
  * Pushing our tokens to every CPO's Tokens Receiver (OCPI 2.2.1 section 12.2.2):
@@ -252,12 +252,13 @@ export async function retryPendingPushes(
     const peer = peers.get(p.peerId);
     const t = await deps.tokens.getTokenById(p.tokenId);
     if (!peer || !t) {
-      // Cleared whatever version it was owed.
+      // Cleared whatever version it was owed, in any push generation (null: no
+      // generation check, so this works before the 202611250001 migration too).
       await deps.tokens.pushSucceeded(
         p.peerId,
         p.tokenId,
         "9999-12-31T23:59:59.000Z",
-        ANY_PUSH_GEN,
+        null,
       );
       report.dropped++;
       continue;

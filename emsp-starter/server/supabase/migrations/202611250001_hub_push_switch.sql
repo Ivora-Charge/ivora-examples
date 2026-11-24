@@ -15,7 +15,10 @@ alter table public.emsp_ocpi_peers
 alter table public.emsp_token_pushes
   add column push_gen bigint not null default 0;
 
--- Same as before, and the row it owes carries the peer's generation.
+-- Same as before, and the row it owes carries the peer's generation. The peer row is
+-- read FOR SHARE, so a token change and a concurrent mode switch (which locks the peer
+-- FOR UPDATE) take turns: a change committed first is moved to the new generation by
+-- the switch, and one made after it waits for the switch and reads the new generation.
 create or replace function public.emsp_tokens_owe_push() returns trigger
 language plpgsql
 security invoker
@@ -30,6 +33,7 @@ begin
   where p.status = 'registered'
     and p.token_ciphertext is not null
     and p.endpoints @> '[{"identifier": "tokens", "role": "RECEIVER"}]'::jsonb
+  for share of p
   on conflict (peer_id, token_id) do update set
     token_last_updated = greatest(q.token_last_updated, excluded.token_last_updated),
     next_attempt_at = least(q.next_attempt_at, excluded.next_attempt_at),
@@ -41,13 +45,13 @@ $$;
 
 revoke execute on function public.emsp_tokens_owe_push() from public, anon, authenticated;
 
--- Switches a registered peer's hub_push_mode if it still has revision p_expected_rev
+-- Switches a registered roaming hub's hub_push_mode if it still has revision p_expected_rev
 -- (compare-and-set; no row is returned otherwise, and nothing is written). It raises
 -- the peer's push_gen and the generation of every push the peer is owed. Switching to
 -- 'hub' also owes the peer every token, active or blocked, due at p_now (a push already
 -- owed stays one row), when it has a token and a tokens Receiver. The audit row is
 -- written in the same transaction. Returns the peer, the previous mode and how many
--- tokens are owed.
+-- tokens are owed. A peer without a HUB role is refused with an error.
 create function public.emsp_ocpi_hub_set_push_mode(
   p_peer_id uuid,
   p_mode text,
@@ -61,18 +65,23 @@ set search_path = ''
 as $$
 declare
   v_from text;
+  v_roles jsonb;
   v_peer public.emsp_ocpi_peers;
   v_owed integer := 0;
 begin
   if p_mode not in ('hub', 'per_party') then
     raise exception 'push mode must be hub or per_party';
   end if;
-  select p.hub_push_mode into v_from
+  select p.hub_push_mode, p.roles into v_from, v_roles
   from public.emsp_ocpi_peers as p
   where p.id = p_peer_id and p.status = 'registered' and p.rev = p_expected_rev
   for update;
   if not found or v_from = p_mode then
     return;
+  end if;
+  -- The push mode means something only behind a hub; the app checks this first too.
+  if not coalesce(v_roles @> '[{"role": "HUB"}]'::jsonb, false) then
+    raise exception 'peer % is not a roaming hub', p_peer_id;
   end if;
 
   update public.emsp_ocpi_peers as p

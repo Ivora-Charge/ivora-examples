@@ -1,11 +1,23 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import { randomUUID } from "node:crypto";
 import type { PGlite } from "@electric-sql/pglite";
+import type { ClientOptions } from "@/lib/ocpi/client";
 import { setHubPushMode } from "@/lib/ocpi/hub";
 import { SupabasePeerStore } from "@/lib/ocpi/store-supabase";
+import { encryptToken } from "@/lib/ocpi/tokens";
+import { pushToken, retryPendingPushes } from "@/lib/tokens/push";
 import type { NewDriverToken } from "@/lib/tokens/store";
 import { SupabaseTokenStore } from "@/lib/tokens/store-supabase";
-import { migratedDatabase } from "./support/pglite";
+import { LIVE_ENV } from "./support/network";
+import { applyMigrations, migratedDatabase } from "./support/pglite";
 import { pgliteRest } from "./support/pglite-rest";
 
 /**
@@ -31,18 +43,26 @@ afterAll(async () => {
   await db?.close();
 });
 
-beforeEach(async () => {
-  HUB = randomUUID();
-  await db.exec(
-    "delete from public.emsp_token_pushes; delete from public.emsp_tokens; delete from public.emsp_ocpi_peers;",
-  );
-  // A registered hub in per-party mode that lists a tokens Receiver.
-  await db.query(
+const saved = { ...process.env };
+afterEach(() => {
+  process.env = { ...saved };
+});
+
+/**
+ * A registered hub in per-party mode that lists a tokens Receiver, with `parties`
+ * trusted behind it.
+ */
+async function addHub(
+  on: PGlite,
+  id: string,
+  { ciphertext = "v1:x", parties = [] as string[], roles = ["HUB"] } = {},
+) {
+  await on.query(
     `insert into public.emsp_ocpi_peers
-       (id, label, direction, status, token_ciphertext, registered_at, endpoints, roles, hub_push_mode)
-     values ($1, 'Hub', 'outbound', 'registered', 'v1:x', now(), $2, $3, 'per_party')`,
+       (id, label, direction, status, token_ciphertext, registered_at, endpoints, roles, hub_push_mode, hub_parties)
+     values ($1, 'Hub', 'outbound', 'registered', $4, now(), $2, $3, 'per_party', $5)`,
     [
-      HUB,
+      id,
       JSON.stringify([
         {
           identifier: "tokens",
@@ -50,17 +70,77 @@ beforeEach(async () => {
           url: "https://hub.example.test/ocpi/2.2.1/tokens",
         },
       ]),
-      JSON.stringify([
-        {
-          role: "HUB",
+      JSON.stringify(
+        roles.map((role) => ({
+          role,
           country_code: "ZZ",
           party_id: "HUB",
           business_details: { name: "Hub" },
-        },
-      ]),
+        })),
+      ),
+      ciphertext,
+      JSON.stringify(
+        parties.map((partyId) => ({
+          countryCode: "DE",
+          partyId,
+          status: "trusted",
+          source: "admin",
+        })),
+      ),
     ],
   );
+}
+
+beforeEach(async () => {
+  HUB = randomUUID();
+  await db.exec(
+    "delete from public.emsp_token_pushes; delete from public.emsp_tokens; delete from public.emsp_ocpi_peers;",
+  );
+  await addHub(db, HUB);
 });
+
+/** Live mode, and the hub's credentials encrypted under the test key. */
+async function goLive(on: PGlite, id: string) {
+  Object.assign(process.env, LIVE_ENV);
+  delete process.env.DEMO_MODE;
+  await on.query(
+    "update public.emsp_ocpi_peers set token_ciphertext = $2 where id = $1",
+    [id, encryptToken("hub-credentials-token", id)],
+  );
+}
+
+type Sent = { method: string; path: string; to: string };
+/**
+ * The hub's Tokens Receiver: answers every request with OCPI success and records who
+ * it was addressed to. `before` runs before the first answer (a test can switch the
+ * mode while a push is under way).
+ */
+function fakeHub(before?: () => Promise<void>) {
+  const sent: Sent[] = [];
+  let first = before;
+  const client: ClientOptions = {
+    retries: 0,
+    transport: async (url, init) => {
+      const headers = new Headers(init.headers);
+      sent.push({
+        method: String(init.method),
+        path: new globalThis.URL(url).pathname,
+        to: `${headers.get("OCPI-to-country-code")}/${headers.get("OCPI-to-party-id")}`,
+      });
+      if (first) {
+        const run = first;
+        first = undefined;
+        await run();
+      }
+      return Response.json({
+        status_code: 1000,
+        status_message: "Success",
+        timestamp: new Date().toISOString(),
+      });
+    },
+  };
+  return { sent, client };
+}
 
 const token = (uid: string): NewDriverToken => ({
   countryCode: "NL",
@@ -270,5 +350,213 @@ describe("hub push mode switch on PGlite", () => {
       now: NOW,
     });
     expect(await owed()).toEqual([{ token_id: t.id, push_gen: 1 }]);
+  });
+
+  it("refuses a peer that is not a roaming hub, and writes nothing", async () => {
+    const cpo = randomUUID();
+    await addHub(db, cpo, { roles: ["CPO"] });
+    await tokens.insertToken(token("0A0B0C01"));
+    await db.query("delete from public.emsp_token_pushes");
+    const peer = (await peers.getPeer(cpo))!;
+    await expect(
+      peers.setHubPushMode({
+        peerId: cpo,
+        mode: "hub",
+        ifRev: peer.rev,
+        now: NOW,
+        actor: "admin",
+      }),
+    ).rejects.toThrow();
+    expect(await peers.getPeer(cpo)).toMatchObject({
+      hubPushMode: "per_party",
+      pushGen: 0,
+    });
+    expect(
+      (await db.query("select 1 from public.emsp_token_pushes")).rows,
+    ).toEqual([]);
+  });
+
+  it("the outbox trigger reads the peer's generation under a share lock", async () => {
+    // PGlite has one connection, so two transactions cannot interleave here: check the
+    // lock that makes a token change wait for a concurrent switch.
+    const [{ src }] = (
+      await db.query<{ src: string }>(
+        "select prosrc as src from pg_proc where proname = 'emsp_tokens_owe_push'",
+      )
+    ).rows;
+    expect(src).toMatch(/for share of p/i);
+  });
+
+  it("a retry round under way during a switch cannot clear what the switch owes", async () => {
+    await db.query(
+      "update public.emsp_ocpi_peers set hub_parties = $2 where id = $1",
+      [
+        HUB,
+        JSON.stringify([
+          {
+            countryCode: "DE",
+            partyId: "AAA",
+            status: "trusted",
+            source: "admin",
+          },
+        ]),
+      ],
+    );
+    await goLive(db, HUB);
+    const t = (await tokens.insertToken(token("0A0B0C01")))!;
+    expect(await owed()).toEqual([{ token_id: t.id, push_gen: 0 }]);
+    // The round reads the hub in per-party mode; the switch lands while its push is
+    // on the wire.
+    const hub = fakeHub(async () => {
+      await setHubPushMode(HUB, "hub", {
+        store: peers,
+        now: () => new Date(NOW),
+      });
+    });
+    const deps = {
+      tokens,
+      peers,
+      client: hub.client,
+      now: () => new Date(NOW),
+    };
+    expect(await retryPendingPushes(deps)).toEqual({
+      sent: 1,
+      failed: 0,
+      dropped: 0,
+    });
+    expect(hub.sent.map((r) => r.to)).toEqual(["DE/AAA"]);
+    // Still owed, in the new generation, and the next round sends it to the hub's party.
+    expect(await owed()).toEqual([{ token_id: t.id, push_gen: 1 }]);
+    expect(await retryPendingPushes(deps)).toMatchObject({ sent: 1 });
+    expect(hub.sent.map((r) => r.to)).toEqual(["DE/AAA", "ZZ/HUB"]);
+    expect(await owed()).toEqual([]);
+  });
+
+  it("hub, per party, then hub again: each switch raises the generation and the last catches up", async () => {
+    await db.query(
+      "update public.emsp_ocpi_peers set hub_push_mode = 'hub' where id = $1",
+      [HUB],
+    );
+    const t = (await tokens.insertToken(token("0A0B0C01")))!;
+    await db.query("delete from public.emsp_token_pushes");
+    const deps = { store: peers, now: () => new Date(NOW) };
+    expect(await setHubPushMode(HUB, "per_party", deps)).toMatchObject({
+      changed: true,
+      owed: 0,
+    });
+    expect(await owed()).toEqual([]);
+    expect(await setHubPushMode(HUB, "hub", deps)).toMatchObject({
+      changed: true,
+      owed: 1,
+    });
+    expect(await modeOf()).toEqual({ hub_push_mode: "hub", push_gen: 2 });
+    expect(await owed()).toEqual([{ token_id: t.id, push_gen: 2 }]);
+    expect(
+      (await audits()).map((a) => (a.details as { mode: string }).mode),
+    ).toEqual(["per_party", "hub"]);
+  });
+});
+
+describe("token pushes before the 202611250001 migration", () => {
+  const BEFORE = "202611250001_hub_push_switch.sql";
+  let old: PGlite;
+  let oldPeers: SupabasePeerStore;
+  let oldTokens: SupabaseTokenStore;
+  let hubId = "";
+
+  beforeAll(async () => {
+    old = await migratedDatabase({ before: BEFORE });
+    oldPeers = new SupabasePeerStore(URL, KEY, pgliteRest(old));
+    oldTokens = new SupabaseTokenStore(URL, KEY, pgliteRest(old));
+  }, 60_000);
+  afterAll(async () => {
+    await old?.close();
+  });
+  beforeEach(async () => {
+    hubId = randomUUID();
+    await old.exec(
+      "delete from public.emsp_token_pushes; delete from public.emsp_tokens; delete from public.emsp_ocpi_peers;",
+    );
+    await addHub(old, hubId, { parties: ["AAA"] });
+    await goLive(old, hubId);
+  });
+  const pending = async () =>
+    (
+      await old.query<{ peer_id: string; token_id: string }>(
+        "select peer_id, token_id from public.emsp_token_pushes order by peer_id",
+      )
+    ).rows;
+
+  it("has no push generation column", async () => {
+    expect(
+      (
+        await old.query(
+          "select 1 from information_schema.columns where table_name = 'emsp_token_pushes' and column_name = 'push_gen'",
+        )
+      ).rows,
+    ).toEqual([]);
+    expect((await oldPeers.getPeer(hubId))!.pushGen).toBeNull();
+  });
+
+  it("a retry round drops a push owed to a peer that is gone, without failing", async () => {
+    const t = (await oldTokens.insertToken(token("0A0B0C01")))!;
+    // A push owed to a peer that is no longer a tokens Receiver: the round drops it.
+    await old.query(
+      "update public.emsp_ocpi_peers set status = 'unregistered' where id = $1",
+      [hubId],
+    );
+    expect(await pending()).toEqual([{ peer_id: hubId, token_id: t.id }]);
+    const hub = fakeHub();
+    expect(
+      await retryPendingPushes({
+        tokens: oldTokens,
+        peers: oldPeers,
+        client: hub.client,
+        now: () => new Date(NOW),
+      }),
+    ).toEqual({ sent: 0, failed: 0, dropped: 1 });
+    expect(await pending()).toEqual([]);
+    expect(hub.sent).toEqual([]);
+  });
+
+  it("a push and a retry both land and clear what is owed", async () => {
+    const hub = fakeHub();
+    const deps = {
+      tokens: oldTokens,
+      peers: oldPeers,
+      client: hub.client,
+      now: () => new Date(NOW),
+    };
+    const a = (await oldTokens.insertToken(token("0A0B0C01")))!;
+    expect(await pushToken(a, { method: "PUT" }, deps)).toMatchObject([
+      { ok: true },
+    ]);
+    expect(await pending()).toEqual([]);
+
+    const b = (await oldTokens.insertToken(token("0A0B0C02")))!;
+    expect(await pending()).toEqual([{ peer_id: hubId, token_id: b.id }]);
+    expect(await retryPendingPushes(deps)).toEqual({
+      sent: 1,
+      failed: 0,
+      dropped: 0,
+    });
+    expect(await pending()).toEqual([]);
+    expect(hub.sent.map((r) => r.to)).toEqual(["DE/AAA", "DE/AAA"]);
+  });
+
+  it("refuses the switch as a pending migration, and works once it is applied", async () => {
+    const peer = (await oldPeers.getPeer(hubId))!;
+    await expect(
+      setHubPushMode(hubId, "hub", { store: oldPeers }),
+    ).rejects.toMatchObject({ code: expect.any(String) });
+    expect((await oldPeers.getPeer(hubId))!.hubPushMode).toBe("per_party");
+    expect((await oldPeers.getPeer(hubId))!.rev).toBe(peer.rev);
+    await applyMigrations(old);
+    expect(
+      await setHubPushMode(hubId, "hub", {
+        store: oldPeers,
+        now: () => new Date(NOW),
+      }),
+    ).toMatchObject({ changed: true });
   });
 });

@@ -211,8 +211,8 @@ export interface PeerStore {
    * (active and blocked) through the token outbox, due at `now` (the catch-up), when it
    * has a token and a tokens Receiver. Every push already owed to the peer moves to the
    * new push generation. Returns null when the peer changed or is not registered, or
-   * already has the mode; nothing is written then. Throws when it could not complete:
-   * nothing is written either.
+   * already has the mode; nothing is written then. Throws when it could not complete,
+   * or the peer has no HUB role: nothing is written either.
    */
   setHubPushMode(input: {
     peerId: string;
@@ -343,6 +343,9 @@ export class MemoryPeerStore implements PeerStore {
       p.hubPushMode === input.mode
     )
       return null;
+    // Like the database function: the push mode is only for a roaming hub.
+    if (!p.roles.some((r) => r.role === "HUB"))
+      throw new Error(`peer ${p.id} is not a roaming hub`);
     const from = p.hubPushMode;
     const before = structuredClone(p);
     p.hubPushMode = input.mode;
