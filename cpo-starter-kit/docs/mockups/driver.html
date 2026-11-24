@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Driver checkout and session · Ampleaf mockups</title>
+    <link rel="stylesheet" href="../../brand/tokens.css" />
+    <link rel="stylesheet" href="mock.css" />
+  </head>
+  <body class="review-body">
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="review" id="main">
+      <header>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <ol>
+            <li><a href="index.html">Mockups</a></li>
+            <li>
+              <span aria-current="page">6. Driver checkout and session</span>
+            </li>
+          </ol>
+        </nav>
+        <h1>6. Driver checkout and session</h1>
+        <p>
+          The driver sees the charger, status, price and one button, in the
+          operator's brand. The session page shows energy, time and cost so far
+          with one Stop action.
+        </p>
+      </header>
+      <div class="controls" role="group" aria-label="Preview options">
+        <span class="seg" role="group" aria-label="Theme"
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="light"
+            aria-pressed="true"
+          >
+            Light</button
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="dark"
+            aria-pressed="false"
+          >
+            Dark
+          </button></span
+        >
+        <span class="seg" role="group" aria-label="Width"
+          ><button
+            type="button"
+            data-set="size"
+            data-value="desktop"
+            aria-pressed="true"
+          >
+            Desktop 1440</button
+          ><button
+            type="button"
+            data-set="size"
+            data-value="phone"
+            aria-pressed="false"
+          >
+            Phone 390
+          </button></span
+        >
+        <a class="btn" href="proposed/driver.html"
+          >Open proposed screens full size</a
+        >
+        <a class="btn" href="proposed/session.html">session</a>
+      </div>
+      <div class="pair">
+        <figure>
+          <figcaption>Current (shipped template)</figcaption>
+          <img
+            data-current="../screens/driver-{size}-{theme}.png"
+            src="../screens/driver-desktop-light.png"
+            alt="Current Driver checkout and session screen in the shipped template"
+          />
+        </figure>
+        <figure>
+          <figcaption>Proposed</figcaption>
+          <div class="frame">
+            <iframe
+              data-proposed="proposed/driver.html"
+              title="Proposed Driver checkout and session mockup"
+            ></iframe>
+          </div>
+          <noscript
+            ><p>
+              <a href="proposed/driver.html">Open the proposed screen</a>
+            </p></noscript
+          >
+        </figure>
+      </div>
+      <div class="notes">
+        <section class="card">
+          <h2>What changes and why</h2>
+          <ul>
+            <li>
+              Price card states the hold and idle fee in plain words before the
+              button.
+            </li>
+            <li>
+              One primary button; offline and busy states say what to do next.
+            </li>
+            <li>
+              Session page: big energy figure, progress, time, power, cost so
+              far; Stop is secondary.
+            </li>
+            <li>
+              Second mock file:
+              <a href="proposed/session.html">session page</a>.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Follows</h2>
+          <ul>
+            <li>
+              Squid: guest checkout and session pages (single column, price
+              first, live session figures).
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Accessibility</h2>
+          <ul>
+            <li>
+              Text pairs are palette v2 pairs already checked at 4.5:1 or more
+              in light and dark (tests/contrast.test.ts); no new pair is
+              introduced.
+            </li>
+            <li>
+              Keyboard order follows the visual order: skip link, navigation,
+              page header, primary action, then content. Tabs use arrow keys;
+              table sort heads are buttons with <code>aria-sort</code>.
+            </li>
+            <li>
+              Focus: the existing 3 px token ring on every control; tap targets
+              44 px (36 px on dense table actions, with 44 px on a phone).
+            </li>
+            <li>
+              Status is a shape, a word and a colour; charts have a text
+              equivalent.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Brand tokens</h2>
+          <ul>
+            <li>
+              Header carries the operator name and logo from the brand tokens;
+              nothing says Ampleaf except the default.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Build size</h2>
+          <p>
+            <span class="size">S</span> Markup and copy only; payment flow
+            untouched.
+          </p>
+        </section>
+      </div>
+      <p class="muted sm" style="margin-top: var(--space-5)">
+        Demo data only. Current screens are the shipped template's own
+        screenshots (docs/screens).
+      </p>
+    </div>
+    <script src="compare.js"></script>
+  </body>
+</html>

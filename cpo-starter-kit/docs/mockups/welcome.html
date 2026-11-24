@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Landing and states · Ampleaf mockups</title>
+    <link rel="stylesheet" href="../../brand/tokens.css" />
+    <link rel="stylesheet" href="mock.css" />
+  </head>
+  <body class="review-body">
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="review" id="main">
+      <header>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <ol>
+            <li><a href="index.html">Mockups</a></li>
+            <li><span aria-current="page">7. Landing and states</span></li>
+          </ol>
+        </nav>
+        <h1>7. Landing and states</h1>
+        <p>
+          The landing page says what the app is and has one sign-in action. The
+          states page shows the empty, loading and error pattern for Live,
+          Chargers, Pricing and Reports.
+        </p>
+      </header>
+      <div class="controls" role="group" aria-label="Preview options">
+        <span class="seg" role="group" aria-label="Theme"
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="light"
+            aria-pressed="true"
+          >
+            Light</button
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="dark"
+            aria-pressed="false"
+          >
+            Dark
+          </button></span
+        >
+        <span class="seg" role="group" aria-label="Width"
+          ><button
+            type="button"
+            data-set="size"
+            data-value="desktop"
+            aria-pressed="true"
+          >
+            Desktop 1440</button
+          ><button
+            type="button"
+            data-set="size"
+            data-value="phone"
+            aria-pressed="false"
+          >
+            Phone 390
+          </button></span
+        >
+        <a class="btn" href="proposed/welcome.html"
+          >Open proposed screens full size</a
+        >
+        <a class="btn" href="proposed/states.html">states</a>
+      </div>
+      <div class="pair">
+        <figure>
+          <figcaption>Current (shipped template)</figcaption>
+          <img
+            data-current="../screens/welcome-{size}-{theme}.png"
+            src="../screens/welcome-desktop-light.png"
+            alt="Current Landing and states screen in the shipped template"
+          />
+        </figure>
+        <figure>
+          <figcaption>Proposed</figcaption>
+          <div class="frame">
+            <iframe
+              data-proposed="proposed/welcome.html"
+              title="Proposed Landing and states mockup"
+            ></iframe>
+          </div>
+          <noscript
+            ><p>
+              <a href="proposed/welcome.html">Open the proposed screen</a>
+            </p></noscript
+          >
+        </figure>
+      </div>
+      <div class="notes">
+        <section class="card">
+          <h2>What changes and why</h2>
+          <ul>
+            <li>
+              Landing: one headline, one sentence, Sign in primary, three plain
+              cards.
+            </li>
+            <li>
+              Empty: an icon, a sentence and one next step. Loading: a skeleton
+              that matches the layout. Error: what happened, is data safe, try
+              again.
+            </li>
+            <li>
+              Second mock file: <a href="proposed/states.html">states</a>.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Follows</h2>
+          <ul>
+            <li>
+              Squid: empty and error states (error says what is safe) and its
+              landing page tone.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Accessibility</h2>
+          <ul>
+            <li>
+              Text pairs are palette v2 pairs already checked at 4.5:1 or more
+              in light and dark (tests/contrast.test.ts); no new pair is
+              introduced.
+            </li>
+            <li>
+              Keyboard order follows the visual order: skip link, navigation,
+              page header, primary action, then content. Tabs use arrow keys;
+              table sort heads are buttons with <code>aria-sort</code>.
+            </li>
+            <li>
+              Focus: the existing 3 px token ring on every control; tap targets
+              44 px (36 px on dense table actions, with 44 px on a phone).
+            </li>
+            <li>
+              Status is a shape, a word and a colour; charts have a text
+              equivalent.
+            </li>
+            <li>
+              Loading uses a status role; errors use an alert role; motion stops
+              under reduced-motion.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Brand tokens</h2>
+          <ul>
+            <li>
+              Landing name and hero text come from OPERATOR_NAME and brand
+              tokens.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Build size</h2>
+          <p>
+            <span class="size">S</span> Shared state components, used by every
+            list page.
+          </p>
+        </section>
+      </div>
+      <p class="muted sm" style="margin-top: var(--space-5)">
+        Demo data only. Current screens are the shipped template's own
+        screenshots (docs/screens).
+      </p>
+    </div>
+    <script src="compare.js"></script>
+  </body>
+</html>

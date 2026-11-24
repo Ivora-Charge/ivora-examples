@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Onboarding and Settings · Ampleaf mockups</title>
+    <link rel="stylesheet" href="../../brand/tokens.css" />
+    <link rel="stylesheet" href="mock.css" />
+  </head>
+  <body class="review-body">
+    <a class="skip" href="#main">Skip to content</a>
+    <div class="review" id="main">
+      <header>
+        <nav class="crumbs" aria-label="Breadcrumb">
+          <ol>
+            <li><a href="index.html">Mockups</a></li>
+            <li><span aria-current="page">5. Onboarding and Settings</span></li>
+          </ol>
+        </nav>
+        <h1>5. Onboarding and Settings</h1>
+        <p>
+          Onboarding and Settings share one layout: a progress strip while setup
+          is incomplete, a section list on the left, one card and one save
+          button per section.
+        </p>
+      </header>
+      <div class="controls" role="group" aria-label="Preview options">
+        <span class="seg" role="group" aria-label="Theme"
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="light"
+            aria-pressed="true"
+          >
+            Light</button
+          ><button
+            type="button"
+            data-set="theme"
+            data-value="dark"
+            aria-pressed="false"
+          >
+            Dark
+          </button></span
+        >
+        <span class="seg" role="group" aria-label="Width"
+          ><button
+            type="button"
+            data-set="size"
+            data-value="desktop"
+            aria-pressed="true"
+          >
+            Desktop 1440</button
+          ><button
+            type="button"
+            data-set="size"
+            data-value="phone"
+            aria-pressed="false"
+          >
+            Phone 390
+          </button></span
+        >
+        <a class="btn" href="proposed/settings.html"
+          >Open proposed screen full size</a
+        >
+      </div>
+      <div class="pair">
+        <figure>
+          <figcaption>Current (shipped template)</figcaption>
+          <img
+            data-current="../screens/onboarding-{size}-{theme}.png"
+            src="../screens/onboarding-desktop-light.png"
+            alt="Current Onboarding and Settings screen in the shipped template"
+          />
+        </figure>
+        <figure>
+          <figcaption>Proposed</figcaption>
+          <div class="frame">
+            <iframe
+              data-proposed="proposed/settings.html"
+              title="Proposed Onboarding and Settings mockup"
+            ></iframe>
+          </div>
+          <noscript
+            ><p>
+              <a href="proposed/settings.html">Open the proposed screen</a>
+            </p></noscript
+          >
+        </figure>
+      </div>
+      <div class="notes">
+        <section class="card">
+          <h2>What changes and why</h2>
+          <ul>
+            <li>
+              Progress strip with the next step instead of a separate wizard
+              once the first step is done.
+            </li>
+            <li>
+              Sections: Company, Brand (with a contrast check and live preview),
+              Payments (status chip and checklist), Team, Roaming.
+            </li>
+            <li>Every form shows Saved with a time; errors are inline text.</li>
+            <li>
+              Payments states are chips with words (Done, To do, Waiting).
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Follows</h2>
+          <ul>
+            <li>
+              Squid: host setup (connect payments, add property) and its inline
+              status messages.
+            </li>
+            <li>
+              Adapted: team and brand sections, which Squid does not have.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Accessibility</h2>
+          <ul>
+            <li>
+              Text pairs are palette v2 pairs already checked at 4.5:1 or more
+              in light and dark (tests/contrast.test.ts); no new pair is
+              introduced.
+            </li>
+            <li>
+              Keyboard order follows the visual order: skip link, navigation,
+              page header, primary action, then content. Tabs use arrow keys;
+              table sort heads are buttons with <code>aria-sort</code>.
+            </li>
+            <li>
+              Focus: the existing 3 px token ring on every control; tap targets
+              44 px (36 px on dense table actions, with 44 px on a phone).
+            </li>
+            <li>
+              Status is a shape, a word and a colour; charts have a text
+              equivalent.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Brand tokens</h2>
+          <ul>
+            <li>
+              The brand section edits exactly the token set: colours, font
+              choice, logo; preview reads from tokens.
+            </li>
+            <li>
+              Contrast check uses the same AA rule as tests/contrast.test.ts.
+            </li>
+          </ul>
+        </section>
+        <section class="card">
+          <h2>Build size</h2>
+          <p>
+            <span class="size">M</span> Reorganises existing forms; contrast
+            check and preview are new.
+          </p>
+        </section>
+      </div>
+      <p class="muted sm" style="margin-top: var(--space-5)">
+        Demo data only. Current screens are the shipped template's own
+        screenshots (docs/screens).
+      </p>
+    </div>
+    <script src="compare.js"></script>
+  </body>
+</html>
