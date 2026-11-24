@@ -12,10 +12,10 @@ import { pullAllSessions } from "@/lib/sessions/pull";
 import { sessionStore } from "@/lib/sessions/registry";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { expireTokens } from "@/lib/tokens/manage";
 import { retryPendingPushes } from "@/lib/tokens/push";
 import { tokenStore } from "@/lib/tokens/registry";
-import { logText } from "@/lib/server/log-error";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;

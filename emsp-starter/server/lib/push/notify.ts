@@ -5,10 +5,10 @@ import { driverAppStore } from "@/lib/driver-app/registry";
 import type { DriverAppStore } from "@/lib/driver-app/store";
 import { onPaymentEvent, type PaymentEvent } from "@/lib/payments/events";
 import { INCREMENT_DECLINED_REASON } from "@/lib/payments/settle";
+import { logText } from "@/lib/server/log-error";
 import { onSessionEvent, type SessionEvent } from "@/lib/sessions/events";
 import { formatAmount, formatKwh, pushText, type PushKind } from "./messages";
 import { pushSender, type PushSender } from "./sender";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * Push notifications to the driver's devices, from the server's own events:

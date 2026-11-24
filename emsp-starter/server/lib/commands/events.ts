@@ -1,6 +1,6 @@
 import "server-only";
-import type { Command } from "./store";
 import { logText } from "@/lib/server/log-error";
+import type { Command } from "./store";
 
 /**
  * Internal command events, for the parts that tell the driver (push notifications):

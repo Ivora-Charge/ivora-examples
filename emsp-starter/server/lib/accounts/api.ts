@@ -2,10 +2,10 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { config } from "@/lib/server/config";
 import { mode } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import type { AuthProvider, AuthUser } from "./auth";
 import { accountStore, authProvider } from "./registry";
 import type { AccountStore, Driver } from "./store";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * The driver API's plumbing: CORS for the app's web build, JSON answers, and the

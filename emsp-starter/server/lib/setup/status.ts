@@ -13,11 +13,11 @@ import {
   missingForLive,
 } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { DatabaseRequestError } from "@/lib/server/supabase-rest";
 import { publicStops, type PublicStop, type SetupStatus } from "./checks";
 import { databaseCheck, type DatabaseCheck } from "./database";
 import { lastWebhookNotes, listJobRuns } from "./log";
-import { logText } from "@/lib/server/log-error";
 
 export type SetupDeps = {
   accounts: AccountStore;

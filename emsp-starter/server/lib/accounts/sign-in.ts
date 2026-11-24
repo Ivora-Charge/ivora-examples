@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { rateLimit } from "@/lib/server/rate-limit";
 import { createAppToken, type TokenDeps } from "@/lib/tokens/manage";
 import type { TokenStore } from "@/lib/tokens/store";
@@ -15,7 +16,6 @@ import {
 } from "./auth";
 import { DEMO_CARD_ID } from "./registry";
 import type { AccountStore, Driver } from "./store";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * Passwordless sign-in for drivers, from the app and the web, and for admins:

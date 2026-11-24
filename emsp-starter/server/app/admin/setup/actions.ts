@@ -2,9 +2,9 @@
 
 import { currentAdmin } from "@/lib/accounts/admin-session";
 import { asAdmin, type AdminResult } from "@/lib/server/admin-action";
+import { logText } from "@/lib/server/log-error";
 import type { SetupStatus } from "@/lib/setup/checks";
 import { readSetupStatus } from "@/lib/setup/status";
-import { logText } from "@/lib/server/log-error";
 
 export type SetupState = AdminResult & { status?: SetupStatus };
 

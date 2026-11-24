@@ -5,10 +5,10 @@ import { requestAdmin } from "./admin/ui/current-admin";
 import { SIGN_IN_LIMITS } from "@/lib/accounts/sign-in";
 import { formatMinorAmount } from "@/lib/locations/pricing";
 import { config, missingForLive } from "@/lib/server/config";
+import { logText } from "@/lib/server/log-error";
 import { getStatus } from "@/lib/server/status";
 import { publicSetupView } from "@/lib/setup/status";
 import { Setup, type SetupFacts, type SetupSettings } from "./setup";
-import { logText } from "@/lib/server/log-error";
 
 // The root page is outside the layout's title template.
 export const metadata: Metadata = {

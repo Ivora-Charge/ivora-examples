@@ -1,6 +1,6 @@
 import "server-only";
-import type { StoredCdr, StoredSession } from "./store";
 import { logText } from "@/lib/server/log-error";
+import type { StoredCdr, StoredSession } from "./store";
 
 /**
  * Internal events of the Sessions and CDRs modules, for the parts that act on them

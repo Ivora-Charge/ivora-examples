@@ -80,19 +80,25 @@ syncBuiltinESMExports();
 
 const realConnect = net.Socket.prototype.connect;
 net.Socket.prototype.connect = function (this: net.Socket, ...args: unknown[]) {
-  const first = args[0] as { host?: string; path?: string } | number | string;
-  const host =
-    typeof first === "object" && first !== null
-      ? first.path
-        ? undefined
-        : first.host
-      : typeof args[1] === "string"
-        ? args[1]
-        : undefined;
-  // A caller's own `lookup` picks the address (the pinned lookup of peer-fetch); the
-  // real dns.lookup stays guarded above.
+  // net.connect and http.Agent call this with one normalized argument, [options, cb];
+  // a direct socket.connect(options | port, ...) passes them as they are.
+  const first = (Array.isArray(args[0]) ? args[0][0] : args[0]) as
+    { host?: string; path?: string; lookup?: unknown } | number | string;
+  const options = typeof first === "object" && first !== null ? first : null;
+  const host = options
+    ? options.path
+      ? undefined
+      : options.host
+    : typeof args[1] === "string"
+      ? args[1]
+      : undefined;
+  // An IP literal is connected to as it is, whatever `lookup` says, so it is checked
+  // here. A name with the caller's own `lookup` (the pinned lookup of peer-fetch) is
+  // left to that lookup; the real dns.lookup stays guarded above.
   const ownLookup =
-    typeof first === "object" && first !== null && "lookup" in first;
+    options !== null &&
+    typeof options.lookup === "function" &&
+    !(typeof host === "string" && net.isIP(host));
   if (!ownLookup && !isLocal(host)) {
     const err = refuse("connect to", host);
     process.nextTick(() => this.destroy(err));

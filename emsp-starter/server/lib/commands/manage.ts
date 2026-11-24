@@ -27,6 +27,7 @@ import { decryptToken } from "@/lib/ocpi/tokens";
 import { sameParty, type Party } from "@/lib/ocpi/types";
 import { ocpiUrls } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { toOcpiToken, tokenValid } from "@/lib/tokens/push";
 import type { TokenStore } from "@/lib/tokens/store";
 import { emitCommandEvent } from "./events";
@@ -42,7 +43,6 @@ import {
   type FinalStatus,
   type NewCommand,
 } from "./store";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * Sending START_SESSION and STOP_SESSION to a CPO's Commands Receiver (OCPI 2.2.1

@@ -13,11 +13,11 @@ import {
 } from "@/lib/ocpi/token-objects";
 import { STATUS } from "@/lib/ocpi/types";
 import type { DisplayText } from "@/lib/ocpi/locations";
+import { logText } from "@/lib/server/log-error";
 import { toOcpiToken } from "./push";
 import { tokenStore } from "./registry";
 import { requireCpoParty } from "./sender";
 import type { DriverToken } from "./store";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * Real-time authorization (OCPI 2.2.1 section 12.2.1.2): a CPO asks whether a driver

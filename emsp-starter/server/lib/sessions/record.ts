@@ -12,6 +12,7 @@ import {
 } from "@/lib/ocpi/session-objects";
 import type { Peer, PeerStore } from "@/lib/ocpi/store";
 import { sameParty, STATUS, type Party } from "@/lib/ocpi/types";
+import { logText } from "@/lib/server/log-error";
 import type { TokenStore } from "@/lib/tokens/store";
 import { emitSessionEvent, type SessionEvent } from "./events";
 import type {
@@ -22,7 +23,6 @@ import type {
   StoredCdr,
   StoredSession,
 } from "./store";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * Storing the sessions and CDRs a CPO sends, whether it pushes them to our Receiver

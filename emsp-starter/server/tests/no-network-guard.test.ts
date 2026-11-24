@@ -1,5 +1,6 @@
 import dns from "node:dns";
 import { lookup as promisesLookup } from "node:dns/promises";
+import http from "node:http";
 import net from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectRefusals } from "./support/no-network";
@@ -98,7 +99,40 @@ describe("no real network in unit tests", () => {
       const socket = net.connect({ host: "db.example.test", port: 5432 });
       socket.on("error", resolve);
     });
-    expect(err.message).toMatch(/Real network use/);
+    // Refused by the connect guard itself, before any DNS lookup.
+    expect(err.message).toMatch(/connect to db\.example\.test/);
+  });
+
+  // A remote IP literal needs no DNS lookup, so only the connect guard can stop it.
+  const refusedConnect = (socket: net.Socket) =>
+    new Promise<Error>((resolve) => socket.on("error", resolve));
+
+  it("refuses net.connect({ host, port }) to a remote IP literal", async () => {
+    const err = await refusedConnect(
+      net.connect({ host: "192.0.2.1", port: 9 }),
+    );
+    expect(err.message).toMatch(/connect to 192\.0\.2\.1/);
+  });
+
+  it("refuses net.connect(port, host) to a remote IP literal", async () => {
+    const err = await refusedConnect(net.connect(9, "192.0.2.1"));
+    expect(err.message).toMatch(/connect to 192\.0\.2\.1/);
+  });
+
+  it("refuses a remote IP literal even with the caller's own lookup", async () => {
+    const lookup = ((_h: string, _o: unknown, cb: Function) =>
+      cb(null, "192.0.2.1", 4)) as unknown as net.LookupFunction;
+    const err = await refusedConnect(
+      net.connect({ host: "192.0.2.1", port: 9, lookup }),
+    );
+    expect(err.message).toMatch(/connect to 192\.0\.2\.1/);
+  });
+
+  it("refuses http.get of a remote IP literal", async () => {
+    const err = await new Promise<Error>((resolve) =>
+      http.get("http://192.0.2.1:9/").on("error", resolve),
+    );
+    expect(err.message).toMatch(/connect to 192\.0\.2\.1/);
   });
 
   it("still allows localhost", async () => {

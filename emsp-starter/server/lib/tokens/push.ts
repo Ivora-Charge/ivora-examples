@@ -8,8 +8,8 @@ import type { Token } from "@/lib/ocpi/token-objects";
 import { decryptToken } from "@/lib/ocpi/tokens";
 import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 import { isDemo } from "@/lib/server/demo";
-import type { DriverToken, TokenStore } from "./store";
 import { logText } from "@/lib/server/log-error";
+import type { DriverToken, TokenStore } from "./store";
 
 /**
  * Pushing our tokens to every CPO's Tokens Receiver (OCPI 2.2.1 section 12.2.2):

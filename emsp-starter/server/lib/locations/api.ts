@@ -1,6 +1,7 @@
 import "server-only";
 import { sameId } from "@/lib/ocpi/locations";
 import { mode } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { clientKey, rateLimit } from "@/lib/server/rate-limit";
 import { displayPrice, previewCost, primaryTariff } from "./pricing";
 import { locationStore, visiblePeerIds } from "./registry";
@@ -14,7 +15,6 @@ import {
   tariffsOfLocation,
 } from "./search";
 import type { StoredLocation } from "./store";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * The app's location API: search, one location, and a price preview. Locations and

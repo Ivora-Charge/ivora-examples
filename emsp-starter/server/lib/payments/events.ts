@@ -1,5 +1,4 @@
 import "server-only";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * Internal payment events, for the parts that tell the driver (the app, part 11) or
@@ -53,6 +52,8 @@ export async function emitPaymentEvent(event: PaymentEvent): Promise<void> {
     try {
       await listener(structuredClone(event));
     } catch (e) {
-      console.error(`A ${event.type} listener failed: ${logText(e)}`);
+      console.error(
+        `A ${event.type} listener failed: ${e instanceof Error ? e.name : "unknown error"}`,
+      );
     }
 }

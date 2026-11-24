@@ -1,11 +1,11 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { adminCookieFlags } from "@/lib/server/admin";
+import { logText } from "@/lib/server/log-error";
 import { userOf } from "./api";
 import type { AuthProvider } from "./auth";
 import { accountStore, authProvider } from "./registry";
 import type { AccountStore, AdminRole } from "./store";
-import { logText } from "@/lib/server/log-error";
 
 /**
  * Admin sign-in for the admin web: the same passwordless Supabase Auth sign-in as
