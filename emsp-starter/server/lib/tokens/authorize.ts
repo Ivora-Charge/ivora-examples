@@ -13,6 +13,7 @@ import {
 } from "@/lib/ocpi/token-objects";
 import { STATUS } from "@/lib/ocpi/types";
 import type { DisplayText } from "@/lib/ocpi/locations";
+import { logText } from "@/lib/server/log-error";
 import { toOcpiToken } from "./push";
 import { tokenStore } from "./registry";
 import { requireCpoParty } from "./sender";
@@ -60,7 +61,7 @@ export async function driverStanding(
     return driver.defaultPaymentMethodId ? "ok" : "no_credit";
   } catch (e) {
     console.error(
-      `Reading the account of token ${token.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
+      `Reading the account of token ${token.id} failed: ${logText(e)}`,
     );
     return "not_allowed";
   }
@@ -180,7 +181,7 @@ export async function authorizeToken(ctx: OcpiContext): Promise<Response> {
   } catch (e) {
     // The CPO is waiting with a driver at the charger: answer even if the log fails.
     console.error(
-      `Audit of a token authorization failed (request ${ctx.requestId}): ${e instanceof Error ? e.name : "unknown error"}`,
+      `Audit of a token authorization failed (request ${ctx.requestId}): ${logText(e)}`,
     );
   }
   return ocpiResponse(answer, ctx);

@@ -1,6 +1,7 @@
 import "server-only";
 import { sameId } from "@/lib/ocpi/locations";
 import { mode } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { clientKey, rateLimit } from "@/lib/server/rate-limit";
 import { displayPrice, previewCost, primaryTariff } from "./pricing";
 import { locationStore, visiblePeerIds } from "./registry";
@@ -61,10 +62,8 @@ function limited(
 }
 
 const failed = (what: string, e: unknown) => {
-  // Name the error only: messages may carry database or peer details.
-  console.error(
-    `Location API ${what} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-  );
+  // logText adds a message only for errors built from a table or endpoint and a status.
+  console.error(`Location API ${what} failed: ${logText(e)}`);
   return json({ error: "Something went wrong" }, 500);
 };
 

@@ -2,6 +2,7 @@ import "server-only";
 import { createHash } from "node:crypto";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { rateLimit } from "@/lib/server/rate-limit";
 import { createAppToken, type TokenDeps } from "@/lib/tokens/manage";
 import type { TokenStore } from "@/lib/tokens/store";
@@ -187,9 +188,7 @@ export async function requestCode(
   } catch (e) {
     if (e instanceof AuthRateLimitedError) throw serviceLimit(e, "code");
     // The same answer as a success: whether an email exists is not ours to tell.
-    console.error(
-      `Sending a sign-in code failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Sending a sign-in code failed: ${logText(e)}`);
   }
   const group = limiters.code;
   return {

@@ -27,6 +27,7 @@ import { decryptToken } from "@/lib/ocpi/tokens";
 import { sameParty, type Party } from "@/lib/ocpi/types";
 import { ocpiUrls } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import { toOcpiToken, tokenValid } from "@/lib/tokens/push";
 import type { TokenStore } from "@/lib/tokens/store";
 import { emitCommandEvent } from "./events";
@@ -196,9 +197,7 @@ async function audit(
     });
   } catch (e) {
     // A command may already be on its way to a charger: never fail it over the log.
-    console.error(
-      `Audit of command ${c.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Audit of command ${c.id} failed: ${logText(e)}`);
   }
 }
 
@@ -402,7 +401,7 @@ async function release(
     await (deps.preAuth ?? preAuth()).release(c, why);
   } catch (e) {
     console.error(
-      `Releasing the payment hold of command ${c.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
+      `Releasing the payment hold of command ${c.id} failed: ${logText(e)}`,
     );
     await audit(deps, "command.release_failed", c);
   }
@@ -555,9 +554,7 @@ async function send(
       e instanceof OcpiUnauthorizedError ||
       e instanceof OcpiNotSentError ||
       !(e instanceof OcpiError);
-    console.error(
-      `Command ${c.id} to peer ${peer.id}: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Command ${c.id} to peer ${peer.id}: ${logText(e)}`);
   }
   if (response) return applyResponse(c, response, deps);
   if (definitive)
@@ -753,9 +750,7 @@ export async function startSession(
   try {
     hold = await (deps.preAuth ?? preAuth()).hold(c);
   } catch (e) {
-    console.error(
-      `Payment hold for command ${c.id} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Payment hold for command ${c.id} failed: ${logText(e)}`);
     hold = { ok: false, reason: "The payment check failed. Try again." };
   }
   if (!hold.ok)

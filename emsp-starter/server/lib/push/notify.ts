@@ -5,6 +5,7 @@ import { driverAppStore } from "@/lib/driver-app/registry";
 import type { DriverAppStore } from "@/lib/driver-app/store";
 import { onPaymentEvent, type PaymentEvent } from "@/lib/payments/events";
 import { INCREMENT_DECLINED_REASON } from "@/lib/payments/settle";
+import { logText } from "@/lib/server/log-error";
 import { onSessionEvent, type SessionEvent } from "@/lib/sessions/events";
 import { formatAmount, formatKwh, pushText, type PushKind } from "./messages";
 import { pushSender, type PushSender } from "./sender";
@@ -63,9 +64,7 @@ export async function notifyDriver(
       else console.warn(`Push ${kind} was not delivered: ${t.code}`);
     }
   } catch (e) {
-    console.error(
-      `Push ${kind} failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Push ${kind} failed: ${logText(e)}`);
   }
   return sent;
 }
@@ -148,9 +147,7 @@ export function later(task: () => Promise<unknown>): void {
     const p: Promise<void> = task()
       .then(() => undefined)
       .catch((e: unknown) =>
-        console.error(
-          `A push notification failed: ${e instanceof Error ? e.name : "unknown error"}`,
-        ),
+        console.error(`A push notification failed: ${logText(e)}`),
       )
       .finally(() => pending().delete(p));
     pending().add(p);

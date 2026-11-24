@@ -11,5 +11,9 @@ export default defineConfig({
       ),
     },
   },
-  test: { include: ["tests/**/*.test.ts"] },
+  test: {
+    include: ["tests/**/*.test.ts"],
+    // Fails any unit test that reaches a real host (DNS, socket, fetch).
+    setupFiles: ["./tests/support/no-network.ts"],
+  },
 });

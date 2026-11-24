@@ -8,6 +8,7 @@ import type { Token } from "@/lib/ocpi/token-objects";
 import { decryptToken } from "@/lib/ocpi/tokens";
 import { ocpiTimestamp, type Party } from "@/lib/ocpi/types";
 import { isDemo } from "@/lib/server/demo";
+import { logText } from "@/lib/server/log-error";
 import type { DriverToken, TokenStore } from "./store";
 
 /**
@@ -204,7 +205,7 @@ async function pushTo(
     });
     // Name the error, not its details: they include the token's uid.
     console.error(
-      `Token push to peer ${peer.id} failed, queued for retry: ${e instanceof Error ? e.name : "unknown error"}`,
+      `Token push to peer ${peer.id} failed, queued for retry: ${logText(e)}`,
     );
     return { peerId: peer.id, label: peer.label, ok: false, error };
   }

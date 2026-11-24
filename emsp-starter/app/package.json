@@ -5,7 +5,7 @@
   "license": "Apache-2.0",
   "main": "expo-router/entry",
   "engines": {
-    "node": ">=22.13"
+    "node": "22.x"
   },
   "scripts": {
     "dev": "expo start",

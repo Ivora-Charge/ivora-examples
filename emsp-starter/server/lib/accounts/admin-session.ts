@@ -1,6 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { adminCookieFlags } from "@/lib/server/admin";
+import { logText } from "@/lib/server/log-error";
 import { userOf } from "./api";
 import type { AuthProvider } from "./auth";
 import { accountStore, authProvider } from "./registry";
@@ -40,9 +41,7 @@ export async function currentAdmin(): Promise<AdminIdentity | null> {
   try {
     return await adminFromToken(token);
   } catch (e) {
-    console.error(
-      `Admin session check failed: ${e instanceof Error ? e.name : "unknown error"}`,
-    );
+    console.error(`Admin session check failed: ${logText(e)}`);
     return null;
   }
 }
