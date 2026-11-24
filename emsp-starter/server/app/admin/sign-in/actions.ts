@@ -1,6 +1,5 @@
 "use server";
 
-import { headers } from "next/headers";
 import { clearAdminCookie, setAdminCookie } from "@/lib/accounts/admin-session";
 import { accountStore, authProvider } from "@/lib/accounts/registry";
 import {
@@ -10,16 +9,16 @@ import {
   type SignInLimit,
 } from "@/lib/accounts/sign-in";
 import type { AccountStore } from "@/lib/accounts/store";
-import { checkAdminSecret } from "@/lib/server/admin";
+import { checkAdminSecret, secretSessionsLimited } from "@/lib/server/admin";
 import { field } from "@/lib/server/admin-action";
 import {
   dropDeadSecretSession,
   endSecretSession,
+  requestClient as client,
   startSecretSession,
 } from "@/lib/server/admin-secret-session";
 import { config } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
-import { clientAddress } from "@/lib/server/rate-limit";
 
 export type SignInState = {
   ok?: boolean;
@@ -38,14 +37,6 @@ export type SignInState = {
    */
   noAdmins?: boolean;
 };
-
-async function client(): Promise<string | null> {
-  try {
-    return clientAddress(await headers());
-  } catch {
-    return null;
-  }
-}
 
 function problem(e: unknown, what: string): SignInState {
   if (e instanceof SignInError)
@@ -169,10 +160,10 @@ export async function verifyAdminLinkAction(
 }
 
 /**
- * Drops an admin-secret session cookie that no longer works (expired, or from before
- * ADMIN_SECRET was changed). The sign-in page calls it when it opens with such a
- * cookie, because a page cannot change cookies while it renders. It checks no secret,
- * counts nothing and answers nothing; a working session is left alone.
+ * Drops an admin-secret session cookie that does not work (expired, from before
+ * ADMIN_SECRET was changed, or not checked because too many failed). The sign-in page
+ * calls it when it opens with such a cookie, because a page cannot change cookies while
+ * it renders. It checks no secret and answers nothing; a working session is left alone.
  */
 export async function dropStaleSecretSessionAction(): Promise<void> {
   await dropDeadSecretSession();
@@ -180,21 +171,35 @@ export async function dropStaleSecretSessionAction(): Promise<void> {
 
 /**
  * Exchanges ADMIN_SECRET for an admin-secret session cookie (an hour, httpOnly). The
- * only place that takes the secret, and the only thing the lockout counts: wrong
+ * only place that takes the secret, and the only thing its lockout counts: wrong
  * secrets submitted here. On a server without ADMIN_SECRET every value is a wrong one.
- * A cookie that no longer works is dropped whatever the answer, while limited too.
+ * A cookie that does not work is dropped whatever the answer, while limited too.
+ *
+ * Session cookies that do not check out have a count of their own, which never stops
+ * this exchange; a right secret starts that count afresh for its client. If cookies
+ * from other clients have reached the cap in total, no session would be accepted, so
+ * none is started and the answer says so.
  */
 export async function adminSecretSignInAction(
   _prev: SignInState,
   form: FormData,
 ): Promise<SignInState> {
   await dropDeadSecretSession();
-  const check = checkAdminSecret(field(form, "secret"), await client());
+  const from = await client();
+  const check = checkAdminSecret(field(form, "secret"), from);
   if (check === "limited")
     return {
       ok: false,
       message: "Too many wrong admin secrets. Try again in 15 minutes.",
       code: "rate_limited",
+      nextStep: "Wait 15 minutes, or sign in by email instead.",
+    };
+  if (check === "ok" && secretSessionsLimited(from))
+    return {
+      ok: false,
+      message:
+        "Admin-secret sessions are paused: too many session cookies did not check out.",
+      code: "session_limited",
       nextStep: "Wait 15 minutes, or sign in by email instead.",
     };
   if (check !== "ok" || !(await startSecretSession()))

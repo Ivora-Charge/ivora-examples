@@ -71,6 +71,8 @@ const signedInAdmin = vi.hoisted(() => ({
 }));
 vi.mock("@/app/admin/ui/current-admin", () => ({
   requestAdmin: async () => signedInAdmin.current,
+  // A visitor without an admin-secret session cookie.
+  requestSecretState: async () => "none",
 }));
 
 /**

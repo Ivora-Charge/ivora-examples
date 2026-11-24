@@ -30,7 +30,10 @@ import { expectAccessible, goTo } from "./support";
  *   shown, less the banner, must still be the same.
  * - On the sign-in page only, whether the admin secret is offered (`secretEnabled`);
  *   in demo mode without it, the page says so in words ("ADMIN_SECRET is not set on
- *   this server"): the same one bit.
+ *   this server"): the same one bit. It also carries `staleSession`: whether the
+ *   visitor's own request came with an admin-secret session cookie that does not
+ *   work, so the page can ask for it to be deleted. It is about that cookie alone and
+ *   is false for a visitor without one, as every request here is.
  * - On Setup only, and only before the first admin exists: the six stops' fixed names
  *   and whether each is done. The two live setups without an admin hold different
  *   facts (peers, times, events, which secrets are set) behind the same six answers,
@@ -358,6 +361,8 @@ test("only the sign-in page is told whether the admin secret is set, and nothing
       const body = plain(await res.text());
       const what = `${setup.name} sign-in`;
       expect(body, what).toContain(`"secretEnabled":${setup.secret}`);
+      // No cookie came with the request, so there is none to delete.
+      expect(body, what).toContain('"staleSession":false');
       // A demo without the admin secret says so in words: the same bit, by name.
       // In the HTML, that is: the page data carries the flag alone.
       const says =

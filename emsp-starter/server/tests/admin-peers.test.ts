@@ -130,7 +130,7 @@ describe("admin secret (temporary admin gate)", () => {
     expect(checkAdminSecret(SECRET, null)).toBe("limited");
   });
 
-  it("never counts a session of another secret: the gate refuses it and nobody is locked out", async () => {
+  it("counts a session of another secret apart from wrong secrets: the gate refuses it, then pauses sessions, and the secret still works", async () => {
     const forged = () => {
       process.env.ADMIN_SECRET = "x".repeat(32);
       signInWithSecret();
@@ -140,6 +140,10 @@ describe("admin secret (temporary admin gate)", () => {
       forged();
       expect((await listPeersAction({}, form({}))).code).toBe("signed_out");
     }
+    // 50 that did not check out: now not even a valid session is accepted.
+    signInWithSecret();
+    expect((await listPeersAction({}, form({}))).code).toBe("session_limited");
+    // None was a wrong secret. A right one also starts the sessions' count afresh.
     expect(checkAdminSecret(SECRET, null)).toBe("ok");
     signInWithSecret();
     expect((await listPeersAction({}, form({}))).ok).toBe(true);

@@ -10,9 +10,13 @@ import { secretSession } from "@/lib/server/admin-secret-session";
 export const requestAdmin = cache(currentAdmin);
 
 /**
- * Whether this request has an admin-secret session, checked once per request. A
- * cookie that does not check out is ignored here and counted nowhere.
+ * This request's admin-secret session, checked once per request: every check of a
+ * cookie that is not a session counts toward the limit on those, so the layout and the
+ * sign-in page share one answer.
  */
+export const requestSecretState = cache(secretSession);
+
+/** Whether this request has a working admin-secret session. */
 export const requestSecretSession = cache(
-  async () => (await secretSession()) === "ok",
+  async () => (await requestSecretState()) === "ok",
 );

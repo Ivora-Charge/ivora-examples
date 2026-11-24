@@ -30,6 +30,14 @@ const SIGNED_OUT = {
 const REFUSED = {
   none: SIGNED_OUT,
   wrong: SIGNED_OUT,
+  limited: {
+    ok: false,
+    message:
+      "Admin-secret sessions are paused: too many session cookies did not check out.",
+    code: "session_limited",
+    nextStep:
+      "Sign in again with the admin secret (Account), or wait 15 minutes.",
+  },
   expired: {
     ok: false,
     message: "The admin-secret session has ended.",
@@ -79,9 +87,9 @@ export async function asAdmin<T extends AdminResult>(
     }
     const session = await secretSession();
     if (session !== "ok") {
-      // A cookie that no longer works was not counted as a wrong secret, and is
-      // dropped here, where the answer can still change cookies.
-      await dropDeadSecretSession();
+      // A cookie that does not work is dropped here, where the answer can still
+      // change cookies. It was checked once, above, and is not checked again.
+      await dropDeadSecretSession(session);
       return REFUSED[session];
     }
   }

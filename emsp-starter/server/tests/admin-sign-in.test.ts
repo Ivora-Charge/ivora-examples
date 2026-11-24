@@ -140,6 +140,9 @@ beforeEach(() => {
   resetAdminLimitForTests();
   clearUserCacheForTests();
   resetRequest();
+  // No test here reaches a real network: every host is unreachable, in-process,
+  // unless the test installs its own.
+  installNetwork(inProcessNetwork({}).transport);
   vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
@@ -672,7 +675,14 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
       message: "Nothing to review.",
       payments: [],
     });
+    // Setup's read asks the database and the stores: none is reachable here, and
+    // nothing leaves the process.
+    const network = inProcessNetwork({});
+    installNetwork(network.transport);
     expect((await setupStatusAction({}, form())).ok).toBe(true);
+    expect(
+      network.calls.every((c) => c.url.startsWith(LIVE_ENV.SUPABASE_URL)),
+    ).toBe(true);
   });
 
   it("refuses a wrong secret and sets nothing", async () => {
@@ -776,7 +786,7 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
     expect((await exchange(SECRET)).ok).toBe(true);
   });
 
-  it("refuses a session whose time, nonce or signature was changed, and one of another secret, without counting any", async () => {
+  it("refuses a session whose time, nonce or signature was changed, and one of another secret, without counting a wrong secret", async () => {
     const real = issueSecretSession()!.value;
     const [v, expires, nonce, mac] = real.split(".");
     process.env.ADMIN_SECRET = "another-secret-".repeat(3);
@@ -804,10 +814,12 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
       "",
       undefined,
     ];
-    expect(forged.length).toBeGreaterThan(ADMIN_LIMIT.perClient);
-    for (const value of forged) expect(checkSecretSession(value)).toBe("wrong");
-    expect(checkSecretSession(real)).toBe("ok");
-    // None was counted as a wrong secret.
+    for (const value of forged)
+      expect(checkSecretSession(value, null)).toBe("wrong");
+    expect(checkSecretSession(real, null)).toBe("ok");
+    // None was counted as a wrong secret: all 50 of those are still to spend.
+    for (let i = 0; i < ADMIN_LIMIT.total - 1; i += 1)
+      checkAdminSecret("wrong", null);
     expect(checkAdminSecret(SECRET, null)).toBe("ok");
 
     // Through an action: refused as signed out, and the cookie is dropped.
@@ -826,7 +838,7 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
     expect(new Set(sessions).size).toBe(sessions.length);
     for (const s of sessions) {
       expect(Buffer.from(s.split(".")[2], "base64url")).toHaveLength(16);
-      expect(checkSecretSession(s)).toBe("ok");
+      expect(checkSecretSession(s, null)).toBe("ok");
     }
   });
 
@@ -853,34 +865,230 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
     expect(macs).toHaveLength(3);
     expect(nonces).toHaveLength(15);
     for (const m of macs)
-      expect(checkSecretSession(`${v}.${expires}.${nonce}.${m}`)).toBe("wrong");
+      expect(checkSecretSession(`${v}.${expires}.${nonce}.${m}`, null)).toBe(
+        "wrong",
+      );
     for (const n of nonces)
-      expect(checkSecretSession(`${v}.${expires}.${n}.${mac}`)).toBe("wrong");
+      expect(checkSecretSession(`${v}.${expires}.${n}.${mac}`, null)).toBe(
+        "wrong",
+      );
     // Padding and the other base64 alphabet are not accepted either.
-    expect(checkSecretSession(`${real}=`)).toBe("wrong");
+    expect(checkSecretSession(`${real}=`, null)).toBe("wrong");
     expect(
-      checkSecretSession(real.replaceAll("-", "+").replaceAll("_", "/")),
+      checkSecretSession(real.replaceAll("-", "+").replaceAll("_", "/"), null),
     ).toBe(/[-_]/.test(real) ? "wrong" : "ok");
-    expect(checkSecretSession(real)).toBe("ok");
+    expect(checkSecretSession(real, null)).toBe("ok");
   });
 
-  it("after ADMIN_SECRET is changed, ignores the old cookie without counting it and takes the new secret at once", async () => {
-    const NEXT = "rotated-secret-".repeat(3);
+  /** A session cookie signed with a guess at the secret, as anyone can make one. */
+  const cookieOf = (guess: string, now?: number) => {
+    const set = process.env.ADMIN_SECRET;
+    process.env.ADMIN_SECRET = guess;
+    const { value } = issueSecretSession(now)!;
+    process.env.ADMIN_SECRET = set;
+    return value;
+  };
+  const guess = (i: number) => `guessed-secret-${i}-`.repeat(3);
+  const SESSION_LIMITED = {
+    ok: false,
+    message:
+      "Admin-secret sessions are paused: too many session cookies did not check out.",
+    code: "session_limited",
+    nextStep:
+      "Sign in again with the admin secret (Account), or wait 15 minutes.",
+  };
+  const from = (address: string) => {
     process.env.TRUSTED_PROXY_HEADER = "x-client-ip";
-    requestHeaders.set("x-client-ip", "203.0.113.9");
+    requestHeaders.set("x-client-ip", address);
+  };
+
+  it("limits cookies signed with guessed secrets to 5 per client, then refuses one signed with the right secret too", async () => {
+    from("203.0.113.9");
+    for (let i = 0; i < ADMIN_LIMIT.perClient; i += 1) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(guess(i)));
+      expect(await list()).toMatchObject({ ok: false, code: "signed_out" });
+      expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+    }
+    // The sixth guess is the right one: not checked, refused and deleted.
+    const right = cookieOf(SECRET);
+    for (let i = 0; i < 3; i += 1) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, right);
+      expect(await secretSession()).toBe("limited");
+      expect(await hasDeadSecretSession()).toBe(true);
+      expect(await list()).toEqual(SESSION_LIMITED);
+      expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+    }
+    expect(checkSecretSession(right, "203.0.113.9")).toBe("limited");
+    // The sign-in page deletes it as well when it opens.
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    await dropStaleSecretSessionAction();
+    expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+    // Another client has its own count.
+    from("203.0.113.10");
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    expect((await list()).ok).toBe(true);
+
+    // Just before the window has passed it is still refused; then it is checked again.
+    from("203.0.113.9");
+    vi.advanceTimersByTime(ADMIN_LIMIT.windowMs - 1);
+    expect(checkSecretSession(right, "203.0.113.9")).toBe("limited");
+    vi.advanceTimersByTime(1);
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    expect((await list()).ok).toBe(true);
+  });
+
+  it("limits them to 50 in total: after that no client's cookie is accepted until the window passes", async () => {
+    const right = cookieOf(SECRET);
+    const t0 = Date.now();
+    for (let i = 0; i < ADMIN_LIMIT.total; i += 1) {
+      from(`198.51.100.${i}`);
+      requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(guess(i)));
+      expect(await list()).toMatchObject({ ok: false, code: "signed_out" });
+    }
+    from("203.0.113.77");
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    expect(await list()).toEqual(SESSION_LIMITED);
+    expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
+    // The secret's own count is untouched, so the right secret is still compared;
+    // but no session would be accepted, so none is started, and the page says why.
+    expect(await exchange(SECRET)).toEqual({
+      ok: false,
+      message:
+        "Admin-secret sessions are paused: too many session cookies did not check out.",
+      code: "session_limited",
+      nextStep: "Wait 15 minutes, or sign in by email instead.",
+    });
+    expect(requestCookies.size).toBe(0);
+    // A wrong secret is still told it is wrong, and counted as one.
+    expect((await exchange("wrong")).code).toBe("wrong_secret");
+
+    vi.setSystemTime(t0 + ADMIN_LIMIT.windowMs);
+    requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(SECRET));
+    expect((await list()).ok).toBe(true);
+    expect((await exchange(SECRET)).ok).toBe(true);
+  });
+
+  it("without a client address, counts them in total only: 50, and then none is accepted", async () => {
+    const right = cookieOf(SECRET);
+    for (let i = 0; i < ADMIN_LIMIT.total - 1; i += 1)
+      expect(checkSecretSession(cookieOf(guess(i)), null)).toBe("wrong");
+    expect(checkSecretSession(right, null)).toBe("ok");
+    expect(checkSecretSession(cookieOf(guess(49)), null)).toBe("wrong");
+    expect(checkSecretSession(right, null)).toBe("limited");
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    expect(await list()).toEqual(SESSION_LIMITED);
+  });
+
+  it("after the limit, a real exchange of the secret lets that client's sessions in again", async () => {
+    from("203.0.113.9");
+    for (let i = 0; i < ADMIN_LIMIT.perClient + 3; i += 1) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(guess(i)));
+      await list();
+    }
+    const right = cookieOf(SECRET);
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    expect(await list()).toEqual(SESSION_LIMITED);
+    // A wrong secret on the sign-in page does not lift it.
+    expect((await exchange("wrong")).code).toBe("wrong_secret");
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    expect(await list()).toEqual(SESSION_LIMITED);
+    // Nor does a right secret from another client.
+    from("203.0.113.10");
+    expect((await exchange(SECRET)).ok).toBe(true);
+    resetRequest();
+    from("203.0.113.9");
+    requestCookies.set(ADMIN_SECRET_COOKIE, right);
+    expect(await list()).toEqual(SESSION_LIMITED);
+
+    // The right secret, from this client: its count starts afresh.
+    expect(await exchange(SECRET)).toEqual({
+      ok: true,
+      message: "Signed in with the admin secret.",
+    });
+    expect((await list()).ok).toBe(true);
+    for (let i = 0; i < ADMIN_LIMIT.perClient - 1; i += 1)
+      expect(checkSecretSession(cookieOf(guess(i)), "203.0.113.9")).toBe(
+        "wrong",
+      );
+    expect((await list()).ok).toBe(true);
+    expect(checkSecretSession(cookieOf(guess(9)), "203.0.113.9")).toBe("wrong");
+    expect(await list()).toEqual(SESSION_LIMITED);
+  });
+
+  it("keeps the two counts apart: failed cookies never count as wrong secrets, nor wrong secrets as failed cookies", async () => {
+    from("203.0.113.9");
+    for (let i = 0; i < ADMIN_LIMIT.total + 10; i += 1) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(guess(i)));
+      await list();
+    }
+    // All five wrong secrets are still this client's to spend.
+    for (let i = 0; i < ADMIN_LIMIT.perClient; i += 1)
+      expect((await exchange("wrong")).code).toBe("wrong_secret");
+    expect((await exchange(SECRET)).code).toBe("rate_limited");
+
+    // The other way round, for another client: locked out of the exchange, its
+    // session still works, and all five failed cookies are still to spend.
+    from("203.0.113.10");
+    await exchange(SECRET);
+    const session = requestCookies.get(ADMIN_SECRET_COOKIE)!;
+    for (let i = 0; i < ADMIN_LIMIT.perClient; i += 1) await exchange("wrong");
+    expect((await exchange(SECRET)).code).toBe("rate_limited");
+    expect((await list()).ok).toBe(true);
+    for (let i = 0; i < ADMIN_LIMIT.perClient - 1; i += 1)
+      expect(checkSecretSession(cookieOf(guess(i)), "203.0.113.10")).toBe(
+        "wrong",
+      );
+    expect(checkSecretSession(session, "203.0.113.10")).toBe("ok");
+  });
+
+  it("does not count an expired cookie of the right secret, a request without a cookie, or anything on a server without ADMIN_SECRET", async () => {
+    from("203.0.113.9");
+    const expired = cookieOf(SECRET, Date.now() - SECRET_SESSION_MS);
+    for (let i = 0; i < ADMIN_LIMIT.total + 1; i += 1) {
+      expect(checkSecretSession(expired, "203.0.113.9")).toBe("expired");
+      expect(await secretSession()).toBe("none");
+    }
+    process.env.ADMIN_SECRET = "";
+    for (let i = 0; i < ADMIN_LIMIT.total + 1; i += 1) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(guess(i)));
+      expect(await secretSession()).toBe("none");
+      expect(checkSecretSession(cookieOf(guess(i)), "203.0.113.9")).toBe(
+        "wrong",
+      );
+    }
+    process.env.ADMIN_SECRET = SECRET;
+    requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(SECRET));
+    expect((await list()).ok).toBe(true);
+  });
+
+  it("checks the cookie once per refused action, so one stale cookie is one count", async () => {
+    from("203.0.113.9");
+    for (let i = 0; i < ADMIN_LIMIT.perClient - 1; i += 1) {
+      requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(guess(i)));
+      expect((await list()).code).toBe("signed_out");
+    }
+    // Four refused actions are four counts: a fifth cookie is still checked.
+    requestCookies.set(ADMIN_SECRET_COOKIE, cookieOf(SECRET));
+    expect((await list()).ok).toBe(true);
+  });
+
+  it("after ADMIN_SECRET is changed, the old cookie does not block the exchange: the new secret is taken at once and its session works", async () => {
+    const NEXT = "rotated-secret-".repeat(3);
+    from("203.0.113.9");
     await exchange(SECRET);
     const old = requestCookies.get(ADMIN_SECRET_COOKIE)!;
     process.env.ADMIN_SECRET = NEXT;
 
-    // Far more page loads than the per-client count allows wrong secrets. A page can
-    // only read the cookie: it stays, and each load finds it not working.
+    // Far more page loads than either count allows. A page can only read the cookie:
+    // it stays, each load finds it not working, and after five it is not even checked.
     for (let i = 0; i < ADMIN_LIMIT.total + 10; i += 1) {
-      expect(await secretSession()).toBe("wrong");
-      expect(await hasDeadSecretSession()).toBe(true);
+      const state = await secretSession();
+      expect(state).toBe(i < ADMIN_LIMIT.perClient ? "wrong" : "limited");
+      expect(await hasDeadSecretSession(state)).toBe(true);
     }
     expect(requestCookies.get(ADMIN_SECRET_COOKIE)).toBe(old);
-    // Nothing was counted: the new secret is accepted at the first try, and the new
-    // session replaces the old cookie.
+    // None was counted as a wrong secret: the new secret is accepted at the first
+    // try, the new session replaces the old cookie and works at once.
     expect(await exchange(NEXT)).toEqual({
       ok: true,
       message: "Signed in with the admin secret.",
@@ -893,22 +1101,34 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
     expect(checkAdminSecret(NEXT, "203.0.113.9")).toBe("limited");
   });
 
-  it("locks nobody after 50 loads with a stale cookie, with or without a client address", async () => {
+  it("locks nobody out of the exchange after 50 loads with a stale cookie, with or without a client address", async () => {
     const stale = issueSecretSession()!.value;
-    process.env.ADMIN_SECRET = "rotated-secret-".repeat(3);
+    const NEXT = "rotated-secret-".repeat(3);
+    process.env.ADMIN_SECRET = NEXT;
     // Without a trusted client address only the total count exists.
-    for (let i = 0; i < ADMIN_LIMIT.total; i += 1) {
+    for (let i = 0; i < ADMIN_LIMIT.total + 10; i += 1) {
       requestCookies.set(ADMIN_SECRET_COOKIE, stale);
-      expect(await secretSession()).toBe("wrong");
-      // An action too: refused as signed out, the cookie dropped, nothing counted.
-      expect(await list()).toMatchObject({ ok: false, code: "signed_out" });
+      // An action: refused, and the cookie dropped.
+      expect((await list()).code).toBe(
+        i < ADMIN_LIMIT.total ? "signed_out" : "session_limited",
+      );
       expect(requestCookies.has(ADMIN_SECRET_COOKIE)).toBe(false);
     }
-    expect(checkAdminSecret(process.env.ADMIN_SECRET, null)).toBe("ok");
-    process.env.TRUSTED_PROXY_HEADER = "x-client-ip";
+    // The new secret is taken at once, and its session works: without client
+    // addresses the right secret clears the one count there is.
+    requestCookies.set(ADMIN_SECRET_COOKIE, stale);
+    expect((await exchange(NEXT)).ok).toBe(true);
+    expect((await list()).ok).toBe(true);
+
     for (const address of ["203.0.113.9", "203.0.113.10"]) {
-      requestHeaders.set("x-client-ip", address);
-      expect((await exchange(process.env.ADMIN_SECRET)).ok).toBe(true);
+      resetRequest();
+      from(address);
+      for (let i = 0; i < ADMIN_LIMIT.perClient + 2; i += 1) {
+        requestCookies.set(ADMIN_SECRET_COOKIE, stale);
+        await list();
+      }
+      expect((await exchange(NEXT)).ok).toBe(true);
+      expect((await list()).ok).toBe(true);
     }
   });
 
@@ -967,7 +1187,8 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
     await verifyAdminCodeAction({}, form({ email: ANA.email, code: "000000" }));
     await exchange("wrong");
     expect(requestCookies.get(ADMIN_SECRET_COOKIE)).toBe(value);
-    // The secret is locked for everyone now; a session already given keeps working.
+    // The secret is locked for everyone now; a session already given keeps working:
+    // wrong secrets are not counted against sessions.
     for (let i = 0; i < ADMIN_LIMIT.total; i += 1)
       checkAdminSecret("wrong", null);
     expect(checkAdminSecret(SECRET, null)).toBe("limited");

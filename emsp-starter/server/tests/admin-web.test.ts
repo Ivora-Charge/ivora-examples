@@ -813,6 +813,7 @@ describe("refunds: partial or full, with a reason and an audit log", () => {
       { ok: false, code: "above_captured" },
       { ok: false, code: "signed_out" },
       { ok: false, code: "session_expired" },
+      { ok: false, code: "session_limited" },
     ])
       expect(requestIdSpent(r)).toBe(false);
   });

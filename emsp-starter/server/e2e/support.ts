@@ -59,6 +59,9 @@ export async function goTo(page: Page, place: Place) {
 
 /** Axe (WCAG 2.1 A and AA) on the page as it is now, and no sideways scroll. */
 export async function expectAccessible(page: Page, label: string) {
+  // A navigation swaps the document's title a moment after the new page shows: wait
+  // for it, or axe can find the page between two titles.
+  await expect(page, label).toHaveTitle(/\S/);
   const results = await new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21aa"])
     .analyze();

@@ -15,9 +15,11 @@ import { config } from "./config";
  * The comparison takes the same time whatever the input.
  *
  * Wrong secrets given on the sign-in page are rate limited: 5 per client and 50 in total
- * per 15 minutes. While limited, the secret is not even compared. Without a trusted client address (see
- * clientAddress in rate-limit.ts) there is no per-client count and the total cap alone applies. The
- * counts live in this server process, so each instance counts on its own.
+ * per 15 minutes. While limited, the secret is not even compared. Session cookies that
+ * do not check out are limited the same way, on a count of their own. Without a trusted
+ * client address (see clientAddress in rate-limit.ts) there is no per-client count and
+ * the total cap alone applies. The counts live in this server process, so each instance
+ * counts on its own.
  */
 export function adminEnabled(): boolean {
   return config.adminSecret !== undefined;
@@ -36,42 +38,75 @@ export const ADMIN_LIMIT = {
   total: 50,
 } as const;
 
-const ALL = "*";
-/** Times of recent wrong secrets, by client and in total. At most `total` entries. */
-const failures = new Map<string, number[]>();
-
-function recent(key: string, now: number): number[] {
-  const kept = (failures.get(key) ?? []).filter(
-    (t) => now - t < ADMIN_LIMIT.windowMs,
-  );
-  if (kept.length) failures.set(key, kept);
-  else failures.delete(key);
-  return kept;
+/**
+ * Recent failures of one kind, by client and in total: at most `total` entries, since
+ * nothing is checked, and so nothing added, once that many are recent.
+ */
+function failureLimit() {
+  let failures: { at: number; client: string | null }[] = [];
+  const recent = (now: number) =>
+    (failures = failures.filter((f) => now - f.at < ADMIN_LIMIT.windowMs));
+  return {
+    limited(client: string | null, now: number): boolean {
+      const kept = recent(now);
+      return (
+        kept.length >= ADMIN_LIMIT.total ||
+        (client !== null &&
+          kept.filter((f) => f.client === client).length >=
+            ADMIN_LIMIT.perClient)
+      );
+    },
+    count(client: string | null, now: number) {
+      recent(now).push({ at: now, client });
+    },
+    /** Forgets what `client` failed, in its own count and in the total. */
+    forget(client: string | null) {
+      failures = failures.filter((f) => f.client !== client);
+    },
+    clear() {
+      failures = [];
+    },
+  };
 }
+
+/** Wrong secrets submitted on the sign-in page. */
+const wrongSecrets = failureLimit();
+/** Session cookies that did not check out. Counted apart from wrong secrets. */
+const wrongSessions = failureLimit();
 
 /**
  * Checks an admin secret for `client` (a trusted address, or null for none), counting
  * wrong ones. "limited" means too many wrong secrets lately: try again later. While
  * limited, the secret is not compared at all. Only a secret that someone submits is
- * counted here: a session cookie never is (see checkSecretSession).
+ * counted here: a session cookie that does not check out has its own count (see
+ * checkSecretSession), so a browser's old cookie never stops the secret being taken.
+ *
+ * A right secret also forgets the session cookies of `client` that did not check out,
+ * so that the session it is exchanged for works at once.
  */
 export function checkAdminSecret(
   input: unknown,
   client: string | null,
   now = Date.now(),
 ): "ok" | "wrong" | "limited" {
-  const key = client === null ? null : `client:${client}`;
-  if (failures.size > 4 * ADMIN_LIMIT.total)
-    for (const k of [...failures.keys()]) recent(k, now);
-  if (
-    (key !== null && recent(key, now).length >= ADMIN_LIMIT.perClient) ||
-    recent(ALL, now).length >= ADMIN_LIMIT.total
-  )
-    return "limited";
-  if (isAdminSecret(input)) return "ok";
-  for (const k of key === null ? [ALL] : [key, ALL])
-    failures.set(k, [...recent(k, now), now]);
+  if (wrongSecrets.limited(client, now)) return "limited";
+  if (isAdminSecret(input)) {
+    wrongSessions.forget(client);
+    return "ok";
+  }
+  wrongSecrets.count(client, now);
   return "wrong";
+}
+
+/**
+ * Whether session cookies from `client` are ignored for now: too many that did not
+ * check out, from this client or in total.
+ */
+export function secretSessionsLimited(
+  client: string | null,
+  now = Date.now(),
+): boolean {
+  return wrongSessions.limited(client, now);
 }
 
 /**
@@ -87,12 +122,17 @@ export function checkAdminSecret(
  * signing out deletes the browser's cookie, and a copy would work until it expires,
  * which is why it is short and the cookie is httpOnly.
  *
- * A session that does not check out is ignored and never counted as a wrong secret: a
- * browser sends its cookie with every request, so after ADMIN_SECRET is changed an old
- * cookie would otherwise lock its own holder out, and everyone with them. Guessing a
- * session means guessing a 256-bit MAC, which the limit on wrong secrets is not needed
- * for. For the same reason a valid session keeps working while wrong secrets are
- * limited.
+ * A session cookie is as good as the secret it was signed with: anyone can sign one
+ * with a guess at ADMIN_SECRET and see whether it opens the gate. So cookies that do
+ * not check out are limited like wrong secrets, 5 per client and 50 in total per 15
+ * minutes, and ADMIN_SECRET must be random (openssl rand -base64 32), not a phrase.
+ * While that limit is reached, no cookie from the client is checked, a valid one
+ * included.
+ *
+ * The count is separate from the one of wrong secrets. A browser sends its cookie
+ * with every request, so after ADMIN_SECRET is changed an old cookie fails again and
+ * again: that pauses sessions for its client, never the sign-in page's exchange, and a
+ * right secret given there starts the client's count afresh.
  */
 export const SECRET_SESSION_MS = 60 * 60 * 1000;
 /**
@@ -135,17 +175,36 @@ function canonical(text: string, bytes: number): Buffer | null {
 }
 
 /**
- * Checks a session. "expired": signed by this server's secret, but past its time.
- * "wrong": anything else that is not a session of this secret, which includes every
- * session made before the secret was changed. Nothing is counted and no limit applies.
+ * Checks a session for `client` (a trusted address, or null for none), counting the
+ * ones that do not check out.
+ * - "expired": signed by this server's secret, but past its time. Not counted: only
+ *   someone who had the secret could have made it.
+ * - "wrong": anything else that is not a session of this secret, which includes every
+ *   session made before the secret was changed. Counted.
+ * - "limited": too many wrong ones lately, from this client or in total. Nothing is
+ *   compared, so a valid session is not accepted either.
+ * Without ADMIN_SECRET there is nothing to guess: "wrong", and nothing is counted.
  */
 export function checkSecretSession(
   value: unknown,
+  client: string | null,
   now = Date.now(),
-): "ok" | "expired" | "wrong" {
+): "ok" | "expired" | "wrong" | "limited" {
   const secret = config.adminSecret;
+  if (!secret) return "wrong";
+  if (wrongSessions.limited(client, now)) return "limited";
+  const state = sessionState(secret, value, now);
+  if (state === "wrong") wrongSessions.count(client, now);
+  return state;
+}
+
+function sessionState(
+  secret: string,
+  value: unknown,
+  now: number,
+): "ok" | "expired" | "wrong" {
   const parts = typeof value === "string" ? SESSION.exec(value) : null;
-  if (!secret || !parts) return "wrong";
+  if (!parts) return "wrong";
   const [, expires, nonce, sent] = parts;
   const given = canonical(sent, 32);
   if (!given || !canonical(nonce, NONCE_BYTES)) return "wrong";
@@ -166,5 +225,6 @@ export function adminCookieFlags(expires: Date) {
 }
 
 export function resetAdminLimitForTests() {
-  failures.clear();
+  wrongSecrets.clear();
+  wrongSessions.clear();
 }

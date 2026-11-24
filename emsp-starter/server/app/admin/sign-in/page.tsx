@@ -6,6 +6,7 @@ import {
 } from "@/lib/accounts/sign-in";
 import { adminEnabled } from "@/lib/server/admin";
 import { hasDeadSecretSession } from "@/lib/server/admin-secret-session";
+import { requestSecretState } from "../ui/current-admin";
 import { SignIn } from "./sign-in-form";
 
 export const metadata: Metadata = { title: "Sign in" };
@@ -20,10 +21,10 @@ export const dynamic = "force-dynamic";
  * The sign-in email's link may lead here with `?token_hash=...` (see the README). The
  * page does nothing with it by itself: it shows a button, and the button sends it.
  *
- * An admin-secret session cookie that no longer works (expired, or from before
- * ADMIN_SECRET was changed) cannot be deleted while the page renders, so the page is
- * told to ask for that (`staleSession`); it is a yes or no about the visitor's own
- * cookie.
+ * An admin-secret session cookie that does not work (expired, from before
+ * ADMIN_SECRET was changed, or not checked because too many failed) cannot be deleted
+ * while the page renders, so the page is told to ask for that (`staleSession`); it is a
+ * yes or no about the visitor's own cookie.
  */
 export default async function SignInPage({
   searchParams,
@@ -39,7 +40,7 @@ export default async function SignInPage({
       }}
       secretEnabled={adminEnabled()}
       link={isTokenHash(hash) ? hash : null}
-      staleSession={await hasDeadSecretSession()}
+      staleSession={await hasDeadSecretSession(await requestSecretState())}
     />
   );
 }

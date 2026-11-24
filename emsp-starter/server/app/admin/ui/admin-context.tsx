@@ -34,7 +34,12 @@ type AdminContext = {
 const Ctx = createContext<AdminContext | null>(null);
 
 /** The gate's answers that mean "nobody is signed in" (lib/server/admin-action.ts). */
-const SIGNED_OUT = new Set(["admin_disabled", "signed_out", "session_expired"]);
+const SIGNED_OUT = new Set([
+  "admin_disabled",
+  "signed_out",
+  "session_expired",
+  "session_limited",
+]);
 
 /**
  * The sign-in state every admin page shares. Both ways of signing in are an httpOnly
