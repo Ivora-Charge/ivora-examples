@@ -12,6 +12,7 @@ import {
 import { i18n, t } from "../i18n";
 import { ApiError, getFavourites, getLocation, setFavourite } from "../lib/api";
 import { directionsUrl } from "../lib/directions";
+import type { OpenState } from "../lib/hours";
 import { present } from "../lib/present";
 import { evseKind, type StatusKind } from "../lib/status";
 import type { LocationDetail, LocationSummary } from "../lib/types";
@@ -223,7 +224,7 @@ export function ChargerDetail({
       .flatMap((e) => e.connectors)
       .find((x) => x.price)?.price;
     const price = priced ? p.detailPrice(priced) : undefined;
-    const hours = p.hours(l.opening_times, l.time_zone);
+    const hours = p.hours(l);
     const directions = text(l.directions);
     body = (
       <View>
@@ -387,25 +388,7 @@ export function ChargerDetail({
         <Section
           title={t("detail.hours")}
           aside={
-            hours.open !== undefined ? (
-              <View style={styles.status}>
-                <StatusGlyph
-                  kind={hours.open ? "free" : "down"}
-                  color={hours.open ? c.free : c.danger}
-                />
-                <Text
-                  style={[
-                    type.strong,
-                    {
-                      color: hours.open ? c.free : c.danger,
-                      fontSize: fs(fontSize.sm),
-                    },
-                  ]}
-                >
-                  {hours.open ? t("detail.openNow") : t("detail.closedNow")}
-                </Text>
-              </View>
-            ) : undefined
+            hours.current ? <OpenNow current={hours.current} /> : undefined
           }
         >
           {hours.lines.map((line) => (
@@ -522,6 +505,46 @@ export function ChargerDetail({
   );
 }
 
+/**
+ * Open or closed right now. A closed site where charging is still possible is told
+ * neutrally, with a clock in the text colour: nothing is wrong for the driver.
+ */
+function OpenNow({
+  current,
+}: {
+  current: { state: OpenState; label: string };
+}) {
+  const { c } = useTheme();
+  const { fs } = useScale();
+  const color =
+    current.state === "open"
+      ? c.free
+      : current.state === "closed"
+        ? c.danger
+        : c.text;
+  return (
+    <View style={[styles.status, styles.shrink]} testID="detail-open-now">
+      {current.state === "closedCanCharge" ? (
+        <Icon name="clock" color={color} size={16} />
+      ) : (
+        <StatusGlyph
+          kind={current.state === "open" ? "free" : "down"}
+          color={color}
+        />
+      )}
+      <Text
+        style={[
+          type.strong,
+          styles.shrink,
+          { color, fontSize: fs(fontSize.sm) },
+        ]}
+      >
+        {current.label}
+      </Text>
+    </View>
+  );
+}
+
 /** The header's close or back button, light on the violet header. */
 function HeaderButton({
   icon,
@@ -593,6 +616,7 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   status: { flexDirection: "row", alignItems: "center", gap: space.xs + 2 },
+  shrink: { flexShrink: 1 },
   actions: { flexDirection: "row", gap: space.sm + 4, flexWrap: "wrap" },
   link: {
     flexDirection: "row",

@@ -4,7 +4,7 @@ import { present } from "../lib/present";
 import type { LocationSummary } from "../lib/types";
 import { fontSize, radius, space, type, useScale, useTheme } from "../theme";
 import { Button } from "./Controls";
-import { StatusGlyph } from "./Icon";
+import { Icon, StatusGlyph } from "./Icon";
 import { PowerTile } from "./PowerTile";
 
 const p = present(i18n);
@@ -22,11 +22,14 @@ export function PlaceRow({
   const { c, scheme } = useTheme();
   const { fs } = useScale();
   const avail = p.availability(place);
+  const closed = p.closedNote(place);
   const price = p.lead(place.price);
   const distance =
     place.distance_m !== undefined ? i18n.distance(place.distance_m) : "";
-  const statusColor =
-    avail.kind === "free"
+  // A closed place keeps its free count, but not in the green that invites a driver.
+  const statusColor = closed
+    ? c.muted
+    : avail.kind === "free"
       ? c.free
       : avail.kind === "busy"
         ? c.busy
@@ -56,7 +59,12 @@ export function PlaceRow({
         pressed && styles.pressed,
       ]}
     >
-      <PowerTile kw={place.max_power_kw} kind={avail.kind} announce />
+      <PowerTile
+        kw={place.max_power_kw}
+        kind={avail.kind}
+        closed={closed !== undefined}
+        announce
+      />
       <View style={styles.middle}>
         <Text
           style={[
@@ -77,6 +85,19 @@ export function PlaceRow({
           >
             {avail.text}
           </Text>
+          {closed ? (
+            <View style={styles.closed} testID="place-closed-now">
+              <Icon name="clock" color={c.text} size={14} />
+              <Text
+                style={[
+                  type.strong,
+                  { color: c.text, fontSize: fs(fontSize.sm) },
+                ]}
+              >
+                {closed}
+              </Text>
+            </View>
+          ) : null}
           {distance ? (
             <Text
               style={[type.body, { color: c.muted, fontSize: fs(fontSize.sm) }]}
@@ -239,6 +260,7 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     gap: space.xs + 2,
   },
+  closed: { flexDirection: "row", alignItems: "center", gap: space.xs + 2 },
   price: { alignItems: "flex-end", maxWidth: "38%" },
   note: { padding: space.md },
   empty: {

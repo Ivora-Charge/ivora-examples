@@ -30,7 +30,8 @@ export function tileColors(kind: StatusKind, c: Palette) {
  * A charger as a rounded-square power tile showing its maximum kW. Its shape carries
  * the status as well as its colour: filled (free), outlined (in use), hatched (out of
  * order) or dashed (unknown). It grows with the driver's text size. The row or marker
- * that holds it says the status in words.
+ * that holds it says the status in words. A place that is closed now gets a plain grey
+ * outline, so a free charger there does not look ready to start.
  */
 export function PowerTile({
   kw,
@@ -39,6 +40,7 @@ export function PowerTile({
   selected = false,
   pin = false,
   announce = false,
+  closed = false,
 }: {
   kw: number;
   kind: StatusKind;
@@ -48,10 +50,14 @@ export function PowerTile({
   pin?: boolean;
   /** Read the kW out (in a list row named by its text); else the holder says it. */
   announce?: boolean;
+  /** The place is closed now: grey outline whatever the status. */
+  closed?: boolean;
 }) {
   const { c } = useTheme();
   const { fs, dim } = useScale();
-  const col = tileColors(kind, c);
+  const col = closed
+    ? { fill: c.surface, line: c.muted, text: c.muted }
+    : tileColors(kind, c);
   const big = size >= 52;
   const value = kw >= 100 ? Math.round(kw) : Math.round(kw * 10) / 10;
   return (

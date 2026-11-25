@@ -1,13 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { SAMPLE_LOCATIONS } from "../src/lib/api";
 import { cluster } from "../src/lib/cluster";
-import { isOpenAt } from "../src/lib/hours";
+import { isOpenAt, openState } from "../src/lib/hours";
 import {
   classify,
   NO_FILTERS,
   openNowFilter,
   searchParams,
   searchSample,
+  summaryOf,
   type Filters,
   type Search,
 } from "../src/lib/search";
@@ -132,6 +133,86 @@ describe("the offline demo's search", () => {
     const open = openNowFilter(items, { ...NO_FILTERS, openNow: true }, early);
     expect(open.map((l) => l.name)).not.toContain("Town Hall Garage");
     expect(open.length).toBe(items.length - 2);
+  });
+});
+
+describe("charging when the site is closed", () => {
+  const garage = SAMPLE_LOCATIONS.find((l) => l.name === "Town Hall Garage")!;
+  // 06:30 on a Monday in Amsterdam: before 07:00. 11:00: open.
+  const early = new Date("2026-10-26T05:30:00Z");
+  const day = new Date("2026-10-26T10:00:00Z");
+  const openNow = { ...NO_FILTERS, openNow: true };
+  const kept = (charging_when_closed: boolean | undefined, now: Date) =>
+    openNowFilter(
+      [summaryOf({ ...garage, charging_when_closed }, 1)],
+      openNow,
+      now,
+    ).length === 1;
+
+  it("hides a closed place under Open now, whatever the flag", () => {
+    for (const value of [true, false, undefined]) {
+      expect(kept(value, early)).toBe(false);
+      expect(kept(value, day)).toBe(true);
+    }
+  });
+
+  it("tells a closed place where a charge can continue only when true", () => {
+    expect(openState({ ...garage, charging_when_closed: true }, early)).toBe(
+      "closedCanCharge",
+    );
+    expect(openState({ ...garage, charging_when_closed: true }, day)).toBe(
+      "open",
+    );
+    for (const value of [false, undefined])
+      expect(openState({ ...garage, charging_when_closed: value }, early)).toBe(
+        "closed",
+      );
+  });
+
+  it("keeps an exceptional closing plain closed, even when true", () => {
+    const shut = {
+      ...garage,
+      charging_when_closed: true,
+      opening_times: {
+        ...garage.opening_times!,
+        exceptional_closings: [
+          {
+            period_begin: "2026-10-26T00:00:00Z",
+            period_end: "2026-10-27T00:00:00Z",
+          },
+        ],
+      },
+    };
+    expect(openState(shut, day)).toBe("closed");
+    expect(openState(shut, early)).toBe("closed");
+    expect(openNowFilter([summaryOf(shut, 1)], openNow, day)).toHaveLength(0);
+  });
+
+  it("keeps a place without opening times under Open now", () => {
+    expect(
+      openNowFilter(
+        [summaryOf({ ...garage, opening_times: undefined }, 1)],
+        openNow,
+        early,
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("says nothing about a place without opening times", () => {
+    expect(
+      openState({ time_zone: "UTC", charging_when_closed: true }, early),
+    ).toBeUndefined();
+  });
+
+  it("keeps the flag in a search result, as the server's summary does", () => {
+    for (const value of [true, false]) {
+      const [item] = searchSample(
+        [{ ...garage, charging_when_closed: value }],
+        { text: "", filters: NO_FILTERS },
+      ).items;
+      expect(item.charging_when_closed).toBe(value);
+      expect(item).not.toHaveProperty("evses");
+    }
   });
 });
 

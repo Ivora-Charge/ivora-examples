@@ -1,12 +1,11 @@
 import type { I18n, Key } from "../i18n/core";
-import { hoursRows, isOpenAt } from "./hours";
+import { hoursRows, openState, type OpenState } from "./hours";
 import { placeKind, type StatusKind } from "./status";
 import type {
   DisplayComponent,
   DisplayPrice,
   LeadPrice,
   LocationSummary,
-  OpeningTimes,
 } from "./types";
 
 /**
@@ -103,15 +102,34 @@ export function present(i: I18n) {
     };
   };
 
-  /** Opening hours as lines, and whether the place is open now. */
-  const hours = (
-    opening: OpeningTimes | undefined,
-    timeZone: string,
+  /**
+   * The list card's note when a place is closed now, also when a charge in progress can
+   * continue there: its free count must not read as "come and charge". Else undefined.
+   */
+  const closedNote = (
+    place: Parameters<typeof openState>[0],
     now = new Date(),
   ) => {
-    const open = isOpenAt(opening, timeZone, now);
-    if (!opening) return { open, lines: [t("detail.hoursUnknown")] };
-    if (opening.twentyfourseven) return { open, lines: [t("detail.open24")] };
+    const state = openState(place, now);
+    return state === "closed" || state === "closedCanCharge"
+      ? t("detail.closedNow")
+      : undefined;
+  };
+
+  const openLabels: Record<OpenState, Key> = {
+    open: "detail.openNow",
+    closed: "detail.closedNow",
+    closedCanCharge: "detail.closedCanCharge",
+  };
+
+  /** Opening hours as lines, and what to say about the place right now. */
+  const hours = (place: Parameters<typeof openState>[0], now = new Date()) => {
+    const opening = place.opening_times;
+    const state = openState(place, now);
+    const current = state && { state, label: t(openLabels[state]) };
+    if (!opening) return { current, lines: [t("detail.hoursUnknown")] };
+    if (opening.twentyfourseven)
+      return { current, lines: [t("detail.open24")] };
     const lines = hoursRows(opening).map((r) => {
       const days =
         r.from === r.to
@@ -132,10 +150,19 @@ export function present(i: I18n) {
         : t("detail.closed");
       return `${days}  ${periods}`;
     });
-    return { open, lines };
+    return { current, lines };
   };
 
-  return { status, connector, parking, lead, detailPrice, availability, hours };
+  return {
+    status,
+    connector,
+    parking,
+    lead,
+    detailPrice,
+    availability,
+    closedNote,
+    hours,
+  };
 }
 
 export type Present = ReturnType<typeof present>;

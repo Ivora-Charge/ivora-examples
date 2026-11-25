@@ -7,6 +7,7 @@ import {
   boundingBox,
   distanceM,
   locationAppId,
+  locationDetail,
   parseLocationAppId,
   parseSearchQuery,
   searchLocations,
@@ -233,6 +234,34 @@ describe("location search", () => {
       partyId: "MCK",
       id: "LOC5",
     });
+  });
+
+  it("says in the summary and the detail whether charging goes on when closed", async () => {
+    const [base] = sampleLocations({ countryCode: "ZZ", partyId: "MCK" }, 1);
+    const sites = new MemoryLocationStore();
+    await sites.saveLocations(
+      ONE,
+      [
+        { ...base, id: "T", name: "A", charging_when_closed: true },
+        { ...base, id: "F", name: "B", charging_when_closed: false },
+        // Unsent by the CPO: unsent by us, not a value of our own.
+        { ...base, id: "U", name: "C" },
+      ],
+      "2026-10-21T10:00:00Z",
+    );
+    const { items } = await searchLocations(sites, [ONE], q({}));
+    expect(items.map((i) => [i.name, i.charging_when_closed])).toEqual([
+      ["A", true],
+      ["B", false],
+      ["C", undefined],
+    ]);
+    expect(items[2]).not.toHaveProperty("charging_when_closed");
+    for (const item of items) {
+      const held = await sites.getLocation(parseLocationAppId(item.id)!);
+      expect(locationDetail(held!, []).charging_when_closed).toBe(
+        item.charging_when_closed,
+      );
+    }
   });
 
   it("pages results", async () => {

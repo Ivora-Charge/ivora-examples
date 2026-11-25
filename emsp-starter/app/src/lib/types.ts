@@ -77,6 +77,11 @@ export type LocationSummary = {
   parking_type?: string;
   time_zone: string;
   opening_times?: OpeningTimes;
+  /**
+   * OCPI: charging goes on outside the opening times. Absent when the CPO says
+   * nothing; older servers send it only on the location itself.
+   */
+  charging_when_closed?: boolean;
   evse_count: number;
   available_count: number;
   /** EVSEs per status; older servers may not send it. */
@@ -117,7 +122,6 @@ export type EvseDetail = {
 
 export type LocationDetail = LocationSummary & {
   directions?: DisplayText[];
-  charging_when_closed?: boolean;
   evses: EvseDetail[];
 };
 
