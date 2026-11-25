@@ -36,14 +36,18 @@ const mins = (hhmm: string) => {
   return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
 };
 
+/** An OCPI DateTime in milliseconds; one without a zone is UTC. NaN when unreadable. */
+const dateTimeMs = (value: string) =>
+  Date.parse(/(Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`);
+
 const within = (
   now: Date,
   ranges?: { period_begin: string; period_end: string }[],
 ) =>
   (ranges ?? []).some(
     (r) =>
-      Date.parse(r.period_begin) <= now.getTime() &&
-      now.getTime() < Date.parse(r.period_end),
+      dateTimeMs(r.period_begin) <= now.getTime() &&
+      now.getTime() < dateTimeMs(r.period_end),
   );
 
 /**
@@ -125,4 +129,29 @@ export function hoursRows(opening: OpeningTimes | undefined): HoursRow[] {
     else rows.push({ from: i + 1, to: i + 1, periods });
   });
   return rows;
+}
+
+/** An exceptional opening or closing, its ends in milliseconds. */
+export type ExceptionalHours = { open: boolean; begin: number; end: number };
+
+/**
+ * The exceptional openings and closings that are not over at `now` (one in progress is
+ * included), soonest first. Unreadable and empty periods are left out.
+ */
+export function upcomingExceptions(
+  opening: OpeningTimes | undefined,
+  now = new Date(),
+): ExceptionalHours[] {
+  const read = (ranges: OpeningTimes["exceptional_openings"], open: boolean) =>
+    (ranges ?? []).map((r) => ({
+      open,
+      begin: dateTimeMs(r.period_begin),
+      end: dateTimeMs(r.period_end),
+    }));
+  return [
+    ...read(opening?.exceptional_closings, false),
+    ...read(opening?.exceptional_openings, true),
+  ]
+    .filter((p) => p.begin < p.end && now.getTime() < p.end)
+    .sort((a, b) => a.begin - b.begin || a.end - b.end);
 }

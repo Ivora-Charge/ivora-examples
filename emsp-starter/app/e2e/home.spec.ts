@@ -84,6 +84,9 @@ test("a charger's page: price from the tariff, connectors, hours and directions"
   await open(page);
   await page.getByTestId("place-Town Hall Garage").click();
   await expect(page.getByTestId("detail-name")).toHaveText("Town Hall Garage");
+  await expect(
+    page.getByText("3 Garden Lane, 1000 AC Sample City, Netherlands"),
+  ).toBeVisible();
   await expect(page.getByTestId("detail-price")).toContainText("€0.42");
   await expect(page.getByTestId("detail-price")).toContainText("per kWh");
   await expect(page.getByTestId("connector")).toHaveCount(2);

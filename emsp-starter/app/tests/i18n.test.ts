@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createI18n } from "../src/i18n/core";
@@ -219,6 +219,7 @@ describe("presenting places", () => {
     expect(hours).toEqual({
       current: { state: "closed", label: "Closed now" },
       lines: ["Mon–Sat  07:00–23:00", "Sun  Closed"],
+      exceptions: [],
     });
     expect(
       p.hours({
@@ -286,5 +287,176 @@ describe("presenting places", () => {
     expect(
       p.closedNote({ time_zone: "UTC", charging_when_closed: true }, sunday),
     ).toBeUndefined();
+  });
+});
+
+describe("exceptional openings and closings", () => {
+  afterEach(() => void vi.unstubAllEnvs());
+  const p = present(createI18n("en-GB"));
+  const period = (period_begin: string, period_end: string) => ({
+    period_begin,
+    period_end,
+  });
+  const place = {
+    time_zone: "Europe/Berlin",
+    opening_times: {
+      twentyfourseven: true,
+      exceptional_closings: [
+        // Christmas Eve in Berlin, which starts on the 23rd in UTC.
+        period("2026-12-23T23:00:00Z", "2026-12-24T23:00:00Z"),
+        period("2026-11-01T08:00:00Z", "2026-11-01T10:00:00Z"),
+        period("2026-12-01T13:00:00Z", "2026-12-01T17:00:00Z"),
+      ],
+      exceptional_openings: [
+        period("2026-12-06T09:00:00Z", "2026-12-06T15:00:00Z"),
+        period("2026-10-04T09:00:00Z", "2026-10-04T15:00:00Z"),
+      ],
+    },
+  };
+  const now = new Date("2026-11-25T10:00:00Z");
+
+  it("lists those to come, soonest first, in the place's time zone", () => {
+    const hours = p.hours(place, now);
+    expect(hours.lines).toEqual(["Open 24 hours, every day"]);
+    expect(hours.exceptions).toEqual([
+      "Closed: 1 Dec 2026, 14:00–18:00",
+      "Open: 6 Dec 2026, 10:00–16:00",
+      "Closed: 24 Dec 2026, 00:00 – 25 Dec 2026, 00:00",
+    ]);
+  });
+
+  it("keeps one in progress and drops it once it ends", () => {
+    const listed = (at: string) => p.hours(place, new Date(at)).exceptions;
+    expect(listed("2026-12-01T16:59:59Z")[0]).toBe(
+      "Closed: 1 Dec 2026, 14:00–18:00",
+    );
+    expect(listed("2026-12-01T17:00:00Z")[0]).toBe(
+      "Open: 6 Dec 2026, 10:00–16:00",
+    );
+    expect(listed("2026-12-25T00:00:00Z")).toEqual([]);
+  });
+
+  it("writes dates and times the driver's way", () => {
+    const exceptions = present(createI18n("de-DE")).hours(
+      place,
+      now,
+    ).exceptions;
+    expect(exceptions[0]).toBe("Closed: 01.12.2026, 14:00–18:00");
+    expect(
+      present(createI18n("en-US")).hours(place, now).exceptions[1],
+    ).toMatch(/^Open: Dec 6, 2026, 10:00\sAM–4:00\sPM$/);
+  });
+
+  it("lists them under regular hours too, once each, skipping unreadable ones", () => {
+    const shut = period("2026-12-01T13:00:00Z", "2026-12-01T17:00:00Z");
+    const hours = p.hours(
+      {
+        time_zone: "Europe/Berlin",
+        opening_times: {
+          twentyfourseven: false,
+          regular_hours: [
+            { weekday: 1, period_begin: "07:00", period_end: "23:00" },
+          ],
+          exceptional_closings: [
+            shut,
+            shut,
+            period("soon", "2026-12-02T00:00:00Z"),
+            period("2026-12-03T10:00:00Z", "2026-12-03T10:00:00Z"),
+          ],
+        },
+      },
+      now,
+    );
+    expect(hours.lines).toContain("Mon  07:00–23:00");
+    expect(hours.exceptions).toEqual(["Closed: 1 Dec 2026, 14:00–18:00"]);
+  });
+
+  it("lists none without opening times", () => {
+    expect(p.hours({ time_zone: "Europe/Berlin" }, now).exceptions).toEqual([]);
+  });
+
+  it("reads a time without a zone as UTC, as OCPI does", () => {
+    vi.stubEnv("TZ", "America/New_York");
+    const bare = {
+      time_zone: "Europe/Berlin",
+      opening_times: {
+        twentyfourseven: true,
+        exceptional_closings: [
+          period("2026-12-01T13:00:00", "2026-12-01T17:00:00"),
+        ],
+      },
+    };
+    const at = new Date("2026-12-01T13:30:00Z");
+    expect(p.hours(bare, at).current?.state).toBe("closed");
+    expect(p.hours(bare, at).exceptions).toEqual([
+      "Closed: 1 Dec 2026, 14:00–18:00",
+    ]);
+  });
+
+  it("still lists them for a time zone the device does not know", () => {
+    const hours = p.hours({ ...place, time_zone: "Nowhere/Nothing" }, now);
+    expect(hours.exceptions).toHaveLength(3);
+  });
+});
+
+describe("a place's address", () => {
+  afterEach(() => void vi.unstubAllGlobals());
+  const place = {
+    address: "Teststrasse 1",
+    postal_code: "10115",
+    city: "Berlin",
+    country: "DEU",
+  };
+
+  it("has the postal code and the country's name in the driver's language", () => {
+    expect(present(createI18n("en-GB")).address(place)).toBe(
+      "Teststrasse 1, 10115 Berlin, Germany",
+    );
+    expect(present(createI18n("de-DE")).address(place)).toBe(
+      "Teststrasse 1, 10115 Berlin, Deutschland",
+    );
+  });
+
+  it("leaves out a postal code the CPO did not send", () => {
+    expect(
+      present(createI18n("en-GB")).address({
+        ...place,
+        postal_code: undefined,
+      }),
+    ).toBe("Teststrasse 1, Berlin, Germany");
+  });
+
+  it("keeps a code it cannot name", () => {
+    const i = createI18n("en-GB");
+    expect(i.country("ZZZ")).toBe("ZZZ");
+    expect(i.country("XKX")).toBe("Kosovo");
+  });
+
+  it("keeps the code on a device without Intl.DisplayNames", () => {
+    // Everything else of Intl, as on an engine without this one.
+    vi.stubGlobal(
+      "Intl",
+      Object.create(Intl, { DisplayNames: { value: undefined } }),
+    );
+    expect(createI18n("en-GB").country("DEU")).toBe("DEU");
+  });
+
+  it("names every ISO 3166-1 country", () => {
+    const codes = readFileSync(join(root, "src/lib/country.ts"), "utf8")
+      .match(/const CODES = `([^`]*)`/)![1]
+      .trim()
+      .split(/\s+/)
+      .map((pair) => pair.slice(0, 3));
+    // ISO 3166-1 has 249 countries; XKX is the one extra.
+    expect(new Set(codes).size).toBe(250);
+    const i = createI18n("en-GB");
+    expect(codes.filter((c) => i.country(c) === c)).toEqual([]);
+    expect(["NLD", "CAN", "USA", "CHE", "AUT"].map(i.country)).toEqual([
+      "Netherlands",
+      "Canada",
+      "United States",
+      "Switzerland",
+      "Austria",
+    ]);
   });
 });
