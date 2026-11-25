@@ -205,7 +205,7 @@ describe("presenting places", () => {
     const cannot = { ...weekdays, charging_when_closed: false };
     expect(p.hours(can, sunday).current).toEqual({
       state: "closedCanCharge",
-      label: "Site closed now · charging still possible",
+      label: "Site closed now · a charge in progress can continue",
     });
     expect(p.hours(cannot, sunday).current).toEqual({
       state: "closed",
@@ -216,5 +216,45 @@ describe("presenting places", () => {
         state: "open",
         label: "Open now",
       });
+  });
+
+  it("keeps an exceptional closing plain Closed now, even with the flag", () => {
+    const monday = new Date("2026-10-26T10:00:00Z");
+    const shut = {
+      ...weekdays,
+      charging_when_closed: true,
+      opening_times: {
+        ...weekdays.opening_times,
+        exceptional_closings: [
+          {
+            period_begin: "2026-10-26T00:00:00Z",
+            period_end: "2026-10-27T00:00:00Z",
+          },
+        ],
+      },
+    };
+    expect(p.hours(shut, monday).current).toEqual({
+      state: "closed",
+      label: "Closed now",
+    });
+  });
+
+  it("marks a closed place on its list card, keeping the free count", () => {
+    const sunday = new Date("2026-10-25T10:00:00Z");
+    const monday = new Date("2026-10-26T10:00:00Z");
+    const place = {
+      ...weekdays,
+      available_count: 1,
+      evse_count: 1,
+    } as Parameters<typeof p.availability>[0];
+    for (const charging_when_closed of [true, false, undefined]) {
+      const l = { ...place, charging_when_closed };
+      expect(p.closedNote(l, sunday)).toBe("Closed now");
+      expect(p.closedNote(l, monday)).toBeUndefined();
+      expect(p.availability(l).text).toBe("1 of 1 free");
+    }
+    expect(
+      p.closedNote({ time_zone: "UTC", charging_when_closed: true }, sunday),
+    ).toBeUndefined();
   });
 });

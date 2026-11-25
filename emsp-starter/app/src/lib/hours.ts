@@ -78,9 +78,11 @@ export function isOpenAt(
 }
 
 /**
- * What a driver is told about a place at `now`: open, closed, or closed while charging
- * is still possible (`charging_when_closed` is true). Undefined when the hours are
- * unknown. The "Open now" filter hides only "closed".
+ * What a driver is told about a place at `now`: open, closed, or closed while a charge
+ * in progress can continue past closing time (OCPI `charging_when_closed` is true; it
+ * does not mean a driver can arrive and start). Undefined when the hours are unknown.
+ * An exceptional closing is always plain "closed", whatever the flag. The "Open now"
+ * filter hides both closed states.
  */
 export type OpenState = "open" | "closed" | "closedCanCharge";
 
@@ -94,6 +96,7 @@ export function openState(
   const open = isOpenAt(place.opening_times, place.time_zone, now);
   if (open === undefined) return undefined;
   if (open) return "open";
+  if (within(now, place.opening_times?.exceptional_closings)) return "closed";
   return place.charging_when_closed === true ? "closedCanCharge" : "closed";
 }
 

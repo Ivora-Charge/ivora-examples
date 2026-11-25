@@ -89,7 +89,7 @@ export function searchParams(s: Search): URLSearchParams {
 
 /**
  * Applies what the server does not: "Open now". It keeps places with unknown hours and
- * closed places where charging is still possible.
+ * hides every closed place, including one where a charge in progress can continue.
  */
 export function openNowFilter(
   items: LocationSummary[],
@@ -97,7 +97,10 @@ export function openNowFilter(
   now = new Date(),
 ): LocationSummary[] {
   return f.openNow
-    ? items.filter((l) => openState(l, now) !== "closed")
+    ? items.filter((l) => {
+        const state = openState(l, now);
+        return state === undefined || state === "open";
+      })
     : items;
 }
 

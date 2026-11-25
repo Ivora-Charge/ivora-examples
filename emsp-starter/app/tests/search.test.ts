@@ -149,25 +149,53 @@ describe("charging when the site is closed", () => {
       now,
     ).length === 1;
 
-  it("keeps the place under Open now when true", () => {
-    expect(kept(true, early)).toBe(true);
-    expect(kept(true, day)).toBe(true);
+  it("hides a closed place under Open now, whatever the flag", () => {
+    for (const value of [true, false, undefined]) {
+      expect(kept(value, early)).toBe(false);
+      expect(kept(value, day)).toBe(true);
+    }
+  });
+
+  it("tells a closed place where a charge can continue only when true", () => {
     expect(openState({ ...garage, charging_when_closed: true }, early)).toBe(
       "closedCanCharge",
     );
     expect(openState({ ...garage, charging_when_closed: true }, day)).toBe(
       "open",
     );
-  });
-
-  it("hides a closed place when false or unsent", () => {
-    for (const value of [false, undefined]) {
-      expect(kept(value, early)).toBe(false);
-      expect(kept(value, day)).toBe(true);
+    for (const value of [false, undefined])
       expect(openState({ ...garage, charging_when_closed: value }, early)).toBe(
         "closed",
       );
-    }
+  });
+
+  it("keeps an exceptional closing plain closed, even when true", () => {
+    const shut = {
+      ...garage,
+      charging_when_closed: true,
+      opening_times: {
+        ...garage.opening_times!,
+        exceptional_closings: [
+          {
+            period_begin: "2026-10-26T00:00:00Z",
+            period_end: "2026-10-27T00:00:00Z",
+          },
+        ],
+      },
+    };
+    expect(openState(shut, day)).toBe("closed");
+    expect(openState(shut, early)).toBe("closed");
+    expect(openNowFilter([summaryOf(shut, 1)], openNow, day)).toHaveLength(0);
+  });
+
+  it("keeps a place without opening times under Open now", () => {
+    expect(
+      openNowFilter(
+        [summaryOf({ ...garage, opening_times: undefined }, 1)],
+        openNow,
+        early,
+      ),
+    ).toHaveLength(1);
   });
 
   it("says nothing about a place without opening times", () => {

@@ -93,7 +93,7 @@
   "detail.open24": "Open 24 hours, every day",
   "detail.openNow": "Open now",
   "detail.closedNow": "Closed now",
-  "detail.closedCanCharge": "Site closed now · charging still possible",
+  "detail.closedCanCharge": "Site closed now · a charge in progress can continue",
   "detail.closed": "Closed",
   "detail.hoursUnknown": "Opening hours not shared",
   "detail.dayRange": "{from}–{to}",

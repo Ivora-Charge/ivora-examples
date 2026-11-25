@@ -102,6 +102,20 @@ export function present(i: I18n) {
     };
   };
 
+  /**
+   * The list card's note when a place is closed now, also when a charge in progress can
+   * continue there: its free count must not read as "come and charge". Else undefined.
+   */
+  const closedNote = (
+    place: Parameters<typeof openState>[0],
+    now = new Date(),
+  ) => {
+    const state = openState(place, now);
+    return state === "closed" || state === "closedCanCharge"
+      ? t("detail.closedNow")
+      : undefined;
+  };
+
   const openLabels: Record<OpenState, Key> = {
     open: "detail.openNow",
     closed: "detail.closedNow",
@@ -139,7 +153,16 @@ export function present(i: I18n) {
     return { current, lines };
   };
 
-  return { status, connector, parking, lead, detailPrice, availability, hours };
+  return {
+    status,
+    connector,
+    parking,
+    lead,
+    detailPrice,
+    availability,
+    closedNote,
+    hours,
+  };
 }
 
 export type Present = ReturnType<typeof present>;
