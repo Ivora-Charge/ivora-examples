@@ -136,7 +136,9 @@ export function PowerTile({
         <View
           style={[
             styles.pointer,
-            { backgroundColor: kind === "free" ? col.fill : col.line },
+            {
+              backgroundColor: kind === "free" && !closed ? col.fill : col.line,
+            },
           ]}
         />
       )}
