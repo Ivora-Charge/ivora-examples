@@ -1,6 +1,7 @@
 import "server-only";
 import {
   CONNECTOR_TYPES,
+  connectorPhases,
   connectorPowerW,
   EVSE_STATUSES,
   FACILITIES,
@@ -372,7 +373,10 @@ export function priceMoment(
   const moment: PriceMoment = { at, timeZone };
   const w = connectorPowerW(c);
   if (w > 0) moment.maxPowerKw = w / 1000;
-  if (c.max_amperage > 0) moment.maxCurrentA = c.max_amperage;
+  // max_amperage is per phase; OCPI min_current and max_current are the sum over
+  // all phases, so a three-phase 32 A connector can draw up to 96 A.
+  if (c.max_amperage > 0)
+    moment.maxCurrentA = c.max_amperage * connectorPhases(c);
   return moment;
 }
 

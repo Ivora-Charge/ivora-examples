@@ -10,6 +10,8 @@ import {
   restrictionsMatch,
   tariffActive,
 } from "@/lib/locations/pricing";
+import { priceMoment } from "@/lib/locations/search";
+import type { Connector } from "@/lib/ocpi/locations";
 import type { Tariff } from "@/lib/ocpi/tariffs";
 
 const PARTY = { countryCode: "ZZ", partyId: "MCK" };
@@ -378,13 +380,80 @@ describe("the price that applies now", () => {
     ]);
   });
 
-  it("judges current tiers by the connector's amperage", () => {
-    const t = tariff([rate("TIME", 2, { min_current: 32 }), rate("TIME", 1)]);
-    expect(nowOf(t).tiers).toEqual([["TIME", 20000, "at 32 A or more"]]);
-    expect(nowOf(t, NOON, AMSTERDAM, { maxCurrentA: 16 })).toEqual({
-      now: [["TIME", 10000, ""]],
-      others: [["TIME", 20000, "at 32 A or more"]],
-      unexplained: false,
+  describe("current tiers, judged by the connector's current over all phases", () => {
+    // OCPI min_current and max_current are the sum over all phases, while
+    // max_amperage is per phase: a three-phase 32 A connector draws up to 96 A.
+    const connector = (
+      power_type: Connector["power_type"],
+      max_amperage: number,
+    ): Connector => ({
+      id: "1",
+      standard: "IEC_62196_T2",
+      format: "SOCKET",
+      power_type,
+      max_voltage: 230,
+      max_amperage,
+      last_updated: "2026-10-01T00:00:00Z",
+    });
+    const at = (t: Tariff, c: Connector) =>
+      nowOf(t, NOON, AMSTERDAM, priceMoment(c, NOON, AMSTERDAM));
+
+    it("keeps a tier above 48 A beside the now line at three-phase 32 A", () => {
+      const t = tariff([rate("TIME", 2, { min_current: 48 }), rate("TIME", 1)]);
+      expect(at(t, connector("AC_3_PHASE", 32))).toEqual({
+        now: [["TIME", 10000, ""]],
+        tiers: [["TIME", 20000, "at 48 A or more"]],
+        others: [],
+        unexplained: false,
+      });
+    });
+
+    it("keeps a tier below 48 A beside the rate that applies at three-phase 32 A", () => {
+      const t = tariff([
+        rate("TIME", 0.5, { max_current: 48 }),
+        rate("TIME", 1),
+      ]);
+      expect(at(t, connector("AC_3_PHASE", 32))).toEqual({
+        now: [["TIME", 10000, ""]],
+        tiers: [["TIME", 5000, "below 48 A"]],
+        others: [],
+        unexplained: false,
+      });
+    });
+
+    it("settles a tier a single-phase or DC connector can never reach", () => {
+      const t = tariff([rate("TIME", 2, { min_current: 48 }), rate("TIME", 1)]);
+      const settled = {
+        now: [["TIME", 10000, ""]],
+        others: [["TIME", 20000, "at 48 A or more"]],
+        unexplained: false,
+      };
+      expect(at(t, connector("AC_1_PHASE", 32))).toEqual(settled);
+      expect(at(t, connector("DC", 40))).toEqual(settled);
+    });
+
+    it("settles a tier below a current a single-phase connector never exceeds", () => {
+      const t = tariff([
+        rate("TIME", 0.5, { max_current: 48 }),
+        rate("TIME", 1),
+      ]);
+      expect(at(t, connector("AC_1_PHASE", 32))).toEqual({
+        now: [["TIME", 5000, "below 48 A"]],
+        others: [["TIME", 10000, "otherwise"]],
+        unexplained: false,
+      });
+    });
+
+    it("passes the phase sum, not the per-phase amperage", () => {
+      expect(
+        priceMoment(connector("AC_3_PHASE", 32), NOON, AMSTERDAM).maxCurrentA,
+      ).toBe(96);
+      expect(
+        priceMoment(connector("AC_2_PHASE", 16), NOON, AMSTERDAM).maxCurrentA,
+      ).toBe(32);
+      expect(
+        priceMoment(connector("DC", 125), NOON, AMSTERDAM).maxCurrentA,
+      ).toBe(125);
     });
   });
 

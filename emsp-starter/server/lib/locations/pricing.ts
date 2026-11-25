@@ -75,6 +75,7 @@ export type PriceMoment = {
   at: Date;
   timeZone: string;
   maxPowerKw?: number;
+  /** Summed over all phases, as OCPI min_current and max_current are. */
   maxCurrentA?: number;
 };
 
