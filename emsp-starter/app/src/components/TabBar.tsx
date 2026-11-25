@@ -1,9 +1,19 @@
 import type { BottomTabBarProps } from "expo-router/js-tabs";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  type DimensionValue,
+} from "react-native";
 import { t } from "../i18n";
 import { fontSize, radius, space, type, useScale, useTheme } from "../theme";
 import { Icon, type IconName } from "./Icon";
 import { Mark } from "./Logo";
+
+/** The rail's width when its labels need no more. */
+const RAIL_WIDTH = 92;
 
 const TABS: Record<string, { icon: IconName; label: () => string }> = {
   index: { icon: "map", label: () => t("nav.map") },
@@ -23,13 +33,20 @@ export function TabBar({
   rail,
 }: BottomTabBarProps & { rail: boolean }) {
   const { c } = useTheme();
-  const { fs } = useScale();
+  const { fs, dim } = useScale();
+  // Web: as wide as the longest word, at any text size and in any language; longer
+  // labels wrap between words. Native layout has no min-content, so the width follows
+  // the font scale.
+  const railWidth =
+    Platform.OS === "web"
+      ? { width: "min-content" as DimensionValue, minWidth: RAIL_WIDTH }
+      : { width: dim(RAIL_WIDTH) };
   return (
     <View
       role="navigation"
       aria-label={t("nav.label")}
       style={[
-        rail ? styles.rail : styles.bar,
+        rail ? [styles.rail, railWidth] : styles.bar,
         {
           backgroundColor: c.surface,
           borderColor: c.border,
@@ -64,6 +81,7 @@ export function TabBar({
               <Text
                 style={[
                   on ? type.strong : type.body,
+                  rail && styles.railLabel,
                   { color: fg, fontSize: fs(fontSize.xs + 1) },
                 ]}
               >
@@ -80,9 +98,13 @@ export function TabBar({
 const styles = StyleSheet.create({
   bar: { paddingTop: space.sm, borderTopWidth: 1 },
   barTabs: { flexDirection: "row", justifyContent: "space-around" },
-  railTabs: { alignItems: "center", gap: space.sm },
+  // The side padding leaves room for a tab's focus ring.
+  railTabs: {
+    alignSelf: "stretch",
+    gap: space.sm,
+    paddingHorizontal: space.sm,
+  },
   rail: {
-    width: 92,
     alignItems: "center",
     gap: space.sm,
     paddingTop: space.md,
@@ -90,7 +112,8 @@ const styles = StyleSheet.create({
   },
   mark: { paddingBottom: space.md },
   item: { flex: 1, alignItems: "center", gap: 2, minHeight: 56 },
-  railItem: { alignItems: "center", gap: 2, minHeight: 64, width: "100%" },
+  railItem: { alignItems: "center", gap: 2, minHeight: 64 },
+  railLabel: { textAlign: "center" },
   pill: {
     width: 60,
     height: 34,
