@@ -62,6 +62,7 @@ Every secret lives on the server, in `server/.env.local` locally or the host's e
 | Email receipts    | server | `RESEND_API_KEY`, `RECEIPT_FROM`                                                                                                          | No receipts. Sign-in emails come from Supabase Auth.                                          |
 | Push              | server | `EXPO_ACCESS_TOKEN`; the app needs an EAS project ID                                                                                      | No push notifications.                                                                        |
 | Driver app        | app    | `EXPO_PUBLIC_API_URL`; for a web build on its own origin, that origin in the server's `APP_ORIGINS`                                       | The app's offline demo.                                                                       |
+| Phone app links   | app    | Optional: `EXPO_PUBLIC_IOS_APP_URL`, `EXPO_PUBLIC_ANDROID_APP_URL`                                                                        | The web build says a card is saved in the phone app, with no link to it.                      |
 | Maps              | app    | `EXPO_PUBLIC_MAP_STYLE_URL` (and `_DARK`, `EXPO_PUBLIC_MAP_ATTRIBUTION`, `EXPO_PUBLIC_MAP_ATTRIBUTION_URL`)                               | OpenFreeMap's keyless tiles: free, no uptime guarantee. See [Map](app/README.md#map).         |
 | CPO live data     | server | None: a read-only key per CPO peer, set in the admin web                                                                                  | No state of charge or power in the app.                                                       |
 
@@ -148,7 +149,7 @@ Supabase Postgres, migrated with `npm run db:migrate` in `server/` or by a produ
 **Status:** demo ready. The whole OCPI path runs in CI against the mock CPO, but live mode has not yet been run in production against a real CPO.
 
 - **RFID cards cannot charge** yet (owner decision): they are pushed to CPOs with whitelist `NEVER`, and real-time authorization refuses them, so no session runs without a payment hold. The app is the only way to charge until RFID billing lands.
-- **Web build:** no card adding (Stripe's PaymentSheet is native), no push notifications and no QR scanner; drivers start from a typed ID. The session is kept in `sessionStorage`; see [Sessions on the web](app/README.md#sessions-on-the-web) before you run it for drivers.
+- **Web build:** no card adding (Stripe's PaymentSheet is native), so a driver saves a card in the phone app before starting a charge, as the web build says before sign-in; no push notifications and no QR scanner; drivers start from a typed ID. The session is kept in `sessionStorage`; see [Sessions on the web](app/README.md#sessions-on-the-web) before you run it for drivers.
 - **Maps:** OpenFreeMap is free and keyless but has no uptime guarantee; use a commercial provider in production. Search finds places by name, street, postcode and city; searching any address needs a geocoder, not included.
 - **Prices** are display only: the CPO's tariff as it says, without your own fees.
 - **Rate limits and caches** are counted per server instance.

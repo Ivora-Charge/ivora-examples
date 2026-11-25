@@ -12,6 +12,9 @@ import { requestId } from "../lib/charging";
 import { brand } from "../theme";
 import { Button } from "./Controls";
 
+/** Whether this build can save a card: the phone apps can (see AddCard.web.tsx). */
+export const canAddCard = true;
+
 /**
  * "Add a card" on iOS and Android: Stripe's PaymentSheet saves the card on the
  * network's own Stripe account, from a SetupIntent the server makes. The card number

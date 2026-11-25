@@ -5,6 +5,11 @@
  * literally.
  */
 const clean = (v: string | undefined) => v?.trim() || undefined;
+/** A link the app may open: https only, anything else counts as not set. */
+const httpsUrl = (v: string | undefined) => {
+  const url = clean(v);
+  return url && /^https:\/\//i.test(url) ? url : undefined;
+};
 
 export const config = {
   /** Origin of the eMSP Starter server, without a trailing slash. Empty in offline demo. */
@@ -30,8 +35,17 @@ export const config = {
   },
   /** Where the attribution links to, as your map provider asks (its copyright page). */
   get mapAttributionUrl(): string | undefined {
-    const url = clean(process.env.EXPO_PUBLIC_MAP_ATTRIBUTION_URL);
-    return url && /^https:\/\//i.test(url) ? url : undefined;
+    return httpsUrl(process.env.EXPO_PUBLIC_MAP_ATTRIBUTION_URL);
+  },
+  /**
+   * Where drivers get your phone apps (their store pages), linked from the web build
+   * where it says a card is saved in the phone app. Empty: the words alone.
+   */
+  get iosAppUrl(): string | undefined {
+    return httpsUrl(process.env.EXPO_PUBLIC_IOS_APP_URL);
+  },
+  get androidAppUrl(): string | undefined {
+    return httpsUrl(process.env.EXPO_PUBLIC_ANDROID_APP_URL);
   },
 };
 

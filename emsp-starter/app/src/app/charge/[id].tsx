@@ -1,11 +1,13 @@
 import { router, useLocalSearchParams } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { StyleSheet, Text, View } from "react-native";
+import { canAddCard } from "../../components/AddCard";
 import { useAuth } from "../../components/AuthProvider";
 import { Choice, ChoiceGroup } from "../../components/Choice";
 import { Button } from "../../components/Controls";
 import { StatusGlyph } from "../../components/Icon";
 import { Card, Fact, Notice, Page } from "../../components/Page";
+import { CardBeforeSignIn, PhoneAppLinks } from "../../components/PhoneApp";
 import { i18n, t } from "../../i18n";
 import {
   ApiError,
@@ -14,6 +16,7 @@ import {
   getQuote,
   startCharge,
 } from "../../lib/api";
+import { cardStep } from "../../lib/card-step";
 import { cardLabel, problemText } from "../../lib/charge-words";
 import {
   oneRequest,
@@ -62,6 +65,9 @@ export default function ConfirmCharge() {
   const [quote, setQuote] = useState<Quote | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // "Check for my card", after saving one in the phone app.
+  const [checking, setChecking] = useState(false);
+  const [checked, setChecked] = useState<"" | "stillNone" | "failed">("");
   // One request ID per start: a double tap or a retry returns the same start.
   const request = useState(oneRequest)[0];
 
@@ -140,6 +146,21 @@ export default function ConfirmCharge() {
     };
   }, [token, id, choice?.evseUid, choice?.connectorId]);
 
+  const checkCards = async () => {
+    if (!token) return;
+    setChecking(true);
+    setChecked("");
+    try {
+      const cards = await getCards(token);
+      setLoad((l) => (l.state === "ready" ? { ...l, cards } : l));
+      if (!cards.length) setChecked("stillNone");
+    } catch {
+      setChecked("failed");
+    } finally {
+      setChecking(false);
+    }
+  };
+
   const start = async (hasCard: boolean) => {
     if (!token || !choice) return;
     if (!hasCard) return router.push("/wallet");
@@ -188,6 +209,7 @@ export default function ConfirmCharge() {
     return (
       <Page title={t("confirm.title")}>
         <Notice kind="info">{t("confirm.signIn")}</Notice>
+        <CardBeforeSignIn />
         <Button
           label={t("detail.signInToCharge")}
           onPress={() => router.push("/account")}
@@ -212,6 +234,8 @@ export default function ConfirmCharge() {
     );
 
   const card = load.cards.find((x) => x.isDefault);
+  const step = cardStep(load.cards, canAddCard);
+  const walletLabel = canAddCard ? t("wallet.addOrChoose") : t("wallet.choose");
   const price = (() => {
     const e = load.location.evses.find((x) => x.uid === choice?.evseUid);
     const x = e?.connectors.find((y) => y.id === choice?.connectorId);
@@ -311,13 +335,15 @@ export default function ConfirmCharge() {
             </Text>
           )}
         </View>
-        <Button
-          label={card ? t("confirm.changeCard") : t("wallet.addOrChoose")}
-          variant="secondary"
-          icon="wallet"
-          onPress={() => router.push("/wallet")}
-          testID="confirm-change-card"
-        />
+        {step !== "phoneApp" && (
+          <Button
+            label={card ? t("confirm.changeCard") : walletLabel}
+            variant="secondary"
+            icon="wallet"
+            onPress={() => router.push("/wallet")}
+            testID="confirm-change-card"
+          />
+        )}
       </Card>
 
       {quote && quote.holdAmount === null && (
@@ -328,14 +354,63 @@ export default function ConfirmCharge() {
           {error}
         </Notice>
       ) : null}
-      {!card && <Notice kind="info">{t("confirm.needCard")}</Notice>}
-      <Button
-        label={card ? t("confirm.start") : t("wallet.addOrChoose")}
-        icon={card ? "bolt" : "wallet"}
-        busy={busy}
-        onPress={() => void start(!!card)}
-        testID="confirm-start"
-      />
+      {step === "phoneApp" ? (
+        // No Wallet button here: on the web it could not add a card either.
+        <>
+          <Notice
+            kind="info"
+            title={t("phoneApp.noCardTitle")}
+            testID="confirm-phone-app"
+          >
+            <Text
+              style={[
+                type.body,
+                { color: c.text, fontSize: fs(fontSize.sm + 1) },
+              ]}
+            >
+              {t("phoneApp.noCardBody", {
+                email: auth.state === "signedIn" ? auth.driver.email : "",
+              })}
+            </Text>
+            <PhoneAppLinks />
+            {checked ? (
+              <Text
+                style={[
+                  type.strong,
+                  { color: c.text, fontSize: fs(fontSize.sm + 1) },
+                ]}
+                testID="confirm-card-check"
+              >
+                {checked === "stillNone"
+                  ? t("phoneApp.stillNone")
+                  : t("phoneApp.checkFailed")}
+              </Text>
+            ) : null}
+          </Notice>
+          <Button
+            label={t("phoneApp.check")}
+            icon="card"
+            busy={checking}
+            onPress={() => void checkCards()}
+            testID="confirm-check-card"
+          />
+        </>
+      ) : (
+        <>
+          {!card && (
+            <Notice kind="info">
+              {canAddCard ? t("confirm.needCard") : t("confirm.chooseCard")}
+            </Notice>
+          )}
+          <Button
+            label={card ? t("confirm.start") : walletLabel}
+            icon={card ? "bolt" : "wallet"}
+            busy={busy}
+            onPress={() => void start(!!card)}
+            testID="confirm-start"
+          />
+        </>
+      )}
     </Page>
   );
 }
