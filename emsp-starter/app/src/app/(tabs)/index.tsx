@@ -278,7 +278,12 @@ export default function MapScreen() {
     <View
       role="main"
       style={[styles.flex, { backgroundColor: c.mapLand }]}
-      onLayout={(e) => setHeight(e.nativeEvent.layout.height)}
+      onLayout={(e) => {
+        // On the web this screen measures 0 while a charger's page covers it. Keeping
+        // the last height leaves the sheet, its list and the camera as they were.
+        const next = e.nativeEvent.layout.height;
+        if (next > 0) setHeight(next);
+      }}
     >
       <LocationMap
         items={items}
