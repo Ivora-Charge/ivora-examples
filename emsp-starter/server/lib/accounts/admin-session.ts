@@ -1,6 +1,6 @@
 import "server-only";
 import { cookies } from "next/headers";
-import { adminCookieFlags } from "@/lib/server/admin";
+import { ADMIN_COOKIE_PATH, adminCookieFlags } from "@/lib/server/admin";
 import { logText } from "@/lib/server/log-error";
 import { userOf } from "./api";
 import type { AuthProvider } from "./auth";
@@ -10,11 +10,11 @@ import type { AccountStore, AdminRole } from "./store";
 /**
  * Admin sign-in for the admin web: the same passwordless Supabase Auth sign-in as
  * drivers, for users listed in the admin role table (`emsp_admins`). The access token
- * is kept in an httpOnly, SameSite=Strict cookie, so page scripts never see it and
- * other sites cannot send it. It lasts as long as the Supabase access token (an hour
- * by default); then the admin signs in again.
+ * is kept in an httpOnly, SameSite=Strict cookie for /admin only, so page scripts never
+ * see it and other sites cannot send it. It lasts as long as the Supabase access token
+ * (an hour by default); then the admin signs in again.
  */
-export const ADMIN_COOKIE = "emsp_admin";
+export const ADMIN_COOKIE = "emsp_admin_session";
 
 export type AdminIdentity = { userId: string; email: string; role: AdminRole };
 
@@ -57,6 +57,7 @@ export async function setAdminCookie(token: string, expiresAt: string) {
 export async function clearAdminCookie(): Promise<string | undefined> {
   const store = await cookies();
   const token = store.get(ADMIN_COOKIE)?.value;
-  store.delete(ADMIN_COOKIE);
+  // A cookie is deleted only by naming the path it was set for.
+  store.delete({ name: ADMIN_COOKIE, path: ADMIN_COOKIE_PATH });
   return token;
 }

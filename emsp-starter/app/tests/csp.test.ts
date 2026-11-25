@@ -42,6 +42,15 @@ describe("the web build's Content-Security-Policy", () => {
     ]);
   });
 
+  it("one domain: the site's own origin as the API adds nothing it did not allow", () => {
+    expect(
+      directive(
+        contentSecurityPolicy({ EXPO_PUBLIC_API_URL: "https://emsp.example" }),
+        "connect-src",
+      ),
+    ).toEqual(["'self'", "https://emsp.example", OPENFREEMAP_ORIGIN]);
+  });
+
   it("drops the map hosts when the map draws no tiles", () => {
     expect(
       directive(

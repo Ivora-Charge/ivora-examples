@@ -77,7 +77,7 @@ Copy `.env.example` to `.env.local`.
 | `EXPO_PUBLIC_MAP_ATTRIBUTION`     | Optional. The attribution your provider requires, shown on the map.                                                                                                                        |
 | `EXPO_PUBLIC_MAP_ATTRIBUTION_URL` | Optional. The https page the attribution links to (your provider's copyright page). Default: OpenStreetMap's copyright page for the built-in style; no link for your own style without it. |
 
-`EXPO_PUBLIC_` values are built into the app and readable by anyone who has it. Never put a secret in one; secrets stay on the server. For the web build, add its origin to the server's `APP_ORIGINS` so the browser may read sign-in answers.
+`EXPO_PUBLIC_` values are built into the app and readable by anyone who has it. Never put a secret in one; secrets stay on the server. For a web build on its own origin, add that origin to the server's `APP_ORIGINS` so the browser may read sign-in answers; a build [on the server's domain](#web-on-the-servers-domain) needs none.
 
 ## Map
 
@@ -105,6 +105,14 @@ On the web, MapLibre runs its tile work in a Web Worker from its own file; `npm 
 
 ## Deploy
 
+The web build goes **on a domain of its own** (below) or **on the server's domain**.
+
+### Web, on the server's domain
+
+`npm run build:one-domain` in `server/` builds this app and serves it from the server: the app at `/`, the admin web at `/admin`, the API on the same origin. Set `EXPO_PUBLIC_API_URL` to that origin for the build; no `APP_ORIGINS` and no CORS. The app keeps its own package, lockfile and `npm run build`, with the same Content-Security-Policy (`connect-src` allows `'self'`, the API's origin and the map) and the same three headers as `vercel.json`, sent by the server. Paths under `/admin`, `/api`, `/ocpi` and `/_next` are the server's: the app must have no route or file there (the build refuses a file or folder of those names). How to deploy it: [server README](../server/README.md#one-domain).
+
+**Security:** one domain is one origin, so a script flaw in the app can reach the admin web, and one there can reach the driver's session. A domain of its own for the app (for example `drive.example.com`) is the stricter layout. See [One origin, one risk](../server/README.md#one-origin-one-risk).
+
 ### Web, on Vercel
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fapp&project-name=emsp-starter-app&repository-name=emsp-starter-app)
@@ -130,6 +138,8 @@ The native apps are built with [EAS Build](https://docs.expo.dev/build/introduct
 ## Sessions on the web
 
 The web build keeps the driver's session (a Bearer access token and a refresh token, as the server's API issues them) in `sessionStorage`: it lasts while the tab is open and is gone when it closes. Page script can read `sessionStorage`, so an injected script could take the tokens. The strict Content-Security-Policy above is the main defence: no inline or third-party script runs, and requests can go only to your server and the map. Access tokens are short-lived and refreshed.
+
+On the server's domain the admin web shares this origin: a script there can read this storage too, in a tab that used the app ([One origin, one risk](../server/README.md#one-origin-one-risk)).
 
 The stronger model is an `httpOnly`, `Secure`, `SameSite` cookie that page script cannot read. That needs a backend on the app's own origin (or the server on the same site) to hold the tokens and forward API calls, plus CSRF protection, so it is not part of this static build. Consider it before you run the web app for drivers in production. Phones keep the session in the keychain or keystore and are not affected.
 

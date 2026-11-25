@@ -1,6 +1,7 @@
 import "server-only";
 import { cookies, headers } from "next/headers";
 import {
+  ADMIN_COOKIE_PATH,
   ADMIN_SECRET_COOKIE,
   adminCookieFlags,
   adminEnabled,
@@ -92,6 +93,10 @@ export async function startSecretSession(): Promise<boolean> {
  */
 export async function endSecretSession(): Promise<void> {
   try {
-    (await cookies()).delete(ADMIN_SECRET_COOKIE);
+    // A cookie is deleted only by naming the path it was set for.
+    (await cookies()).delete({
+      name: ADMIN_SECRET_COOKIE,
+      path: ADMIN_COOKIE_PATH,
+    });
   } catch {}
 }

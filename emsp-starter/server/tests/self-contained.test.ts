@@ -13,6 +13,8 @@ const SKIP = new Set([
   ".expo",
   ".vercel",
   "dist",
+  // The app's web bundle, copied into the server's public/ by a one-domain build.
+  "_expo",
   "build",
   "out",
   "coverage",

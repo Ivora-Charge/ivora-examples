@@ -11,3 +11,10 @@ supabase/.temp
 .env.e2e.local
 !.env.e2e.example
 .vercel
+# The driver app's web build, copied here by `npm run build:one-domain`.
+.driver-web.json
+/public/_expo/
+/public/assets/
+/public/index.html
+/public/maplibre-gl-worker.mjs
+/public/metadata.json

@@ -91,8 +91,8 @@ export function PushPendingNote({ state }: { state: ActionState }) {
   return (
     <p className="small" role="alert">
       Not saved: a database migration is pending.{" "}
-      <Link href="/#stop-2">Open Setup</Link> to see which one, apply it, then
-      choose again.
+      <Link href="/admin#stop-2">Open Setup</Link> to see which one, apply it,
+      then choose again.
     </p>
   );
 }

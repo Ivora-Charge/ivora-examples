@@ -7,3 +7,9 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 test-results
 playwright-report
+.driver-web.json
+/public/_expo/
+/public/assets/
+/public/index.html
+/public/maplibre-gl-worker.mjs
+/public/metadata.json

@@ -55,6 +55,8 @@ function routes(dir = join(__dirname, "../app"), at = ""): string[] {
   });
 }
 const SIGN_IN = "/admin/sign-in";
+/** Setup, the admin web's first page. */
+const SETUP = "/admin";
 const ROUTES = [
   ...routes().sort(),
   // A query the page reads.
@@ -181,7 +183,7 @@ test("every signed-out page is the same whatever the deployment's configuration"
   // The app has the pages this test thinks it has.
   expect(ROUTES).toEqual(
     expect.arrayContaining([
-      "/",
+      SETUP,
       "/admin/payments",
       "/admin/peers",
       "/admin/peers/connect",
@@ -207,7 +209,7 @@ test("every signed-out page is the same whatever the deployment's configuration"
         // Whether the admin secret is offered is the sign-in page's to say.
         if (path === SIGN_IN && other.secret !== first.secret) continue;
         // Before and after the first admin, Setup differs: tested on its own below.
-        if (path === "/" && other.admin !== first.admin) continue;
+        if (path === SETUP && other.admin !== first.admin) continue;
         const what = `${path}: ${first.name} and ${other.name}`;
         const a = sent.get(first.name)!.get(path)!;
         const b = sent.get(other.name)!.get(path)!;
@@ -264,12 +266,12 @@ test("before the first admin a visitor is told six names and done or not; after 
 }) => {
   test.setTimeout(120_000);
   for (const setup of SETUPS) {
-    const what = `${setup.name} /`;
+    const what = `${setup.name} ${SETUP}`;
     const view = expectedView(setup);
-    const html = await (await request.get(`${setup.url}/`)).text();
+    const html = await (await request.get(`${setup.url}${SETUP}`)).text();
     const data = plain(
       await (
-        await request.get(`${setup.url}/`, { headers: { RSC: "1" } })
+        await request.get(`${setup.url}${SETUP}`, { headers: { RSC: "1" } })
       ).text(),
     );
     // What the server hands the page: exactly the view, or none.
@@ -304,7 +306,7 @@ test("before the first admin a visitor is told six names and done or not; after 
 
   // As a visitor sees it, in a browser: the list, then the sign-in prompt.
   const fresh = SETUPS.find((s) => s.name === "live-b")!;
-  await page.goto(`${fresh.url}/`);
+  await page.goto(`${fresh.url}${SETUP}`);
   const progress = page.getByRole("list", { name: "Setup progress" });
   await expect(progress.getByRole("listitem")).toHaveCount(6);
   await expect(progress.getByText("Not done")).toHaveCount(3);
@@ -326,7 +328,7 @@ test("before the first admin a visitor is told six names and done or not; after 
     );
   }
   const after = SETUPS.find((s) => s.name === "live-admin")!;
-  await page.goto(`${after.url}/`);
+  await page.goto(`${after.url}${SETUP}`);
   await expect(
     page.getByRole("heading", {
       name: "Sign in as an admin to see this deployment's setup",

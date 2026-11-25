@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
 import { brand } from "@/brand";
-import { forEmailAdmin } from "./admin/ui/for-admin";
-import { requestAdmin } from "./admin/ui/current-admin";
+import { forEmailAdmin } from "./ui/for-admin";
+import { requestAdmin } from "./ui/current-admin";
 import { SIGN_IN_LIMITS } from "@/lib/accounts/sign-in";
 import { formatMinorAmount } from "@/lib/locations/pricing";
 import { config, missingForLive } from "@/lib/server/config";
 import { logText } from "@/lib/server/log-error";
 import { getStatus } from "@/lib/server/status";
 import { publicSetupView } from "@/lib/setup/status";
-import { Setup, type SetupFacts, type SetupSettings } from "./setup";
+import { Setup, type SetupFacts, type SetupSettings } from "./setup/setup";
 
-// The root page is outside the layout's title template.
+// The whole title, as the browser shows it: not through the layout's title template.
 export const metadata: Metadata = {
   title: { absolute: `Setup · ${brand.name}` },
 };
@@ -32,7 +32,8 @@ function readSettings(): SetupSettings {
 }
 
 /**
- * Setup, called Health once all six checks pass.
+ * Setup, called Health once all six checks pass: the admin web's first page, /admin.
+ * (`/` is the driver app's, or leads here: see next.config.ts.)
  *
  * What the six stops found comes from the setup status read
  * (app/admin/setup/actions.ts), which the page asks for once an admin is signed in;

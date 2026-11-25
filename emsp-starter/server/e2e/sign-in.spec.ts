@@ -165,15 +165,16 @@ test("demo: the admin secret is asked once and exchanged for a session cookie th
     await expectAccessible(page, `account, ${colorScheme}`);
   }
 
-  // One cookie: httpOnly, SameSite=Strict, Secure (a production build), for an hour.
+  // One cookie: httpOnly, SameSite=Strict, Secure (a production build), for /admin
+  // only, for an hour.
   const cookies = await context.cookies();
-  expect(cookies.map((c) => c.name)).toEqual(["emsp_admin_secret"]);
+  expect(cookies.map((c) => c.name)).toEqual(["emsp_admin_secret_session"]);
   const [cookie] = cookies;
   expect(cookie).toMatchObject({
     httpOnly: true,
     sameSite: "Strict",
     secure: true,
-    path: "/",
+    path: "/admin",
   });
   const life = cookie.expires - Date.now() / 1000;
   expect(life).toBeGreaterThan(55 * 60);
@@ -229,9 +230,13 @@ test("demo: a session cookie that no longer works is ignored, never counted as a
   // The form of a session, signed by no secret of this server: what a browser holds
   // after ADMIN_SECRET was changed.
   const stale = `v1.${Date.now() + 3_600_000}.${"A".repeat(22)}.${"A".repeat(43)}`;
-  await context.addCookies([
-    { name: "emsp_admin_secret", value: stale, url: baseURL },
-  ]);
+  const staleCookie = {
+    name: "emsp_admin_secret_session",
+    value: stale,
+    domain: new URL(baseURL!).hostname,
+    path: "/admin",
+  };
+  await context.addCookies([staleCookie]);
   // More page loads than the lockout allows wrong secrets per client (5): each sends
   // the stale cookie, and each is shown the signed-out prompt.
   for (let i = 0; i < 7; i += 1) {
@@ -249,14 +254,12 @@ test("demo: a session cookie that no longer works is ignored, never counted as a
   await expect.poll(async () => (await context.cookies()).length).toBe(0);
 
   // With the stale cookie back, the right secret is accepted at the first try.
-  await context.addCookies([
-    { name: "emsp_admin_secret", value: stale, url: baseURL },
-  ]);
+  await context.addCookies([staleCookie]);
   await signIn(page);
   await expect(
     page.getByRole("heading", { name: "Account", level: 1 }),
   ).toBeVisible();
   const cookies = await context.cookies();
-  expect(cookies.map((c) => c.name)).toEqual(["emsp_admin_secret"]);
+  expect(cookies.map((c) => c.name)).toEqual(["emsp_admin_secret_session"]);
   expect(cookies[0].value).not.toBe(stale);
 });
