@@ -988,6 +988,11 @@ describe("setup: nothing for a visitor who is not signed in", () => {
   const view = (status: SetupStatus, who: Who = ana, f = facts(read)) =>
     page(who, createElement(StatusView, { facts: f, status }));
   const NONE = STOP_NAMES.map((name) => ({ name, pass: false }));
+  /** The visitor's generator for the two random settings, and the page without it. */
+  const GENERATOR =
+    /<section class="card stack" aria-labelledby="generate-h">.*?<\/section>/s;
+  const generatorOf = (html: string) => GENERATOR.exec(html)?.[0];
+  const lessGenerator = (html: string) => html.replace(GENERATOR, "");
 
   // A deployment with unset live-mode settings and malformed optional ones.
   const MALFORMED = {
@@ -1042,8 +1047,11 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     expect(rest).not.toMatch(
       /must |missing|errors|malformed|stripe|webhook|cron|hold|secret/i,
     );
-    // And the page as rendered for them.
-    const html = page(null, element);
+    // And the page as rendered for them. The generator names its two settings, the
+    // same two on every deployment (tested below); the rest of the page names none.
+    const rendered = page(null, element);
+    expect(generatorOf(rendered)).toBeDefined();
+    const html = lessGenerator(rendered);
     expect(html).toContain("Sign in as an admin to see this deployment");
     expect(html).not.toMatch(/[A-Z][A-Z0-9]+_[A-Z0-9_]+/);
     expect(html).not.toMatch(/must |is not set|Malformed|Missing|secret/i);
@@ -1103,15 +1111,27 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     expect(html).toContain('href="/admin/sign-in"');
     expect(html).not.toMatch(/STRIPE|CRON_SECRET|Setup checklist|NL-EXA/);
     expect(html).not.toMatch(/Setup progress|Not done|Scheduled job/i);
+    expect(html).not.toMatch(/Generate|Make the secret values|<button/);
     expect(html).not.toMatch(/<input|<ol/);
   });
 
-  it("before the first admin: the six names, Done or Not done, the prompt, and nothing else", () => {
+  it("before the first admin: the six names, Done or Not done, the generator, the prompt, and nothing else", () => {
     const stops = STOP_NAMES.map((name, i) => ({ name, pass: i < 2 }));
-    const html = page(
+    const rendered = page(
       null,
       createElement(Setup, { facts: facts(read, false, stops) }),
     );
+    // The generator is the same whatever the deployment has and whatever passes.
+    const other = page(
+      null,
+      createElement(Setup, { facts: facts(null, true, NONE) }),
+    );
+    expect(generatorOf(rendered)).toBe(generatorOf(other));
+    expect(generatorOf(rendered)!.match(/<button/g)).toHaveLength(2);
+    expect(rendered.match(/<button/g)).toHaveLength(2);
+    // No value is made until a button is pressed, and nothing of it is a form.
+    expect(rendered).not.toMatch(/<input|<form|<pre|[A-Za-z0-9+/_-]{43}/);
+    const html = lessGenerator(rendered);
     expect(html).toContain("Setup so far: 2 of 6 done");
     for (const name of STOP_NAMES) expect(html).toContain(name.toUpperCase());
     expect(html.match(/>Done</g)).toHaveLength(2);
@@ -1147,6 +1167,8 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     expect(html).toContain("Environment complete");
     expect(html).toContain("<code>STRIPE_SECRET_KEY</code>");
     expect(html).toContain("<code>CRON_SECRET</code> is not set");
+    // The environment stop is done and folded: the job's stop makes the secret.
+    expect(offered(html)).toEqual(["CRON_SECRET"]);
     expect(html).toContain("Setting up: 4 of 6 done");
     expect(html).toContain("https://emsp.example.com/api/webhooks/stripe");
   });
@@ -1320,10 +1342,73 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     const html = view(status, ana, facts(read, true));
     expect(html).toContain("Demo mode: 0 of 6 done");
     expect(html).toContain("One setting needs you");
-    expect(html).toContain("openssl rand -base64 32");
+    expect(offered(stopOne(html))).toEqual(["OCPI_TOKEN_ENCRYPTION_KEY"]);
+    expect(html).toContain("after peers are registered");
     expect(html).toContain("<code>DEMO_MODE</code> is set");
     expect(html.match(/>Waiting</g)).toHaveLength(5);
     expect(html).toContain("The mock CPO stands in");
+  });
+
+  /** The settings a page offers a new value for, by its buttons. */
+  const offered = (html: string) =>
+    [...html.matchAll(/Generate<span class="sr"> ([A-Z0-9_]+)<\/span>/g)].map(
+      (m) => m[1],
+    );
+  const stopOne = (html: string) =>
+    html.slice(html.indexOf('id="stop-1"'), html.indexOf('id="stop-2"'));
+  const demoWith = (change: Partial<SetupStatus["environment"]>) =>
+    view(
+      healthy({
+        demo: true,
+        database: null,
+        environment: { ...healthy().environment, ...change },
+      }),
+      ana,
+      facts(read, true),
+    );
+
+  it.each<[string, Partial<SetupStatus["environment"]>, string[]]>([
+    [
+      "an unset key and job secret",
+      { missing: ["OCPI_TOKEN_ENCRYPTION_KEY"], cronSecret: false },
+      ["OCPI_TOKEN_ENCRYPTION_KEY", "CRON_SECRET"],
+    ],
+    [
+      "a malformed key",
+      {
+        malformed: ["OCPI_TOKEN_ENCRYPTION_KEY must be 32 bytes, base64"],
+        malformedRequired: 1,
+      },
+      ["OCPI_TOKEN_ENCRYPTION_KEY"],
+    ],
+    [
+      "another setting unset and no job secret",
+      { missing: ["SUPABASE_URL"], cronSecret: false },
+      ["CRON_SECRET"],
+    ],
+    ["another setting unset", { missing: ["SUPABASE_URL"] }, []],
+    [
+      "demo mode switched on and no job secret",
+      { demoForced: true, cronSecret: false },
+      ["CRON_SECRET"],
+    ],
+    ["demo mode switched on", { demoForced: true }, []],
+  ])(
+    "the environment stop offers a new value only for what needs one: %s",
+    (_, change, names) => {
+      const html = demoWith(change);
+      expect(offered(stopOne(html))).toEqual(names);
+      // The later stops wait for the environment: no second button elsewhere.
+      expect(offered(html)).toEqual(names);
+      // The warning comes with the key's button, and only with it.
+      expect(html.includes("after peers are registered")).toBe(
+        names.includes("OCPI_TOKEN_ENCRYPTION_KEY"),
+      );
+    },
+  );
+
+  it("offers a signed-in admin no new value where both are set", () => {
+    expect(view(healthy())).not.toContain("Generate");
   });
 
   it("the sign-in page in demo mode says whether the admin secret is set, and only that", () => {

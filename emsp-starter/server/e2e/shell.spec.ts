@@ -22,7 +22,9 @@ test("demo: Setup shows a visitor six names, none done, and the sign-in prompt",
   await expect(
     page.getByRole("heading", { name: "Setup so far: 0 of 6 done" }),
   ).toBeVisible();
-  // Then one prompt with a link: no fix, no setting's name, no secret field.
+  // The generator for the two random settings (e2e/generate.spec.ts), then one
+  // prompt with a link: no fix, nothing this deployment has set, no secret field.
+  await expect(page.getByRole("button", { name: /^Generate / })).toHaveCount(2);
   await expect(
     page.getByRole("heading", {
       name: "Sign in as an admin to see this deployment's setup",
@@ -36,12 +38,12 @@ test("demo: Setup shows a visitor six names, none done, and the sign-in prompt",
   await expect(page.getByRole("list", { name: "Setup checklist" })).toHaveCount(
     0,
   );
-  await expect(main).not.toContainText(/STRIPE|CRON_SECRET|is not set|ZZ-DMO/);
+  await expect(main).not.toContainText(/STRIPE|is not set|ZZ-DMO/);
   await expect(page.getByLabel("Admin secret")).toHaveCount(0);
   // Nor does the page's own data say whether the payment or job secrets are set.
   // (e2e/signed-out.spec.ts reads the same from a wrongly set up deployment.)
   expect(await page.content()).not.toMatch(
-    /stripeKey|webhookSecret|cronSecret|secretEnabled|STRIPE_|CRON_SECRET|ADMIN_SECRET/,
+    /stripeKey|webhookSecret|cronSecret|secretEnabled|STRIPE_|ADMIN_SECRET/,
   );
   for (const colorScheme of ["light", "dark"] as const) {
     await page.emulateMedia({ colorScheme });
@@ -69,7 +71,11 @@ test("demo: Setup shows a signed-in admin the six stops and the OCPI version", a
   await expect(first).toContainText("settings need you");
   await expect(first).toContainText("EMSP_COUNTRY_CODE is not set.");
   await expect(first).toContainText("DEMO_MODE is set");
-  await expect(first).toContainText("openssl rand -base64 32");
+  await expect(
+    first.getByRole("button", {
+      name: "Generate OCPI_TOKEN_ENCRYPTION_KEY",
+    }),
+  ).toBeVisible();
   // Every later stop waits for the environment: demo mode has nothing behind them.
   for (const stop of ["#stop-2", "#stop-3", "#stop-4", "#stop-5"])
     await expect(lane.locator(stop)).toContainText("Waiting");

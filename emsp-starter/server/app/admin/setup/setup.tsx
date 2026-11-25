@@ -16,6 +16,11 @@ import { useAdmin } from "../ui/admin-context";
 import { Head, Icon, Result, State, Tile, utc, type Kind } from "../ui/kit";
 import { Copy, Gate, Later, OurParty } from "../ui/parts";
 import { allPass, useSetup } from "../ui/setup-context";
+import {
+  GENERATED_SETTINGS,
+  type GeneratedSetting,
+} from "@/lib/setup/generate";
+import { Generator } from "./generate";
 
 /**
  * What every visitor's page carries: the mode, which the banner shows, and two
@@ -161,8 +166,6 @@ const Fix = ({
   </>
 );
 
-const KEY_COMMAND = "openssl rand -base64 32";
-
 /** "40 seconds", "12 minutes", "3 hours", "2 days". */
 export function span(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000));
@@ -184,6 +187,24 @@ const unread = (title: string, what: string, fix?: ReactNode): Stop => ({
   text: `${what} could not be read just now. Reload the page; if it stays, the server log has the error name.`,
   fix,
 });
+
+/** The environment stop's step for values that can be made right on the page. */
+const generateStep = (names: GeneratedSetting[]) =>
+  names.length > 0 && (
+    <li>
+      <p>
+        {names.length === 1 ? "Make the value" : "Make the values"} here.
+        {names.includes("CRON_SECRET") && (
+          <>
+            {" "}
+            Leaving demo mode does not need <code>CRON_SECRET</code>, but the
+            scheduled job does not run without it: set it in the same visit.
+          </>
+        )}
+      </p>
+      <Generator names={names} />
+    </li>
+  );
 
 function environment(s: SetupStatus): Stop {
   const e = s.environment;
@@ -218,6 +239,7 @@ function environment(s: SetupStatus): Stop {
                 environment variables.
               </p>
             </li>
+            {generateStep(e.cronSecret ? [] : ["CRON_SECRET"])}
             <li>
               <p>Redeploy. A changed variable only reaches a new deployment.</p>
             </li>
@@ -226,9 +248,13 @@ function environment(s: SetupStatus): Stop {
       ),
     };
   const count = e.missing.length + e.malformed.length;
-  const key =
-    e.missing.includes("OCPI_TOKEN_ENCRYPTION_KEY") ||
-    e.malformed.some((m) => m.startsWith("OCPI_TOKEN_ENCRYPTION_KEY"));
+  // A new value is offered only for what is not set and well formed already.
+  const make = GENERATED_SETTINGS.filter((name) =>
+    name === "CRON_SECRET"
+      ? !e.cronSecret
+      : e.missing.includes(name) ||
+        e.malformed.some((m) => m.startsWith(`${name} `)),
+  );
   return {
     kind: "todo",
     big: String(
@@ -283,16 +309,7 @@ function environment(s: SetupStatus): Stop {
         </ul>
         <Fix>
           <ol className="steps">
-            {key && (
-              <li>
-                <p>
-                  Make the key for <code>OCPI_TOKEN_ENCRYPTION_KEY</code> on
-                  your machine. Keep it: losing or changing it later locks out
-                  every stored peer token.
-                </p>
-                <Copy text={KEY_COMMAND} label="Command" />
-              </li>
-            )}
+            {generateStep(make)}
             <li>
               <p>
                 Set each variable above in your hosting project&apos;s
@@ -569,6 +586,7 @@ Authorization: Bearer <CRON_SECRET>`;
               Set <code>CRON_SECRET</code> (at least 32 characters) and
               redeploy. The job answers only with it.
             </p>
+            <Generator names={["CRON_SECRET"]} />
           </li>
         )}
         <li>
@@ -765,7 +783,7 @@ export function firstAdmin(
     big: "0",
     small: "admins",
     title: "No admin exists yet",
-    text: "Nobody can sign in by email until one exists; the first is added by hand, once, in this order. Until then, this address shows any visitor the six stops' names and whether each is done, and nothing else.",
+    text: "Nobody can sign in by email until one exists; the first is added by hand, once, in this order. Until then, this address shows any visitor the six stops' names and whether each is done, with buttons that make new random values in the visitor's own browser, and nothing else about this deployment.",
     fix,
   };
 }
@@ -883,9 +901,13 @@ export function heroLine(s: SetupStatus, stops: Stop[]): string {
 
 /**
  * What a visitor sees before the first admin exists: the six stops by name, each Done
- * or Not done, and the sign-in prompt. What a stop found and its fix are for a
- * signed-in admin. Once an admin exists the server sends no `publicView`, and this is
- * the sign-in prompt alone.
+ * or Not done, the generator for the two random settings, and the sign-in prompt. What
+ * a stop found and its fix are for a signed-in admin. Once an admin exists the server
+ * sends no `publicView`, and this is the sign-in prompt alone.
+ *
+ * The generator is here because the first deployment needs the encryption key before
+ * anybody can be an admin. It is the same whatever the deployment has set: it is told
+ * nothing by the server and tells the server nothing.
  */
 function Visitor({ stops }: { stops: PublicStop[] | null }) {
   return (
@@ -921,11 +943,23 @@ function Visitor({ stops }: { stops: PublicStop[] | null }) {
             </ol>
             <p className="small muted">
               No admin exists yet, so this page shows anyone these six names and
-              whether each is done, and nothing else. What each stop found and
-              how to fix it is for a signed-in admin; the server README walks
-              through the same six steps. This list is gone once the first admin
-              exists.
+              whether each is done, and nothing else about this deployment. What
+              each stop found and how to fix it is for a signed-in admin; the
+              server README walks through the same six steps. This list is gone
+              once the first admin exists.
             </p>
+          </section>
+        )}
+        {stops && (
+          <section className="card stack" aria-labelledby="generate-h">
+            <h2 className="h3" id="generate-h">
+              Make the secret values
+            </h2>
+            <p>
+              A new deployment needs two random values in its host&apos;s
+              environment settings. Make the ones it does not have yet.
+            </p>
+            <Generator names={GENERATED_SETTINGS} />
           </section>
         )}
         <Gate what="see this deployment's setup" />
