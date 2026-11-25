@@ -3,8 +3,10 @@
 // advisory lock, so a failure leaves the database unchanged and two runs cannot
 // interleave.
 //
-// Usage: npm run db:migrate (reads SUPABASE_DB_URL from .env.local).
-// Without it, run the files in filename order in the Supabase SQL editor instead.
+// Usage: npm run db:migrate (reads SUPABASE_DB_URL from .env.local, else
+// POSTGRES_URL_NON_POOLING, else POSTGRES_URL: the names the Supabase integration of
+// the Vercel Marketplace sets).
+// Without any of them, run the files in filename order in the Supabase SQL editor instead.
 import { readFile, readdir } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 
@@ -22,6 +24,36 @@ revoke all on table public.emsp_schema_migrations from public, anon, authenticat
 grant select, insert on table public.emsp_schema_migrations to service_role;
 `;
 
+/** The connection string's names, the first one set wins. */
+export const DB_URL_NAMES = [
+  "SUPABASE_DB_URL",
+  "POSTGRES_URL_NON_POOLING",
+  "POSTGRES_URL",
+];
+
+// Parameters of a pooled connection string that are not Postgres settings. The driver
+// would send them to the server as if they were.
+const NOT_FOR_THE_SERVER = ["supa", "pgbouncer"];
+
+/**
+ * The connection string and the name it came from, or undefined. As in
+ * lib/server/config.ts, an empty value or `demo` counts as unset.
+ */
+export function databaseUrl(env) {
+  for (const name of DB_URL_NAMES) {
+    let url = env[name]?.trim();
+    if (!url || url.toLowerCase() === "demo") continue;
+    // Cut as text: a password need not be URL-encoded the way `URL` would rewrite it.
+    for (const parameter of NOT_FOR_THE_SERVER)
+      url = url.replace(
+        new RegExp(`([?&])${parameter}=[^&#]*(&|(?=#)|$)`, "g"),
+        "$1",
+      );
+    return { name, url: url.replace(/[?&]+(?=#|$)/, "") };
+  }
+  return undefined;
+}
+
 export async function listMigrations(directory) {
   return (await readdir(directory))
     .filter((f) => MIGRATION_NAME.test(f))
@@ -34,16 +66,21 @@ export function stripTransaction(sql) {
 }
 
 async function main() {
-  if (!process.env.SUPABASE_DB_URL) {
+  const database = databaseUrl(process.env);
+  if (!database) {
     console.error(
-      "Add SUPABASE_DB_URL to .env.local, or run the SQL files in supabase/migrations in filename order in the Supabase SQL editor.",
+      `Add ${DB_URL_NAMES[0]} (or ${DB_URL_NAMES.slice(1).join(" or ")}) to .env.local, or run the SQL files in supabase/migrations in filename order in the Supabase SQL editor.`,
     );
     process.exit(1);
   }
+  // The name only, never the string: it holds the database password.
+  console.log(`Connecting with ${database.name}.`);
   const { default: postgres } = await import("postgres");
-  const sql = postgres(process.env.SUPABASE_DB_URL, {
+  const sql = postgres(database.url, {
     ssl: "require",
     max: 1,
+    // A transaction-mode pooler (POSTGRES_URL) keeps no prepared statements.
+    prepare: false,
     connect_timeout: 15,
     onnotice: () => {},
   });

@@ -21,7 +21,17 @@ const LIVE = {
   SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
   OCPI_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
 };
-const VARS = [...Object.keys(LIVE), "DEMO_MODE"];
+const VARS = [
+  ...Object.keys(LIVE),
+  "SUPABASE_SECRET_KEY",
+  "VERCEL",
+  "DEMO_MODE",
+];
+/** What missingForLive() calls each, when unset. */
+const listed = (name: string) =>
+  name === "SUPABASE_SERVICE_ROLE_KEY"
+    ? "SUPABASE_SERVICE_ROLE_KEY or SUPABASE_SECRET_KEY"
+    : name;
 
 describe("demo mode", () => {
   const saved = { ...process.env };
@@ -43,7 +53,7 @@ describe("demo mode", () => {
 
   it("is on with no credentials, with any one missing or empty, and when forced", () => {
     expect(isDemo()).toBe(true);
-    expect(missingForLive()).toEqual(Object.keys(LIVE));
+    expect(missingForLive()).toEqual(Object.keys(LIVE).map(listed));
     Object.assign(process.env, LIVE);
     expect(isDemo()).toBe(false);
     expect(mode()).toBe("live");
@@ -52,7 +62,7 @@ describe("demo mode", () => {
       for (const unset of ["  ", "demo", " Demo "]) {
         process.env[name] = unset;
         expect(isDemo()).toBe(true);
-        expect(missingForLive()).toEqual([name]);
+        expect(missingForLive()).toEqual([listed(name)]);
         expect(configErrors()).toEqual([]);
       }
       process.env[name] = LIVE[name as keyof typeof LIVE];

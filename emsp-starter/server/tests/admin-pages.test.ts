@@ -1004,7 +1004,8 @@ describe("setup: nothing for a visitor who is not signed in", () => {
   });
 
   it("the server sends a visitor no setting's name, no config error and no secret flag", async () => {
-    for (const name of LIVE_REQUIRED) delete process.env[name];
+    for (const name of [...LIVE_REQUIRED, "SUPABASE_SECRET_KEY", "VERCEL"])
+      delete process.env[name];
     Object.assign(process.env, MALFORMED);
     // The deployment does have something to say, to an admin.
     expect(missingForLive().length).toBeGreaterThan(0);
@@ -1049,7 +1050,8 @@ describe("setup: nothing for a visitor who is not signed in", () => {
   });
 
   it("the server reads the address and the hold for an admin signed in by email, and no public view", async () => {
-    for (const name of LIVE_REQUIRED) delete process.env[name];
+    for (const name of [...LIVE_REQUIRED, "SUPABASE_SECRET_KEY", "VERCEL"])
+      delete process.env[name];
     Object.assign(process.env, MALFORMED);
     signedInAdmin.current = { userId: "u1", ...ana! };
     const element = await SetupPage();
@@ -1061,6 +1063,10 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     const status = await readSetupStatus();
     const html = view(status, ana, sent);
     expect(html).toContain("<code>PUBLIC_BASE_URL</code> is not set");
+    // A variable with two names is listed under both.
+    expect(html).toContain(
+      "Neither <code>SUPABASE_SERVICE_ROLE_KEY</code> nor <code>SUPABASE_SECRET_KEY</code> is set.",
+    );
     expect(html).toContain("<code>HOLD_AMOUNTS</code>");
     for (const sentToPage of [element.props, status])
       expect(JSON.stringify(sentToPage)).not.toContain(MALFORMED.ADMIN_SECRET);

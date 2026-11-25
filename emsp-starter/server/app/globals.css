@@ -722,6 +722,12 @@ main:focus {
   align-items: baseline;
   gap: 0.25rem 0.625rem;
 }
+/* A finding's words, beside its state: a long one wraps there, long names too. */
+.found li > span:not([class]) {
+  flex: 1 1 14rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .fix > * + * {
   margin-top: 0.625rem;
 }

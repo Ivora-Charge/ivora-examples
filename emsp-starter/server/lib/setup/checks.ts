@@ -38,7 +38,10 @@ export type SetupStatus = {
   environment: {
     /** How many live-mode variables there are. */
     required: number;
-    /** Names of the unset live-mode variables. */
+    /**
+     * Names of the unset live-mode variables; "<name> or <other>" for one that is
+     * accepted under two names.
+     */
     missing: string[];
     /** What is wrong with a set one, live-mode or optional: "<NAME> must ...". */
     malformed: string[];

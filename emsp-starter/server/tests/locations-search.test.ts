@@ -336,6 +336,8 @@ describe("location API in demo mode", () => {
       "PUBLIC_BASE_URL",
       "SUPABASE_URL",
       "SUPABASE_SERVICE_ROLE_KEY",
+      "SUPABASE_SECRET_KEY",
+      "VERCEL",
       "OCPI_TOKEN_ENCRYPTION_KEY",
     ])
       delete process.env[k];

@@ -10,6 +10,7 @@ import {
   config,
   configErrors,
   LIVE_REQUIRED,
+  malformedRequired,
   missingForLive,
 } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
@@ -96,7 +97,6 @@ async function gather(
   const demo = isDemo();
   const missing = missingForLive();
   const errors = configErrors();
-  const required: readonly string[] = LIVE_REQUIRED;
   const database = demo
     ? null
     : await deps.database(fresh).catch((): DatabaseCheck => ({
@@ -153,13 +153,11 @@ async function gather(
     checkedAt: (deps.now?.() ?? new Date()).toISOString(),
     demo,
     environment: {
-      required: required.length,
+      required: LIVE_REQUIRED.length,
       missing,
       malformed: errors,
       // A malformed live-mode setting is not "present and well formed" either.
-      malformedRequired: required.filter((name) =>
-        errors.some((e) => e.startsWith(`${name} `)),
-      ).length,
+      malformedRequired: malformedRequired(errors),
       demoForced: FORCED_ON.has(
         process.env.DEMO_MODE?.trim().toLowerCase() ?? "",
       ),

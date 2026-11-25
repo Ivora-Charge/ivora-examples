@@ -90,8 +90,9 @@ export function OurVersionsUrl({ url }: { url: string | null }) {
   if (url) return <Copy text={url} label="Our versions URL" />;
   return (
     <p className="small" role="note" aria-label="Our versions URL">
-      This server&apos;s public address (<code>PUBLIC_BASE_URL</code>) followed
-      by <code>/ocpi/versions</code>. It is shown here in full only to an admin
+      This server&apos;s public address (<code>PUBLIC_BASE_URL</code>; on
+      Vercel, the production domain when that is unset) followed by{" "}
+      <code>/ocpi/versions</code>. It is shown here in full only to an admin
       signed in by email.
     </p>
   );

@@ -5,8 +5,8 @@ import { LIVE_REQUIRED } from "@/lib/server/config";
 import { isDemo } from "@/lib/server/demo";
 
 // The Deploy to Vercel button, checked offline: it clones this server's folder of the
-// public repository, asks only for variables the server reads, and a deployment that
-// answers `demo` to every question runs in demo mode.
+// public repository, adds the Supabase integration, asks only for variables the server
+// reads, and a deployment that answers `demo` to every question runs in demo mode.
 
 const server = path.resolve(__dirname, "..");
 const readme = readFileSync(path.join(server, "README.md"), "utf8");
@@ -15,6 +15,9 @@ const buttons = [
 ].map((m) => new URL(m[1]));
 const button = buttons[0];
 const prompted = (button?.searchParams.get("env") ?? "").split(",");
+/** Live-mode variables the button does not ask for: the integration or Vercel's own. */
+const FROM_SUPABASE = ["SUPABASE_URL", "SUPABASE_SERVICE_ROLE_KEY"];
+const FROM_VERCEL = ["PUBLIC_BASE_URL"];
 const example = new Set(
   readFileSync(path.join(server, ".env.example"), "utf8")
     .split("\n")
@@ -26,6 +29,8 @@ describe("the Deploy to Vercel button", () => {
   const saved = { ...process.env };
   beforeEach(() => {
     for (const k of [...example] as string[]) delete process.env[k];
+    for (const k of ["SUPABASE_SECRET_KEY", "VERCEL", "VERCEL_ENV"])
+      delete process.env[k];
   });
   afterEach(() => {
     process.env = { ...saved };
@@ -42,8 +47,20 @@ describe("the Deploy to Vercel button", () => {
     expect(existsSync(path.join(server, "package.json"))).toBe(true);
   });
 
-  it("asks for every live-mode variable, all of them documented and server-side", () => {
-    expect([...prompted].sort()).toEqual([...LIVE_REQUIRED].sort());
+  it("creates a Supabase database with the Marketplace integration", () => {
+    expect(JSON.parse(button.searchParams.get("stores")!)).toEqual([
+      {
+        type: "integration",
+        integrationSlug: "supabase",
+        productSlug: "supabase",
+      },
+    ]);
+  });
+
+  it("asks for every live-mode variable nothing else provides, all documented and server-side", () => {
+    expect([...prompted, ...FROM_SUPABASE, ...FROM_VERCEL].sort()).toEqual(
+      [...LIVE_REQUIRED].sort(),
+    );
     for (const k of prompted) {
       expect(example.has(k), `${k} in .env.example`).toBe(true);
       expect(readme).toContain(`| \`${k}\``);
@@ -65,15 +82,20 @@ describe("the Deploy to Vercel button", () => {
     expect(template).toContain(`](${button.href})`);
   });
 
-  it("deploys in demo mode when every question is answered `demo`, and live once they are real", () => {
+  it("deploys in demo mode when every question is answered `demo`, and out of it once they are real", () => {
+    // What the integration and Vercel set on the new project.
+    Object.assign(process.env, {
+      SUPABASE_URL: "https://db.example.test",
+      SUPABASE_SECRET_KEY: "sb_secret_exampleexample",
+      VERCEL: "1",
+      VERCEL_ENV: "production",
+      VERCEL_PROJECT_PRODUCTION_URL: "emsp.example.test",
+    });
     for (const k of prompted) process.env[k] = "demo";
     expect(isDemo()).toBe(true);
     Object.assign(process.env, {
       EMSP_COUNTRY_CODE: "NL",
       EMSP_PARTY_ID: "ABC",
-      PUBLIC_BASE_URL: "https://emsp.example.test",
-      SUPABASE_URL: "https://db.example.test",
-      SUPABASE_SERVICE_ROLE_KEY: "test-service-role-key",
       OCPI_TOKEN_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString("base64"),
     });
     expect(isDemo()).toBe(false);
