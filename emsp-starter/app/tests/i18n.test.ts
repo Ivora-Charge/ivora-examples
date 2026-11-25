@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createI18n } from "../src/i18n/core";
 import en from "../src/i18n/en.json";
+import { MAX_EXCEPTIONS, upcomingExceptions } from "../src/lib/hours";
 import { present } from "../src/lib/present";
 import type { DisplayComponent, LocationSummary } from "../src/lib/types";
 
@@ -215,10 +216,16 @@ describe("presenting places", () => {
   };
 
   it("groups opening hours by day", () => {
-    const hours = p.hours(weekdays, new Date("2026-10-25T10:00:00Z")); // a Sunday
+    const hours = p.hours(
+      weekdays,
+      new Date("2026-10-25T10:00:00Z"), // a Sunday
+      "Europe/Amsterdam",
+    );
     expect(hours).toEqual({
       current: { state: "closed", label: "Closed now" },
       lines: ["Mon–Sat  07:00–23:00", "Sun  Closed"],
+      exceptions: [],
+      zoneNote: undefined,
     });
     expect(
       p.hours({
@@ -286,5 +293,311 @@ describe("presenting places", () => {
     expect(
       p.closedNote({ time_zone: "UTC", charging_when_closed: true }, sunday),
     ).toBeUndefined();
+  });
+});
+
+describe("exceptional openings and closings", () => {
+  afterEach(() => void vi.unstubAllEnvs());
+  const p = present(createI18n("en-GB"));
+  const period = (period_begin: string, period_end: string) => ({
+    period_begin,
+    period_end,
+  });
+  const place = {
+    time_zone: "Europe/Berlin",
+    opening_times: {
+      twentyfourseven: true,
+      exceptional_closings: [
+        // Christmas Eve in Berlin, which starts on the 23rd in UTC.
+        period("2026-12-23T23:00:00Z", "2026-12-24T23:00:00Z"),
+        period("2026-11-01T08:00:00Z", "2026-11-01T10:00:00Z"),
+        period("2026-12-01T13:00:00Z", "2026-12-01T17:00:00Z"),
+      ],
+      exceptional_openings: [
+        period("2026-12-06T09:00:00Z", "2026-12-06T15:00:00Z"),
+        period("2026-10-04T09:00:00Z", "2026-10-04T15:00:00Z"),
+      ],
+    },
+  };
+  const now = new Date("2026-11-25T10:00:00Z");
+
+  it("lists those to come, soonest first, in the place's time zone", () => {
+    const hours = p.hours(place, now);
+    expect(hours.lines).toEqual(["Open 24 hours, every day"]);
+    expect(hours.exceptions).toEqual([
+      "Closed: 1 Dec 2026, 14:00–18:00",
+      "Open: 6 Dec 2026, 10:00–16:00",
+      "Closed: 24 Dec 2026, 00:00 – 25 Dec 2026, 00:00",
+    ]);
+  });
+
+  it("keeps one in progress and drops it once it ends", () => {
+    const listed = (at: string) => p.hours(place, new Date(at)).exceptions;
+    expect(listed("2026-12-01T16:59:59Z")[0]).toBe(
+      "Closed: 1 Dec 2026, 14:00–18:00",
+    );
+    expect(listed("2026-12-01T17:00:00Z")[0]).toBe(
+      "Open: 6 Dec 2026, 10:00–16:00",
+    );
+    expect(listed("2026-12-25T00:00:00Z")).toEqual([]);
+  });
+
+  it("writes dates and times the driver's way", () => {
+    const exceptions = present(createI18n("de-DE")).hours(
+      place,
+      now,
+    ).exceptions;
+    expect(exceptions[0]).toBe("Closed: 01.12.2026, 14:00–18:00");
+    expect(
+      present(createI18n("en-US")).hours(place, now).exceptions[1],
+    ).toMatch(/^Open: Dec 6, 2026, 10:00\sAM–4:00\sPM$/);
+  });
+
+  it("lists them under regular hours too, once each, skipping unreadable ones", () => {
+    const shut = period("2026-12-01T13:00:00Z", "2026-12-01T17:00:00Z");
+    const hours = p.hours(
+      {
+        time_zone: "Europe/Berlin",
+        opening_times: {
+          twentyfourseven: false,
+          regular_hours: [
+            { weekday: 1, period_begin: "07:00", period_end: "23:00" },
+          ],
+          exceptional_closings: [
+            shut,
+            shut,
+            period("soon", "2026-12-02T00:00:00Z"),
+            period("2026-12-03T10:00:00Z", "2026-12-03T10:00:00Z"),
+          ],
+        },
+      },
+      now,
+    );
+    expect(hours.lines).toContain("Mon  07:00–23:00");
+    expect(hours.exceptions).toEqual(["Closed: 1 Dec 2026, 14:00–18:00"]);
+  });
+
+  it("lists none without opening times", () => {
+    expect(p.hours({ time_zone: "Europe/Berlin" }, now).exceptions).toEqual([]);
+  });
+
+  it("reads a time without a zone as UTC, as OCPI does", () => {
+    vi.stubEnv("TZ", "America/New_York");
+    const bare = {
+      time_zone: "Europe/Berlin",
+      opening_times: {
+        twentyfourseven: true,
+        exceptional_closings: [
+          period("2026-12-01T13:00:00", "2026-12-01T17:00:00"),
+        ],
+      },
+    };
+    const at = new Date("2026-12-01T13:30:00Z");
+    expect(p.hours(bare, at).current?.state).toBe("closed");
+    expect(p.hours(bare, at).exceptions).toEqual([
+      "Closed: 1 Dec 2026, 14:00–18:00",
+    ]);
+  });
+
+  it("still lists them for a time zone the device does not know", () => {
+    const hours = p.hours({ ...place, time_zone: "Nowhere/Nothing" }, now);
+    expect(hours.exceptions).toHaveLength(3);
+  });
+});
+
+describe("a long list of exceptional periods", () => {
+  const p = present(createI18n("en-GB"));
+  const now = new Date("2026-11-25T10:00:00Z");
+  const day = 24 * 3600 * 1000;
+  // 50 closings, one a week from last week on.
+  const closings = Array.from({ length: 50 }, (_, n) => {
+    const begin = now.getTime() + (n - 1) * 7 * day;
+    return {
+      period_begin: new Date(begin).toISOString(),
+      period_end: new Date(begin + 2 * 3600 * 1000).toISOString(),
+    };
+  });
+  const place = (exceptional_closings: typeof closings) => ({
+    time_zone: "Europe/Berlin",
+    opening_times: { twentyfourseven: true, exceptional_closings },
+  });
+
+  it("shows only the next five", () => {
+    const listed = upcomingExceptions(place(closings).opening_times, now);
+    expect(MAX_EXCEPTIONS).toBe(5);
+    expect(listed).toHaveLength(5);
+    // The one from last week is over; the list starts with this week's.
+    expect(listed[0].begin).toBe(now.getTime());
+    expect(listed.map((x) => x.begin)).toEqual(
+      [0, 1, 2, 3, 4].map((n) => now.getTime() + n * 7 * day),
+    );
+    expect(p.hours(place(closings), now, "Europe/Berlin").exceptions).toEqual([
+      "Closed: 25 Nov 2026, 11:00–13:00",
+      "Closed: 2 Dec 2026, 11:00–13:00",
+      "Closed: 9 Dec 2026, 11:00–13:00",
+      "Closed: 16 Dec 2026, 11:00–13:00",
+      "Closed: 23 Dec 2026, 11:00–13:00",
+    ]);
+  });
+
+  it("shows none that begin more than 12 months ahead, whichever is fewer", () => {
+    // Every 20 weeks: now, in 20 and 40 weeks, then 60 weeks (past 12 months) and on.
+    const sparse = closings.filter((_, n) => n >= 1 && (n - 1) % 20 === 0);
+    expect(sparse).toHaveLength(3);
+    const far = sparse.concat(
+      [60, 80].map((weeks) => {
+        const begin = now.getTime() + weeks * 7 * day;
+        return {
+          period_begin: new Date(begin).toISOString(),
+          period_end: new Date(begin + day).toISOString(),
+        };
+      }),
+    );
+    expect(
+      upcomingExceptions(place(far).opening_times, now).map((x) => x.begin),
+    ).toEqual([0, 20, 40].map((w) => now.getTime() + w * 7 * day));
+  });
+
+  it("counts a period sent twice once", () => {
+    const twice = closings.slice(1, 4).flatMap((c) => [c, c]);
+    expect(upcomingExceptions(place(twice).opening_times, now)).toHaveLength(3);
+  });
+});
+
+describe("the clock the times are on", () => {
+  afterEach(() => void vi.unstubAllEnvs());
+  const now = new Date("2026-11-25T10:00:00Z");
+  const p = present(createI18n("en-GB"));
+  const regular = {
+    time_zone: "Europe/Berlin",
+    opening_times: {
+      twentyfourseven: false,
+      regular_hours: [
+        { weekday: 1, period_begin: "07:00", period_end: "23:00" },
+      ],
+    },
+  };
+  const closing = {
+    time_zone: "Europe/Berlin",
+    opening_times: {
+      twentyfourseven: true,
+      exceptional_closings: [
+        {
+          period_begin: "2026-12-01T13:00:00Z",
+          period_end: "2026-12-01T17:00:00Z",
+        },
+      ],
+    },
+  };
+
+  it("says nothing when the device is in the site's zone", () => {
+    expect(p.hours(regular, now, "Europe/Berlin").zoneNote).toBeUndefined();
+    expect(p.hours(closing, now, "Europe/Berlin").zoneNote).toBeUndefined();
+  });
+
+  it("names the site's zone when the device is elsewhere", () => {
+    expect(p.hours(regular, now, "America/New_York").zoneNote).toBe(
+      "Times are local to the site (CET).",
+    );
+    const hours = p.hours(closing, now, "Europe/London");
+    expect(hours.zoneNote).toBe("Times are local to the site (CET).");
+    // The times themselves stay on the site's clock.
+    expect(hours.exceptions).toEqual(["Closed: 1 Dec 2026, 14:00–18:00"]);
+    // In summer the site's zone has its summer name.
+    expect(
+      p.hours(regular, new Date("2026-07-01T10:00:00Z"), "Europe/London")
+        .zoneNote,
+    ).toBe("Times are local to the site (CEST).");
+  });
+
+  it("says nothing when there are no times to show", () => {
+    const away = "America/New_York";
+    expect(
+      p.hours(
+        { ...closing, opening_times: { twentyfourseven: true } },
+        now,
+        away,
+      ).zoneNote,
+    ).toBeUndefined();
+    expect(
+      p.hours({ time_zone: "Europe/Berlin" }, now, away).zoneNote,
+    ).toBeUndefined();
+  });
+
+  it("says the device's clock is used when the site's zone is unknown", () => {
+    vi.stubEnv("TZ", "UTC");
+    const unknown = { ...closing, time_zone: "Nowhere/Nothing" };
+    const hours = p.hours(unknown, now, "UTC");
+    expect(hours.exceptions).toEqual(["Closed: 1 Dec 2026, 13:00–17:00"]);
+    expect(hours.zoneNote).toBe(
+      "The site's time zone is not known, so exceptional hours are in your device's time (UTC).",
+    );
+    // Regular hours are the site's wall clock whatever the zone: nothing to say.
+    expect(
+      p.hours({ ...regular, time_zone: "Nowhere/Nothing" }, now, "UTC")
+        .zoneNote,
+    ).toBeUndefined();
+  });
+});
+
+describe("a place's address", () => {
+  afterEach(() => void vi.unstubAllGlobals());
+  const place = {
+    address: "Teststrasse 1",
+    postal_code: "10115",
+    city: "Berlin",
+    country: "DEU",
+  };
+
+  it("has the postal code and the country's name in the driver's language", () => {
+    expect(present(createI18n("en-GB")).address(place)).toBe(
+      "Teststrasse 1, 10115 Berlin, Germany",
+    );
+    expect(present(createI18n("de-DE")).address(place)).toBe(
+      "Teststrasse 1, 10115 Berlin, Deutschland",
+    );
+  });
+
+  it("leaves out a postal code the CPO did not send", () => {
+    expect(
+      present(createI18n("en-GB")).address({
+        ...place,
+        postal_code: undefined,
+      }),
+    ).toBe("Teststrasse 1, Berlin, Germany");
+  });
+
+  it("keeps a code it cannot name", () => {
+    const i = createI18n("en-GB");
+    expect(i.country("ZZZ")).toBe("ZZZ");
+    expect(i.country("XKX")).toBe("Kosovo");
+  });
+
+  it("keeps the code on a device without Intl.DisplayNames", () => {
+    // Everything else of Intl, as on an engine without this one.
+    vi.stubGlobal(
+      "Intl",
+      Object.create(Intl, { DisplayNames: { value: undefined } }),
+    );
+    expect(createI18n("en-GB").country("DEU")).toBe("DEU");
+  });
+
+  it("names every ISO 3166-1 country", () => {
+    const codes = readFileSync(join(root, "src/lib/country.ts"), "utf8")
+      .match(/const CODES = `([^`]*)`/)![1]
+      .trim()
+      .split(/\s+/)
+      .map((pair) => pair.slice(0, 3));
+    // ISO 3166-1 has 249 countries; XKX is the one extra.
+    expect(new Set(codes).size).toBe(250);
+    const i = createI18n("en-GB");
+    expect(codes.filter((c) => i.country(c) === c)).toEqual([]);
+    expect(["NLD", "CAN", "USA", "CHE", "AUT"].map(i.country)).toEqual([
+      "Netherlands",
+      "Canada",
+      "United States",
+      "Switzerland",
+      "Austria",
+    ]);
   });
 });

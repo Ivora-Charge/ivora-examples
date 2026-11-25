@@ -1,5 +1,11 @@
 import type { I18n, Key } from "../i18n/core";
-import { hoursRows, openState, type OpenState } from "./hours";
+import {
+  hoursRows,
+  openState,
+  upcomingExceptions,
+  type ExceptionalHours,
+  type OpenState,
+} from "./hours";
 import { placeKind, type StatusKind } from "./status";
 import type {
   DisplayComponent,
@@ -122,15 +128,42 @@ export function present(i: I18n) {
     closedCanCharge: "detail.closedCanCharge",
   };
 
-  /** Opening hours as lines, and what to say about the place right now. */
-  const hours = (place: Parameters<typeof openState>[0], now = new Date()) => {
-    const opening = place.opening_times;
-    const state = openState(place, now);
-    const current = state && { state, label: t(openLabels[state]) };
-    if (!opening) return { current, lines: [t("detail.hoursUnknown")] };
-    if (opening.twentyfourseven)
-      return { current, lines: [t("detail.open24")] };
-    const lines = hoursRows(opening).map((r) => {
+  /** "Street 1, 1000 AA City, Netherlands", leaving out what the CPO did not send. */
+  const address = (
+    place: Pick<
+      LocationSummary,
+      "address" | "postal_code" | "city" | "country"
+    >,
+  ) =>
+    [
+      place.address,
+      [place.postal_code, place.city].filter(Boolean).join(" "),
+      i.country(place.country),
+    ]
+      .filter(Boolean)
+      .join(", ");
+
+  /** "Closed: 24 Dec 2026, 14:00–18:00", in the place's own time zone. */
+  const exception = (x: ExceptionalHours, timeZone: string) => {
+    const begin = i.zoned(x.begin, timeZone);
+    const end = i.zoned(x.end, timeZone);
+    const period =
+      begin.date === end.date
+        ? t("detail.onDate", {
+            date: begin.date,
+            period: t("detail.period", { begin: begin.time, end: end.time }),
+          })
+        : t("detail.dateRange", { begin: begin.dateTime, end: end.dateTime });
+    return t(x.open ? "detail.exceptionalOpen" : "detail.exceptionalClosed", {
+      period,
+    });
+  };
+
+  /** The regular hours as lines. */
+  const regularLines = (opening: LocationSummary["opening_times"]) => {
+    if (!opening) return [t("detail.hoursUnknown")];
+    if (opening.twentyfourseven) return [t("detail.open24")];
+    return hoursRows(opening).map((r) => {
       const days =
         r.from === r.to
           ? i.weekday(r.from)
@@ -150,7 +183,62 @@ export function present(i: I18n) {
         : t("detail.closed");
       return `${days}  ${periods}`;
     });
-    return { current, lines };
+  };
+
+  /**
+   * Opening hours as lines, the exceptional openings and closings still to come (or in
+   * progress), and what to say about the place right now.
+   */
+  const hours = (
+    place: Parameters<typeof openState>[0],
+    now = new Date(),
+    deviceZone = i.deviceZone(),
+  ) => {
+    const state = openState(place, now);
+    const opening = place.opening_times;
+    const exceptions = [
+      ...new Set(
+        upcomingExceptions(opening, now).map((x) =>
+          exception(x, place.time_zone),
+        ),
+      ),
+    ];
+    return {
+      current: state && { state, label: t(openLabels[state]) },
+      lines: regularLines(opening),
+      exceptions,
+      zoneNote: zoneNote(
+        place.time_zone,
+        deviceZone,
+        now,
+        exceptions.length > 0,
+        hoursRows(opening).some((r) => r.periods.length > 0),
+      ),
+    };
+  };
+
+  /**
+   * Which clock the times are on, when it is not the device's: the site's zone, or the
+   * device's when the device does not know the site's zone (exceptional hours are then
+   * shown on the device's clock; regular hours are always the site's wall clock).
+   */
+  const zoneNote = (
+    timeZone: string,
+    deviceZone: string,
+    now: Date,
+    hasExceptions: boolean,
+    hasRegularTimes: boolean,
+  ) => {
+    if (!hasExceptions && !hasRegularTimes) return undefined;
+    const site = i.canonicalZone(timeZone);
+    if (!site) {
+      if (!hasExceptions) return undefined;
+      const zone = i.zoneName(deviceZone, now.getTime()) ?? deviceZone;
+      return t("detail.zoneUnknown", { zone });
+    }
+    if (site === i.canonicalZone(deviceZone)) return undefined;
+    const zone = i.zoneName(site, now.getTime()) ?? site;
+    return t("detail.zoneSite", { zone });
   };
 
   return {
@@ -161,6 +249,7 @@ export function present(i: I18n) {
     detailPrice,
     availability,
     closedNote,
+    address,
     hours,
   };
 }

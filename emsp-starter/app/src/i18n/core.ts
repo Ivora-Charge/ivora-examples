@@ -1,3 +1,4 @@
+import { countryName } from "../lib/country";
 import en from "./en.json";
 
 /**
@@ -176,6 +177,61 @@ export function createI18n(
     }
   };
 
+  /**
+   * A moment's date, time of day and both, as the clock in `timeZone` shows them (the
+   * device's clock when the zone is unknown): "24 Dec 2026", "14:00".
+   */
+  const zoned = (ms: number, timeZone: string) => {
+    const format = (opts: Intl.DateTimeFormatOptions) => {
+      for (const zone of [timeZone, undefined])
+        try {
+          return new Intl.DateTimeFormat(locale, {
+            ...opts,
+            timeZone: zone,
+          }).format(ms);
+        } catch {}
+      return new Date(ms).toISOString();
+    };
+    return {
+      date: format({ dateStyle: "medium" }),
+      time: format({ timeStyle: "short" }),
+      dateTime: format({ dateStyle: "medium", timeStyle: "short" }),
+    };
+  };
+
+  /**
+   * A time zone's short name at `ms` in the driver's language ("CET", "GMT+1"), or
+   * undefined when the device does not know the zone.
+   */
+  const zoneName = (timeZone: string, ms: number) => {
+    try {
+      return new Intl.DateTimeFormat(locale, {
+        timeZone,
+        timeZoneName: "short",
+      })
+        .formatToParts(ms)
+        .find((part) => part.type === "timeZoneName")?.value;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** A time zone's canonical name ("Europe/Berlin"), or undefined when unknown. */
+  const canonicalZone = (timeZone: string) => {
+    try {
+      return new Intl.DateTimeFormat("en", { timeZone }).resolvedOptions()
+        .timeZone;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** The device's own time zone. */
+  const deviceZone = () => new Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  /** A country's name from its ISO 3166-1 alpha-3 code: "Germany" for "DEU". */
+  const country = (code: string) => countryName(code, locale);
+
   return {
     locale,
     t,
@@ -190,6 +246,11 @@ export function createI18n(
     dateTime,
     clock,
     weekday,
+    zoned,
+    zoneName,
+    canonicalZone,
+    deviceZone,
+    country,
   };
 }
 

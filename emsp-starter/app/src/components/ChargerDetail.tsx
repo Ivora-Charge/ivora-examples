@@ -196,10 +196,7 @@ export function ChargerDetail({
             { color: c.onPrimary, fontSize: fs(fontSize.sm + 1) },
           ]}
         >
-          {[
-            [place.address, place.city].join(", "),
-            p.parking(place.parking_type),
-          ]
+          {[p.address(place), p.parking(place.parking_type)]
             .filter(Boolean)
             .join(" · ")}
         </Text>
@@ -409,6 +406,43 @@ export function ChargerDetail({
               {line}
             </Text>
           ))}
+          {hours.exceptions.length > 0 && (
+            <View style={styles.exceptions} testID="detail-exceptions">
+              <Text
+                role="heading"
+                aria-level={sectionLevel + 1}
+                style={[
+                  type.strong,
+                  { color: c.text, fontSize: fs(fontSize.sm + 1) },
+                ]}
+              >
+                {t("detail.exceptional")}
+              </Text>
+              {hours.exceptions.map((line) => (
+                <Text
+                  key={line}
+                  style={[
+                    type.body,
+                    { color: c.text, fontSize: fs(fontSize.md) },
+                  ]}
+                >
+                  {line}
+                </Text>
+              ))}
+            </View>
+          )}
+          {hours.zoneNote ? (
+            <Text
+              testID="detail-zone"
+              style={[
+                type.body,
+                styles.zoneNote,
+                { color: c.muted, fontSize: fs(fontSize.sm) },
+              ]}
+            >
+              {hours.zoneNote}
+            </Text>
+          ) : null}
         </Section>
 
         {directions ? (
@@ -631,6 +665,8 @@ const styles = StyleSheet.create({
   flex: { flex: 1, minWidth: 0 },
   gap: { gap: space.md },
   gapSm: { gap: space.sm },
+  exceptions: { paddingTop: space.md, gap: space.xs },
+  zoneNote: { paddingTop: space.sm },
   header: {
     paddingHorizontal: space.lg,
     paddingTop: space.md + 2,

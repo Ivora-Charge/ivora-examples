@@ -36,14 +36,18 @@ const mins = (hhmm: string) => {
   return m ? Number(m[1]) * 60 + Number(m[2]) : NaN;
 };
 
+/** An OCPI DateTime in milliseconds; one without a zone is UTC. NaN when unreadable. */
+const dateTimeMs = (value: string) =>
+  Date.parse(/(Z|[+-]\d{2}:\d{2})$/.test(value) ? value : `${value}Z`);
+
 const within = (
   now: Date,
   ranges?: { period_begin: string; period_end: string }[],
 ) =>
   (ranges ?? []).some(
     (r) =>
-      Date.parse(r.period_begin) <= now.getTime() &&
-      now.getTime() < Date.parse(r.period_end),
+      dateTimeMs(r.period_begin) <= now.getTime() &&
+      now.getTime() < dateTimeMs(r.period_end),
   );
 
 /**
@@ -125,4 +129,47 @@ export function hoursRows(opening: OpeningTimes | undefined): HoursRow[] {
     else rows.push({ from: i + 1, to: i + 1, periods });
   });
   return rows;
+}
+
+/** An exceptional opening or closing, its ends in milliseconds. */
+export type ExceptionalHours = { open: boolean; begin: number; end: number };
+
+/** At most this many exceptional periods are listed. */
+export const MAX_EXCEPTIONS = 5;
+
+/**
+ * The exceptional openings and closings that are not over at `now` (one in progress is
+ * included) and begin within the next 12 months, soonest first: at most
+ * `MAX_EXCEPTIONS` of them. Unreadable and empty periods are left out, and a period
+ * sent twice is listed once.
+ */
+export function upcomingExceptions(
+  opening: OpeningTimes | undefined,
+  now = new Date(),
+): ExceptionalHours[] {
+  const horizon = new Date(now);
+  horizon.setUTCFullYear(horizon.getUTCFullYear() + 1);
+  const read = (ranges: OpeningTimes["exceptional_openings"], open: boolean) =>
+    (ranges ?? []).map((r) => ({
+      open,
+      begin: dateTimeMs(r.period_begin),
+      end: dateTimeMs(r.period_end),
+    }));
+  const seen = new Set<string>();
+  return [
+    ...read(opening?.exceptional_closings, false),
+    ...read(opening?.exceptional_openings, true),
+  ]
+    .filter(
+      (p) =>
+        p.begin < p.end && now.getTime() < p.end && p.begin < horizon.getTime(),
+    )
+    .sort((a, b) => a.begin - b.begin || a.end - b.end)
+    .filter((p) => {
+      const key = `${p.open} ${p.begin} ${p.end}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_EXCEPTIONS);
 }

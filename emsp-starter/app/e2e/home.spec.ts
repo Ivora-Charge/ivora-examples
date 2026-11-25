@@ -84,6 +84,9 @@ test("a charger's page: price from the tariff, connectors, hours and directions"
   await open(page);
   await page.getByTestId("place-Town Hall Garage").click();
   await expect(page.getByTestId("detail-name")).toHaveText("Town Hall Garage");
+  await expect(
+    page.getByText("3 Garden Lane, 1000 AC Sample City, Netherlands"),
+  ).toBeVisible();
   await expect(page.getByTestId("detail-price")).toContainText("€0.42");
   await expect(page.getByTestId("detail-price")).toContainText("per kWh");
   await expect(page.getByTestId("connector")).toHaveCount(2);
@@ -102,6 +105,27 @@ test("a charger's page: price from the tariff, connectors, hours and directions"
   if (isPhone(page))
     await expect(page.getByTestId("search-input")).toBeVisible();
   else await expect(page.getByTestId("detail-card")).toHaveCount(0);
+});
+
+test.describe("a device in another time zone", () => {
+  test.use({ locale: "en-GB", timezoneId: "America/New_York" });
+  test("names the site's zone under the opening hours", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("place-Town Hall Garage").click();
+    await expect(page.getByTestId("detail-zone")).toHaveText(
+      /^Times are local to the site \(CES?T\)\.$/,
+    );
+  });
+});
+
+test.describe("a device in the site's time zone", () => {
+  test.use({ locale: "en-GB", timezoneId: "Europe/Amsterdam" });
+  test("adds no note to the opening hours", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("place-Town Hall Garage").click();
+    await expect(page.getByText("Mon–Sat")).toBeVisible();
+    await expect(page.getByTestId("detail-zone")).toHaveCount(0);
+  });
 });
 
 test("passwordless sign-in: email, then the code (000000 in demo)", async ({
