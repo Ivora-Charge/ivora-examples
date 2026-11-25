@@ -6,12 +6,13 @@
 //
 // The app stays its own package: it is installed from its own lockfile and built by its
 // own `npm run build`. What is copied is listed in .driver-web.json, which also tells
-// next.config.ts that this build serves the app. Only what is listed there is ever
-// deleted: other files in public/ are yours.
+// next.config.ts that this build serves the app. Only what is listed there, and what
+// git could never have held (below), is ever deleted: other files in public/ are yours.
 import { spawnSync } from "node:child_process";
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -37,6 +38,22 @@ const isEntry = (name) =>
   name !== ".." &&
   !/[/\\]/.test(name);
 
+/**
+ * Whether every file of the entry `name` in `publicDir` lies in a node_modules folder.
+ * git ignores those (.gitignore), so no commit of yours put them there: they are what a
+ * host's build cache restored of an earlier copy. Vercel's restores every node_modules
+ * folder, the app's assets/node_modules among them, but not the record at the root.
+ */
+export function onlyCached(publicDir, name) {
+  const walk = (path, inModules) => {
+    if (!lstatSync(path).isDirectory()) return inModules;
+    return readdirSync(path).every((n) =>
+      walk(join(path, n), inModules || n === "node_modules"),
+    );
+  };
+  return walk(join(publicDir, name), name === "node_modules");
+}
+
 /** Takes out of public/ what `.driver-web.json` of the server in `dir` lists. */
 export function removeDriverWeb(dir) {
   const record = join(dir, RECORD);
@@ -58,7 +75,8 @@ export function removeDriverWeb(dir) {
  * Copies the app's web build in `dist` into public/ of the server in `dir`, in place
  * of what an earlier run copied. It refuses, and copies nothing, when the build has no
  * Content-Security-Policy, uses a path of the server's, or would overwrite a file in
- * public/ that no earlier run put there.
+ * public/ that no earlier run put there. What a build cache restored of an earlier
+ * copy, without the record, is replaced too (onlyCached).
  */
 export function copyDriverWeb(dist, dir) {
   const index = join(dist, "index.html");
@@ -80,11 +98,14 @@ export function copyDriverWeb(dist, dir) {
     );
   removeDriverWeb(dir);
   const publicDir = join(dir, "public");
-  const mine = entries.filter((n) => existsSync(join(publicDir, n)));
+  const there = entries.filter((n) => existsSync(join(publicDir, n)));
+  const mine = there.filter((n) => !onlyCached(publicDir, n));
   if (mine.length)
     throw new Error(
       `public/ already has ${mine.join(", ")}, which the driver app's build would overwrite. Move them first.`,
     );
+  for (const name of there)
+    rmSync(join(publicDir, name), { recursive: true, force: true });
   mkdirSync(publicDir, { recursive: true });
   // Written first, so that a copy cut short can still be taken out.
   writeFileSync(join(dir, RECORD), `${JSON.stringify({ entries })}\n`);

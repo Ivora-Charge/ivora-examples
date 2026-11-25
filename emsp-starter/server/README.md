@@ -787,7 +787,7 @@ One deployment on one domain can serve both web UIs:
 | `/_next/...`            | The admin web's own files.                                                                             |
 | every other path        | The driver app's web build: its files, and `index.html` for the rest, so `/account` opens and reloads. |
 
-`npm run build:one-domain` makes it. `scripts/driver-web.mjs` installs the app in `../app` from its own lockfile (`npm ci`), builds it (`npm run build`), copies `app/dist` into `public/` (all but `_headers`, which only static hosts read) and then the server is built. The two stay separate packages. The script lists what it copied in `.driver-web.json` (ignored by git, like the copies) and deletes only that: your own files in `public/` stay, and a name both use stops the build. A plain `npm run build` takes the app out again, and `/` then leads to `/admin`.
+`npm run build:one-domain` makes it. `scripts/driver-web.mjs` installs the app in `../app` from its own lockfile (`npm ci`), builds it (`npm run build`), copies `app/dist` into `public/` (all but `_headers`, which only static hosts read) and then the server is built. The two stay separate packages. The script lists what it copied in `.driver-web.json` (ignored by git, like the copies) and deletes only that, and what a build cache restored of an earlier copy ([Vercel's build cache](#one-domain)): your own files in `public/` stay, and a name both use stops the build. A plain `npm run build` takes the app out again, and `/` then leads to `/admin`.
 
 **Build settings.** The app is built into the files it ships, so these go to the build, and a change needs a new one:
 
@@ -801,6 +801,8 @@ The app's install and build get those, `EXPO_NO_TELEMETRY`, `EXPO_OFFLINE` and w
 1. Import it as a project with **Root Directory** `emsp-starter/server` (or `server`, if your repository is the template folder), and keep **Include source files outside of the Root Directory in the Build Step** on.
 2. In the project's build settings, set **Build Command** to `npm run build:one-domain`.
 3. Add the server's variables ([Connect real services](#connect-real-services); the Supabase integration can be added to this project too) and the build settings above, then deploy. If the project skips builds when nothing in its root directory changed, turn that off: a change to the app needs a build too.
+
+**Vercel's build cache.** Each build starts from your repository plus Vercel's build cache, and the cache restores every `node_modules` folder, `public/assets/node_modules` (the app's fonts and icons) among them, but not `.driver-web.json`. The script handles this: an entry in `public/` whose every file lies in a `node_modules` folder cannot come from a commit (git ignores those folders), so it is taken as the cache's copy of an earlier build and replaced. A file of yours beside it (for example `public/assets/logo.png`) still stops the build. If a build ever stops with `public/ already has ..., which the driver app's build would overwrite` and those files are not yours, redeploy without the cache: **Deployments**, the deployment's **⋯** menu, **Redeploy**, with **Use existing Build Cache** cleared (or set the environment variable `VERCEL_FORCE_NO_BUILD_CACHE=1` on the project, deploy, and remove it again).
 
 **Any other Node host:** with both folders there, run `npm ci && npm run build:one-domain && npm start` in `server/`.
 
