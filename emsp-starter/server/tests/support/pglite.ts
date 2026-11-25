@@ -14,7 +14,7 @@ const MIGRATIONS = new URL("../../supabase/migrations/", import.meta.url);
  * created after the 10-30 change, nothing has default grants; see LEGACY_DEFAULTS
  * for older projects.
  */
-const SUPABASE_STUB = `
+export const SUPABASE_STUB = `
 create role anon nologin;
 create role authenticated nologin;
 create role service_role nologin bypassrls;

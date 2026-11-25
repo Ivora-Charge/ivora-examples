@@ -65,7 +65,7 @@ Every secret lives on the server, in `server/.env.local` locally or the host's e
 | Maps              | app    | `EXPO_PUBLIC_MAP_STYLE_URL` (and `_DARK`, `EXPO_PUBLIC_MAP_ATTRIBUTION`, `EXPO_PUBLIC_MAP_ATTRIBUTION_URL`)                               | OpenFreeMap's keyless tiles: free, no uptime guarantee. See [Map](app/README.md#map).         |
 | CPO live data     | server | None: a read-only key per CPO peer, set in the admin web                                                                                  | No state of charge or power in the app.                                                       |
 
-Then apply the migrations (`npm run db:migrate` in `server/`), add your first admin, connect your first CPO or hub from **Peers**, and try a charge in [Stripe test mode](server/README.md#try-it-in-stripe-test-mode) before you [go live with payments](server/README.md#go-live-with-payments).
+Then apply the migrations (`npm run db:migrate` in `server/`; a production build on Vercel applies them itself, see [Migrations during the build](server/README.md#migrations-during-the-build)), add your first admin, connect your first CPO or hub from **Peers**, and try a charge in [Stripe test mode](server/README.md#try-it-in-stripe-test-mode) before you [go live with payments](server/README.md#go-live-with-payments).
 
 ## Deploy
 
@@ -84,7 +84,7 @@ The two web UIs can share **one domain** or have **an origin each**:
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22supabase%22%2C%22productSlug%22%3A%22supabase%22%7D%5D&env=EMSP_COUNTRY_CODE,EMSP_PARTY_ID,OCPI_TOKEN_ENCRYPTION_KEY&envDescription=Your%20OCPI%20identity%20and%20encryption%20key.%20Type%20demo%20in%20any%20you%20don%27t%20have%20yet%3A%20the%20server%20stays%20in%20demo%20mode%20until%20all%20of%20them%20are%20real.&envLink=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples%2Ftree%2Fmain%2Femsp-starter%2Fserver%23deploy)
 
-The button creates the Vercel project and, through the [Supabase integration](https://vercel.com/marketplace/supabase), its database and keys: no visit to the Supabase dashboard for those. It asks only for `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID` and `OCPI_TOKEN_ENCRYPTION_KEY`. Type `demo` in any you don't have yet (Vercel takes no empty field): the server stays in demo mode until every one is real. The server takes its public address from Vercel. Applying the migrations and adding the first admin are still yours: the [server's Deploy section](server/README.md#deploy) has the steps, then payments and scheduled jobs. It gives the server an origin of its own; the driver app is [deployed separately](#separate-origins).
+The button creates the Vercel project and, through the [Supabase integration](https://vercel.com/marketplace/supabase), its database and keys: no visit to the Supabase dashboard for those. It asks only for `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID` and `OCPI_TOKEN_ENCRYPTION_KEY`. Type `demo` in any you don't have yet (Vercel takes no empty field): the server stays in demo mode until every one is real. The server takes its public address from Vercel. Its production builds apply the migrations before the new code serves ([Migrations during the build](server/README.md#migrations-during-the-build)); adding the first admin is still yours: the [server's Deploy section](server/README.md#deploy) has the steps, then payments and scheduled jobs. It gives the server an origin of its own; the driver app is [deployed separately](#separate-origins).
 
 ### One domain
 
@@ -141,7 +141,7 @@ The template ships with its own brand, **Kilolane**: violet, a sodium-yellow "fl
 
 ## Data
 
-Supabase Postgres, migrated with `npm run db:migrate` in `server/` (see its README). Migrations follow the **10-30 rule**: row-level security and an explicit revoke on every public table, no default grants, grants to the Data API roles only on tables with a policy, and no public function executable by those roles. The app never reads the database directly, so tables are service-only. A copy of the repository's checker ([`tools/check-migrations`](../tools/check-migrations/README.md)) lives in `server/scripts/check-migrations/` and enforces the rule in CI, and every migration runs in tests on PGlite. A fork of this template alone needs nothing else.
+Supabase Postgres, migrated with `npm run db:migrate` in `server/` or by a production build (see its README). Migrations follow the **10-30 rule**: row-level security and an explicit revoke on every public table, no default grants, grants to the Data API roles only on tables with a policy, and no public function executable by those roles. The app never reads the database directly, so tables are service-only. A copy of the repository's checker ([`tools/check-migrations`](../tools/check-migrations/README.md)) lives in `server/scripts/check-migrations/` and enforces the rule in CI, and every migration runs in tests on PGlite. A fork of this template alone needs nothing else.
 
 ## Limits and next steps
 

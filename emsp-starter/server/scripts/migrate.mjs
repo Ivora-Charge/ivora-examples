@@ -65,16 +65,68 @@ export function stripTransaction(sql) {
   return sql.replace(/^\s*begin;\s*/i, "").replace(/\s*commit;\s*$/i, "");
 }
 
-async function main() {
-  const database = databaseUrl(process.env);
-  if (!database) {
-    console.error(
-      `Add ${DB_URL_NAMES[0]} (or ${DB_URL_NAMES.slice(1).join(" or ")}) to .env.local, or run the SQL files in supabase/migrations in filename order in the Supabase SQL editor.`,
+/** A failed migration: the file it failed in (none when it failed before any) and the error code. */
+export class MigrationError extends Error {
+  constructor(file, code) {
+    super(
+      file
+        ? `Migration failed in ${file}: ${code}.`
+        : `Migration failed: ${code}.`,
     );
-    process.exit(1);
+    this.name = "MigrationError";
+    this.file = file;
+    this.code = code;
   }
-  // The name only, never the string: it holds the database password.
-  console.log(`Connecting with ${database.name}.`);
+}
+
+/**
+ * Applies the pending files in `directory` through `sql` (a postgres.js client): one
+ * transaction, under an advisory lock, recorded in the ledger. Returns the files applied.
+ * Throws a MigrationError that holds the file name and the error code only: a driver's
+ * message can echo connection details or a row value.
+ */
+export async function applyPending(sql, directory) {
+  const files = await listMigrations(directory);
+  let current;
+  try {
+    return await sql.begin(async (tx) => {
+      await tx`select pg_advisory_xact_lock(hashtext('emsp-starter:migrations'))`;
+      await tx.unsafe(LEDGER_SQL);
+      const recorded =
+        await tx`select filename from public.emsp_schema_migrations`;
+      const known = new Set(recorded.map((row) => row.filename));
+      const changed = [];
+      for (const filename of files) {
+        if (known.has(filename)) continue;
+        current = filename;
+        const source = await readFile(new URL(filename, directory), "utf8");
+        await tx.unsafe(stripTransaction(source));
+        await tx`insert into public.emsp_schema_migrations (filename) values (${filename})`;
+        changed.push(filename);
+      }
+      current = undefined;
+      return changed;
+    });
+  } catch (error) {
+    const code =
+      typeof error?.code === "string" && /^[A-Z0-9_]{1,32}$/i.test(error.code)
+        ? error.code
+        : "connection error";
+    throw new MigrationError(current, code);
+  }
+}
+
+export const MIGRATIONS_DIRECTORY = new URL(
+  "../supabase/migrations/",
+  import.meta.url,
+);
+
+/**
+ * Connects with `database` (from databaseUrl) and applies the pending migrations.
+ * Logs names only, never the connection string: it holds the database password.
+ */
+export async function migrate(database, { log = console.log } = {}) {
+  log(`Connecting with ${database.name}.`);
   const { default: postgres } = await import("postgres");
   const sql = postgres(database.url, {
     ssl: "require",
@@ -85,35 +137,35 @@ async function main() {
     onnotice: () => {},
   });
   try {
-    const directory = new URL("../supabase/migrations/", import.meta.url);
-    const files = await listMigrations(directory);
-    const applied = await sql.begin(async (tx) => {
-      await tx`select pg_advisory_xact_lock(hashtext('emsp-starter:migrations'))`;
-      await tx.unsafe(LEDGER_SQL);
-      const recorded =
-        await tx`select filename from public.emsp_schema_migrations`;
-      const known = new Set(recorded.map((row) => row.filename));
-      const changed = [];
-      for (const filename of files) {
-        if (known.has(filename)) continue;
-        const source = await readFile(new URL(filename, directory), "utf8");
-        await tx.unsafe(stripTransaction(source));
-        await tx`insert into public.emsp_schema_migrations (filename) values (${filename})`;
-        changed.push(filename);
-      }
-      return changed;
-    });
-    console.log(
+    const applied = await applyPending(sql, MIGRATIONS_DIRECTORY);
+    log(
       applied.length
         ? `Migrations applied: ${applied.join(", ")}`
         : "Schema is current. No changes applied.",
     );
-  } catch (error) {
-    // The error code only: messages can echo connection details.
-    console.error("Migration failed:", error?.code ?? "connection error");
-    process.exitCode = 1;
+    return applied;
   } finally {
-    await sql.end();
+    await sql.end({ timeout: 5 }).catch(() => {});
+  }
+}
+
+async function main() {
+  const database = databaseUrl(process.env);
+  if (!database) {
+    console.error(
+      `Add ${DB_URL_NAMES[0]} (or ${DB_URL_NAMES.slice(1).join(" or ")}) to .env.local, or run the SQL files in supabase/migrations in filename order in the Supabase SQL editor.`,
+    );
+    process.exit(1);
+  }
+  try {
+    await migrate(database);
+  } catch (error) {
+    console.error(
+      error instanceof MigrationError
+        ? error.message
+        : "Migration failed: connection error.",
+    );
+    process.exitCode = 1;
   }
 }
 
