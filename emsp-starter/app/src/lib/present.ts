@@ -189,20 +189,56 @@ export function present(i: I18n) {
    * Opening hours as lines, the exceptional openings and closings still to come (or in
    * progress), and what to say about the place right now.
    */
-  const hours = (place: Parameters<typeof openState>[0], now = new Date()) => {
+  const hours = (
+    place: Parameters<typeof openState>[0],
+    now = new Date(),
+    deviceZone = i.deviceZone(),
+  ) => {
     const state = openState(place, now);
+    const opening = place.opening_times;
+    const exceptions = [
+      ...new Set(
+        upcomingExceptions(opening, now).map((x) =>
+          exception(x, place.time_zone),
+        ),
+      ),
+    ];
     return {
       current: state && { state, label: t(openLabels[state]) },
-      lines: regularLines(place.opening_times),
-      // A CPO may send a period twice: it is listed once.
-      exceptions: [
-        ...new Set(
-          upcomingExceptions(place.opening_times, now).map((x) =>
-            exception(x, place.time_zone),
-          ),
-        ),
-      ],
+      lines: regularLines(opening),
+      exceptions,
+      zoneNote: zoneNote(
+        place.time_zone,
+        deviceZone,
+        now,
+        exceptions.length > 0,
+        hoursRows(opening).some((r) => r.periods.length > 0),
+      ),
     };
+  };
+
+  /**
+   * Which clock the times are on, when it is not the device's: the site's zone, or the
+   * device's when the device does not know the site's zone (exceptional hours are then
+   * shown on the device's clock; regular hours are always the site's wall clock).
+   */
+  const zoneNote = (
+    timeZone: string,
+    deviceZone: string,
+    now: Date,
+    hasExceptions: boolean,
+    hasRegularTimes: boolean,
+  ) => {
+    if (!hasExceptions && !hasRegularTimes) return undefined;
+    const site = i.canonicalZone(timeZone);
+    if (!site) {
+      if (!hasExceptions) return undefined;
+      const zone = i.zoneName(deviceZone, now.getTime()) ?? deviceZone;
+      return t("detail.zoneUnknown", { zone });
+    }
+    if (site === i.canonicalZone(deviceZone)) return undefined;
+    const zone = i.zoneName(site, now.getTime()) ?? site;
+    return t("detail.zoneSite", { zone });
   };
 
   return {

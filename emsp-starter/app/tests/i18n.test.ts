@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { createI18n } from "../src/i18n/core";
 import en from "../src/i18n/en.json";
+import { MAX_EXCEPTIONS, upcomingExceptions } from "../src/lib/hours";
 import { present } from "../src/lib/present";
 import type { DisplayComponent, LocationSummary } from "../src/lib/types";
 
@@ -215,11 +216,16 @@ describe("presenting places", () => {
   };
 
   it("groups opening hours by day", () => {
-    const hours = p.hours(weekdays, new Date("2026-10-25T10:00:00Z")); // a Sunday
+    const hours = p.hours(
+      weekdays,
+      new Date("2026-10-25T10:00:00Z"), // a Sunday
+      "Europe/Amsterdam",
+    );
     expect(hours).toEqual({
       current: { state: "closed", label: "Closed now" },
       lines: ["Mon–Sat  07:00–23:00", "Sun  Closed"],
       exceptions: [],
+      zoneNote: undefined,
     });
     expect(
       p.hours({
@@ -396,6 +402,141 @@ describe("exceptional openings and closings", () => {
   it("still lists them for a time zone the device does not know", () => {
     const hours = p.hours({ ...place, time_zone: "Nowhere/Nothing" }, now);
     expect(hours.exceptions).toHaveLength(3);
+  });
+});
+
+describe("a long list of exceptional periods", () => {
+  const p = present(createI18n("en-GB"));
+  const now = new Date("2026-11-25T10:00:00Z");
+  const day = 24 * 3600 * 1000;
+  // 50 closings, one a week from last week on.
+  const closings = Array.from({ length: 50 }, (_, n) => {
+    const begin = now.getTime() + (n - 1) * 7 * day;
+    return {
+      period_begin: new Date(begin).toISOString(),
+      period_end: new Date(begin + 2 * 3600 * 1000).toISOString(),
+    };
+  });
+  const place = (exceptional_closings: typeof closings) => ({
+    time_zone: "Europe/Berlin",
+    opening_times: { twentyfourseven: true, exceptional_closings },
+  });
+
+  it("shows only the next five", () => {
+    const listed = upcomingExceptions(place(closings).opening_times, now);
+    expect(MAX_EXCEPTIONS).toBe(5);
+    expect(listed).toHaveLength(5);
+    // The one from last week is over; the list starts with this week's.
+    expect(listed[0].begin).toBe(now.getTime());
+    expect(listed.map((x) => x.begin)).toEqual(
+      [0, 1, 2, 3, 4].map((n) => now.getTime() + n * 7 * day),
+    );
+    expect(p.hours(place(closings), now, "Europe/Berlin").exceptions).toEqual([
+      "Closed: 25 Nov 2026, 11:00–13:00",
+      "Closed: 2 Dec 2026, 11:00–13:00",
+      "Closed: 9 Dec 2026, 11:00–13:00",
+      "Closed: 16 Dec 2026, 11:00–13:00",
+      "Closed: 23 Dec 2026, 11:00–13:00",
+    ]);
+  });
+
+  it("shows none that begin more than 12 months ahead, whichever is fewer", () => {
+    // Every 20 weeks: now, in 20 and 40 weeks, then 60 weeks (past 12 months) and on.
+    const sparse = closings.filter((_, n) => n >= 1 && (n - 1) % 20 === 0);
+    expect(sparse).toHaveLength(3);
+    const far = sparse.concat(
+      [60, 80].map((weeks) => {
+        const begin = now.getTime() + weeks * 7 * day;
+        return {
+          period_begin: new Date(begin).toISOString(),
+          period_end: new Date(begin + day).toISOString(),
+        };
+      }),
+    );
+    expect(
+      upcomingExceptions(place(far).opening_times, now).map((x) => x.begin),
+    ).toEqual([0, 20, 40].map((w) => now.getTime() + w * 7 * day));
+  });
+
+  it("counts a period sent twice once", () => {
+    const twice = closings.slice(1, 4).flatMap((c) => [c, c]);
+    expect(upcomingExceptions(place(twice).opening_times, now)).toHaveLength(3);
+  });
+});
+
+describe("the clock the times are on", () => {
+  afterEach(() => void vi.unstubAllEnvs());
+  const now = new Date("2026-11-25T10:00:00Z");
+  const p = present(createI18n("en-GB"));
+  const regular = {
+    time_zone: "Europe/Berlin",
+    opening_times: {
+      twentyfourseven: false,
+      regular_hours: [
+        { weekday: 1, period_begin: "07:00", period_end: "23:00" },
+      ],
+    },
+  };
+  const closing = {
+    time_zone: "Europe/Berlin",
+    opening_times: {
+      twentyfourseven: true,
+      exceptional_closings: [
+        {
+          period_begin: "2026-12-01T13:00:00Z",
+          period_end: "2026-12-01T17:00:00Z",
+        },
+      ],
+    },
+  };
+
+  it("says nothing when the device is in the site's zone", () => {
+    expect(p.hours(regular, now, "Europe/Berlin").zoneNote).toBeUndefined();
+    expect(p.hours(closing, now, "Europe/Berlin").zoneNote).toBeUndefined();
+  });
+
+  it("names the site's zone when the device is elsewhere", () => {
+    expect(p.hours(regular, now, "America/New_York").zoneNote).toBe(
+      "Times are local to the site (CET).",
+    );
+    const hours = p.hours(closing, now, "Europe/London");
+    expect(hours.zoneNote).toBe("Times are local to the site (CET).");
+    // The times themselves stay on the site's clock.
+    expect(hours.exceptions).toEqual(["Closed: 1 Dec 2026, 14:00–18:00"]);
+    // In summer the site's zone has its summer name.
+    expect(
+      p.hours(regular, new Date("2026-07-01T10:00:00Z"), "Europe/London")
+        .zoneNote,
+    ).toBe("Times are local to the site (CEST).");
+  });
+
+  it("says nothing when there are no times to show", () => {
+    const away = "America/New_York";
+    expect(
+      p.hours(
+        { ...closing, opening_times: { twentyfourseven: true } },
+        now,
+        away,
+      ).zoneNote,
+    ).toBeUndefined();
+    expect(
+      p.hours({ time_zone: "Europe/Berlin" }, now, away).zoneNote,
+    ).toBeUndefined();
+  });
+
+  it("says the device's clock is used when the site's zone is unknown", () => {
+    vi.stubEnv("TZ", "UTC");
+    const unknown = { ...closing, time_zone: "Nowhere/Nothing" };
+    const hours = p.hours(unknown, now, "UTC");
+    expect(hours.exceptions).toEqual(["Closed: 1 Dec 2026, 13:00–17:00"]);
+    expect(hours.zoneNote).toBe(
+      "The site's time zone is not known, so exceptional hours are in your device's time (UTC).",
+    );
+    // Regular hours are the site's wall clock whatever the zone: nothing to say.
+    expect(
+      p.hours({ ...regular, time_zone: "Nowhere/Nothing" }, now, "UTC")
+        .zoneNote,
+    ).toBeUndefined();
   });
 });
 

@@ -431,6 +431,18 @@ export function ChargerDetail({
               ))}
             </View>
           )}
+          {hours.zoneNote ? (
+            <Text
+              testID="detail-zone"
+              style={[
+                type.body,
+                styles.zoneNote,
+                { color: c.muted, fontSize: fs(fontSize.sm) },
+              ]}
+            >
+              {hours.zoneNote}
+            </Text>
+          ) : null}
         </Section>
 
         {directions ? (
@@ -654,6 +666,7 @@ const styles = StyleSheet.create({
   gap: { gap: space.md },
   gapSm: { gap: space.sm },
   exceptions: { paddingTop: space.md, gap: space.xs },
+  zoneNote: { paddingTop: space.sm },
   header: {
     paddingHorizontal: space.lg,
     paddingTop: space.md + 2,

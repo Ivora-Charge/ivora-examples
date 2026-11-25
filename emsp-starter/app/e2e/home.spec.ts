@@ -107,6 +107,27 @@ test("a charger's page: price from the tariff, connectors, hours and directions"
   else await expect(page.getByTestId("detail-card")).toHaveCount(0);
 });
 
+test.describe("a device in another time zone", () => {
+  test.use({ locale: "en-GB", timezoneId: "America/New_York" });
+  test("names the site's zone under the opening hours", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("place-Town Hall Garage").click();
+    await expect(page.getByTestId("detail-zone")).toHaveText(
+      /^Times are local to the site \(CES?T\)\.$/,
+    );
+  });
+});
+
+test.describe("a device in the site's time zone", () => {
+  test.use({ locale: "en-GB", timezoneId: "Europe/Amsterdam" });
+  test("adds no note to the opening hours", async ({ page }) => {
+    await open(page);
+    await page.getByTestId("place-Town Hall Garage").click();
+    await expect(page.getByText("Mon–Sat")).toBeVisible();
+    await expect(page.getByTestId("detail-zone")).toHaveCount(0);
+  });
+});
+
 test("passwordless sign-in: email, then the code (000000 in demo)", async ({
   page,
 }) => {

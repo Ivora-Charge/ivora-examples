@@ -199,6 +199,36 @@ export function createI18n(
     };
   };
 
+  /**
+   * A time zone's short name at `ms` in the driver's language ("CET", "GMT+1"), or
+   * undefined when the device does not know the zone.
+   */
+  const zoneName = (timeZone: string, ms: number) => {
+    try {
+      return new Intl.DateTimeFormat(locale, {
+        timeZone,
+        timeZoneName: "short",
+      })
+        .formatToParts(ms)
+        .find((part) => part.type === "timeZoneName")?.value;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** A time zone's canonical name ("Europe/Berlin"), or undefined when unknown. */
+  const canonicalZone = (timeZone: string) => {
+    try {
+      return new Intl.DateTimeFormat("en", { timeZone }).resolvedOptions()
+        .timeZone;
+    } catch {
+      return undefined;
+    }
+  };
+
+  /** The device's own time zone. */
+  const deviceZone = () => new Intl.DateTimeFormat().resolvedOptions().timeZone;
+
   /** A country's name from its ISO 3166-1 alpha-3 code: "Germany" for "DEU". */
   const country = (code: string) => countryName(code, locale);
 
@@ -217,6 +247,9 @@ export function createI18n(
     clock,
     weekday,
     zoned,
+    zoneName,
+    canonicalZone,
+    deviceZone,
     country,
   };
 }

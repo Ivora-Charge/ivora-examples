@@ -106,6 +106,8 @@
   "detail.exceptional": "Exceptional hours",
   "detail.exceptionalOpen": "Open: {period}",
   "detail.exceptionalClosed": "Closed: {period}",
+  "detail.zoneSite": "Times are local to the site ({zone}).",
+  "detail.zoneUnknown": "The site's time zone is not known, so exceptional hours are in your device's time ({zone}).",
   "detail.floor": "Level {floor}",
   "detail.reference": "Charger {reference}",
   "detail.connector": "{standard} · {power}",

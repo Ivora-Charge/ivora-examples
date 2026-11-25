@@ -134,24 +134,42 @@ export function hoursRows(opening: OpeningTimes | undefined): HoursRow[] {
 /** An exceptional opening or closing, its ends in milliseconds. */
 export type ExceptionalHours = { open: boolean; begin: number; end: number };
 
+/** At most this many exceptional periods are listed. */
+export const MAX_EXCEPTIONS = 5;
+
 /**
  * The exceptional openings and closings that are not over at `now` (one in progress is
- * included), soonest first. Unreadable and empty periods are left out.
+ * included) and begin within the next 12 months, soonest first: at most
+ * `MAX_EXCEPTIONS` of them. Unreadable and empty periods are left out, and a period
+ * sent twice is listed once.
  */
 export function upcomingExceptions(
   opening: OpeningTimes | undefined,
   now = new Date(),
 ): ExceptionalHours[] {
+  const horizon = new Date(now);
+  horizon.setUTCFullYear(horizon.getUTCFullYear() + 1);
   const read = (ranges: OpeningTimes["exceptional_openings"], open: boolean) =>
     (ranges ?? []).map((r) => ({
       open,
       begin: dateTimeMs(r.period_begin),
       end: dateTimeMs(r.period_end),
     }));
+  const seen = new Set<string>();
   return [
     ...read(opening?.exceptional_closings, false),
     ...read(opening?.exceptional_openings, true),
   ]
-    .filter((p) => p.begin < p.end && now.getTime() < p.end)
-    .sort((a, b) => a.begin - b.begin || a.end - b.end);
+    .filter(
+      (p) =>
+        p.begin < p.end && now.getTime() < p.end && p.begin < horizon.getTime(),
+    )
+    .sort((a, b) => a.begin - b.begin || a.end - b.end)
+    .filter((p) => {
+      const key = `${p.open} ${p.begin} ${p.end}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_EXCEPTIONS);
 }
