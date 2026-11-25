@@ -9,6 +9,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { i18n, t } from "../i18n";
 import { ApiError, getFavourites, getLocation, setFavourite } from "../lib/api";
 import { directionsUrl } from "../lib/directions";
@@ -23,6 +24,7 @@ import {
   type,
   useScale,
   useTheme,
+  useWide,
   type Palette,
 } from "../theme";
 import { useAuth } from "./AuthProvider";
@@ -30,6 +32,9 @@ import { Button, Section } from "./Controls";
 import { Icon, StatusGlyph } from "./Icon";
 
 const p = present(i18n);
+
+/** The least height the card keeps for its details above pinned buttons. */
+const CARD_MIN_DETAILS = 120;
 
 const statusColor = (kind: StatusKind, c: Palette) =>
   kind === "free"
@@ -48,7 +53,9 @@ type Load =
 /**
  * A charger's page: where it is, its price from the tariff, its connectors with EVSE
  * IDs and status, opening hours, directions, and the way to charge. A floating card
- * beside the map on wide screens, a full page on phones.
+ * beside the map on wide screens, a full page on phones. Directions and the charge
+ * action are pinned under the scrolling details, in the card and on a phone's page,
+ * while there is room for both; "Report a problem" ends the details.
  */
 export function ChargerDetail({
   id,
@@ -63,11 +70,17 @@ export function ChargerDetail({
   onClose: () => void;
 }) {
   const { c } = useTheme();
-  const { fs } = useScale();
+  const { fs, dim } = useScale();
+  const wide = useWide();
+  const insets = useSafeAreaInsets();
   const auth = useAuth();
   const [load, setLoad] = useState<Load>({ state: "loading" });
   const [attempt, setAttempt] = useState(0);
   const [favourite, setFav] = useState<boolean | null>(null);
+  // Measured, to know whether pinned buttons leave the details enough room.
+  const [frameHeight, setFrameHeight] = useState(0);
+  const [headerHeight, setHeaderHeight] = useState(0);
+  const [buttonsHeight, setButtonsHeight] = useState(0);
   const token = auth.token;
 
   useEffect(() => {
@@ -118,6 +131,8 @@ export function ChargerDetail({
       ? i18n.distance(summary.distance_m)
       : undefined;
   const lang = i18n.locale.split("-")[0];
+  // The card sits under the map screen's own heading; the page is a screen.
+  const sectionLevel = variant === "card" ? 3 : 2;
   const text = (list?: { language: string; text: string }[]) =>
     (list?.find((d) => d.language === lang) ?? list?.[0])?.text;
 
@@ -126,6 +141,7 @@ export function ChargerDetail({
       style={[styles.header, { backgroundColor: c.primary }]}
       // Web: focus rings in here use `focusOnPrimary` (see WebStyles.web.tsx).
       {...({ dataSet: { onPrimary: "true" } } as object)}
+      onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
     >
       <View style={styles.headerTop}>
         <Text
@@ -228,11 +244,7 @@ export function ChargerDetail({
     const directions = text(l.directions);
     body = (
       <View>
-        <Section
-          level={variant === "card" ? 3 : 2}
-          title={t("detail.price")}
-          first
-        >
+        <Section level={sectionLevel} title={t("detail.price")} first>
           {price ? (
             <View style={styles.gapSm} testID="detail-price">
               <View style={styles.priceRow}>
@@ -311,10 +323,7 @@ export function ChargerDetail({
           )}
         </Section>
 
-        <Section
-          level={variant === "card" ? 3 : 2}
-          title={t("detail.connectors")}
-        >
+        <Section level={sectionLevel} title={t("detail.connectors")}>
           <View role="list">
             {l.evses.flatMap((e) =>
               e.connectors.map((x) => {
@@ -386,6 +395,7 @@ export function ChargerDetail({
         </Section>
 
         <Section
+          level={sectionLevel}
           title={t("detail.hours")}
           aside={
             hours.current ? <OpenNow current={hours.current} /> : undefined
@@ -402,10 +412,7 @@ export function ChargerDetail({
         </Section>
 
         {directions ? (
-          <Section
-            level={variant === "card" ? 3 : 2}
-            title={t("detail.gettingThere")}
-          >
+          <Section level={sectionLevel} title={t("detail.gettingThere")}>
             <Text
               style={[type.body, { color: c.text, fontSize: fs(fontSize.md) }]}
             >
@@ -417,90 +424,140 @@ export function ChargerDetail({
     );
   }
 
-  const actions = place && (
-    <View style={styles.gapSm}>
-      <View style={styles.actions}>
-        <Button
-          label={t("detail.directions")}
-          icon="directions"
-          variant="secondary"
-          onPress={() =>
-            void Linking.openURL(
-              directionsUrl(place.coordinates, place.name, Platform.OS),
-            )
-          }
-          style={styles.flex}
-          testID="directions"
-        />
-        <Button
-          label={
-            auth.state === "signedIn"
-              ? t("detail.chargeHere")
-              : t("detail.signInToCharge")
-          }
-          icon="bolt"
-          onPress={() =>
-            auth.state === "signedIn"
-              ? router.push(`/charge/${id}`)
-              : router.push("/account")
-          }
-          style={styles.grow}
-          testID="charge"
-        />
-      </View>
-      {auth.state === "signedIn" && (
-        <Pressable
-          role="link"
-          aria-label={t("report.open")}
-          onPress={() =>
-            router.push({ pathname: "/report", params: { location: id } })
-          }
-          style={styles.link}
-          testID="detail-report"
-        >
-          <Icon name="flag" color={c.text} size={18} />
-          <Text
-            style={[
-              type.strong,
-              styles.underline,
-              { color: c.text, fontSize: fs(fontSize.sm + 1) },
-            ]}
-          >
-            {t("report.open")}
-          </Text>
-        </Pressable>
-      )}
+  // Side by side while each has room for its label in two lines at most; stacked when
+  // the card or the screen is narrower than that, or the driver's text is larger.
+  const buttons = place && (
+    <View
+      style={styles.actions}
+      onLayout={(e) => setButtonsHeight(e.nativeEvent.layout.height)}
+    >
+      <Button
+        label={t("detail.directions")}
+        icon="directions"
+        variant="secondary"
+        onPress={() =>
+          void Linking.openURL(
+            directionsUrl(place.coordinates, place.name, Platform.OS),
+          )
+        }
+        style={[styles.action, { flexBasis: dim(144) }]}
+        testID="directions"
+      />
+      <Button
+        label={
+          auth.state === "signedIn"
+            ? t("detail.chargeHere")
+            : t("detail.signInToCharge")
+        }
+        icon="bolt"
+        onPress={() =>
+          auth.state === "signedIn"
+            ? router.push(`/charge/${id}`)
+            : router.push("/account")
+        }
+        style={[styles.action, styles.primaryAction, { flexBasis: dim(168) }]}
+        testID="charge"
+      />
+    </View>
+  );
+
+  const report = place && auth.state === "signedIn" && (
+    <Pressable
+      role="link"
+      aria-label={t("report.open")}
+      onPress={() =>
+        router.push({ pathname: "/report", params: { location: id } })
+      }
+      style={styles.link}
+      testID="detail-report"
+    >
+      <Icon name="flag" color={c.text} size={18} />
+      <Text
+        style={[
+          type.strong,
+          styles.underline,
+          { color: c.text, fontSize: fs(fontSize.sm + 1) },
+        ]}
+      >
+        {t("report.open")}
+      </Text>
+    </Pressable>
+  );
+
+  // Where pinning the buttons would crowd the details (a short window, very large
+  // text), they end the details instead. A phone's page gives them a third of its
+  // height at most. The card keeps a minimum for the details between its header and
+  // the buttons; short of that, the header scrolls with the details too.
+  const footerBottom =
+    variant === "card" ? space.lg : Math.max(insets.bottom, space.md);
+  const footerHeight = space.md + buttonsHeight + footerBottom;
+  const pinned =
+    variant === "card"
+      ? frameHeight === 0 ||
+        frameHeight - headerHeight - footerHeight >= CARD_MIN_DETAILS
+      : !wide && (frameHeight === 0 || footerHeight <= frameHeight / 3);
+  const details = (
+    <>
+      {body}
+      {!pinned && <View style={styles.inlineActions}>{buttons}</View>}
+      {report && <View style={styles.report}>{report}</View>}
+    </>
+  );
+  const footer = pinned && buttons && (
+    <View
+      style={[
+        styles.footer,
+        {
+          backgroundColor: c.surface,
+          borderTopColor: c.border,
+          paddingBottom: footerBottom,
+        },
+      ]}
+      testID="detail-footer"
+    >
+      {buttons}
     </View>
   );
 
   if (variant === "page")
     return (
-      <ScrollView
+      <View
         role="main"
-        style={{ backgroundColor: c.background }}
-        contentContainerStyle={styles.pageContent}
+        style={[styles.flex, { backgroundColor: c.background }]}
+        onLayout={(e) => setFrameHeight(e.nativeEvent.layout.height)}
       >
-        {header}
-        <View style={[styles.body, { backgroundColor: c.surface }]}>
-          {body}
-          <View style={styles.pageActions}>{actions}</View>
-        </View>
-      </ScrollView>
+        <ScrollView
+          style={styles.flex}
+          contentContainerStyle={styles.pageContent}
+        >
+          {header}
+          <View
+            style={[
+              styles.body,
+              styles.pageBody,
+              { backgroundColor: c.surface },
+            ]}
+          >
+            {details}
+          </View>
+        </ScrollView>
+        {footer}
+      </View>
     );
   return (
     <View
       role="region"
       aria-label={place?.name ?? t("detail.title")}
       style={[styles.card, { backgroundColor: c.surface }]}
+      onLayout={(e) => setFrameHeight(e.nativeEvent.layout.height)}
       testID="detail-card"
     >
-      {header}
-      <ScrollView style={styles.flex} contentContainerStyle={styles.body}>
-        {body}
+      {pinned && header}
+      <ScrollView style={styles.flex}>
+        {!pinned && header}
+        <View style={styles.body}>{details}</View>
       </ScrollView>
-      <View style={[styles.cardActions, { borderTopColor: c.border }]}>
-        {actions}
-      </View>
+      {footer}
     </View>
   );
 }
@@ -572,7 +629,6 @@ function HeaderButton({
 
 const styles = StyleSheet.create({
   flex: { flex: 1, minWidth: 0 },
-  grow: { flex: 1.4, minWidth: 0 },
   gap: { gap: space.md },
   gapSm: { gap: space.sm },
   header: {
@@ -618,6 +674,13 @@ const styles = StyleSheet.create({
   status: { flexDirection: "row", alignItems: "center", gap: space.xs + 2 },
   shrink: { flexShrink: 1 },
   actions: { flexDirection: "row", gap: space.sm + 4, flexWrap: "wrap" },
+  action: {
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    paddingHorizontal: space.md,
+  },
+  primaryAction: { flexGrow: 1.4 },
   link: {
     flexDirection: "row",
     alignItems: "center",
@@ -627,7 +690,13 @@ const styles = StyleSheet.create({
   },
   underline: { textDecorationLine: "underline" },
   card: { flex: 1, borderRadius: radius.lg + 6, overflow: "hidden" },
-  cardActions: { padding: space.lg, paddingTop: space.md, borderTopWidth: 1 },
   pageContent: { flexGrow: 1 },
-  pageActions: { paddingTop: space.lg },
+  pageBody: { flexGrow: 1 },
+  inlineActions: { paddingTop: space.lg },
+  report: { paddingTop: space.md },
+  footer: {
+    paddingHorizontal: space.lg,
+    paddingTop: space.md,
+    borderTopWidth: 1,
+  },
 });

@@ -73,6 +73,7 @@ export function Button({
       <Text
         style={[
           primary ? type.heading : type.strong,
+          styles.label,
           { color: fg, fontSize: fs(primary ? fontSize.md + 1 : fontSize.md) },
         ]}
       >
@@ -213,6 +214,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
   },
   icon: { flexShrink: 0 },
+  label: { flexShrink: 1, textAlign: "center" },
   pressed: { opacity: 0.85, transform: [{ scale: 0.98 }] },
   iconButton: {
     width: 52,
