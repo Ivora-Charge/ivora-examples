@@ -113,7 +113,7 @@ const NONE: Filters = {
   before: "",
 };
 
-/** The number beside a chip, from the list's counts: "1000+" when a search capped it. */
+/** The number beside a chip, from the list's counts: "500+" when a search capped it. */
 function chipCount(value: Status, c: SessionsState["counts"]): string | null {
   if (!c) return null;
   const { n, more } = filterCount(value, c);
@@ -124,6 +124,9 @@ export function Sessions() {
   const { signedIn, demo } = useAdmin();
   const id = useId();
   const [filters, setFilters] = useState<Filters>(NONE);
+  // Bumped by "Clear all filters": remounts the fields so none keeps its old text
+  // (a form reset only restores each field's default, which is the last applied value).
+  const [cleared, setCleared] = useState(0);
   // The list is the page: it opens by itself and again on every change of a filter.
   const list = useList(listSessionsAction, filters);
   const older = useAction(listSessionsAction);
@@ -203,7 +206,7 @@ export function Sessions() {
                 }))
               }
             >
-              <div className="fields">
+              <div className="fields" key={cleared}>
                 <div className="field">
                   <label htmlFor={`${id}-peer`}>Peer</label>
                   <select
@@ -240,6 +243,7 @@ export function Sessions() {
                   <input
                     id={`${id}-driver`}
                     name="driverRef"
+                    defaultValue={filters.driverRef}
                     maxLength={64}
                     autoComplete="off"
                     aria-describedby={`${id}-driver-h`}
@@ -253,6 +257,7 @@ export function Sessions() {
                   <input
                     id={`${id}-before`}
                     name="before"
+                    defaultValue={filters.before}
                     maxLength={24}
                     autoComplete="off"
                     placeholder="2026-10-01"
@@ -271,7 +276,10 @@ export function Sessions() {
                   <button
                     className="btn ghost sm"
                     type="reset"
-                    onClick={() => setFilters(NONE)}
+                    onClick={() => {
+                      setFilters(NONE);
+                      setCleared((n) => n + 1);
+                    }}
                   >
                     Clear all filters
                   </button>

@@ -404,27 +404,36 @@ describe("session search in the store itself", () => {
       }
       seen.length = 0;
       await store.countSessions({ search: "p1" });
-      // With a term: at most 1001 IDs per status, never an exact count of a scan.
+      // With a term: at most 501 IDs per status, never an exact count of a scan.
       expect(seen).toHaveLength(5);
       for (const r of seen) {
         expect(r.method).toBe("GET");
-        expect(r.url).toMatch(/select=id&limit=1001$/);
+        expect(r.url).toMatch(/select=id&limit=501$/);
       }
     },
   );
 
   it("says when a search matches more than it counts", async () => {
-    const ids = Array.from({ length: 1001 }, (_, i) => ({ id: `r${i}` }));
-    const store = new SupabaseSessionStore(URL_, KEY, async (url) =>
-      Response.json(String(url).includes("status=eq.COMPLETED") ? ids : []),
-    );
+    // 5,000 matches, behind a REST stub that enforces hosted Supabase's default
+    // max rows (1,000) on top of the requested limit.
+    const MAX_ROWS = 1000;
+    const ids = Array.from({ length: 5000 }, (_, i) => ({ id: `r${i}` }));
+    const store = new SupabaseSessionStore(URL_, KEY, async (url) => {
+      const u = String(url);
+      const limit = Number(/limit=(\d+)/.exec(u)?.[1] ?? Infinity);
+      return Response.json(
+        u.includes("status=eq.COMPLETED")
+          ? ids.slice(0, Math.min(limit, MAX_ROWS))
+          : [],
+      );
+    });
     expect(await store.countSessions({ search: "p" })).toEqual({
-      total: 1000,
+      total: 500,
       byStatus: {
         ACTIVE: 0,
         PENDING: 0,
         RESERVATION: 0,
-        COMPLETED: 1000,
+        COMPLETED: 500,
         INVALID: 0,
       },
       more: ["COMPLETED"],

@@ -55,9 +55,11 @@ export const SESSION_SEARCH_MAX = 64;
 
 /**
  * With a search term, each status is counted up to this many and then shown as
- * "1000+": a search cannot ask the database to count a whole table that matches.
+ * "500+": a search cannot ask the database to count a whole table that matches.
+ * Kept below hosted Supabase's default max rows (1,000), which would silently cut a
+ * larger read and hide the "+".
  */
-export const SESSION_SEARCH_COUNT_CAP = 1000;
+export const SESSION_SEARCH_COUNT_CAP = 500;
 
 /**
  * ASCII letters, digits, space and `. : @ / + - _` only. Nothing that means something

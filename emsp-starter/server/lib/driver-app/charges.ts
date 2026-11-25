@@ -7,6 +7,7 @@ import { cdrAmount } from "@/lib/payments/money";
 import type { PaymentDeps } from "@/lib/payments/registry";
 import { INCREMENT_DECLINED_REASON } from "@/lib/payments/settle";
 import type { Payment } from "@/lib/payments/store";
+import { OPEN_SESSION_STATUSES } from "@/lib/sessions/statuses";
 import { isDemo } from "@/lib/server/demo";
 import type {
   SessionStore,
@@ -62,8 +63,7 @@ export type SessionView = {
 
 export function sessionView(s: StoredSession): SessionView {
   const open =
-    ["ACTIVE", "PENDING", "RESERVATION"].includes(s.session.status) &&
-    !s.completedAt;
+    OPEN_SESSION_STATUSES.includes(s.session.status) && !s.completedAt;
   const total = s.session.total_cost;
   const cost = total ? cdrAmount(total, s.session.currency) : null;
   return {

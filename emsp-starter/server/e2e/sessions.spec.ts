@@ -97,6 +97,8 @@ test("demo: the session list opens by itself; filters are chips; a table on desk
 
   await page.getByRole("button", { name: "Clear all filters" }).click();
   await expect(rows).toHaveCount(3);
+  await expect(page.getByLabel("Started before")).toHaveValue("");
+  await expect(page.getByLabel("Driver reference")).toHaveValue("");
 
   // Search runs on the server: it narrows the list and the chips' counts.
   const search = page.getByRole("searchbox", { name: "Search" });
