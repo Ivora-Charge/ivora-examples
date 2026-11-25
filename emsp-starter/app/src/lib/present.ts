@@ -122,6 +122,25 @@ export function present(i: I18n) {
       : undefined;
   };
 
+  /**
+   * A place's map pin: what it reads out, and whether it is drawn closed, on the same
+   * terms as the list card (see `closedNote`).
+   */
+  const marker = (place: LocationSummary, now = new Date()) => {
+    const closed = closedNote(place, now);
+    const vars = {
+      name: place.name,
+      power: i.kw(place.max_power_kw),
+      status: availability(place).text,
+    };
+    return {
+      closed: closed !== undefined,
+      label: closed
+        ? t("map.markerClosed", { ...vars, closed })
+        : t("map.marker", vars),
+    };
+  };
+
   const openLabels: Record<OpenState, Key> = {
     open: "detail.openNow",
     closed: "detail.closedNow",
@@ -249,6 +268,7 @@ export function present(i: I18n) {
     detailPrice,
     availability,
     closedNote,
+    marker,
     address,
     hours,
   };

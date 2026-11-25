@@ -14,6 +14,7 @@ import {
   useScale,
   useTheme,
 } from "../theme";
+import { Icon } from "./Icon";
 import { PowerTile } from "./PowerTile";
 
 const p = present(i18n);
@@ -34,7 +35,10 @@ export type MapProps = {
 
 export const FALLBACK_CENTER: LatLng = { lat: 52.09074, lng: 5.12142 };
 
-/** A charger on the map: its power tile with a pointer, read out in words. */
+/**
+ * A charger on the map: its power tile with a pointer, read out in words. A place that
+ * is closed now has the list card's grey tile with a clock badge on its corner.
+ */
 export function PlaceMarker({
   place,
   selected,
@@ -44,27 +48,41 @@ export function PlaceMarker({
   selected: boolean;
   onPress: () => void;
 }) {
-  const kind = placeKind(place);
+  const { c } = useTheme();
+  const { label, closed } = p.marker(place);
   return (
     <Pressable
       role="button"
-      aria-label={t("map.marker", {
-        name: place.name,
-        power: i18n.kw(place.max_power_kw),
-        status: p.availability(place).text,
-      })}
+      aria-label={label}
       aria-current={selected ? "true" : undefined}
       onPress={onPress}
       testID={`marker-${place.name}`}
-      style={[styles.marker, selected && styles.markerSelected]}
+      style={[
+        styles.marker,
+        closed && styles.markerClosed,
+        selected && styles.markerSelected,
+      ]}
     >
       <PowerTile
         kw={place.max_power_kw}
-        kind={kind}
+        kind={placeKind(place)}
         size={46}
         selected={selected}
+        closed={closed}
         pin
       />
+      {closed ? (
+        <View
+          style={[
+            styles.closedBadge,
+            { backgroundColor: c.surface, borderColor: c.muted },
+          ]}
+          aria-hidden
+          testID="marker-closed"
+        >
+          <Icon name="clock" color={c.text} size={14} />
+        </View>
+      ) : null}
     </Pressable>
   );
 }
@@ -214,6 +232,20 @@ export class MapBoundary extends Component<
 const styles = StyleSheet.create({
   marker: { alignItems: "center" },
   markerSelected: { zIndex: 2 },
+  // Room for the badge inside the marker's own box, so no map has to draw outside it:
+  // clear of the kW, and even on both sides so the pointer stays on the spot.
+  markerClosed: { paddingTop: space.xs, paddingHorizontal: space.sm },
+  closedBadge: {
+    position: "absolute",
+    top: 0,
+    right: 0,
+    width: 20,
+    height: 20,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   halo: { borderRadius: radius.pill },
   disc: {
     borderRadius: radius.pill,

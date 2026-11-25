@@ -294,6 +294,69 @@ describe("presenting places", () => {
       p.closedNote({ time_zone: "UTC", charging_when_closed: true }, sunday),
     ).toBeUndefined();
   });
+
+  const pin = {
+    ...weekdays,
+    name: "Garden Garage",
+    max_power_kw: 22,
+    available_count: 1,
+    evse_count: 2,
+  } as Parameters<typeof p.marker>[0];
+  const openPin = {
+    closed: false,
+    label: "Garden Garage: 22 kW, 1 of 2 free",
+  };
+  const closedPin = {
+    closed: true,
+    label: "Garden Garage: 22 kW, 1 of 2 free, Closed now",
+  };
+
+  it("draws and reads a closed place's map marker as closed, whatever the flag", () => {
+    const sunday = new Date("2026-10-25T10:00:00Z");
+    const monday = new Date("2026-10-26T10:00:00Z");
+    for (const charging_when_closed of [true, false, undefined]) {
+      const l = { ...pin, charging_when_closed };
+      expect(p.marker(l, sunday)).toEqual(closedPin);
+      expect(p.marker(l, monday)).toEqual(openPin);
+    }
+  });
+
+  it("closes the marker for an exceptional closing, and opens it for an exceptional opening", () => {
+    const during = (day: string) => [
+      {
+        period_begin: `${day}T00:00:00Z`,
+        period_end: `${day}T23:00:00Z`,
+      },
+    ];
+    const shut = {
+      ...pin,
+      charging_when_closed: true,
+      opening_times: {
+        twentyfourseven: true,
+        exceptional_closings: during("2026-10-26"),
+      },
+    };
+    expect(p.marker(shut, new Date("2026-10-26T10:00:00Z"))).toEqual(closedPin);
+    const extra = {
+      ...pin,
+      opening_times: {
+        ...weekdays.opening_times,
+        exceptional_openings: during("2026-10-25"),
+      },
+    };
+    expect(p.marker(extra, new Date("2026-10-25T10:00:00Z"))).toEqual(openPin);
+  });
+
+  it("leaves the marker of a place with unknown hours as it was", () => {
+    const unknown = {
+      ...pin,
+      opening_times: undefined,
+      charging_when_closed: false,
+    };
+    expect(p.marker(unknown, new Date("2026-10-25T10:00:00Z"))).toEqual(
+      openPin,
+    );
+  });
 });
 
 describe("exceptional openings and closings", () => {
