@@ -145,6 +145,49 @@ describe("location search", () => {
     expect(await names(q({ q: "market garden" }), [ONE])).toEqual([]);
   });
 
+  it("matches a text search against the operator's name", async () => {
+    const [stationSquare, marketHall] = sampleLocations({
+      countryCode: "ZZ",
+      partyId: "MCK",
+    });
+    await store.saveLocations(
+      ONE,
+      [
+        { ...stationSquare, operator: { name: "Example Volt Network" } },
+        // No operator: still found by name, never by an operator word.
+        { ...marketHall, operator: undefined },
+      ],
+      "2026-10-21T11:00:00Z",
+    );
+    // The memory store narrows its candidates by the operator's name too.
+    const candidates = await store.findLocations({
+      peerIds: [ONE, TWO],
+      words: ["volt"],
+      limit: 10,
+    });
+    expect(candidates.map((c) => c.location.name)).toEqual(["Station Square"]);
+    expect(await names(q({ q: "VOLT network" }))).toEqual(["Station Square"]);
+    // Words may come from the operator's name and the location's own fields.
+    expect(await names(q({ q: "volt station" }))).toEqual(["Station Square"]);
+    expect(await names(q({ q: "volt market" }))).toEqual([]);
+    expect(await names(q({ q: "market hall" }), [ONE])).toEqual([
+      "Market Hall",
+    ]);
+    expect(await names(q({ q: "operator market" }), [ONE])).toEqual([]);
+    // The order stays: by name without a point, nearest first with one.
+    const byName = await names(q({ q: "sample charging operator" }), [ONE]);
+    expect(byName.length).toBeGreaterThan(1);
+    expect(byName).toEqual([...byName].sort((a, b) => a.localeCompare(b)));
+    const nearest = await searchLocations(
+      store,
+      [ONE],
+      near({ q: "sample charging operator", radius_m: "50000" }),
+    );
+    const d = nearest.items.map((i) => i.distance_m!);
+    expect(d.length).toBeGreaterThan(1);
+    expect(d).toEqual([...d].sort((a, b) => a - b));
+  });
+
   it("finds a charger by EVSE ID or by the reference printed on it", async () => {
     expect(await names(q({ evse_id: "zz*mck*e21" }))).toEqual(["Market Hall"]);
     expect(await names(q({ evse_id: "ZZMCKE21" }))).toEqual(["Market Hall"]);

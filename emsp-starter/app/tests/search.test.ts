@@ -93,6 +93,28 @@ describe("the offline demo's search", () => {
     expect(names({ text: "nowhere at all" })).toEqual([]);
   });
 
+  it("finds a place by its operator's name, in the same order", () => {
+    const places = SAMPLE_LOCATIONS.map((l) =>
+      l.name === "Market Hall"
+        ? { ...l, operator: "Example Volt Network" }
+        : l.name === "Library Plaza"
+          ? { ...l, operator: undefined }
+          : l,
+    );
+    const found = (text: string) =>
+      searchSample(places, { text, filters: NO_FILTERS }).items.map(
+        (i) => i.name,
+      );
+    expect(found("VOLT network")).toEqual(["Market Hall"]);
+    expect(found("volt market")).toEqual(["Market Hall"]);
+    expect(found("volt station")).toEqual([]);
+    expect(found("plaza")).toEqual(["Library Plaza"]);
+    expect(found("operator plaza")).toEqual([]);
+    expect(found("sample charging operator")).toEqual(
+      names({}).filter((n) => n !== "Market Hall" && n !== "Library Plaza"),
+    );
+  });
+
   it("filters by availability, power, connector, step-free access and price", () => {
     const all = (f: Partial<Filters>) => run({ filters: f }).items;
     expect(all({ minPowerKw: 150 }).every((l) => l.max_power_kw >= 150)).toBe(

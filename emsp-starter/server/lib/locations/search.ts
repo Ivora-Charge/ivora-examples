@@ -50,7 +50,7 @@ export const SEARCH_LIMITS = {
 
 export type SearchQuery = {
   near?: { lat: number; lng: number; radiusM: number };
-  /** Words that must all appear in the name or address. */
+  /** Words that must all appear in searchText(). */
   text?: string;
   /** An EVSE ID, for example NL*ABC*E12345 (separators and case ignored). */
   evseId?: string;

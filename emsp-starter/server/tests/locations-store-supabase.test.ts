@@ -58,7 +58,8 @@ describe("Supabase location store (PostgREST)", () => {
       publish: true,
       latitude: 52.09274,
       longitude: expect.any(Number),
-      search_text: "station square 1 station square 1000 aa sample city",
+      search_text:
+        "station square 1 station square 1000 aa sample city sample charging operator",
       search_ids: [
         "LOC1",
         "LOC11",
@@ -74,6 +75,25 @@ describe("Supabase location store (PostgREST)", () => {
     expect(body.p_rows[1].last_updated).toBe(locations[1].last_updated);
     await store.saveLocations(PEER, [], "2026-10-21T10:00:00Z");
     expect(requests).toHaveLength(1);
+  });
+
+  it("writes the operator's name into the search text, pulled or pushed", async () => {
+    const [sample] = sampleLocations(PARTY, 1);
+    const named = { ...sample, operator: { name: "Example Volt Network" } };
+    const unnamed = { ...sample, id: "LOC2", operator: undefined };
+    const base = "station square 1 station square 1000 aa sample city";
+    await store.saveLocations(PEER, [named, unnamed], "2026-10-21T10:00:00Z");
+    const { p_rows } = await requests[0].json();
+    expect(p_rows.map((r: { search_text: string }) => r.search_text)).toEqual([
+      `${base} example volt network`,
+      base,
+    ]);
+    // A push: an update of the row read, then an insert of a new one.
+    await store.putLocation(PEER, named, "2026-10-21T10:00:00Z", "r1");
+    await store.putLocation(PEER, named, "2026-10-21T10:00:00Z", null);
+    expect(requests.slice(1).map((r) => r.method)).toEqual(["PATCH", "POST"]);
+    for (const r of requests.slice(1))
+      expect((await r.json()).search_text).toBe(`${base} example volt network`);
   });
 
   it("writes a pushed location only if its revision is the one read", async () => {

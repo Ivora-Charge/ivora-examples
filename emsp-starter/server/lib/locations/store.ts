@@ -165,9 +165,12 @@ export interface LocationStore {
   ): Promise<boolean>;
 }
 
-/** Text the search matches words against: name, address, postal code, city. */
+/**
+ * Text the search matches words against: name, address, postal code, city and the
+ * operator's name.
+ */
 export function searchText(l: Location): string {
-  return [l.name, l.address, l.postal_code, l.city]
+  return [l.name, l.address, l.postal_code, l.city, l.operator?.name]
     .filter(Boolean)
     .join(" ")
     .toLowerCase();
