@@ -12,6 +12,7 @@ import type {
   DisplayPrice,
   LeadPrice,
   LocationSummary,
+  PriceNow,
 } from "./types";
 
 /**
@@ -55,42 +56,128 @@ export function present(i: I18n) {
     return { amount: price.summary, unit: "" };
   };
 
-  /** One price line of the detail, for example "€7.26 per hour (after 45 min)". */
-  const line = (c: DisplayComponent, currency: string) => {
-    const vars = { price: i.money(c.priceE4, currency), unit: unit(c) };
-    return c.conditions.length
-      ? t("price.when", { ...vars, conditions: c.conditions.join(", ") })
-      : t("price.line", vars);
+  /**
+   * From a server that does not say what applies now: only a rate without conditions
+   * counts as applying, the first of its kind. When a kind that costs something has no
+   * such rate, nothing is shown as applying (a part of the price would read as all of
+   * it) and every rate is listed with its conditions.
+   */
+  const withoutNow = (components: DisplayComponent[]): PriceNow => {
+    const order = ["ENERGY", "TIME", "PARKING_TIME", "FLAT"];
+    const first = new Map<string, DisplayComponent>();
+    for (const c of components)
+      if (!c.conditions.length && !first.has(c.type)) first.set(c.type, c);
+    const partial = components.some((c) => c.priceE4 > 0 && !first.has(c.type));
+    const current = partial
+      ? []
+      : [...first.values()].sort(
+          (a, b) => order.indexOf(a.type) - order.indexOf(b.type),
+        );
+    return {
+      components: current,
+      others: components.filter(
+        (c) => c.conditions.length || (partial && first.get(c.type) === c),
+      ),
+      unexplained: components.some(
+        (c) => !c.conditions.length && first.get(c.type)!.priceE4 !== c.priceE4,
+      ),
+    };
   };
 
   /**
-   * The detail's price: the lead component big, the rest as lines. The CPO's own
-   * free text (OCPI `tariff_alt_text`) is often without VAT or in another language, so
-   * it is shown only when there are no structured prices, and then as the CPO's note.
+   * The price of a connector, for its detail and for the confirm screen. `amount` is
+   * what applies now, every kind with equal weight ("€0.11 per kWh + €0.66 per hour"),
+   * and `session` the fee on top of it. The CPO's own free text (OCPI
+   * `tariff_alt_text`) is often without VAT or in another language, so it is shown only
+   * when the structured prices do not tell the whole story, and then as the CPO's note.
    */
   const detailPrice = (p: DisplayPrice) => {
-    const paid = p.components.filter((c) => c.priceE4 > 0);
-    const main = paid.find((c) => c.type === "ENERGY") ?? paid[0];
     const structured = p.free || p.components.length > 0;
-    return {
+    const now = p.now ?? withoutNow(p.components);
+    // A zero rate says something only beside a paid one of its kind ("free for the
+    // first 2 h"), or when nothing costs anything and there is still a minimum.
+    const paid = new Set(
+      p.components.filter((c) => c.priceE4 > 0).map((c) => c.type),
+    );
+    const shown = (c: DisplayComponent) => !paid.size || paid.has(c.type);
+    const current = p.free ? [] : now.components.filter(shown);
+    const others = p.free ? [] : now.others.filter(shown);
+    const all = [...current, ...others];
+    const included = all.filter((c) => c.vatIncluded).length;
+    const mixed = included > 0 && included < all.length;
+    /** "€0.11 per kWh", saying its own VAT state when the rates differ in it. */
+    const rate = (c: DisplayComponent) => {
+      const text = t("price.line", {
+        price: i.money(c.priceE4, p.currency),
+        unit: unit(c),
+      });
+      return mixed
+        ? t(c.vatIncluded ? "price.withVat" : "price.withoutVat", {
+            price: text,
+          })
+        : text;
+    };
+    const when = (c: DisplayComponent) =>
+      c.conditions.length
+        ? t("price.when", {
+            price: rate(c),
+            conditions: c.conditions.join(", "),
+          })
+        : rate(c);
+    const used = current.filter((c) => c.type !== "FLAT");
+    const fee = current.find((c) => c.type === "FLAT");
+    const amount = !structured
+      ? t("price.unknown")
+      : p.free
+        ? t("price.noFee")
+        : used.length
+          ? used.map(rate).join(" + ")
+          : fee
+            ? rate(fee)
+            : t("price.varies");
+    const unexplained = !p.free && now.unexplained;
+    const price = {
+      amount,
+      session:
+        used.length && fee ? t("price.plus", { price: rate(fee) }) : undefined,
+      /** When the rates that apply now do so, for those that have a condition. */
+      conditions: current
+        .filter((c) => c.conditions.length)
+        .map((c) =>
+          t("price.applies", {
+            unit: unit(c),
+            conditions: c.conditions.join(", "),
+          }),
+        ),
+      others: [...new Set(others.map(when))],
+      min: p.minPrice ? t("price.min", { amount: p.minPrice }) : undefined,
+      max: p.maxPrice ? t("price.max", { amount: p.maxPrice }) : undefined,
+      vat:
+        !all.length || mixed
+          ? ""
+          : included
+            ? t("price.vatIncluded")
+            : t("price.vatExcluded"),
+      unexplained: unexplained ? t("price.unexplained") : undefined,
       operatorNote:
-        !structured && p.altText
+        (unexplained || !structured) && p.altText
           ? t("price.operatorNote", { text: p.altText })
           : undefined,
-      amount: !structured
-        ? t("price.unknown")
-        : p.free || !main
-          ? t("price.noFee")
-          : i.money(main.priceE4, p.currency),
-      unit: p.free || !main ? "" : unit(main),
-      vat: !main
-        ? ""
-        : main.vatIncluded
-          ? t("price.vatIncluded")
-          : t("price.vatExcluded"),
-      conditions: main?.conditions ?? [],
-      more: paid.filter((c) => c !== main).map((c) => line(c, p.currency)),
     };
+    /**
+     * The confirm screen's lines: the same price as the page's, with the other rates
+     * only when none applies now.
+     */
+    const lines = [
+      price.amount,
+      price.session,
+      ...price.conditions,
+      ...(current.length ? [] : price.others),
+      price.min,
+      price.max,
+      price.vat,
+    ].filter((s): s is string => !!s);
+    return { ...price, lines };
   };
 
   /** "2 of 3 free", or the status word when none is free. */

@@ -366,9 +366,10 @@ function priceOf(
   c: Connector,
   tariffs: Tariff[],
   now: Date,
+  timeZone: string,
 ): DisplayPrice | null {
   const t = primaryTariff(c.tariff_ids, tariffs, now);
-  return t ? displayPrice(t) : null;
+  return t ? displayPrice(t, { at: now, timeZone }) : null;
 }
 
 function summarise(
@@ -453,7 +454,7 @@ export function locationDetail(
             format: c.format,
             power_type: c.power_type,
             max_power_kw: kw(connectorPowerW(c)),
-            price: priceOf(c, tariffs, now),
+            price: priceOf(c, tariffs, now, l.time_zone),
           };
           if (c.terms_and_conditions)
             cd.terms_and_conditions = c.terms_and_conditions;

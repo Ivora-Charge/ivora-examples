@@ -43,12 +43,34 @@ export type DisplayComponent = {
   conditions: string[];
 };
 
+/** What a driver who starts a session at a given moment is told. */
+export type PriceNow = {
+  /**
+   * Per dimension, in the order energy, time, parking, flat: the first rate that holds
+   * as the session starts (OCPI first match). Its `conditions` are those of its own
+   * element; empty when it has none. A dimension with no such rate is left out.
+   */
+  components: DisplayComponent[];
+  /** The other rates, each with when it applies in `conditions`. */
+  others: DisplayComponent[];
+  /**
+   * A dimension has several different rates without conditions. Only the first
+   * applies; the others are in neither list.
+   */
+  unexplained: boolean;
+};
+
+/** A moment at a location: restriction times and days are on its local clock. */
+export type PriceMoment = { at: Date; timeZone: string };
+
 export type DisplayPrice = {
   tariffId: string;
   currency: string;
   type?: Tariff["type"];
   free: boolean;
   components: DisplayComponent[];
+  /** Only when a moment was given. */
+  now?: PriceNow;
   minPrice?: string;
   maxPrice?: string;
   /** The CPO's own description, when it gave one. */
@@ -259,8 +281,14 @@ function money(p: { excl_vat: number; incl_vat?: number }, currency: string) {
     : `${formatMoney(p.excl_vat, currency)} excl. VAT`;
 }
 
-export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
+export function displayPrice(
+  t: Tariff,
+  moment?: PriceMoment,
+  language = "en",
+): DisplayPrice {
   const components: DisplayComponent[] = [];
+  /** The element of each component, in the same order. */
+  const elements: TariffElement[] = [];
   const seenRestricted = new Set<TariffDimensionType>();
   for (const e of t.elements) {
     const conditions = describeRestrictions(e.restrictions);
@@ -274,6 +302,7 @@ export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
           : c.type === "PARKING_TIME"
             ? `${amount} per hour parking`
             : `${amount} per ${unit}`;
+      elements.push(e);
       components.push({
         type: c.type,
         unit,
@@ -313,6 +342,7 @@ export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
       ? "Free"
       : `${line || "Price varies"}${varies && line ? "; varies at other times" : ""}`,
   };
+  if (moment) value.now = priceNow(components, elements, moment);
   if (t.type) value.type = t.type;
   if (t.min_price) value.minPrice = money(t.min_price, t.currency);
   if (t.max_price) value.maxPrice = money(t.max_price, t.currency);
@@ -465,6 +495,79 @@ function active(t: Tariff, type: TariffDimensionType, m: Moment) {
     if (c && restrictionsMatch(e.restrictions, m)) return { index: i, c };
   }
   return undefined;
+}
+
+/** The order a driver reads the dimensions in: what is used first, the fee last. */
+const SHOWN: TariffDimensionType[] = ["ENERGY", "TIME", "PARKING_TIME", "FLAT"];
+
+/** Power and current depend on the car: unknown until it charges. */
+const dependsOnPower = (r: TariffRestrictions = {}) =>
+  [r.min_power, r.max_power, r.min_current, r.max_current].some(
+    (v) => v !== undefined,
+  );
+
+/**
+ * Whether an element can price a session at its start: its time, day and date hold,
+ * nothing has to be used up first (duration, energy) and it is not for a reservation.
+ * Power and current are not judged here.
+ */
+function holdsAtStart(r: TariffRestrictions = {}, start: Moment): boolean {
+  const {
+    min_power: _minPower,
+    max_power: _maxPower,
+    min_current: _minCurrent,
+    max_current: _maxCurrent,
+    ...known
+  } = r;
+  return restrictionsMatch(known, start);
+}
+
+/**
+ * The rates of a display price at a moment. `elements[i]` is the element of
+ * `components[i]`. A rate that depends on power or current is "now" only when no
+ * other rate of its dimension holds, and then keeps its condition.
+ */
+function priceNow(
+  components: DisplayComponent[],
+  elements: TariffElement[],
+  { at, timeZone }: PriceMoment,
+): PriceNow {
+  const value: PriceNow = { components: [], others: [], unexplained: false };
+  const start: Moment = {
+    ...localParts(at, timeZone),
+    kwh: 0,
+    powerKw: 0,
+    seconds: 0,
+  };
+  for (const type of SHOWN) {
+    const rates = components
+      .map((c, i) => ({ c, e: elements[i] }))
+      .filter((x) => x.c.type === type);
+    const holding = rates.filter((x) => holdsAtStart(x.e.restrictions, start));
+    const pick =
+      holding.find((x) => !dependsOnPower(x.e.restrictions)) ?? holding[0];
+    if (pick)
+      value.components.push({
+        ...pick.c,
+        conditions: describeRestrictions(pick.e.restrictions),
+      });
+    const always = rates.filter((x) => !restricted(x.e));
+    if (
+      always.some(
+        (x) =>
+          x.c.priceE4 !== always[0].c.priceE4 ||
+          x.c.vatIncluded !== always[0].c.vatIncluded,
+      )
+    )
+      value.unexplained = true;
+    // Of the rates without conditions, only the first can ever apply.
+    value.others.push(
+      ...rates
+        .filter((x) => x !== pick && (restricted(x.e) || x === always[0]))
+        .map((x) => x.c),
+    );
+  }
+  return value;
 }
 
 /** Line amounts are exact fractions of E4 units over this: lcm(1000 Wh, 3600 s). */

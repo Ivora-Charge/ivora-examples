@@ -133,6 +133,221 @@ describe("display price", () => {
   });
 });
 
+describe("the price that applies now", () => {
+  type Element = Tariff["elements"][number];
+  type Component = Element["price_components"][number];
+  const rate = (
+    type: Component["type"],
+    price: number,
+    restrictions?: Element["restrictions"],
+  ): Element => ({
+    price_components: [{ type, price, step_size: 1 }],
+    ...(restrictions ? { restrictions } : {}),
+  });
+  /** A Thursday, 12:00 in Amsterdam. */
+  const NOON = new Date("2026-10-01T10:00:00Z");
+  const nowOf = (t: Tariff, at = NOON, timeZone = AMSTERDAM) => {
+    const now = displayPrice(t, { at, timeZone }).now!;
+    const read = (list: typeof now.components) =>
+      list.map((c) => [c.type, c.priceE4, c.conditions.join(", ")]);
+    return {
+      now: read(now.components),
+      others: read(now.others),
+      unexplained: now.unexplained,
+    };
+  };
+
+  it("is left out without a moment", () => {
+    expect(displayPrice(SAMPLE.DC_FAST)).not.toHaveProperty("now");
+  });
+
+  // 6 TIME and 2 ENERGY components, none with restrictions.
+  const unexplained = [
+    rate("TIME", 0.66),
+    rate("TIME", 1.2),
+    rate("TIME", 1.8),
+    rate("ENERGY", 0.11),
+    rate("TIME", 2.4),
+    rate("TIME", 3),
+    rate("ENERGY", 0.22),
+    rate("TIME", 3.6),
+  ];
+
+  it.each([
+    ["an element each", unexplained],
+    [
+      "all in one element",
+      [{ price_components: unexplained.flatMap((e) => e.price_components) }],
+    ],
+  ])(
+    "takes the first of several rates without conditions (%s)",
+    (_, elements) => {
+      const t = tariff(elements, { min_price: { excl_vat: 0.5 } });
+      expect(nowOf(t)).toEqual({
+        now: [
+          ["ENERGY", 1100, ""],
+          ["TIME", 6600, ""],
+        ],
+        others: [],
+        unexplained: true,
+      });
+      expect(displayPrice(t).minPrice).toBe("€0.50 excl. VAT");
+      // Every component is still sent, and the preview charges the same two.
+      expect(displayPrice(t).components).toHaveLength(8);
+      expect(
+        previewCost(t, {
+          start: NOON,
+          energyKwh: 10,
+          chargingMinutes: 60,
+        }).lines.map((l) => [l.type, l.unitPriceE4]),
+      ).toEqual([
+        ["ENERGY", 1100],
+        ["TIME", 6600],
+      ]);
+    },
+  );
+
+  it("does not call the same rate listed twice another rate", () => {
+    const t = tariff([rate("ENERGY", 0.3), rate("ENERGY", 0.3)]);
+    expect(nowOf(t)).toEqual({
+      now: [["ENERGY", 3000, ""]],
+      others: [],
+      unexplained: false,
+    });
+  });
+
+  it("keeps a fee that starts after 2 h for later", () => {
+    const t = tariff([
+      rate("ENERGY", 0.4),
+      rate("TIME", 3, { min_duration: 7200 }),
+      rate("FLAT", 0.5),
+    ]);
+    expect(nowOf(t)).toEqual({
+      now: [
+        ["ENERGY", 4000, ""],
+        ["FLAT", 5000, ""],
+      ],
+      others: [["TIME", 30000, "after 2 h"]],
+      unexplained: false,
+    });
+  });
+
+  it("falls back to the rate after the one that starts after 2 h", () => {
+    const t = tariff([
+      rate("TIME", 3, { min_duration: 7200 }),
+      rate("TIME", 1),
+    ]);
+    expect(nowOf(t)).toEqual({
+      now: [["TIME", 10000, ""]],
+      others: [["TIME", 30000, "after 2 h"]],
+      unexplained: false,
+    });
+  });
+
+  it("lists a conditional rate placed after one that always applies", () => {
+    const t = tariff([
+      rate("TIME", 1),
+      rate("TIME", 3, { min_duration: 7200 }),
+    ]);
+    expect(nowOf(t)).toEqual({
+      now: [["TIME", 10000, ""]],
+      others: [["TIME", 30000, "after 2 h"]],
+      unexplained: false,
+    });
+  });
+
+  it("shows the first period until it is used up", () => {
+    const t = tariff([
+      rate("TIME", 0, { max_duration: 1800 }),
+      rate("ENERGY", 0.2, { max_kwh: 10 }),
+      rate("TIME", 2),
+      rate("ENERGY", 0.5),
+    ]);
+    expect(nowOf(t)).toEqual({
+      now: [
+        ["ENERGY", 2000, "up to 10 kWh"],
+        ["TIME", 0, "first 30 min"],
+      ],
+      others: [
+        ["ENERGY", 5000, "otherwise"],
+        ["TIME", 20000, "otherwise"],
+      ],
+      unexplained: false,
+    });
+  });
+
+  it("reads days and times on the location's clock", () => {
+    const at = (iso: string, zone = AMSTERDAM) =>
+      nowOf(SAMPLE.AC_DAY_NIGHT, new Date(iso), zone);
+    // Thursday 12:00 in Amsterdam: the weekday day rate.
+    expect(at("2026-10-01T10:00:00Z")).toEqual({
+      now: [
+        ["ENERGY", 4719, "Mon–Fri, 07:00–21:00"],
+        ["FLAT", 6050, ""],
+      ],
+      others: [["ENERGY", 3509, "otherwise"]],
+      unexplained: false,
+    });
+    // 21:00 in Amsterdam, then the same instant on a clock where it is 19:00 UTC.
+    const night = at("2026-10-01T19:00:00Z");
+    expect(night.now).toEqual([
+      ["ENERGY", 3509, ""],
+      ["FLAT", 6050, ""],
+    ]);
+    expect(night.others).toEqual([["ENERGY", 4719, "Mon–Fri, 07:00–21:00"]]);
+    expect(at("2026-10-01T19:00:00Z", "UTC").now[0][1]).toBe(4719);
+    // Saturday noon.
+    expect(at("2026-10-03T10:00:00Z").now[0][1]).toBe(3509);
+  });
+
+  it("leaves out a kind that has no rate today, and one outside its dates", () => {
+    const t = tariff([
+      rate("ENERGY", 0.4),
+      rate("PARKING_TIME", 2, { day_of_week: ["SATURDAY"] }),
+      rate("FLAT", 1, { start_date: "2026-11-01" }),
+    ]);
+    expect(nowOf(t).now).toEqual([["ENERGY", 4000, ""]]);
+    expect(nowOf(t).others).toEqual([
+      ["PARKING_TIME", 20000, "Sat"],
+      ["FLAT", 10000, "from 2026-11-01"],
+    ]);
+  });
+
+  it("never prices a normal start with a reservation's rate", () => {
+    const t = tariff([
+      rate("TIME", 5, { reservation: "RESERVATION" }),
+      rate("TIME", 1),
+    ]);
+    expect(nowOf(t)).toEqual({
+      now: [["TIME", 10000, ""]],
+      others: [["TIME", 50000, "while reserved"]],
+      unexplained: false,
+    });
+  });
+
+  it("prefers a rate that holds at any power over one that depends on it", () => {
+    const fallback = tariff([
+      rate("ENERGY", 0.6, { min_power: 50 }),
+      rate("ENERGY", 0.4),
+    ]);
+    expect(nowOf(fallback)).toEqual({
+      now: [["ENERGY", 4000, ""]],
+      others: [["ENERGY", 6000, "at 50 kW or more"]],
+      unexplained: false,
+    });
+    // Only tiers: the first is shown, with its condition.
+    const tiers = tariff([
+      rate("ENERGY", 0.4, { max_power: 50 }),
+      rate("ENERGY", 0.6, { min_power: 50 }),
+    ]);
+    expect(nowOf(tiers)).toEqual({
+      now: [["ENERGY", 4000, "below 50 kW"]],
+      others: [["ENERGY", 6000, "at 50 kW or more"]],
+      unexplained: false,
+    });
+  });
+});
+
 describe("which tariff applies", () => {
   it("is free only when every component is zero and there is no minimum", () => {
     expect(isFreeTariff(SAMPLE.FREE)).toBe(true);
