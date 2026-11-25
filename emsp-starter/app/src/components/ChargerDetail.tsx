@@ -29,7 +29,9 @@ import {
 } from "../theme";
 import { useAuth } from "./AuthProvider";
 import { Button, Section } from "./Controls";
+import { canAddCard } from "./AddCard";
 import { Icon, StatusGlyph } from "./Icon";
+import { CardBeforeSignIn } from "./PhoneApp";
 
 const p = present(i18n);
 
@@ -55,7 +57,9 @@ type Load =
  * IDs and status, opening hours, directions, and the way to charge. A floating card
  * beside the map on wide screens, a full page on phones. Directions and the charge
  * action are pinned under the scrolling details, in the card and on a phone's page,
- * while there is room for both; "Report a problem" ends the details.
+ * while there is room for both; "Report a problem" ends the details. Signed out on the
+ * web, the buttons come with the words that a charge needs a card saved in the phone
+ * app (see `cardNote`).
  */
 export function ChargerDetail({
   id,
@@ -81,6 +85,7 @@ export function ChargerDetail({
   const [frameHeight, setFrameHeight] = useState(0);
   const [headerHeight, setHeaderHeight] = useState(0);
   const [buttonsHeight, setButtonsHeight] = useState(0);
+  const [noteHeight, setNoteHeight] = useState(0);
   const token = auth.token;
 
   useEffect(() => {
@@ -530,10 +535,34 @@ export function ChargerDetail({
       ? frameHeight === 0 ||
         frameHeight - headerHeight - footerHeight >= CARD_MIN_DETAILS
       : !wide && (frameHeight === 0 || footerHeight <= frameHeight / 3);
+  // What a signed-out web driver should read before "Sign in to charge". It sits right
+  // above the buttons. Where the pinned footer would then take more than a third of the
+  // height, or leave a card's details under their minimum, it opens the details
+  // instead: still seen on arrival, with the buttons still pinned.
+  const cardNote = !canAddCard && place && auth.state === "signedOut" && (
+    <View
+      style={styles.cardNote}
+      onLayout={(e) => setNoteHeight(e.nativeEvent.layout.height)}
+    >
+      <CardBeforeSignIn />
+    </View>
+  );
+  const noteFits =
+    frameHeight === 0 ||
+    (footerHeight + noteHeight <= frameHeight / 3 &&
+      (variant === "page" ||
+        frameHeight - headerHeight - footerHeight - noteHeight >=
+          CARD_MIN_DETAILS));
   const details = (
     <>
+      {pinned && !noteFits && cardNote}
       {body}
-      {!pinned && <View style={styles.inlineActions}>{buttons}</View>}
+      {!pinned && (
+        <View style={styles.inlineActions}>
+          {cardNote}
+          {buttons}
+        </View>
+      )}
       {report && <View style={styles.report}>{report}</View>}
     </>
   );
@@ -549,6 +578,7 @@ export function ChargerDetail({
       ]}
       testID="detail-footer"
     >
+      {noteFits && cardNote}
       {buttons}
     </View>
   );
@@ -729,6 +759,8 @@ const styles = StyleSheet.create({
   pageContent: { flexGrow: 1 },
   pageBody: { flexGrow: 1 },
   inlineActions: { paddingTop: space.lg },
+  // Padding, not margin: the measured height includes the gap to what follows.
+  cardNote: { paddingBottom: space.sm },
   report: { paddingTop: space.md },
   footer: {
     paddingHorizontal: space.lg,

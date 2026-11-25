@@ -2,6 +2,9 @@ import { Text } from "react-native";
 import { t } from "../i18n";
 import { fontSize, type, useScale, useTheme } from "../theme";
 
+/** Whether this build can save a card. The web build cannot. */
+export const canAddCard = false;
+
 /**
  * The web build saves no cards: Stripe's PaymentSheet is for the phone apps (see
  * AddCard.tsx). Drivers add a card there; here they see, choose and remove cards.

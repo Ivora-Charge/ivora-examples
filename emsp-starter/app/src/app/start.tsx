@@ -5,6 +5,7 @@ import { useAuth } from "../components/AuthProvider";
 import { Button } from "../components/Controls";
 import { Field } from "../components/Field";
 import { Card, Notice, Page } from "../components/Page";
+import { CardBeforeSignIn } from "../components/PhoneApp";
 import { Scanner, scannerAvailable } from "../components/Scanner";
 import { t } from "../i18n";
 import { ApiError, getLocation, searchLocations } from "../lib/api";
@@ -63,6 +64,7 @@ export default function Start() {
     return (
       <Page title={t("start.title")}>
         <Notice kind="info">{t("confirm.signIn")}</Notice>
+        <CardBeforeSignIn />
         <Button
           label={t("detail.signInToCharge")}
           onPress={() => router.push("/account")}

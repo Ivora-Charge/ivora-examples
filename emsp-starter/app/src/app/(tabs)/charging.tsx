@@ -6,6 +6,7 @@ import { FavouriteList, HistoryList } from "../../components/ChargeLists";
 import { Button } from "../../components/Controls";
 import { LiveCharge } from "../../components/LiveCharge";
 import { Card, Notice } from "../../components/Page";
+import { CardBeforeSignIn } from "../../components/PhoneApp";
 import { t } from "../../i18n";
 import { getActiveCharge, getFavourites, getHistory } from "../../lib/api";
 import type { Charge, Favourite, HistoryItem } from "../../lib/charging";
@@ -92,6 +93,7 @@ export default function Charging() {
           >
             {t("charging.signIn")}
           </Text>
+          <CardBeforeSignIn />
           <Button
             label={t("detail.signInToCharge")}
             onPress={() => router.navigate("/account")}
