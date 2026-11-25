@@ -22,7 +22,8 @@ const p = present(i18n);
 export type MapProps = {
   items: LocationSummary[];
   selectedId?: string;
-  onSelect: (place: LocationSummary) => void;
+  /** A place was picked: its pin, or its row in a cluster's chooser (`from`). */
+  onSelect: (place: LocationSummary, from?: "chooser") => void;
   /** The driver, when they shared their location. */
   you?: LatLng;
   /** Move the camera when `key` changes: fit `bounds`, or centre on `center`. */
@@ -68,12 +69,17 @@ export function PlaceMarker({
   );
 }
 
-/** Several places too close to tell apart: a violet disc with the count. */
+/**
+ * Several places too close to tell apart: a violet disc with the count. A press zooms
+ * in, or opens the list of them when zooming cannot separate them (`chooses`).
+ */
 export function ClusterMarker({
   count,
+  chooses,
   onPress,
 }: {
   count: number;
+  chooses: boolean;
   onPress: () => void;
 }) {
   const { c } = useTheme();
@@ -81,8 +87,15 @@ export function ClusterMarker({
   return (
     <Pressable
       role="button"
-      aria-label={`${tn("map.cluster", count)}. ${t("map.clusterHint")}`}
+      aria-label={
+        chooses
+          ? `${tn("map.spot", count)}. ${t("map.spotHint")}`
+          : `${tn("map.cluster", count)}. ${t("map.clusterHint")}`
+      }
+      // Web: tells screen readers the press opens a dialog. React Native's types lack it.
+      {...((chooses ? { "aria-haspopup": "dialog" } : {}) as object)}
       onPress={onPress}
+      testID="cluster"
       style={[styles.halo, { backgroundColor: `${c.primary}33`, padding: 7 }]}
     >
       <View

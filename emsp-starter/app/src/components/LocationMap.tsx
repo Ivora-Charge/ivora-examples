@@ -13,9 +13,10 @@ import {
 } from "react";
 import { StyleSheet, View } from "react-native";
 import { t } from "../i18n";
-import { cluster } from "../lib/cluster";
+import { cluster, tapOpensChooser } from "../lib/cluster";
 import { mapStyle } from "../lib/map-style";
 import { useTheme } from "../theme";
+import { useClusterChooser } from "./ClusterChooser";
 import {
   Attribution,
   ClusterMarker,
@@ -42,10 +43,9 @@ function NativeMap({
   const camera = useRef<CameraRef>(null);
   const [zoom, setZoom] = useState(13);
   const map = useMemo(() => mapStyle(c, scheme), [c, scheme]);
-  const groups = useMemo(
-    () => cluster(items, Math.floor(zoom * 2) / 2),
-    [items, zoom],
-  );
+  const level = Math.floor(zoom * 2) / 2;
+  const groups = useMemo(() => cluster(items, level), [items, level]);
+  const { open, chooser } = useClusterChooser({ items, selectedId, onSelect });
   const padding = {
     top: insets.top + 48,
     right: insets.right + 48,
@@ -117,17 +117,20 @@ function NativeMap({
             >
               <ClusterMarker
                 count={g.count}
-                onPress={() =>
-                  camera.current?.fitBounds(
-                    [
-                      g.bounds.west,
-                      g.bounds.south,
-                      g.bounds.east,
-                      g.bounds.north,
-                    ],
-                    { padding, duration: 500 },
-                  )
-                }
+                chooses={tapOpensChooser(g, level)}
+                onPress={() => {
+                  if (tapOpensChooser(g, level)) open(g.items);
+                  else
+                    camera.current?.fitBounds(
+                      [
+                        g.bounds.west,
+                        g.bounds.south,
+                        g.bounds.east,
+                        g.bounds.north,
+                      ],
+                      { padding, duration: 500 },
+                    );
+                }}
               />
             </Marker>
           ),
@@ -143,6 +146,7 @@ function NativeMap({
         url={map.attributionUrl}
         bottom={insets.bottom}
       />
+      {chooser}
     </View>
   );
 }
