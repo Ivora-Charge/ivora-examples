@@ -43,12 +43,50 @@ export type DisplayComponent = {
   conditions: string[];
 };
 
+/** What a driver who starts a session at a given moment is told. */
+export type PriceNow = {
+  /**
+   * Per dimension, in the order energy, time, parking, flat: the first rate that holds
+   * as the session starts (OCPI first match). Its `conditions` are those of its own
+   * element; empty when it has none. A dimension with no such rate is left out.
+   */
+  components: DisplayComponent[];
+  /**
+   * Rates that come before one in `components` in the tariff and price its dimension
+   * instead when the car charges at a power or current they name ("at 50 kW or more").
+   * Each keeps its condition. Shown beside what applies now, never as a later rate.
+   */
+  tiers: DisplayComponent[];
+  /** The other rates, each with when it applies in `conditions`. */
+  others: DisplayComponent[];
+  /**
+   * A dimension has several different rates without conditions. Only the first
+   * applies; the others are in neither list.
+   */
+  unexplained: boolean;
+};
+
+/**
+ * A moment at a location: restriction times and days are on its local clock. The
+ * connector's limits, when known, settle power and current tiers it can never reach
+ * or never exceed.
+ */
+export type PriceMoment = {
+  at: Date;
+  timeZone: string;
+  maxPowerKw?: number;
+  /** Summed over all phases, as OCPI min_current and max_current are. */
+  maxCurrentA?: number;
+};
+
 export type DisplayPrice = {
   tariffId: string;
   currency: string;
   type?: Tariff["type"];
   free: boolean;
   components: DisplayComponent[];
+  /** Only when a moment was given. */
+  now?: PriceNow;
   minPrice?: string;
   maxPrice?: string;
   /** The CPO's own description, when it gave one. */
@@ -259,8 +297,14 @@ function money(p: { excl_vat: number; incl_vat?: number }, currency: string) {
     : `${formatMoney(p.excl_vat, currency)} excl. VAT`;
 }
 
-export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
+export function displayPrice(
+  t: Tariff,
+  moment?: PriceMoment,
+  language = "en",
+): DisplayPrice {
   const components: DisplayComponent[] = [];
+  /** The element of each component, in the same order. */
+  const elements: TariffElement[] = [];
   const seenRestricted = new Set<TariffDimensionType>();
   for (const e of t.elements) {
     const conditions = describeRestrictions(e.restrictions);
@@ -274,6 +318,7 @@ export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
           : c.type === "PARKING_TIME"
             ? `${amount} per hour parking`
             : `${amount} per ${unit}`;
+      elements.push(e);
       components.push({
         type: c.type,
         unit,
@@ -313,6 +358,7 @@ export function displayPrice(t: Tariff, language = "en"): DisplayPrice {
       ? "Free"
       : `${line || "Price varies"}${varies && line ? "; varies at other times" : ""}`,
   };
+  if (moment) value.now = priceNow(components, elements, moment);
   if (t.type) value.type = t.type;
   if (t.min_price) value.minPrice = money(t.min_price, t.currency);
   if (t.max_price) value.maxPrice = money(t.max_price, t.currency);
@@ -465,6 +511,125 @@ function active(t: Tariff, type: TariffDimensionType, m: Moment) {
     if (c && restrictionsMatch(e.restrictions, m)) return { index: i, c };
   }
   return undefined;
+}
+
+/** The order a driver reads the dimensions in: what is used first, the fee last. */
+const SHOWN: TariffDimensionType[] = ["ENERGY", "TIME", "PARKING_TIME", "FLAT"];
+
+/**
+ * Whether an element's power and current restrictions hold at a connector: "always"
+ * when no car can break them there (or there are none), "never" when no car can meet
+ * them, "maybe" when it depends on the car.
+ */
+function atConnector(
+  r: TariffRestrictions = {},
+  maxPowerKw?: number,
+  maxCurrentA?: number,
+): "always" | "never" | "maybe" {
+  let value: "always" | "maybe" = "always";
+  const limit = (min?: number, max?: number, top?: number) => {
+    const known = top !== undefined && top > 0;
+    // The car can always charge more slowly than the connector allows.
+    if (min !== undefined && min > 0) {
+      if (known && top < min) return "never";
+      value = "maybe";
+    }
+    if (max !== undefined && !(known && top < max)) value = "maybe";
+    return undefined;
+  };
+  return (
+    limit(r.min_power, r.max_power, maxPowerKw) ??
+    limit(r.min_current, r.max_current, maxCurrentA) ??
+    value
+  );
+}
+
+/**
+ * Whether an element can price a session at its start: its time, day and date hold,
+ * nothing has to be used up first (duration, energy) and it is not for a reservation.
+ * Power and current are not judged here.
+ */
+function holdsAtStart(r: TariffRestrictions = {}, start: Moment): boolean {
+  const {
+    min_power: _minPower,
+    max_power: _maxPower,
+    min_current: _minCurrent,
+    max_current: _maxCurrent,
+    ...known
+  } = r;
+  return restrictionsMatch(known, start);
+}
+
+/**
+ * The rates of a display price at a moment. `elements[i]` is the element of
+ * `components[i]`. Per dimension, in tariff order (OCPI first match): a rate that
+ * holds at the start whatever the car does is what applies now; a rate before it that
+ * holds at the start but depends on the car's power or current is a tier beside it.
+ * When no rate holds whatever the car does, the first tier is what applies now, with
+ * its condition.
+ */
+function priceNow(
+  components: DisplayComponent[],
+  elements: TariffElement[],
+  { at, timeZone, maxPowerKw, maxCurrentA }: PriceMoment,
+): PriceNow {
+  const value: PriceNow = {
+    components: [],
+    tiers: [],
+    others: [],
+    unexplained: false,
+  };
+  const start: Moment = {
+    ...localParts(at, timeZone),
+    kwh: 0,
+    powerKw: 0,
+    seconds: 0,
+  };
+  const withConditions = (x: { c: DisplayComponent; e: TariffElement }) => ({
+    ...x.c,
+    conditions: describeRestrictions(x.e.restrictions),
+  });
+  for (const type of SHOWN) {
+    const rates = components
+      .map((c, i) => ({ c, e: elements[i] }))
+      .filter((x) => x.c.type === type);
+    const tiers: typeof rates = [];
+    let pick: (typeof rates)[number] | undefined;
+    for (const x of rates) {
+      if (!holdsAtStart(x.e.restrictions, start)) continue;
+      const fit = atConnector(x.e.restrictions, maxPowerKw, maxCurrentA);
+      if (fit === "never") continue;
+      if (fit === "maybe") tiers.push(x);
+      else {
+        pick = x;
+        break;
+      }
+    }
+    pick ??= tiers.shift();
+    if (pick) value.components.push(withConditions(pick));
+    value.tiers.push(...tiers.map(withConditions));
+    const always = rates.filter((x) => !restricted(x.e));
+    if (
+      always.some(
+        (x) =>
+          x.c.priceE4 !== always[0].c.priceE4 ||
+          x.c.vatIncluded !== always[0].c.vatIncluded,
+      )
+    )
+      value.unexplained = true;
+    // Of the rates without conditions, only the first can ever apply.
+    value.others.push(
+      ...rates
+        .filter(
+          (x) =>
+            x !== pick &&
+            !tiers.includes(x) &&
+            (restricted(x.e) || x === always[0]),
+        )
+        .map((x) => x.c),
+    );
+  }
+  return value;
 }
 
 /** Line amounts are exact fractions of E4 units over this: lcm(1000 Wh, 3600 s). */

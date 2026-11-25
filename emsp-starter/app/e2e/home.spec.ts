@@ -205,6 +205,23 @@ test("the charger's price is ours, rounded to cents; the CPO's free text is not 
   await expect(price).not.toContainText("0.59 per kWh");
 });
 
+test("the price that applies now stands apart from the rates for other times", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByTestId("place-Market Hall").click();
+  const price = page.getByTestId("detail-price");
+  // The sample data is of a weekday noon: the day rate and the session fee.
+  await expect(page.getByTestId("detail-price-now")).toHaveText(
+    "€0.47 per kWh",
+  );
+  await expect(price).toContainText("plus €0.61 per session");
+  await expect(price).toContainText("per kWh: Mon–Fri, 07:00–21:00");
+  await expect(page.getByTestId("detail-price-others")).toContainText(
+    "€0.35 per kWh (otherwise)",
+  );
+});
+
 test("the web build carries a strict Content-Security-Policy, and the app runs under it", async ({
   page,
 }) => {
