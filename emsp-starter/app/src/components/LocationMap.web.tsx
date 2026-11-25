@@ -4,9 +4,10 @@ import { StyleSheet, View } from "react-native";
 import { getVersion, setWorkerUrl } from "maplibre-gl";
 import Map, { Marker, type MapRef } from "react-map-gl/maplibre";
 import { t } from "../i18n";
-import { cluster } from "../lib/cluster";
+import { cluster, tapOpensChooser } from "../lib/cluster";
 import { mapStyle } from "../lib/map-style";
 import { useTheme } from "../theme";
+import { useClusterChooser } from "./ClusterChooser";
 import {
   Attribution,
   ClusterMarker,
@@ -33,10 +34,9 @@ function WebMap({
   const ref = useRef<MapRef>(null);
   const [zoom, setZoom] = useState(13);
   const map = useMemo(() => mapStyle(c, scheme), [c, scheme]);
-  const groups = useMemo(
-    () => cluster(items, Math.floor(zoom * 2) / 2),
-    [items, zoom],
-  );
+  const level = Math.floor(zoom * 2) / 2;
+  const groups = useMemo(() => cluster(items, level), [items, level]);
+  const { open, chooser } = useClusterChooser({ items, selectedId, onSelect });
   const padding = {
     top: insets.top + 40,
     right: insets.right + 40,
@@ -112,15 +112,18 @@ function WebMap({
             >
               <ClusterMarker
                 count={g.count}
-                onPress={() =>
-                  ref.current?.fitBounds(
-                    [
-                      [g.bounds.west, g.bounds.south],
-                      [g.bounds.east, g.bounds.north],
-                    ],
-                    { padding, maxZoom: 17, duration: 500 },
-                  )
-                }
+                chooses={tapOpensChooser(g, level)}
+                onPress={() => {
+                  if (tapOpensChooser(g, level)) open(g.items);
+                  else
+                    ref.current?.fitBounds(
+                      [
+                        [g.bounds.west, g.bounds.south],
+                        [g.bounds.east, g.bounds.north],
+                      ],
+                      { padding, maxZoom: 17, duration: 500 },
+                    );
+                }}
               />
             </Marker>
           ),
@@ -136,6 +139,7 @@ function WebMap({
         url={map.attributionUrl}
         bottom={insets.bottom}
       />
+      {chooser}
     </View>
   );
 }

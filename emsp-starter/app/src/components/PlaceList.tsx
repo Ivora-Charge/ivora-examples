@@ -14,10 +14,13 @@ export function PlaceRow({
   place,
   selected,
   onPress,
+  showAddress = false,
 }: {
   place: LocationSummary;
   selected: boolean;
   onPress: () => void;
+  /** The street and city under the name, to tell places at one spot apart. */
+  showAddress?: boolean;
 }) {
   const { c, scheme } = useTheme();
   const { fs } = useScale();
@@ -75,6 +78,15 @@ export function PlaceRow({
         >
           {place.name}
         </Text>
+        {showAddress ? (
+          <Text
+            style={[type.body, { color: c.muted, fontSize: fs(fontSize.sm) }]}
+            numberOfLines={2}
+            testID="place-address"
+          >
+            {[place.address, place.city].join(", ")}
+          </Text>
+        ) : null}
         <View style={styles.meta}>
           <StatusGlyph kind={avail.kind} color={statusColor} />
           <Text

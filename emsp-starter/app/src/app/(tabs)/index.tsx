@@ -131,15 +131,18 @@ export default function MapScreen() {
     }
   }, []);
 
-  const select = useCallback(
-    (place: LocationSummary) => {
+  const select = useCallback<MapProps["onSelect"]>(
+    (place, from) => {
       if (wide) {
         setSelected(place);
-        setTarget({
-          key: ++targetKey.current,
-          center: place.coordinates,
-          zoom: 15,
-        });
+        // A chooser pick keeps the camera: zooming out to 15 could fold the spot the
+        // driver just opened into a wider cluster.
+        if (from !== "chooser")
+          setTarget({
+            key: ++targetKey.current,
+            center: place.coordinates,
+            zoom: 15,
+          });
       } else
         router.push({ pathname: "/location/[id]", params: { id: place.id } });
     },
