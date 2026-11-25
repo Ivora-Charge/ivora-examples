@@ -1,4 +1,4 @@
-import type { OpeningTimes } from "./types";
+import type { LocationSummary, OpeningTimes } from "./types";
 
 /** Weekday (1 is Monday, as in OCPI) and minutes since midnight at `now` in `timeZone`. */
 export function localTime(
@@ -75,6 +75,26 @@ export function isOpenAt(
       (h.weekday === yesterday && minutes < end)
     );
   });
+}
+
+/**
+ * What a driver is told about a place at `now`: open, closed, or closed while charging
+ * is still possible (`charging_when_closed` is true). Undefined when the hours are
+ * unknown. The "Open now" filter hides only "closed".
+ */
+export type OpenState = "open" | "closed" | "closedCanCharge";
+
+export function openState(
+  place: Pick<
+    LocationSummary,
+    "opening_times" | "time_zone" | "charging_when_closed"
+  >,
+  now = new Date(),
+): OpenState | undefined {
+  const open = isOpenAt(place.opening_times, place.time_zone, now);
+  if (open === undefined) return undefined;
+  if (open) return "open";
+  return place.charging_when_closed === true ? "closedCanCharge" : "closed";
 }
 
 export type HoursRow = {

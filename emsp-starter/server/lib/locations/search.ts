@@ -290,6 +290,8 @@ export type LocationSummary = {
   parking_type?: Location["parking_type"];
   time_zone: string;
   opening_times?: Location["opening_times"];
+  /** OCPI: charging goes on outside the opening times. Absent when the CPO says nothing. */
+  charging_when_closed?: boolean;
   evse_count: number;
   available_count: number;
   /** How many EVSEs are in each status, so an app can tell "in use" from "out of order". */
@@ -355,7 +357,6 @@ export type EvseDetail = {
 
 export type LocationDetail = LocationSummary & {
   directions?: Location["directions"];
-  charging_when_closed?: boolean;
   evses: EvseDetail[];
 };
 
@@ -425,6 +426,8 @@ function summarise(
   if (l.operator) summary.operator = l.operator.name;
   if (l.parking_type) summary.parking_type = l.parking_type;
   if (l.opening_times) summary.opening_times = l.opening_times;
+  if (l.charging_when_closed !== undefined)
+    summary.charging_when_closed = l.charging_when_closed;
   return summary;
 }
 
@@ -465,8 +468,6 @@ export function locationDetail(
     }),
   };
   if (l.directions) detail.directions = l.directions;
-  if (l.charging_when_closed !== undefined)
-    detail.charging_when_closed = l.charging_when_closed;
   return detail;
 }
 

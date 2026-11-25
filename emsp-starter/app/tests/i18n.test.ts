@@ -172,25 +172,49 @@ describe("presenting places", () => {
     expect(p.connector("SOMETHING_NEW")).toBe("Other plug");
   });
 
+  const weekdays = {
+    opening_times: {
+      twentyfourseven: false,
+      regular_hours: [1, 2, 3, 4, 5, 6].map((weekday) => ({
+        weekday,
+        period_begin: "07:00",
+        period_end: "23:00",
+      })),
+    },
+    time_zone: "Europe/Amsterdam",
+  };
+
   it("groups opening hours by day", () => {
-    const hours = p.hours(
-      {
-        twentyfourseven: false,
-        regular_hours: [1, 2, 3, 4, 5, 6].map((weekday) => ({
-          weekday,
-          period_begin: "07:00",
-          period_end: "23:00",
-        })),
-      },
-      "Europe/Amsterdam",
-      new Date("2026-10-25T10:00:00Z"), // a Sunday
-    );
+    const hours = p.hours(weekdays, new Date("2026-10-25T10:00:00Z")); // a Sunday
     expect(hours).toEqual({
-      open: false,
+      current: { state: "closed", label: "Closed now" },
       lines: ["Mon–Sat  07:00–23:00", "Sun  Closed"],
     });
     expect(
-      p.hours({ twentyfourseven: true }, "Europe/Amsterdam").lines,
+      p.hours({
+        opening_times: { twentyfourseven: true },
+        time_zone: "Europe/Amsterdam",
+      }).lines,
     ).toEqual(["Open 24 hours, every day"]);
+  });
+
+  it("says a closed site can still charge only when the CPO says so", () => {
+    const sunday = new Date("2026-10-25T10:00:00Z");
+    const monday = new Date("2026-10-26T10:00:00Z");
+    const can = { ...weekdays, charging_when_closed: true };
+    const cannot = { ...weekdays, charging_when_closed: false };
+    expect(p.hours(can, sunday).current).toEqual({
+      state: "closedCanCharge",
+      label: "Site closed now · charging still possible",
+    });
+    expect(p.hours(cannot, sunday).current).toEqual({
+      state: "closed",
+      label: "Closed now",
+    });
+    for (const place of [can, cannot])
+      expect(p.hours(place, monday).current).toEqual({
+        state: "open",
+        label: "Open now",
+      });
   });
 });

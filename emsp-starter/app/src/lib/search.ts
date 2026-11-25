@@ -1,5 +1,5 @@
 import { distanceM, type LatLng } from "./geo";
-import { isOpenAt } from "./hours";
+import { openState } from "./hours";
 import type {
   ConnectorDetail,
   LocationDetail,
@@ -87,14 +87,17 @@ export function searchParams(s: Search): URLSearchParams {
   return q;
 }
 
-/** Applies what the server does not: "Open now". */
+/**
+ * Applies what the server does not: "Open now". It keeps places with unknown hours and
+ * closed places where charging is still possible.
+ */
 export function openNowFilter(
   items: LocationSummary[],
   f: Filters,
   now = new Date(),
 ): LocationSummary[] {
   return f.openNow
-    ? items.filter((l) => isOpenAt(l.opening_times, l.time_zone, now) !== false)
+    ? items.filter((l) => openState(l, now) !== "closed")
     : items;
 }
 
@@ -123,12 +126,7 @@ export function summaryOf(
   matching: number,
   distance?: number,
 ): LocationSummary {
-  const {
-    evses: _evses,
-    directions: _d,
-    charging_when_closed: _c,
-    ...rest
-  } = l;
+  const { evses: _evses, directions: _d, ...rest } = l;
   const s: LocationSummary = { ...rest, matching_evse_count: matching };
   if (distance !== undefined) s.distance_m = Math.round(distance);
   return s;

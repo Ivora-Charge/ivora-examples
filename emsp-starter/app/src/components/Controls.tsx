@@ -241,6 +241,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: space.sm,
   },
   caps: { letterSpacing: 1.4 },
