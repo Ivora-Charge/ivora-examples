@@ -41,7 +41,7 @@ Charging (offline demo):
 
 - Every control has a screen-reader label and role; filter chips are checkboxes, tabs are tabs, and a charger in the list is read in the words it shows ("150 kW Station Square 1 of 2 free · 400 m €0.71 per kWh"), so voice control finds it by what the driver sees. Screens are landmarks (main, navigation, the demo strip as a region), and headings go one level at a time. `e2e/a11y.spec.ts` runs axe on the map, a charger and sign-in, light and dark.
 - Status is never colour alone: free is a filled tile and dot, in use an outlined tile and half dot, out of order a hatched tile and a cross, unknown a dashed outline, and the word is always printed.
-- Text follows the driver's text size: Dynamic Type and font scale on phones, rem on the web (browser font size and zoom). Status tiles grow with it. No text is under 12 px.
+- Text follows the driver's text size: Dynamic Type and font scale on phones, rem on the web (browser font size and zoom). Status tiles grow with it, and the wide layout's left rail widens to its longest word (labels wrap between words), checked by `e2e/text-size.spec.ts`. No text is under 12 px.
 - Text pairs meet WCAG AA (4.5:1) in both modes, and the focus ring is at least 3:1 against everything it touches (ink in light mode, flare in dark; on the violet charger header it is `focusOnPrimary`, white in light mode and ink in dark). The selected charger's ring (`selected`) differs from the focus ring in both modes. `tests/brand.test.ts` checks every pair.
 - Tap targets are 44 px or more; the search field and the primary button are 56 to 60 px. No sideways scroll at 390 px (only the chip row scrolls, inside itself).
 
