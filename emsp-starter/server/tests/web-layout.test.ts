@@ -18,6 +18,7 @@ import {
 import {
   appEnvironment,
   copyDriverWeb,
+  onlyCached,
   RECORD,
   removeDriverWeb,
 } from "@/scripts/driver-web.mjs";
@@ -145,6 +146,75 @@ describe("the driver app's web build in public/", () => {
     );
     expect(inPublic("index.html")).toBe(false);
     expect(existsSync(join(server, RECORD))).toBe(false);
+  });
+
+  // Vercel's build cache brings back every node_modules folder, the app's
+  // assets/node_modules among them, and nothing else of public/ or the record.
+  const restoreFromCache = () => {
+    for (const name of ["index.html", "_expo"])
+      rmSync(join(server, "public", name), { recursive: true, force: true });
+    rmSync(join(server, RECORD));
+  };
+
+  it("replaces what a build cache restored of an earlier copy, without the record", () => {
+    const FONT = "assets/node_modules/@expo-google-fonts/dm-mono/DMMono.ttf";
+    build([FONT]);
+    copyDriverWeb(dist, server);
+    restoreFromCache();
+    expect(inPublic(FONT)).toBe(true);
+    build(["assets/node_modules/expo-router/assets/new.png"]);
+    expect(copyDriverWeb(dist, server)!.sort()).toEqual([
+      "_expo",
+      "assets",
+      "index.html",
+    ]);
+    expect(inPublic(FONT)).toBe(false);
+    expect(inPublic("assets/node_modules/expo-router/assets/new.png")).toBe(
+      true,
+    );
+    expect(inPublic("index.html")).toBe(true);
+    expect(existsSync(join(server, RECORD))).toBe(true);
+    // And --remove takes the new copy out whole.
+    removeDriverWeb(server);
+    expect(existsSync(join(server, "public"))).toBe(false);
+  });
+
+  it("still stops at a file of yours beside what the cache restored", () => {
+    build(["assets/node_modules/pkg/font.ttf"]);
+    copyDriverWeb(dist, server);
+    restoreFromCache();
+    write(join(server, "public/assets/logo.png"), "mine");
+    expect(() => copyDriverWeb(dist, server)).toThrow(
+      /public\/ already has assets,/,
+    );
+    expect(readFileSync(join(server, "public/assets/logo.png"), "utf8")).toBe(
+      "mine",
+    );
+    expect(inPublic("assets/node_modules/pkg/font.ttf")).toBe(true);
+    expect(existsSync(join(server, RECORD))).toBe(false);
+  });
+
+  it("counts as cached only what lies in a node_modules folder", () => {
+    const pub = join(server, "public");
+    write(join(pub, "a/node_modules/x/y.js"));
+    write(join(pub, "b/node_modules/x.js"));
+    write(join(pub, "b/readme.txt"));
+    write(join(pub, "c/node_modulesx/y.js"));
+    write(join(pub, "node_modules/z.js"));
+    write(join(pub, "index.html"));
+    mkdirSync(join(pub, "empty"));
+    expect(
+      ["a", "b", "c", "node_modules", "index.html", "empty"].filter((n) =>
+        onlyCached(pub, n),
+      ),
+    ).toEqual(["a", "node_modules", "empty"]);
+  });
+
+  it("rests on git ignoring node_modules folders at any depth", () => {
+    const lines = readFileSync(join(__dirname, "../.gitignore"), "utf8")
+      .split("\n")
+      .map((l) => l.trim());
+    expect(lines).toContain("node_modules");
   });
 
   it("refuses a build without a Content-Security-Policy", () => {
