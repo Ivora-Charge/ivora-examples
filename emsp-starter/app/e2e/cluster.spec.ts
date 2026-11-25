@@ -98,12 +98,38 @@ test("a cluster at one coordinate opens a chooser of its places", async ({
 
   // Back on the map the chooser stays closed, and the other places are one press away.
   await page.getByTestId("detail-close").click();
+  await expect(page.getByTestId("detail-name")).toHaveCount(0);
   await expect(page.getByTestId("cluster-chooser")).toHaveCount(0);
   await spot(page).click();
   await dialog.getByTestId("place-Library Plaza").click();
   await expect(page.getByTestId("detail-name")).toHaveText("Library Plaza");
   if (!isPhone(page))
     await expect(page.getByTestId("detail-card")).toBeVisible();
+});
+
+test("going back from a charger's page keeps the map and list as they were", async ({
+  page,
+}) => {
+  test.skip(!isPhone(page), "wide screens show a card beside the map");
+  // Camera moves jump instead of easing, so positions are final once seen.
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await open(page);
+  await toSpot(page);
+  const place = () => spot(page).boundingBox();
+  const before = await place();
+  const row = page.getByTestId("sheet").getByTestId("place-Town Hall Garage");
+  await row.scrollIntoViewIfNeeded();
+  const listed = await row.boundingBox();
+
+  await row.click();
+  await expect(page.getByTestId("detail-name")).toHaveText("Town Hall Garage");
+  // Covered, not thrown away: a sheet built anew would frame the results again.
+  await expect(page.getByTestId("sheet")).toHaveCount(1);
+  await page.getByTestId("detail-close").click();
+  await expect(page.getByTestId("detail-name")).toHaveCount(0);
+
+  await expect.poll(() => row.boundingBox()).toEqual(listed);
+  await expect.poll(place).toEqual(before);
 });
 
 test("the chooser works by keyboard, and closes without choosing", async ({
