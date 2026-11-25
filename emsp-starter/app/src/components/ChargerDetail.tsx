@@ -258,6 +258,19 @@ export function ChargerDetail({
               >
                 {price.amount}
               </Text>
+              {price.tiers.map((line) => (
+                // A rate that applies instead at some power: as plain as the line above.
+                <Text
+                  key={line}
+                  style={[
+                    type.heading,
+                    { color: c.text, fontSize: fs(fontSize.lg) },
+                  ]}
+                  testID="detail-price-tier"
+                >
+                  {line}
+                </Text>
+              ))}
               {price.session ? (
                 <Text
                   style={[

@@ -42,8 +42,8 @@ Charging (offline demo):
 
 The charger page and the confirm screen show the same price, as it stands when the server answers (`price.now`, see the [server README](../server/README.md#locations-and-tariffs)), rounded to the currency's minor unit (€0.71):
 
-- **What applies now**, every kind with equal weight ("€0.11 per kWh + €0.66 per hour"), then the session fee, when each of those applies if it has a condition, the minimum and maximum price, and whether VAT is included (said per rate when the rates differ).
-- **At other times or conditions** (charger page): the other rates with their conditions in words ("after 2 h", "while reserved"). The confirm screen lists them only when no rate applies now ("Depends on time and use").
+- **What applies now**, every kind with equal weight ("€0.11 per kWh + €0.66 per hour"), then any rate that applies instead at some charging power or current, as plainly ("€0.60 per kWh instead, at 50 kW or more"), the session fee, when each of those applies if it has a condition, the minimum and maximum price, and whether VAT is included (said per rate when the rates differ).
+- **At other times or conditions**, on both screens: the other rates with their conditions in words ("after 2 h", "while reserved"). When no rate applies at the start, the price line reads "Depends on time and use".
 - When the CPO lists several rates of one kind without saying when each applies, the first is shown as the one that applies (OCPI's first match), with "This operator lists other rates without saying when they apply." and the operator's note.
 
 The offline demo's prices are those of the moment its sample data was made for (Thursday 1 October 2026, 10:00 UTC, on each sample site's clock), whatever the time on the device.

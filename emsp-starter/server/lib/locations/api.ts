@@ -9,6 +9,7 @@ import {
   locationDetail,
   parseLocationAppId,
   parseSearchQuery,
+  priceMoment,
   searchLocations,
   SearchQueryError,
   tariffsFor,
@@ -180,10 +181,10 @@ export async function previewResponse(
     return json({
       mode: mode(),
       display_only: true,
-      price: displayPrice(tariff, {
-        at: session.start,
-        timeZone: held.location.time_zone,
-      }),
+      price: displayPrice(
+        tariff,
+        priceMoment(connector, session.start, held.location.time_zone),
+      ),
       preview: previewCost(tariff, {
         ...session,
         timeZone: held.location.time_zone,

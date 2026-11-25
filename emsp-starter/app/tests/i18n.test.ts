@@ -210,6 +210,7 @@ describe("presenting places", () => {
       );
       expect(shown).toEqual({
         amount: "€0.11 per kWh + €0.66 per hour",
+        tiers: [],
         session: "plus €0.50 per session",
         conditions: [],
         others: ["€0.09 per kWh (22:00–06:00)"],
@@ -218,7 +219,8 @@ describe("presenting places", () => {
         vat: "VAT included",
         unexplained: undefined,
         operatorNote: undefined,
-        // The confirm screen: the same line and fee, without the other times.
+        // The confirm screen: the same line and fee; it lists `others` under their
+        // own label, as the page does.
         lines: [
           "€0.11 per kWh + €0.66 per hour",
           "plus €0.50 per session",
@@ -274,7 +276,65 @@ describe("presenting places", () => {
         }),
       );
       expect(shown.amount).toBe("€0.40 per kWh");
+      // The page and the confirm screen both list it.
       expect(shown.others).toEqual(["€3.00 per hour (after 2 h)"]);
+      expect(shown.lines).toEqual(["€0.40 per kWh", "VAT included"]);
+    });
+
+    it("shows a power tier beside what applies now, on the page and confirm screen", () => {
+      // [ENERGY €0.60 at 50 kW or more], [ENERGY €0.40]: a fast charge pays €0.60.
+      const fast = rate("ENERGY", 6000, ["at 50 kW or more"]);
+      const energy = rate("ENERGY", 4000);
+      const shown = p.detailPrice(
+        priced([fast, energy], {
+          components: [energy],
+          tiers: [fast],
+          others: [],
+          unexplained: false,
+        }),
+      );
+      expect(shown).toMatchObject({
+        amount: "€0.40 per kWh",
+        tiers: ["€0.60 per kWh instead, at 50 kW or more"],
+        others: [],
+        lines: [
+          "€0.40 per kWh",
+          "€0.60 per kWh instead, at 50 kW or more",
+          "VAT included",
+        ],
+      });
+      // [ENERGY €0.30 below 11 kW], [ENERGY €0.50].
+      const slow = rate("ENERGY", 3000, ["below 11 kW"]);
+      const normal = rate("ENERGY", 5000);
+      expect(
+        p.detailPrice(
+          priced([slow, normal], {
+            components: [normal],
+            tiers: [slow],
+            others: [],
+            unexplained: false,
+          }),
+        ).lines,
+      ).toEqual([
+        "€0.50 per kWh",
+        "€0.30 per kWh instead, below 11 kW",
+        "VAT included",
+      ]);
+    });
+
+    it("from an older server, shows a conditional rate placed first as a tier", () => {
+      const shown = p.detailPrice(
+        priced([
+          rate("ENERGY", 6000, ["at 50 kW or more"]),
+          rate("ENERGY", 4000),
+          rate("ENERGY", 9000, ["while reserved"]),
+        ]),
+      );
+      expect(shown).toMatchObject({
+        amount: "€0.40 per kWh",
+        tiers: ["€0.60 per kWh instead, at 50 kW or more"],
+        others: ["€0.90 per kWh (while reserved)"],
+      });
     });
 
     it("says when the rates that apply now do, and shows a free first period", () => {
@@ -317,11 +377,8 @@ describe("presenting places", () => {
       ).toMatchObject({
         amount: "Depends on time and use",
         vat: "VAT included",
-        lines: [
-          "Depends on time and use",
-          "€2.00 per hour (after 2 h)",
-          "VAT included",
-        ],
+        others: ["€2.00 per hour (after 2 h)"],
+        lines: ["Depends on time and use", "VAT included"],
       });
     });
 

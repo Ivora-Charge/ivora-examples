@@ -20,6 +20,7 @@ import {
   primaryTariff,
   type DisplayComponent,
   type DisplayPrice,
+  type PriceMoment,
 } from "./pricing";
 import {
   normaliseId,
@@ -362,6 +363,19 @@ export type LocationDetail = LocationSummary & {
 
 const kw = (w: number) => Math.round(w / 100) / 10;
 
+/** A session starting at a connector: the location's clock and the connector's limits. */
+export function priceMoment(
+  c: Connector,
+  at: Date,
+  timeZone: string,
+): PriceMoment {
+  const moment: PriceMoment = { at, timeZone };
+  const w = connectorPowerW(c);
+  if (w > 0) moment.maxPowerKw = w / 1000;
+  if (c.max_amperage > 0) moment.maxCurrentA = c.max_amperage;
+  return moment;
+}
+
 function priceOf(
   c: Connector,
   tariffs: Tariff[],
@@ -369,7 +383,7 @@ function priceOf(
   timeZone: string,
 ): DisplayPrice | null {
   const t = primaryTariff(c.tariff_ids, tariffs, now);
-  return t ? displayPrice(t, { at: now, timeZone }) : null;
+  return t ? displayPrice(t, priceMoment(c, now, timeZone)) : null;
 }
 
 function summarise(

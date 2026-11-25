@@ -109,7 +109,10 @@ export default function ConfirmCharge() {
           detail: [
             e.evse_id ?? e.uid,
             p.status(kind),
-            price && [price.amount, price.session].filter(Boolean).join(", "),
+            price &&
+              [price.amount, ...price.tiers, price.session]
+                .filter(Boolean)
+                .join(", "),
           ]
             .filter(Boolean)
             .join(" · "),
@@ -283,10 +286,17 @@ export default function ConfirmCharge() {
       <Card title={t("confirm.payment")} icon="card">
         <Fact
           label={t("detail.price")}
-          // The same price as the charger's page: what applies now, then the rest.
+          // The same price as the charger's page: what applies now, then other rates.
           value={price ? price.lines.join("\n") : t("price.unknown")}
           testID="confirm-price"
         />
+        {price?.others.length ? (
+          <Fact
+            label={t("price.others")}
+            value={price.others.join("\n")}
+            testID="confirm-price-others"
+          />
+        ) : null}
         {price?.unexplained || price?.operatorNote ? (
           <View style={styles.gap} testID="confirm-price-note">
             {[price.unexplained, price.operatorNote]

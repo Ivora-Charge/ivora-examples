@@ -58,9 +58,10 @@ export function present(i: I18n) {
 
   /**
    * From a server that does not say what applies now: only a rate without conditions
-   * counts as applying, the first of its kind. When a kind that costs something has no
-   * such rate, nothing is shown as applying (a part of the price would read as all of
-   * it) and every rate is listed with its conditions.
+   * counts as applying, the first of its kind. A rate with conditions placed before it
+   * may price that kind instead (first match), so it is shown beside it. When a kind
+   * that costs something has no such rate, nothing is shown as applying (a part of the
+   * price would read as all of it) and every rate is listed with its conditions.
    */
   const withoutNow = (components: DisplayComponent[]): PriceNow => {
     const order = ["ENERGY", "TIME", "PARKING_TIME", "FLAT"];
@@ -73,10 +74,17 @@ export function present(i: I18n) {
       : [...first.values()].sort(
           (a, b) => order.indexOf(a.type) - order.indexOf(b.type),
         );
+    const before = (c: DisplayComponent) =>
+      !partial &&
+      c.conditions.length > 0 &&
+      components.indexOf(c) < components.indexOf(first.get(c.type)!);
     return {
       components: current,
+      tiers: components.filter(before),
       others: components.filter(
-        (c) => c.conditions.length || (partial && first.get(c.type) === c),
+        (c) =>
+          !before(c) &&
+          (c.conditions.length || (partial && first.get(c.type) === c)),
       ),
       unexplained: components.some(
         (c) => !c.conditions.length && first.get(c.type)!.priceE4 !== c.priceE4,
@@ -87,7 +95,9 @@ export function present(i: I18n) {
   /**
    * The price of a connector, for its detail and for the confirm screen. `amount` is
    * what applies now, every kind with equal weight ("€0.11 per kWh + €0.66 per hour"),
-   * and `session` the fee on top of it. The CPO's own free text (OCPI
+   * and `session` the fee on top of it. `tiers` are rates that apply instead at some
+   * charging power or current ("€0.60 per kWh instead, at 50 kW or more"), shown beside
+   * `amount` with the same weight. The CPO's own free text (OCPI
    * `tariff_alt_text`) is often without VAT or in another language, so it is shown only
    * when the structured prices do not tell the whole story, and then as the CPO's note.
    */
@@ -101,8 +111,9 @@ export function present(i: I18n) {
     );
     const shown = (c: DisplayComponent) => !paid.size || paid.has(c.type);
     const current = p.free ? [] : now.components.filter(shown);
+    const tiers = p.free ? [] : (now.tiers ?? []).filter(shown);
     const others = p.free ? [] : now.others.filter(shown);
-    const all = [...current, ...others];
+    const all = [...current, ...tiers, ...others];
     const included = all.filter((c) => c.vatIncluded).length;
     const mixed = included > 0 && included < all.length;
     /** "€0.11 per kWh", saying its own VAT state when the rates differ in it. */
@@ -138,6 +149,12 @@ export function present(i: I18n) {
     const unexplained = !p.free && now.unexplained;
     const price = {
       amount,
+      tiers: tiers.map((c) =>
+        t("price.tier", {
+          price: rate(c),
+          conditions: c.conditions.join(", "),
+        }),
+      ),
       session:
         used.length && fee ? t("price.plus", { price: rate(fee) }) : undefined,
       /** When the rates that apply now do so, for those that have a condition. */
@@ -165,14 +182,15 @@ export function present(i: I18n) {
           : undefined,
     };
     /**
-     * The confirm screen's lines: the same price as the page's, with the other rates
-     * only when none applies now.
+     * The confirm screen's lines: the same price as the page's. The other rates follow
+     * under their own label there, as on the page, so that a rate that starts later in
+     * the session ("after 2 h") is seen before starting.
      */
     const lines = [
       price.amount,
+      ...price.tiers,
       price.session,
       ...price.conditions,
-      ...(current.length ? [] : price.others),
       price.min,
       price.max,
       price.vat,

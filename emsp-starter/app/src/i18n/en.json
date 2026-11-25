@@ -75,6 +75,7 @@
   "price.when": "{price} ({conditions})",
   "price.line": "{price} {unit}",
   "price.plus": "plus {price}",
+  "price.tier": "{price} instead, {conditions}",
   "price.applies": "{unit}: {conditions}",
   "price.varies": "Depends on time and use",
   "price.others": "At other times or conditions",

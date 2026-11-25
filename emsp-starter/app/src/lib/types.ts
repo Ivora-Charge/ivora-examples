@@ -56,6 +56,12 @@ export type DisplayComponent = LeadPrice & {
 export type PriceNow = {
   /** The rate that applies per dimension, with its own conditions, if it has any. */
   components: DisplayComponent[];
+  /**
+   * Rates that price a dimension instead of the one in `components` when the car
+   * charges at a power or current they name; each with its condition. Older servers
+   * do not send it.
+   */
+  tiers?: DisplayComponent[];
   /** The other rates, each with when it applies. */
   others: DisplayComponent[];
   /** The operator lists several rates of one kind without saying when each applies. */
