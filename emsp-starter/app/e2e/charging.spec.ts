@@ -52,6 +52,17 @@ async function startAt(page: Page, code: string) {
   await expect(page.getByTestId("confirm-screen")).toBeVisible();
 }
 
+test("the confirm screen lists a rate that starts later in the session", async ({
+  page,
+}) => {
+  await signedIn(page);
+  await startAt(page, "zz-mck-e71");
+  await expect(page.getByTestId("confirm-place")).toHaveText("Harbour Front");
+  await expect(page.getByTestId("confirm-price-others")).toContainText(
+    "€7.26 per hour (after 45 min)",
+  );
+});
+
 test("enter a charger's ID, confirm, charge, stop and read the receipt, sending nothing", async ({
   page,
 }) => {

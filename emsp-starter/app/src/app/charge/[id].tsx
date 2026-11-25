@@ -109,7 +109,10 @@ export default function ConfirmCharge() {
           detail: [
             e.evse_id ?? e.uid,
             p.status(kind),
-            price && [price.amount, price.unit].filter(Boolean).join(" "),
+            price &&
+              [price.amount, ...price.tiers, price.session]
+                .filter(Boolean)
+                .join(", "),
           ]
             .filter(Boolean)
             .join(" · "),
@@ -283,13 +286,34 @@ export default function ConfirmCharge() {
       <Card title={t("confirm.payment")} icon="card">
         <Fact
           label={t("detail.price")}
-          value={
-            price
-              ? [price.amount, price.unit, price.vat].filter(Boolean).join(" ")
-              : t("price.unknown")
-          }
+          // The same price as the charger's page: what applies now, then other rates.
+          value={price ? price.lines.join("\n") : t("price.unknown")}
           testID="confirm-price"
         />
+        {price?.others.length ? (
+          <Fact
+            label={t("price.others")}
+            value={price.others.join("\n")}
+            testID="confirm-price-others"
+          />
+        ) : null}
+        {price?.unexplained || price?.operatorNote ? (
+          <View style={styles.gap} testID="confirm-price-note">
+            {[price.unexplained, price.operatorNote]
+              .filter(Boolean)
+              .map((s) => (
+                <Text
+                  key={s}
+                  style={[
+                    type.body,
+                    { color: c.text, fontSize: fs(fontSize.sm + 1) },
+                  ]}
+                >
+                  {s}
+                </Text>
+              ))}
+          </View>
+        ) : null}
         <Fact
           label={t("confirm.hold")}
           value={

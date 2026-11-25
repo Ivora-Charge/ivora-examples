@@ -249,52 +249,39 @@ export function ChargerDetail({
         <Section level={sectionLevel} title={t("detail.price")} first>
           {price ? (
             <View style={styles.gapSm} testID="detail-price">
-              <View style={styles.priceRow}>
+              <Text
+                style={[
+                  type.heading,
+                  { color: c.text, fontSize: fs(fontSize.xl) },
+                ]}
+                testID="detail-price-now"
+              >
+                {price.amount}
+              </Text>
+              {price.tiers.map((line) => (
+                // A rate that applies instead at some power: as plain as the line above.
                 <Text
+                  key={line}
                   style={[
                     type.heading,
-                    { color: c.text, fontSize: fs(fontSize.xxl) },
+                    { color: c.text, fontSize: fs(fontSize.lg) },
                   ]}
+                  testID="detail-price-tier"
                 >
-                  {price.amount}
-                </Text>
-                {price.unit ? (
-                  <Text
-                    style={[
-                      type.body,
-                      { color: c.muted, fontSize: fs(fontSize.md) },
-                    ]}
-                  >
-                    {[price.unit, price.vat].filter(Boolean).join(", ")}
-                  </Text>
-                ) : null}
-              </View>
-              {price.conditions.length > 0 && (
-                <Text
-                  style={[
-                    type.body,
-                    { color: c.muted, fontSize: fs(fontSize.sm) },
-                  ]}
-                >
-                  {price.conditions.join(", ")}
-                </Text>
-              )}
-              {price.more.map((m) => (
-                <Text
-                  key={m}
-                  style={[
-                    type.body,
-                    { color: c.text, fontSize: fs(fontSize.sm + 1) },
-                  ]}
-                >
-                  {m}
+                  {line}
                 </Text>
               ))}
-              {[
-                priced?.minPrice && t("price.min", { amount: priced.minPrice }),
-                priced?.maxPrice && t("price.max", { amount: priced.maxPrice }),
-                price.operatorNote,
-              ]
+              {price.session ? (
+                <Text
+                  style={[
+                    type.strong,
+                    { color: c.text, fontSize: fs(fontSize.md) },
+                  ]}
+                >
+                  {price.session}
+                </Text>
+              ) : null}
+              {[...price.conditions, price.min, price.max, price.vat]
                 .filter(Boolean)
                 .map((s) => (
                   <Text
@@ -307,6 +294,53 @@ export function ChargerDetail({
                     {s}
                   </Text>
                 ))}
+              {price.others.length > 0 && (
+                <View style={styles.otherPrices} testID="detail-price-others">
+                  <Text
+                    role="heading"
+                    aria-level={sectionLevel + 1}
+                    style={[
+                      type.strong,
+                      { color: c.text, fontSize: fs(fontSize.sm + 1) },
+                    ]}
+                  >
+                    {t("price.others")}
+                  </Text>
+                  {price.others.map((line) => (
+                    <Text
+                      key={line}
+                      style={[
+                        type.body,
+                        { color: c.text, fontSize: fs(fontSize.sm + 1) },
+                      ]}
+                    >
+                      {line}
+                    </Text>
+                  ))}
+                </View>
+              )}
+              {price.unexplained ? (
+                <Text
+                  style={[
+                    type.body,
+                    { color: c.text, fontSize: fs(fontSize.sm + 1) },
+                  ]}
+                  testID="detail-price-unexplained"
+                >
+                  {price.unexplained}
+                </Text>
+              ) : null}
+              {price.operatorNote ? (
+                <Text
+                  style={[
+                    type.body,
+                    { color: c.muted, fontSize: fs(fontSize.sm) },
+                  ]}
+                  testID="detail-price-note"
+                >
+                  {price.operatorNote}
+                </Text>
+              ) : null}
               <Text
                 style={[
                   type.body,
@@ -717,12 +751,7 @@ const styles = StyleSheet.create({
     paddingTop: space.md,
     paddingBottom: space.lg,
   },
-  priceRow: {
-    flexDirection: "row",
-    alignItems: "baseline",
-    flexWrap: "wrap",
-    gap: space.sm,
-  },
+  otherPrices: { paddingTop: space.xs, gap: space.xs },
   connector: {
     flexDirection: "row",
     alignItems: "center",

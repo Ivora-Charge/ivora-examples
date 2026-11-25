@@ -610,14 +610,17 @@ export function parsePatch(v: unknown): Parsed<Record<string, unknown>> {
 export const sameId = (a: string, b: string) =>
   a.toUpperCase() === b.toUpperCase();
 
+/** How many phases carry max_amperage: 3, 2, or 1 for single-phase AC and DC. */
+export function connectorPhases(c: Pick<Connector, "power_type">): number {
+  return c.power_type === "AC_3_PHASE"
+    ? 3
+    : c.power_type === "AC_2_PHASE" || c.power_type === "AC_2_PHASE_SPLIT"
+      ? 2
+      : 1;
+}
+
 /** A connector's maximum power in W: max_electric_power, or volts × amps × phases. */
 export function connectorPowerW(c: Connector): number {
   if (c.max_electric_power) return c.max_electric_power;
-  const phases =
-    c.power_type === "AC_3_PHASE"
-      ? 3
-      : c.power_type === "AC_2_PHASE" || c.power_type === "AC_2_PHASE_SPLIT"
-        ? 2
-        : 1;
-  return c.max_voltage * c.max_amperage * phases;
+  return c.max_voltage * c.max_amperage * connectorPhases(c);
 }
