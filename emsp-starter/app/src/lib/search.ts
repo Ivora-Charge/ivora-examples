@@ -151,7 +151,9 @@ export function searchSample(
     if (s.near && distance! > s.near.radiusM) continue;
     if (entry?.kind === "text") {
       const hay = words(
-        [l.name, l.address, l.postal_code, l.city].filter(Boolean).join(" "),
+        [l.name, l.address, l.postal_code, l.city, l.operator]
+          .filter(Boolean)
+          .join(" "),
       ).join(" ");
       if (!words(entry.value).every((w) => hay.includes(w))) continue;
     }
