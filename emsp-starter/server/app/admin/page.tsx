@@ -42,8 +42,10 @@ function readSettings(): SetupSettings {
  * A visitor who is not signed in gets the mode (which the banner on every page shows)
  * and constants of the code. Before the first admin exists, and only then, they also
  * get the six stops' fixed names and whether each passes (`publicSetupView`): no
- * value, address, key, count, time or variable name. Once an admin exists that is
- * gone, and the page is the sign-in prompt alone.
+ * value, address, key, count, time or variable name of this deployment's. Beside them
+ * the page offers to make the two random settings in the visitor's browser
+ * (setup/generate.tsx). Once an admin exists both are gone, and the page is the
+ * sign-in prompt alone.
  */
 export default async function SetupPage() {
   const status = getStatus();

@@ -38,7 +38,9 @@ import { expectAccessible, goTo } from "./support";
  *   and whether each is done. The two live setups without an admin hold different
  *   facts (peers, times, events, which secrets are set) behind the same six answers,
  *   and must still be sent the same page and the same page data. Demo mode never has an admin, so its three
- *   setups show the six names with none done. Once an admin exists ("live-admin"),
+ *   setups show the six names with none done. With the list comes the generator for
+ *   the two random settings (e2e/generate.spec.ts): it names those two, in the same
+ *   bytes on every setup that shows it. Once an admin exists ("live-admin"),
  *   Setup is the sign-in prompt alone again.
  */
 
@@ -126,9 +128,14 @@ function expectSame(b: Wire, a: Wire, what: string) {
   expect(rows(b.data), `${what} (page data)`).toEqual(rows(a.data));
 }
 
-/** Setup's list for a visitor before the first admin exists, taken out. */
+/** The generator a visitor is shown with Setup's list: constants of the code. */
+const GENERATOR =
+  /<section class="card stack" aria-labelledby="generate-h">.*?<\/section>/s;
+const lessGenerator = (html: string) => html.replace(GENERATOR, "");
+
+/** What Setup adds for a visitor before the first admin exists, taken out. */
 const lessProgress = (html: string) =>
-  html.replace(
+  lessGenerator(html).replace(
     /<section class="stack" aria-labelledby="progress-h">.*?<\/section>/s,
     "",
   );
@@ -228,12 +235,27 @@ test("every signed-out page is the same whatever the deployment's configuration"
       expect(html, what).toContain("__next_f");
       if (path === SIGN_IN) continue;
       expect(html, what).toContain("Sign in as an admin");
-      expectNoHints(html, `${what} (HTML)`, setup);
+      // The generator's two names are checked on their own, below.
+      expectNoHints(lessGenerator(html), `${what} (HTML)`, setup);
       expectNoHints(data, `${what} (page data)`, setup);
     }
 
+  // The generator is there exactly before the first admin, and the same everywhere:
+  // across both modes, whatever each setup has set.
+  const generators = SETUPS.map((setup) => {
+    const { html } = sent.get(setup.name)!.get(SETUP)!;
+    const found = GENERATOR.exec(html)?.[0];
+    expect(found !== undefined, setup.name).toBe(!setup.admin);
+    return found;
+  }).filter((found) => found !== undefined);
+  expect(new Set(generators).size).toBe(1);
+  expect([...new Set(generators[0]!.match(VARIABLE))].sort()).toEqual([
+    "CRON_SECRET",
+    "OCPI_TOKEN_ENCRYPTION_KEY",
+  ]);
+
   // Across the modes, a visitor is shown the same page but for the banner, and on
-  // Setup but for the six names with their answers.
+  // Setup but for the six names with their answers and the generator.
   const demo = sent.get("demo")!;
   for (const name of ["live-a", "live-admin"]) {
     const live = sent.get(name)!;
@@ -286,6 +308,7 @@ test("before the first admin a visitor is told six names and done or not; after 
       for (const name of STOPS.slice(1))
         expect(text.toLowerCase(), what).not.toContain(name.toLowerCase());
       expect(html, what).not.toContain("Setup progress");
+      expect(html, what).not.toContain("Make the secret values");
       continue;
     }
     const done = view.filter((stop) => stop.pass).length;
