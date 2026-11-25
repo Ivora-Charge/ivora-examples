@@ -15,7 +15,9 @@ import { useSetup } from "./setup-context";
  * signed-in admin's menu can say Health: a visitor's always says Setup.
  */
 type Place = { href: string; label: string; icon: IconName };
-const SETUP: Place = { href: "/", label: "Setup", icon: "setup" };
+// The admin web's first page. The other places are under it.
+const HOME = "/admin";
+const SETUP: Place = { href: HOME, label: "Setup", icon: "setup" };
 const PEERS: Place = { href: "/admin/peers", label: "Peers", icon: "network" };
 const SESSIONS: Place = {
   href: "/admin/sessions",
@@ -66,11 +68,11 @@ const RAIL: (Place | { group: string })[] = [
 const MORE = [PROBLEMS, RECON, DRIVERS, ACCOUNT];
 
 const isAt = (path: string, href: string) =>
-  href === "/" ? path === "/" : path === href || path.startsWith(`${href}/`);
+  href === HOME ? path === HOME : path === href || path.startsWith(`${href}/`);
 
 function Logo({ name }: { name: string }) {
   return (
-    <Link className="logo" href="/">
+    <Link className="logo" href={HOME}>
       <Mark />
       <span className="word">{name.toLowerCase()}</span>
       <span className="role">Admin</span>

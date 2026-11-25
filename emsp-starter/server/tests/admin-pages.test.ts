@@ -36,14 +36,14 @@ import PaymentsPage from "@/app/admin/payments/page";
 import ConnectPage from "@/app/admin/peers/connect/page";
 import PeersPage from "@/app/admin/peers/page";
 import TokensPage from "@/app/admin/tokens/page";
-import SetupPage from "@/app/page";
+import SetupPage from "@/app/admin/page";
 import {
   buildStops,
   firstAdmin,
   Setup,
   StatusView,
   type SetupFacts,
-} from "@/app/setup";
+} from "@/app/admin/setup/setup";
 import {
   LimitNotice,
   NotAdmin,
@@ -69,7 +69,7 @@ import {
 // The sign-in form asks for the router; nothing here navigates.
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh() {}, push() {}, replace() {} }),
-  usePathname: () => "/",
+  usePathname: () => "/admin",
 }));
 
 // Who the server finds signed in by email: nobody, unless a test says otherwise.
@@ -772,7 +772,7 @@ describe("peers: a row and a hub's page, from the peer list", () => {
       }),
     );
     expect(html).toContain("a database migration is pending");
-    expect(html).toContain('href="/#stop-2"');
+    expect(html).toContain('href="/admin#stop-2"');
     expect(
       renderToStaticMarkup(
         createElement(PushPendingNote, { state: { ok: true } }),

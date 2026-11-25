@@ -36,6 +36,8 @@ npm ci
 npm run dev
 ```
 
+The admin web is at `http://localhost:3000/admin` (`/` leads there, unless the build holds the driver app: [One domain](#one-domain)).
+
 With no credentials it starts in **demo mode**, with a "Demo" banner on every page. Demo mode never charges a card, never sends a command or request to a real CPO, and never sends email or push notifications.
 
 ## Connect real services
@@ -304,7 +306,7 @@ Admin pages read and change data only through server actions behind the admin ga
 
 | Place                                               | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Setup**, later **Health** (`/`)                   | Six stops in order: environment, database, payments webhook, scheduled job, first admin, first peer. Each is Done, Needs you, Broken or Waiting and shows its fix (the command, the statement, the address to register). What the stops found comes from the [setup status](#setup-status) read, an admin action: unset and malformed variables by name, applied and pending migrations, the last signed and the last refused payment event, how often the scheduled job really runs and how old the payment sweep is, and the number of admins and peers. Never a value. The header says "Demo mode", "Not live" (the database check fails), "Setting up", "Almost live", "Live, but card holds are refused" or "Live". Once all six pass, the page and its menu entry are called **Health** and every stop stays open. A visitor who is not signed in sees the sign-in prompt; before the first admin exists, also the six names with Done or Not done. In demo mode stop 1 names what keeps the server in demo mode and the other five wait for it. |
+| **Setup**, later **Health** (`/admin`)              | Six stops in order: environment, database, payments webhook, scheduled job, first admin, first peer. Each is Done, Needs you, Broken or Waiting and shows its fix (the command, the statement, the address to register). What the stops found comes from the [setup status](#setup-status) read, an admin action: unset and malformed variables by name, applied and pending migrations, the last signed and the last refused payment event, how often the scheduled job really runs and how old the payment sweep is, and the number of admins and peers. Never a value. The header says "Demo mode", "Not live" (the database check fails), "Setting up", "Almost live", "Live, but card holds are refused" or "Live". Once all six pass, the page and its menu entry are called **Health** and every stop stays open. A visitor who is not signed in sees the sign-in prompt; before the first admin exists, also the six names with Done or Not done. In demo mode stop 1 names what keeps the server in demo mode and the other five wait for it. |
 | **Network: Peers** (`/admin/peers`)                 | The CPOs and hubs as rows with their state and a failed pull's error, code and next step. **Connect a peer** (`/admin/peers/connect`) asks what you were given: a hub's one-time token, a CPO's token, or "they will register with us" (a one-time token shown once). A refused one-time token says "get a new one-time token", not "rotate tokens". A peer's own page (`/admin/peers/<id>`): for a hub the trusted and offered parties with Accept and Remove; the connection, the last pull per module, pull now, rotate tokens, unregister, and its live-data adapter (see [Live data](#live-data-state-of-charge)). Below the rows, **Live-data adapters** lists every adapter with a link to its peer. **Our side** shows our versions URL to copy for an admin signed in by email; with the admin secret it says how to put it together (`PUBLIC_BASE_URL` followed by `/ocpi/versions`), and a new one-time token always comes with the full URL.                                                                                               |
 | **Charging: Sessions** (`/admin/sessions`)          | Every session, newest start first, 100 at a time, as a table on desktop and one card per row on a phone. Filters are chips (All, Live, Charging now, Starting, Reserved, Needs a look, Finished), each with its count, and the list says "8 of 128" for what the chip and the other filters match (see [Session counts and search](#session-counts-and-search) for how they are read and capped). **Search** finds part of a driver reference, session ID, charger (EVSE UID) or location ID, in any letter case, on the server; peer, exact driver reference and "started before" (a UTC day or timestamp) are under **More filters**. **Show older** pages back by start time. Each row shows the CPO's session reference, location, kWh, the CPO's cost, driver and charge (command) ID.                                                                                                                                                                                                                                                            |
 | **Charging: Problems** (`/admin/problems`)          | Problems drivers report from the app (category, words, charger, optional photo), open or resolved, newest first; open one with its photo; **mark it resolved** from its row (who did it goes to the report and the audit log, never the driver's words). **Find a report by its ID** shows and resolves one that is not among the listed rows (the list holds the newest 100).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
@@ -399,7 +401,7 @@ Tests: `tests/setup-status.test.ts` (the read, the checks, the records with each
 
 **Supabase setup** (dashboard, once): Authentication → Providers → Email on, "Confirm email" on. In the **Magic Link** email template, put the code in: `{{ .Token }}`; for a link as well, point it at your app with the token hash, for example `{{ .RedirectTo }}?token_hash={{ .TokenHash }}`, set `AUTH_REDIRECT_URL` and add it under URL Configuration → Redirect URLs. Set your own SMTP server for real volumes. Sign-up is open: any email can make a driver account, which can charge only once it saves a card.
 
-**CORS.** The driver API sends no cookies, so another site cannot ride on a driver's session; browsers may read its answers only from `APP_ORIGINS`.
+**CORS.** The driver API sends no cookies, so another site cannot ride on a driver's session; browsers on another origin may read its answers only from `APP_ORIGINS`. A web build on this server's own origin ([One domain](#one-domain)) needs no CORS.
 
 ### Lists and failures: what the admin pages keep
 
@@ -417,7 +419,7 @@ None of this needs a migration: it lives in columns that already exist (`emsp_oc
 
 ### Admin sign-in
 
-`/admin/sign-in` uses the same email code. Only users in the **admin role table** `emsp_admins` get in: `admin` (every action) or `viewer` (read only). The access token is kept in an httpOnly, `SameSite=Strict` cookie and lasts as long as the Supabase session's access token (an hour by default); then sign in again. The server only reads `emsp_admins`. Add the first admin in the SQL editor, after they have asked for a code once (which makes their Auth user):
+`/admin/sign-in` uses the same email code. Only users in the **admin role table** `emsp_admins` get in: `admin` (every action) or `viewer` (read only). The access token is kept in an httpOnly, `SameSite=Strict` cookie for `Path=/admin` only (`emsp_admin_session`) and lasts as long as the Supabase session's access token (an hour by default); then sign in again. The server only reads `emsp_admins`. Add the first admin in the SQL editor, after they have asked for a code once (which makes their Auth user):
 
 ```sql
 insert into public.emsp_admins (user_id, role)
@@ -435,7 +437,7 @@ Demo mode has no admin accounts: sign in there with `ADMIN_SECRET`.
 
 Why the link and not a setup check that the template contains the code: the server cannot read the email template with what it has. Only Supabase's Management API returns it, and that needs an account-wide access token, far more power than this server should hold for one check. The sign-in code already understood a link's token hash, so accepting it adds no credential and no setting beyond a redirect URL.
 
-**`ADMIN_SECRET`, asked once.** On a deployment where `ADMIN_SECRET` is set, the sign-in page also offers "Use the admin secret instead". A right secret is exchanged for an **admin-secret session**: a cookie, `emsp_admin_secret`, with the flags of the admin cookie (httpOnly, `SameSite=Strict`, `Secure` in production) that lasts an hour. No other request carries the secret: no admin action reads it from a form, and the browser keeps it nowhere. No other page has a field for it, and a deployment without `ADMIN_SECRET` never shows the choice.
+**`ADMIN_SECRET`, asked once.** On a deployment where `ADMIN_SECRET` is set, the sign-in page also offers "Use the admin secret instead". A right secret is exchanged for an **admin-secret session**: a cookie, `emsp_admin_secret_session`, with the flags of the admin cookie (httpOnly, `SameSite=Strict`, `Path=/admin`, `Secure` in production) that lasts an hour. No other request carries the secret: no admin action reads it from a form, and the browser keeps it nowhere. No other page has a field for it, and a deployment without `ADMIN_SECRET` never shows the choice.
 
 - The cookie's value is a signed expiry time with a random number, never the secret: `v1.<expiry>.<nonce>.<mac>`. `<expiry>` is the time the session ends, in milliseconds; `<nonce>` is 128 random bits, new for every session; `<mac>` is HMAC-SHA256 over `v1.<expiry>.<nonce>` with a key derived from `ADMIN_SECRET`. Nonce and MAC are base64url without padding, and only the one spelling this server writes is accepted: other text for the same bytes is refused. Nothing is stored on the server, so it works on every instance.
 - Changing or removing `ADMIN_SECRET` ends every admin-secret session at once. One session cannot be ended on the server: signing out deletes the browser's cookie, and a copy of it would work until its hour is over.
@@ -674,14 +676,14 @@ npm run test:ocpi-e2e   # loads .env.e2e.local; prints the lane, never a value
 
 ## Deploy
 
-The server and the admin web deploy together as one Vercel project:
+The server and the admin web deploy together as one Vercel project. The driver app's web build can be part of it ([One domain](#one-domain)) or a site of its own.
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter&env=EMSP_COUNTRY_CODE,EMSP_PARTY_ID,PUBLIC_BASE_URL,SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,OCPI_TOKEN_ENCRYPTION_KEY&envDescription=Live-mode%20settings.%20Type%20demo%20in%20any%20you%20don%27t%20have%20yet%3A%20the%20server%20stays%20in%20demo%20mode%20until%20all%20of%20them%20are%20real.&envLink=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples%2Ftree%2Fmain%2Femsp-starter%2Fserver%23deploy)
 
 1. The button copies this folder into a new repository of yours and asks for the live-mode settings: `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID`, `PUBLIC_BASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` and `OCPI_TOKEN_ENCRYPTION_KEY` (see [Connect real services](#connect-real-services)). Vercel takes no empty field, so type `demo` in any you don't have yet: `demo` counts as unset, and the server stays in demo mode until every one is real. `PUBLIC_BASE_URL` is the deployment's own `https://` address, so it is often `demo` the first time.
 2. To go live, apply the migrations (`npm run db:migrate` from your machine, see [Database](#database)), replace each `demo` in the project's environment settings, and redeploy. Add your first admin (see [Admin sign-in](#admin-sign-in)).
 3. For the scheduled pulls, token push retries and the payment sweep, set `CRON_SECRET` (at least 32 characters; Vercel Cron then sends it as `Authorization: Bearer <CRON_SECRET>` itself). `vercel.json` declares `/api/cron/ocpi-sync` once a day (`0 4 * * *`), because Vercel's free plan runs crons at most once a day and refuses a more frequent schedule. **Live payments need it every minute** (`* * * * *` on a paid plan, or any scheduler that sends the header): card holds are refused while the payment sweep has not run for 5 minutes. Without payments, every 15 minutes (`*/15 * * * *`) is enough. Without `CRON_SECRET` the route answers 503.
-4. For payments, add the Stripe variables and the webhook; see [Go live with payments](#go-live-with-payments). For receipts and push, add `RESEND_API_KEY`, `RECEIPT_FROM` and `EXPO_ACCESS_TOKEN`. For the app's web build, add its origin to `APP_ORIGINS`.
+4. For payments, add the Stripe variables and the webhook; see [Go live with payments](#go-live-with-payments). For receipts and push, add `RESEND_API_KEY`, `RECEIPT_FROM` and `EXPO_ACCESS_TOKEN`. For a web build of the app on its own origin, add that origin to `APP_ORIGINS`.
 5. Give your CPOs the versions URL from **Peers** (`PUBLIC_BASE_URL` followed by `/ocpi/versions`), or connect to theirs (**Connect a peer**).
 
 **Runs serverless.** The server holds no long-lived connection and keeps no state in memory that it needs later:
@@ -693,7 +695,7 @@ The server and the admin web deploy together as one Vercel project:
 
 Ivora's developer docs page on building serverless apps will be linked here once it is published.
 
-For a public demo, set `DEMO_MODE=true` and nothing else. The driver app deploys separately: see the [app README](../app/README.md#deploy).
+For a public demo, set `DEMO_MODE=true` and nothing else. The Deploy button's project holds the server alone: `/` leads to `/admin`, and the driver app deploys separately (see the [app README](../app/README.md#deploy)).
 
 ### First deploy: troubleshooting
 
@@ -704,6 +706,53 @@ The server logs the table or endpoint and the HTTP status of a refused Supabase 
 - **`ENETUNREACH` from `npm run db:migrate`**: your machine has no IPv6 and the direct database host is IPv6-only. Use the Session pooler connection string (port 5432) from the Supabase dashboard as `SUPABASE_DB_URL`.
 - **A path under `/ocpi` with a malformed segment** (a percent-escape that does not decode, a control character, or a `.` or `..` segment) answers 404 in the OCPI envelope. Any other printable ASCII, an encoded backslash included, reaches the handler, since OCPI IDs may contain it.
 - **A bare `/ocpi/2.2.1/tokens%5C` on Vercel answers Vercel's own 500 page.** Vercel's edge answers it with a static 500 page before any function or `proxy.ts` runs, even on Node 22. This is harmless: no handler runs and nothing is logged. With `next start` on Node 22 the same path answers 404. A path with a segment after the slash, such as `tokens/a%5Cb`, reaches the app normally.
+
+## One domain
+
+One deployment on one domain can serve both web UIs:
+
+| Path                    | Serves                                                                                                 |
+| ----------------------- | ------------------------------------------------------------------------------------------------------ |
+| `/admin`, `/admin/...`  | The admin web. Setup is `/admin`.                                                                      |
+| `/api/...`, `/ocpi/...` | The REST API and OCPI, as before.                                                                      |
+| `/_next/...`            | The admin web's own files.                                                                             |
+| every other path        | The driver app's web build: its files, and `index.html` for the rest, so `/account` opens and reloads. |
+
+`npm run build:one-domain` makes it. `scripts/driver-web.mjs` installs the app in `../app` from its own lockfile (`npm ci`), builds it (`npm run build`), copies `app/dist` into `public/` (all but `_headers`, which only static hosts read) and then the server is built. The two stay separate packages. The script lists what it copied in `.driver-web.json` (ignored by git, like the copies) and deletes only that: your own files in `public/` stay, and a name both use stops the build. A plain `npm run build` takes the app out again, and `/` then leads to `/admin`.
+
+**Build settings.** The app is built into the files it ships, so these go to the build, and a change needs a new one:
+
+- `EXPO_PUBLIC_API_URL`: this deployment's own `https://` origin (the same as `PUBLIC_BASE_URL`). Without it the app at `/` runs its offline demo and never calls the server.
+- The map's variables and `MAP_CONNECT_SRC`, if you use them (see the [app README](../app/README.md#connect-to-your-server)).
+
+The app's install and build get those, `EXPO_NO_TELEMETRY`, `EXPO_OFFLINE` and what npm needs to run (`PATH`, `HOME`, proxy and registry settings), and none of the server's variables, so no package of the app sees a server secret in its environment. On your own machine the app's build also reads its `.env` files, as always. `APP_ORIGINS` is not needed: the browser asks the API on the page's own origin.
+
+**On Vercel.** The Deploy button copies the server folder alone, so start from the whole repository (a fork) or a copy of the `emsp-starter` folder:
+
+1. Import it as a project with **Root Directory** `emsp-starter/server` (or `server`, if your repository is the template folder), and keep **Include source files outside of the Root Directory in the Build Step** on.
+2. In the project's build settings, set **Build Command** to `npm run build:one-domain`.
+3. Add the server's variables ([Connect real services](#connect-real-services)) and the build settings above, then deploy. If the project skips builds when nothing in its root directory changed, turn that off: a change to the app needs a build too.
+
+**Any other Node host:** with both folders there, run `npm ci && npm run build:one-domain && npm start` in `server/`.
+
+**To try it locally**, offline and in demo mode: `EXPO_PUBLIC_API_URL=http://localhost:3000 npm run build:one-domain && npm start`.
+
+**Headers.** Every page, in both layouts, forbids framing (`Content-Security-Policy: frame-ancestors 'none'`) and type sniffing (`X-Content-Type-Options: nosniff`). They differ in the referrer policy: admin pages send `strict-origin` (never a path or a query, this origin included), the driver app's `strict-origin-when-cross-origin`, as its own `vercel.json` does. The app's full Content-Security-Policy is the `<meta>` tag its build puts in `index.html`; the build refuses an app without one. The admin's pages send no script policy of their own. Answers of the API and OCPI to programs carry none of these headers; a browser that opens an address there (`Accept: text/html`) gets the admin's. `next.config.ts` holds all of it.
+
+**Cookies.** Both admin cookies, `emsp_admin_session` and `emsp_admin_secret_session`, are set with `Path=/admin`: every admin page and action is under it, and the browser sends them with no request of the driver app, the API or OCPI. They have new names since Setup moved to `/admin`, so after you upgrade, sign in again; a cookie of an earlier build is never read and expires within the hour. The driver app's own session is unchanged ([Sessions on the web](../app/README.md#sessions-on-the-web)).
+
+**Upgrading.** Setup was at `/`. In the one-domain layout `/` is the driver app now, so change bookmarks to `/admin`.
+
+### One origin, one risk
+
+On one domain the admin web and the driver app are **one origin**. A browser keeps scripts apart by origin, not by path, so a script flaw in one can reach the other:
+
+- A script running on a driver app page can send requests to `/admin` in the browser of a signed-in admin, and the browser attaches the admin cookie; it can also open admin pages in a new window and read or operate them. `Path=/admin` and `httpOnly` keep the cookie out of the app's own requests and out of reach of reading; neither stops such a script from using it.
+- A script running on an admin page can read the driver session that the app keeps in `sessionStorage`, in a tab that used the app before it came to the admin (or a window opened from one).
+
+The app's strict Content-Security-Policy and `frame-ancestors 'none'` lower the risk; they do not remove it. **The stricter layout is an origin each:** this server at one subdomain (for example `emsp.example.com`) and the app's web build at another (`drive.example.com`, in `APP_ORIGINS`). The browser then keeps their pages and storage apart, the admin cookie is never sent to the app's host, and the server refuses admin actions posted by another origin. If you run one domain, sign in to the admin in a browser profile you do not use the app in, and sign out when you are done.
+
+**Restricting the admin by network.** A rule on the path `/admin` alone is not an access control: Next.js also runs a server action posted to other addresses of this server. Every action still checks who is asking (and the sign-in actions are rate limited), whatever address it came to.
 
 ## What it uses
 
@@ -752,6 +801,7 @@ Ask the CPO for a key with `billing:read` and no other scope. The adapter sends 
 npm run format:check && npm run typecheck && npm run check:migrations && npm test && npm run build
 npm run test:ocpi-e2e                                 # the OCPI e2e suite, against the mock CPO
 npx playwright install chromium && npm run test:e2e   # offline demo run, desktop and mobile
+EXPO_PUBLIC_API_URL=http://localhost:3330 npm run build:one-domain && npm run test:e2e:one-domain   # one domain, after test:e2e
 SCREENSHOT=1 npm run test:e2e -- screenshots          # redraws docs/admin-*.png (after npm run build)
 ```
 

@@ -11,7 +11,7 @@ permissions:
 jobs:
   server:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: emsp-starter/server
@@ -21,7 +21,9 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: emsp-starter/server/package-lock.json
+          cache-dependency-path: |
+            emsp-starter/server/package-lock.json
+            emsp-starter/app/package-lock.json
       - run: npm ci
       - run: npm run format:check
       - run: npm run typecheck
@@ -35,6 +37,12 @@ jobs:
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e
+      # One domain: the driver app at / and the admin at /admin, from one build (server
+      # README: One domain). The script installs and builds the app from its lockfile.
+      - run: npm run build:one-domain
+        env:
+          EXPO_PUBLIC_API_URL: http://localhost:3330
+      - run: npm run test:e2e:one-domain
 
   app:
     runs-on: ubuntu-latest

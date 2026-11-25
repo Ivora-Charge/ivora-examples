@@ -1,4 +1,8 @@
-import { ADMIN_SECRET_COOKIE, issueSecretSession } from "@/lib/server/admin";
+import {
+  ADMIN_COOKIE_PATH,
+  ADMIN_SECRET_COOKIE,
+  issueSecretSession,
+} from "@/lib/server/admin";
 
 /**
  * What `next/headers` answers in tests: the request's cookies and headers, which a test
@@ -21,7 +25,13 @@ export const nextHeaders = {
       requestCookies.set(name, value);
       cookieOptions.set(name, options ?? {});
     },
-    delete: (name: string) => {
+    // As a browser does: only the cookie of that name and path goes, and the path
+    // is "/" unless the call names one. A cookie a test set itself counts as one
+    // for the admin's path.
+    delete: (target: string | { name: string; path?: string }) => {
+      const { name, path = "/" } =
+        typeof target === "string" ? { name: target } : target;
+      if (path !== (cookieOptions.get(name)?.path ?? ADMIN_COOKIE_PATH)) return;
       requestCookies.delete(name);
       cookieOptions.delete(name);
     },

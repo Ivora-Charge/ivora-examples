@@ -523,7 +523,7 @@ describe("a right code for an address that is not an admin", () => {
       httpOnly: true,
       sameSite: "strict",
       secure: true,
-      path: "/",
+      path: "/admin",
     });
   });
 });
@@ -631,7 +631,7 @@ describe("ADMIN_SECRET is exchanged for an admin-secret session cookie", () => {
       httpOnly: true,
       sameSite: "strict",
       secure: true,
-      path: "/",
+      path: "/admin",
       expires: new Date(Date.now() + SECRET_SESSION_MS),
     });
     expect(SECRET_SESSION_MS).toBe(60 * 60 * 1000);

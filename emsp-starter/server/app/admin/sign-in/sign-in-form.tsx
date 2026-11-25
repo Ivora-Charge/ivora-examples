@@ -359,7 +359,7 @@ function Account() {
             </dd>
           </dl>
           <div className="row">
-            <Link className="btn" href="/">
+            <Link className="btn" href="/admin">
               Go to Setup <Icon name="arrow" />
             </Link>
             {signOut}
@@ -389,7 +389,7 @@ function Account() {
             </dd>
           </dl>
           <div className="row">
-            <Link className="btn" href="/">
+            <Link className="btn" href="/admin">
               Go to Setup <Icon name="arrow" />
             </Link>
             {signOut}
@@ -595,7 +595,7 @@ export function SignIn({
           <Result state={problem} />
           <p className="small muted">
             Only people on the admin list can sign in. Nobody on it yet?{" "}
-            <Link href="/#stop-5">Setup, stop 5</Link> shows how to add the
+            <Link href="/admin#stop-5">Setup, stop 5</Link> shows how to add the
             first admin.
           </p>
           {secretLink}

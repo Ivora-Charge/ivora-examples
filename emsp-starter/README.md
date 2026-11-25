@@ -36,14 +36,14 @@ More in the [app README](app/README.md) and the [server README](server/README.md
 
 ## Why two packages
 
-Every other template in this repository is a single Next.js app. A driver app has to ship to phones, so this template breaks that convention: the app is an Expo project next to the Next.js server. Each has its own `package.json`, lockfile, `README.md` and `.env.example`, and they share no code. One workflow, [`.github/workflows/emsp-starter.yml`](../.github/workflows/emsp-starter.yml), checks both: format, typecheck, unit tests and build (Next build for the server, `expo export` for the app's web build), the OCPI e2e suite against the mock CPO, then Playwright against the admin web and the app's web build. CI makes no native store builds.
+Every other template in this repository is a single Next.js app. A driver app has to ship to phones, so this template breaks that convention: the app is an Expo project next to the Next.js server. Each has its own `package.json`, lockfile, `README.md` and `.env.example`, and they share no code. One workflow, [`.github/workflows/emsp-starter.yml`](../.github/workflows/emsp-starter.yml), checks both: format, typecheck, unit tests and build (Next build for the server, `expo export` for the app's web build), the OCPI e2e suite against the mock CPO, then Playwright against the admin web, the [one-domain](#one-domain) build and the app's web build. CI makes no native store builds.
 
 ## Run locally
 
 Requires Node.js 22 (22.13 or later; the template is tested on Node 22 only). In two terminals:
 
 ```sh
-cd server && npm ci && npm run dev    # http://localhost:3000, admin web and API
+cd server && npm ci && npm run dev    # http://localhost:3000/admin (admin web), /api and /ocpi
 cd app && npm ci && npm run web       # the driver app in a browser
 ```
 
@@ -61,13 +61,36 @@ Every secret lives on the server, in `server/.env.local` locally or the host's e
 | Payments (Stripe) | server | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`; optional `HOLD_AMOUNTS`, `PAYMENT_DEFAULT_CURRENCY` | Live mode refuses every app start ("Payments are not set up").                                |
 | Email receipts    | server | `RESEND_API_KEY`, `RECEIPT_FROM`                                                                                            | No receipts. Sign-in emails come from Supabase Auth.                                          |
 | Push              | server | `EXPO_ACCESS_TOKEN`; the app needs an EAS project ID                                                                        | No push notifications.                                                                        |
-| Driver app        | app    | `EXPO_PUBLIC_API_URL`; for the web build, its origin in the server's `APP_ORIGINS`                                          | The app's offline demo.                                                                       |
+| Driver app        | app    | `EXPO_PUBLIC_API_URL`; for a web build on its own origin, that origin in the server's `APP_ORIGINS`                         | The app's offline demo.                                                                       |
 | Maps              | app    | `EXPO_PUBLIC_MAP_STYLE_URL` (and `_DARK`, `EXPO_PUBLIC_MAP_ATTRIBUTION`, `EXPO_PUBLIC_MAP_ATTRIBUTION_URL`)                 | OpenFreeMap's keyless tiles: free, no uptime guarantee. See [Map](app/README.md#map).         |
 | CPO live data     | server | None: a read-only key per CPO peer, set in the admin web                                                                    | No state of charge or power in the app.                                                       |
 
 Then apply the migrations (`npm run db:migrate` in `server/`), add your first admin, connect your first CPO or hub from **Peers**, and try a charge in [Stripe test mode](server/README.md#try-it-in-stripe-test-mode) before you [go live with payments](server/README.md#go-live-with-payments).
 
 ## Deploy
+
+The two web UIs can share **one domain** or have **an origin each**:
+
+| Path              | [One domain](#one-domain): one deployment | [Separate origins](#separate-origins): two deployments |
+| ----------------- | ----------------------------------------- | ------------------------------------------------------ |
+| `/admin`          | Admin web, Setup first                    | Server: admin web, Setup first                         |
+| `/api`, `/ocpi`   | REST API and OCPI                         | Server: REST API and OCPI                              |
+| every other path  | Driver app (`/`, `/account`, ...)         | Server: `/` leads to `/admin`                          |
+| the app's own URL | none                                      | Driver app, as a static site                           |
+
+### One domain
+
+The server's build can take in the driver app's web build, so one deployment serves both:
+
+```sh
+cd server && EXPO_PUBLIC_API_URL=https://emsp.example.com npm run build:one-domain && npm start
+```
+
+It installs and builds the app in `app/` from its own lockfile and copies `app/dist` into `server/public/`. The app calls the API on its own origin, so no `APP_ORIGINS` is needed. It needs the whole template folder, so start from a fork or a copy of it, not from the Deploy button below; the steps for Vercel are in the [server README](server/README.md#one-domain).
+
+**Security: one domain is one origin.** A browser keeps scripts apart by origin, not by path, so a script flaw in the driver app can reach the admin web and the other way round. The stricter layout is [an origin each](#separate-origins), for example the server at `emsp.example.com` and the app at `drive.example.com`. What exactly can reach what is in the [server README](server/README.md#one-origin-one-risk).
+
+### Separate origins
 
 **Server and admin web, on Vercel:**
 
@@ -77,7 +100,7 @@ The button asks for the live-mode settings. Type `demo` in any you don't have ye
 
 **Driver app:**
 
-- **Web:** the same app as a static site, on Vercel (`app/vercel.json`) or any static host. See the [app's Deploy section](app/README.md#deploy).
+- **Web:** the same app as a static site, on Vercel (`app/vercel.json`) or any static host, with its origin in the server's `APP_ORIGINS`. See the [app's Deploy section](app/README.md#deploy).
 - **iOS and Android:** build with [Expo EAS](https://docs.expo.dev/build/introduction/) from your own Expo account (`app/eas.json` has a `preview` and a `production` profile). Submitting to the App Store and Google Play needs **your own Apple Developer Program and Google Play Console accounts**, under your network's name; the template ships with neither. CI makes no native store builds.
 
 ## OCPI 2.2.1: modules and roles
@@ -136,7 +159,7 @@ The full lists are in the [server](server/README.md#limits-and-next-steps) and [
 
 ## Checks
 
-The same as CI, in each package:
+The same as CI, in each package (the server's one-domain tests are in its [README](server/README.md#checks)):
 
 ```sh
 cd server && npm run format:check && npm run typecheck && npm run check:migrations && npm test && npm run build && npm run test:ocpi-e2e

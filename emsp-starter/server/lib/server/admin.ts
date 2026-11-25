@@ -136,10 +136,10 @@ export function secretSessionsLimited(
  */
 export const SECRET_SESSION_MS = 60 * 60 * 1000;
 /**
- * The session's cookie: httpOnly, SameSite=Strict and, in production, Secure, like the
- * admin sign-in cookie. It never holds ADMIN_SECRET.
+ * The session's cookie: httpOnly, SameSite=Strict, for /admin only and, in production,
+ * Secure, like the admin sign-in cookie. It never holds ADMIN_SECRET.
  */
-export const ADMIN_SECRET_COOKIE = "emsp_admin_secret";
+export const ADMIN_SECRET_COOKIE = "emsp_admin_secret_session";
 const SESSION =
   /^v1\.([1-9][0-9]{12,14})\.([A-Za-z0-9_-]{22})\.([A-Za-z0-9_-]{43})$/;
 const NONCE_BYTES = 16;
@@ -213,13 +213,28 @@ function sessionState(
   return Number(expires) > now ? "ok" : "expired";
 }
 
+/**
+ * The path both admin cookies are sent to. Every admin page, and so every admin
+ * action, is under it; the driver app (/, on the same origin in the one-domain
+ * layout), the API and OCPI need neither, and the browser sends them neither.
+ *
+ * It keeps the cookies out of requests that have no use for them. It is no wall
+ * between scripts of one origin: a script on any page of it can still make requests to
+ * /admin, which carry them (README: One domain).
+ *
+ * The cookies' names are not the ones of earlier builds, which set them for every
+ * path. A cookie left from such a build is never read, so it cannot stand in for one
+ * set now, or stay signed in after a sign-out; it expires within the hour.
+ */
+export const ADMIN_COOKIE_PATH = "/admin";
+
 /** The flags of both admin cookies: not for page scripts, not for other sites. */
 export function adminCookieFlags(expires: Date) {
   return {
     httpOnly: true,
     sameSite: "strict",
     secure: process.env.NODE_ENV === "production",
-    path: "/",
+    path: ADMIN_COOKIE_PATH,
     expires,
   } as const;
 }

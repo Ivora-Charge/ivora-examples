@@ -11,19 +11,11 @@ import {
   type PublicStop,
   type SetupStatus,
 } from "@/lib/setup/checks";
-import { firstAdminSql } from "./admin/sign-in/states";
-import { useAdmin } from "./admin/ui/admin-context";
-import {
-  Head,
-  Icon,
-  Result,
-  State,
-  Tile,
-  utc,
-  type Kind,
-} from "./admin/ui/kit";
-import { Copy, Gate, Later, OurParty } from "./admin/ui/parts";
-import { allPass, useSetup } from "./admin/ui/setup-context";
+import { firstAdminSql } from "../sign-in/states";
+import { useAdmin } from "../ui/admin-context";
+import { Head, Icon, Result, State, Tile, utc, type Kind } from "../ui/kit";
+import { Copy, Gate, Later, OurParty } from "../ui/parts";
+import { allPass, useSetup } from "../ui/setup-context";
 
 /**
  * What every visitor's page carries: the mode, which the banner shows, and two

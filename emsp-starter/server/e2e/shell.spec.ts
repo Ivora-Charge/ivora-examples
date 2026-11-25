@@ -5,7 +5,7 @@ import { expectAccessible, goTo, signIn, type Place } from "./support";
 test("demo: Setup shows a visitor six names, none done, and the sign-in prompt", async ({
   page,
 }) => {
-  await page.goto("/");
+  await page.goto("/admin");
   await expect(
     page.getByRole("status").filter({ hasText: "Demo" }).first(),
   ).toBeVisible();
@@ -95,7 +95,7 @@ test("the menu reaches every place: a rail on desktop, a tab bar and More on a p
   page,
   isMobile,
 }) => {
-  await page.goto("/");
+  await page.goto("/admin");
   const rail = page.getByRole("navigation", { name: "Admin", exact: true });
   const tabs = page.getByRole("navigation", { name: "Admin, phone" });
   await expect(rail).toBeVisible({ visible: !isMobile });
@@ -140,12 +140,60 @@ test("demo: status API reports demo mode", async ({ request }) => {
   });
 });
 
+// This build has no driver app in public/ (the app is deployed on its own origin), so
+// / leads to the admin's first page. e2e-one-domain/ covers the build that has it.
+test("without the driver app, / leads to /admin", async ({ page, request }) => {
+  const res = await request.get("/?from=bookmark", { maxRedirects: 0 });
+  expect(res.status()).toBe(307);
+  expect(res.headers()["location"]).toBe("/admin?from=bookmark");
+  await page.goto("/");
+  await expect(page).toHaveURL(/\/admin$/);
+  await expect(
+    page.getByRole("heading", { name: "Get this network live", level: 1 }),
+  ).toBeVisible();
+});
+
+test("admin pages forbid framing and sniffing and keep their path to themselves; the API and OCPI answer as before", async ({
+  request,
+}) => {
+  const security = [
+    "content-security-policy",
+    "x-content-type-options",
+    "referrer-policy",
+  ];
+  const sent = async (path: string, accept = "text/html") => {
+    const res = await request.get(path, {
+      headers: { Accept: accept },
+      maxRedirects: 0,
+    });
+    return security.map((name) => res.headers()[name]);
+  };
+  const admin = ["frame-ancestors 'none'", "nosniff", "strict-origin"];
+  // Not /: its answer here is the redirect, with no page in it.
+  for (const path of [
+    "/admin",
+    "/admin/sign-in",
+    "/admin/no-such-page",
+    "/no-such-page",
+    // A browser that opens a wrong address under the API gets the admin's 404 page.
+    "/api/no-such-page",
+    "/ocpi/no-such/%",
+  ])
+    expect(await sent(path), path).toEqual(admin);
+  for (const path of ["/api/v1/status", "/ocpi/versions"])
+    expect(await sent(path, "application/json"), path).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+});
+
 test("skip link moves focus to the main content", async ({
   page,
   isMobile,
 }) => {
   test.skip(isMobile, "keyboard navigation is a desktop flow");
-  await page.goto("/");
+  await page.goto("/admin");
   await page.keyboard.press("Tab");
   const skip = page.getByRole("link", { name: "Skip to content" });
   await expect(skip).toBeFocused();
