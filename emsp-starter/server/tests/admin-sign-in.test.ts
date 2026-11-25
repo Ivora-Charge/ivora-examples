@@ -370,6 +370,22 @@ describe("the resend cooldown for an address", () => {
     expect(sent).toHaveLength(2);
   });
 
+  it("never puts a preview deployment's address in the email's link", async () => {
+    const { sent } = fakeAuth();
+    delete process.env.PUBLIC_BASE_URL;
+    Object.assign(process.env, {
+      VERCEL: "1",
+      VERCEL_ENV: "preview",
+      VERCEL_URL: "emsp-abc123-team.vercel.app",
+      VERCEL_BRANCH_URL: "emsp-git-feature-team.vercel.app",
+      VERCEL_PROJECT_PRODUCTION_URL: "emsp.example.test",
+    });
+    await requestAdminCodeAction({}, form({ email: ANA.email }));
+    expect(sent.map((s) => s.redirectTo)).toEqual([
+      "https://emsp.example.test/admin/sign-in",
+    ]);
+  });
+
   it("reaches the page: the answer after a code, and the refusal with its source and wait", async () => {
     const { sent } = fakeAuth();
     const first = await requestAdminCodeAction(

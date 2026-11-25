@@ -17,7 +17,77 @@ function env(name: string): string | undefined {
 }
 
 /**
- * Variables live mode needs. If any is missing, the server runs in demo mode.
+ * Other names live mode accepts for a variable: the ones the Supabase integration of
+ * the Vercel Marketplace sets. Our own name wins when both are set. Publishable and
+ * anon keys have no place here: the integration sets those too.
+ */
+const FALLBACKS: Readonly<Record<string, string>> = {
+  SUPABASE_SERVICE_ROLE_KEY: "SUPABASE_SECRET_KEY",
+};
+
+/** A variable's own name, then the other name it is accepted under, if it has one. */
+function namesOf(name: string): string[] {
+  return FALLBACKS[name] ? [name, FALLBACKS[name]] : [name];
+}
+
+/** The server key as set, with the name it was found under. Not yet checked. */
+function setServerKey(): { name: string; value: string } | undefined {
+  for (const name of namesOf("SUPABASE_SERVICE_ROLE_KEY")) {
+    const value = env(name);
+    if (value) return { name, value };
+  }
+  return undefined;
+}
+
+/**
+ * A key that must never be used as the server key: a publishable key, or a JWT that
+ * names a role other than service_role (the legacy anon key, a user's access token).
+ * Nothing is verified here; Supabase does that.
+ */
+function isClientKey(key: string): boolean {
+  if (key.startsWith("sb_publishable_")) return true;
+  const parts = key.split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const { role } = JSON.parse(
+      Buffer.from(parts[1], "base64url").toString("utf8"),
+    ) as { role?: unknown };
+    return typeof role === "string" && role !== "service_role";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The project's production address on Vercel, for a deployment without
+ * PUBLIC_BASE_URL. Vercel sets VERCEL_PROJECT_PRODUCTION_URL (a host name, no scheme)
+ * in preview deployments too, so a preview also answers with the production address.
+ * A deployment's own addresses (VERCEL_URL, VERCEL_BRANCH_URL) are never read. Not
+ * for local development, where `vercel env pull` writes these variables too.
+ */
+function vercelProductionUrl(): string | undefined {
+  if (process.env.VERCEL !== "1" || process.env.VERCEL_ENV === "development")
+    return undefined;
+  const host = env("VERCEL_PROJECT_PRODUCTION_URL")?.toLowerCase();
+  if (!host) return undefined;
+  try {
+    const url = new URL(`https://${host}`);
+    // A bare host only: no scheme, path, query or user name.
+    return url.host === host ? url.origin : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** PUBLIC_BASE_URL, which always wins, else the production address on Vercel. */
+function knownBaseUrl(): string | undefined {
+  return env("PUBLIC_BASE_URL") ?? vercelProductionUrl();
+}
+
+/**
+ * Variables live mode needs. If any is missing, the server runs in demo mode. One of
+ * them may be set under another name (FALLBACKS), and on Vercel PUBLIC_BASE_URL has
+ * the production address to fall back on.
  * OCPI peer credentials are not here: they are exchanged with each CPO through the
  * OCPI credentials module and stored in the database.
  */
@@ -104,18 +174,24 @@ export const config = {
   get partyId(): string {
     return env("EMSP_PARTY_ID")?.toUpperCase() ?? DEMO_PARTY.partyId;
   },
-  /** HTTPS origin this server is reached at, used for the OCPI versions URL. */
+  /**
+   * HTTPS origin this server is reached at, used for the OCPI endpoints and the admin
+   * sign-in email's link: PUBLIC_BASE_URL, else on Vercel the project's production
+   * address (never a preview deployment's own).
+   */
   get publicBaseUrl(): string {
-    return (env("PUBLIC_BASE_URL") ?? "http://localhost:3000").replace(
-      /\/+$/,
-      "",
-    );
+    return (knownBaseUrl() ?? "http://localhost:3000").replace(/\/+$/, "");
   },
   get supabaseUrl(): string {
     return env("SUPABASE_URL") ?? "";
   },
+  /**
+   * SUPABASE_SERVICE_ROLE_KEY, else SUPABASE_SECRET_KEY. Secret. Empty when neither is
+   * set, or when the one in use holds a publishable or anon key.
+   */
   get supabaseServiceRoleKey(): string {
-    return env("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+    const key = setServerKey()?.value;
+    return key && !isClientKey(key) ? key : "";
   },
   /**
    * 32-byte key (base64) that encrypts the tokens CPO peers give us, at rest. Secret.
@@ -257,9 +333,26 @@ export function ocpiUrls() {
   };
 }
 
-/** Names (never values) of live-mode variables that are unset. */
+/**
+ * Names (never values) of live-mode variables that are unset. One that is accepted
+ * under two names is missing when neither is set, and is listed as "<ours> or <other>".
+ */
 export function missingForLive(): string[] {
-  return LIVE_REQUIRED.filter((name) => !env(name));
+  return LIVE_REQUIRED.filter((name) =>
+    name === "PUBLIC_BASE_URL"
+      ? !knownBaseUrl()
+      : !namesOf(name).some((n) => env(n)),
+  ).map((name) => namesOf(name).join(" or "));
+}
+
+/**
+ * How many live-mode variables the errors of configErrors() are about, under whichever
+ * name each was set.
+ */
+export function malformedRequired(errors: readonly string[]): number {
+  return LIVE_REQUIRED.filter((name) =>
+    namesOf(name).some((n) => errors.some((e) => e.startsWith(`${n} `))),
+  ).length;
 }
 
 /** Problems with the values that are set. Messages name variables, never values. */
@@ -284,6 +377,11 @@ export function configErrors(): string[] {
     } catch {}
     if (!ok) errors.push("SUPABASE_URL must be an https:// URL");
   }
+  const key = setServerKey();
+  if (key && isClientKey(key.value))
+    errors.push(
+      `${key.name} must be a secret key (sb_secret_) or the legacy service_role key, never a publishable or anon key`,
+    );
   if (env("OCPI_TOKEN_ENCRYPTION_KEY") && !config.tokenEncryptionKey)
     errors.push("OCPI_TOKEN_ENCRYPTION_KEY must be 32 bytes, base64-encoded");
   const ttl = env("OCPI_TOKEN_A_TTL_DAYS");

@@ -194,6 +194,9 @@ describe("what the app's install and build get of the environment", () => {
     const server = [
       ...names(".env.example"),
       ...names(".env.e2e.example"),
+      "SUPABASE_SECRET_KEY",
+      "POSTGRES_URL_NON_POOLING",
+      "POSTGRES_URL",
       "VERCEL_TOKEN",
       "NODE_ENV",
       "NODE_OPTIONS",

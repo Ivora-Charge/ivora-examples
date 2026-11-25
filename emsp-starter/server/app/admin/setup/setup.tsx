@@ -46,7 +46,7 @@ export type SetupFacts = {
 };
 
 export type SetupSettings = {
-  /** PUBLIC_BASE_URL, when it is set. */
+  /** This server's public address, when it is known (config.publicBaseUrl). */
   baseUrl: string | null;
   /** The hold per charge, per currency, as text. */
   holds: string[];
@@ -240,14 +240,27 @@ function environment(s: SetupStatus): Stop {
     fix: (
       <>
         <ul className="found">
-          {e.missing.map((name) => (
-            <li key={name}>
-              <State kind="bad">Missing</State>
-              <span>
-                <code>{name}</code> is not set.
-              </span>
-            </li>
-          ))}
+          {e.missing.map((entry) => {
+            // One variable, or two names of which either would do.
+            const [name, other] = entry.split(" or ");
+            return (
+              <li key={entry}>
+                <State kind="bad">Missing</State>
+                <span>
+                  {other ? (
+                    <>
+                      Neither <code>{name}</code> nor <code>{other}</code> is
+                      set.
+                    </>
+                  ) : (
+                    <>
+                      <code>{name}</code> is not set.
+                    </>
+                  )}
+                </span>
+              </li>
+            );
+          })}
           {e.malformed.map((m) => {
             const [name, ...rest] = m.split(" ");
             return (
@@ -306,7 +319,9 @@ const migrateFix = (
       <li>
         <p>
           From your machine, in <code>server/</code>, with{" "}
-          <code>SUPABASE_DB_URL</code> in <code>.env.local</code>:
+          <code>SUPABASE_DB_URL</code> (or the Vercel integration&apos;s{" "}
+          <code>POSTGRES_URL_NON_POOLING</code> or <code>POSTGRES_URL</code>) in{" "}
+          <code>.env.local</code>:
         </p>
         <Copy text="npm run db:migrate" label="Command" />
       </li>
@@ -356,9 +371,10 @@ function database(s: SetupStatus): Stop {
             <li>
               <p>
                 Check that <code>SUPABASE_URL</code> is this project&apos;s URL
-                and <code>SUPABASE_SERVICE_ROLE_KEY</code> its service role (or
-                secret) key, not the anon key, and that the project is not
-                paused.
+                and <code>SUPABASE_SERVICE_ROLE_KEY</code> (or, when that is
+                unset, <code>SUPABASE_SECRET_KEY</code>) its service role or
+                secret key, not the anon or publishable key, and that the
+                project is not paused.
               </p>
             </li>
             <li>

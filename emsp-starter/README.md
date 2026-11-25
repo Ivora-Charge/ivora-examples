@@ -53,17 +53,17 @@ Both start in **demo mode** with no credentials, and say so in a "Demo" banner o
 
 Every secret lives on the server, in `server/.env.local` locally or the host's environment settings. The app holds no secret: its `EXPO_PUBLIC_` values are built into it and anyone can read them. The full tables are in the [server README](server/README.md#connect-real-services) and the [app README](app/README.md#connect-to-your-server).
 
-| Service           | Where  | Variables                                                                                                                   | Without it                                                                                    |
-| ----------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| OCPI identity     | server | `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID`, `PUBLIC_BASE_URL`, `OCPI_TOKEN_ENCRYPTION_KEY`                                        | Demo mode. Peer credentials are not variables: each CPO's are exchanged over OCPI and stored. |
-| Database and auth | server | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` (and `SUPABASE_DB_URL` for migrations)                                          | Demo mode.                                                                                    |
-| Scheduled jobs    | server | `CRON_SECRET`                                                                                                               | No scheduled pulls, token push retries or payment sweep.                                      |
-| Payments (Stripe) | server | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`; optional `HOLD_AMOUNTS`, `PAYMENT_DEFAULT_CURRENCY` | Live mode refuses every app start ("Payments are not set up").                                |
-| Email receipts    | server | `RESEND_API_KEY`, `RECEIPT_FROM`                                                                                            | No receipts. Sign-in emails come from Supabase Auth.                                          |
-| Push              | server | `EXPO_ACCESS_TOKEN`; the app needs an EAS project ID                                                                        | No push notifications.                                                                        |
-| Driver app        | app    | `EXPO_PUBLIC_API_URL`; for a web build on its own origin, that origin in the server's `APP_ORIGINS`                         | The app's offline demo.                                                                       |
-| Maps              | app    | `EXPO_PUBLIC_MAP_STYLE_URL` (and `_DARK`, `EXPO_PUBLIC_MAP_ATTRIBUTION`, `EXPO_PUBLIC_MAP_ATTRIBUTION_URL`)                 | OpenFreeMap's keyless tiles: free, no uptime guarantee. See [Map](app/README.md#map).         |
-| CPO live data     | server | None: a read-only key per CPO peer, set in the admin web                                                                    | No state of charge or power in the app.                                                       |
+| Service           | Where  | Variables                                                                                                                                 | Without it                                                                                    |
+| ----------------- | ------ | ----------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| OCPI identity     | server | `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID`, `PUBLIC_BASE_URL` (optional on Vercel), `OCPI_TOKEN_ENCRYPTION_KEY`                                 | Demo mode. Peer credentials are not variables: each CPO's are exchanged over OCPI and stored. |
+| Database and auth | server | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` or `SUPABASE_SECRET_KEY` (and `SUPABASE_DB_URL` or `POSTGRES_URL_NON_POOLING` for migrations) | Demo mode.                                                                                    |
+| Scheduled jobs    | server | `CRON_SECRET`                                                                                                                             | No scheduled pulls, token push retries or payment sweep.                                      |
+| Payments (Stripe) | server | `STRIPE_SECRET_KEY`, `STRIPE_PUBLISHABLE_KEY`, `STRIPE_WEBHOOK_SECRET`; optional `HOLD_AMOUNTS`, `PAYMENT_DEFAULT_CURRENCY`               | Live mode refuses every app start ("Payments are not set up").                                |
+| Email receipts    | server | `RESEND_API_KEY`, `RECEIPT_FROM`                                                                                                          | No receipts. Sign-in emails come from Supabase Auth.                                          |
+| Push              | server | `EXPO_ACCESS_TOKEN`; the app needs an EAS project ID                                                                                      | No push notifications.                                                                        |
+| Driver app        | app    | `EXPO_PUBLIC_API_URL`; for a web build on its own origin, that origin in the server's `APP_ORIGINS`                                       | The app's offline demo.                                                                       |
+| Maps              | app    | `EXPO_PUBLIC_MAP_STYLE_URL` (and `_DARK`, `EXPO_PUBLIC_MAP_ATTRIBUTION`, `EXPO_PUBLIC_MAP_ATTRIBUTION_URL`)                               | OpenFreeMap's keyless tiles: free, no uptime guarantee. See [Map](app/README.md#map).         |
+| CPO live data     | server | None: a read-only key per CPO peer, set in the admin web                                                                                  | No state of charge or power in the app.                                                       |
 
 Then apply the migrations (`npm run db:migrate` in `server/`), add your first admin, connect your first CPO or hub from **Peers**, and try a charge in [Stripe test mode](server/README.md#try-it-in-stripe-test-mode) before you [go live with payments](server/README.md#go-live-with-payments).
 
@@ -78,6 +78,14 @@ The two web UIs can share **one domain** or have **an origin each**:
 | every other path  | Driver app (`/`, `/account`, ...)         | Server: `/` leads to `/admin`                          |
 | the app's own URL | none                                      | Driver app, as a static site                           |
 
+### One click
+
+**Server and admin web, with their database, on Vercel:**
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter&stores=%5B%7B%22type%22%3A%22integration%22%2C%22integrationSlug%22%3A%22supabase%22%2C%22productSlug%22%3A%22supabase%22%7D%5D&env=EMSP_COUNTRY_CODE,EMSP_PARTY_ID,OCPI_TOKEN_ENCRYPTION_KEY&envDescription=Your%20OCPI%20identity%20and%20encryption%20key.%20Type%20demo%20in%20any%20you%20don%27t%20have%20yet%3A%20the%20server%20stays%20in%20demo%20mode%20until%20all%20of%20them%20are%20real.&envLink=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples%2Ftree%2Fmain%2Femsp-starter%2Fserver%23deploy)
+
+The button creates the Vercel project and, through the [Supabase integration](https://vercel.com/marketplace/supabase), its database and keys: no visit to the Supabase dashboard for those. It asks only for `EMSP_COUNTRY_CODE`, `EMSP_PARTY_ID` and `OCPI_TOKEN_ENCRYPTION_KEY`. Type `demo` in any you don't have yet (Vercel takes no empty field): the server stays in demo mode until every one is real. The server takes its public address from Vercel. Applying the migrations and adding the first admin are still yours: the [server's Deploy section](server/README.md#deploy) has the steps, then payments and scheduled jobs. It gives the server an origin of its own; the driver app is [deployed separately](#separate-origins).
+
 ### One domain
 
 The server's build can take in the driver app's web build, so one deployment serves both:
@@ -86,17 +94,13 @@ The server's build can take in the driver app's web build, so one deployment ser
 cd server && EXPO_PUBLIC_API_URL=https://emsp.example.com npm run build:one-domain && npm start
 ```
 
-It installs and builds the app in `app/` from its own lockfile and copies `app/dist` into `server/public/`. The app calls the API on its own origin, so no `APP_ORIGINS` is needed. It needs the whole template folder, so start from a fork or a copy of it, not from the Deploy button below; the steps for Vercel are in the [server README](server/README.md#one-domain).
+It installs and builds the app in `app/` from its own lockfile and copies `app/dist` into `server/public/`. The app calls the API on its own origin, so no `APP_ORIGINS` is needed. It needs the whole template folder, so start from a fork or a copy of it, not from the Deploy button above; the steps for Vercel are in the [server README](server/README.md#one-domain).
 
 **Security: one domain is one origin.** A browser keeps scripts apart by origin, not by path, so a script flaw in the driver app can reach the admin web and the other way round. The stricter layout is [an origin each](#separate-origins), for example the server at `emsp.example.com` and the app at `drive.example.com`. What exactly can reach what is in the [server README](server/README.md#one-origin-one-risk).
 
 ### Separate origins
 
-**Server and admin web, on Vercel:**
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples&root-directory=emsp-starter%2Fserver&project-name=emsp-starter-server&repository-name=emsp-starter&env=EMSP_COUNTRY_CODE,EMSP_PARTY_ID,PUBLIC_BASE_URL,SUPABASE_URL,SUPABASE_SERVICE_ROLE_KEY,OCPI_TOKEN_ENCRYPTION_KEY&envDescription=Live-mode%20settings.%20Type%20demo%20in%20any%20you%20don%27t%20have%20yet%3A%20the%20server%20stays%20in%20demo%20mode%20until%20all%20of%20them%20are%20real.&envLink=https%3A%2F%2Fgithub.com%2FIvora-Charge%2Fivora-examples%2Ftree%2Fmain%2Femsp-starter%2Fserver%23deploy)
-
-The button asks for the live-mode settings. Type `demo` in any you don't have yet (Vercel takes no empty field): the server stays in demo mode until every one is real. See the [server's Deploy section](server/README.md#deploy) for the rest (payments, scheduled jobs, the first admin).
+**Server and admin web:** the [one-click](#one-click) project above, which holds the server alone. To set it up by hand instead (your own Supabase project, or another host), follow the server README's [By hand](server/README.md#by-hand).
 
 **Driver app:**
 
