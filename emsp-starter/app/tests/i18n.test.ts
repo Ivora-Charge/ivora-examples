@@ -172,6 +172,36 @@ describe("presenting places", () => {
     expect(p.connector("SOMETHING_NEW")).toBe("Other plug");
   });
 
+  // The OCPI 2.2.1 list the server validates against (the packages share no code).
+  const standards = [
+    ...readFileSync(join(root, "../server/lib/ocpi/locations.ts"), "utf8")
+      .match(/export const CONNECTOR_TYPES = \[([^\]]*)\] as const;/)![1]
+      .matchAll(/"([^"]+)"/g),
+  ].map((m) => m[1]);
+
+  it("names every connector standard the server accepts", () => {
+    // OCPI 2.2.1 has this many: a shorter list means the reading above broke.
+    expect(standards.length).toBeGreaterThanOrEqual(40);
+    expect(
+      standards.filter((s) =>
+        ["", `connector.${s}`, "Other plug"].includes(p.connector(s)),
+      ),
+    ).toEqual([]);
+    // Two standards never read the same.
+    expect(new Set(standards.map(p.connector)).size).toBe(standards.length);
+    // No name for a value the server would refuse, such as a misspelt key.
+    expect(
+      Object.keys(en).filter(
+        (k) =>
+          k.startsWith("connector.") &&
+          k !== "connector.other" &&
+          !standards.includes(k.slice("connector.".length)),
+      ),
+    ).toEqual([]);
+    expect(p.connector("DOMESTIC_B")).toBe("Type B (US household)");
+    expect(p.connector("DOMESTIC_F")).toBe("Schuko");
+  });
+
   const weekdays = {
     opening_times: {
       twentyfourseven: false,
