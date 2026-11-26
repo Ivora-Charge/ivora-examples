@@ -1,17 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useId, useState } from "react";
-import { Result, State, utc } from "../ui/kit";
+import Link from "next/link";
+import { useCallback, useEffect, useId } from "react";
+import { useAdmin } from "../ui/admin-context";
+import { Icon, Result, State, utc } from "../ui/kit";
 import { ActionForm, ConfirmButton } from "../ui/parts";
 import { fields, useAction } from "../ui/use-action";
 import {
   addRfidCardAction,
   changeTokenAction,
   createAppTokenAction,
-  driverAccountAction,
   driverTokensAction,
   retryPushesAction,
-  type DriverSummary,
   type TokenActionState,
   type TokenSummary,
 } from "./actions";
@@ -62,31 +62,6 @@ function Answer({ state }: { state: TokenActionState }) {
     <Result state={state}>
       <FailedPushes state={state} />
     </Result>
-  );
-}
-
-function DriverFacts({ d }: { d: DriverSummary }) {
-  return (
-    <dl className="facts">
-      <dt>Driver</dt>
-      <dd>
-        <code>{d.id}</code>
-      </dd>
-      <dt>Email</dt>
-      <dd>{d.email}</dd>
-      <dt>Status</dt>
-      <dd>
-        {d.status === "active" ? (
-          <State kind="ok">active (may charge)</State>
-        ) : (
-          <State kind="bad">blocked</State>
-        )}
-      </dd>
-      <dt>Card on file</dt>
-      <dd>{d.hasCard ? "yes" : "no"}</dd>
-      <dt>Since</dt>
-      <dd>{utc(d.createdAt)}</dd>
-    </dl>
   );
 }
 
@@ -272,276 +247,198 @@ export function TokenByUid() {
   );
 }
 
-function Driver({ driverRef }: { driverRef: string }) {
-  const account = useAction(driverAccountAction);
+/**
+ * One driver's tokens, on the driver's page: the list, each token's actions, a new app
+ * token and a new RFID card. `onChange` hears of a change, for facts shown elsewhere.
+ */
+export function DriverTokens({
+  driverRef,
+  onChange,
+}: {
+  driverRef: string;
+  onChange?: () => Promise<unknown>;
+}) {
+  const { signedIn } = useAdmin();
   const tokens = useAction(driverTokensAction);
   const change = useAction(changeTokenAction);
   const create = useAction(createAppTokenAction);
   const rfid = useAction(addRfidCardAction);
   const id = useId();
 
-  const { run: readAccount } = account;
   const { run: runTokens } = tokens;
   const readTokens = useCallback(
     () => runTokens(fields({ driverRef })),
     [runTokens, driverRef],
   );
-  // Read when this driver is shown (the parent gives each search its own key).
   useEffect(() => {
-    void readAccount(fields({ driverRef, intent: "show" }));
-    void readTokens();
-  }, [readAccount, readTokens, driverRef]);
-  const driver = account.state.driver;
+    if (signedIn) void readTokens();
+  }, [signedIn, readTokens]);
+  const changed = async () => {
+    await readTokens();
+    await onChange?.();
+  };
   const list = tokens.state.tokens ?? [];
   const hasApp = list.some((t) => t.type === "APP_USER");
 
   return (
-    <div className="stack">
-      <section className="card stack" aria-labelledby={`${id}-account`}>
-        <h2 id={`${id}-account`}>
-          Driver <span className="mono muted">{driverRef}</span>
-        </h2>
-        {!account.done ? (
+    <section className="stack" aria-labelledby={`${id}-tokens`}>
+      <h2 id={`${id}-tokens`}>Tokens</h2>
+      <Answer state={change.state} />
+      {!tokens.done ? (
+        <p className="muted" role="status">
+          Loading…
+        </p>
+      ) : tokens.state.ok === false ? (
+        <Result state={tokens.state} />
+      ) : (
+        <>
           <p className="muted" role="status">
-            Loading…
+            {tokens.state.message}
           </p>
-        ) : (
-          <>
-            <Result state={account.state} />
-            {driver && <DriverFacts d={driver} />}
-          </>
-        )}
-        {driver && (
-          <>
-            <p className="small muted">
-              A blocked driver may not charge with any of their tokens: CPOs
-              that ask us get NOT_ALLOWED, and the app refuses to start. A CPO
-              may let a whitelisted token charge without asking: block the
-              tokens too for that.
-            </p>
-            <div className="row" aria-busy={account.pending}>
-              {driver.status === "active" ? (
-                <ConfirmButton
-                  ask="Block this driver? They may not charge until unblocked."
-                  yes="Yes, block the driver"
-                  onConfirm={() =>
-                    account.run(fields({ driverRef, intent: "block" }))
-                  }
-                >
-                  Block driver
-                </ConfirmButton>
-              ) : (
-                <button
-                  type="button"
-                  className="btn ghost sm"
-                  onClick={() =>
-                    void account.run(fields({ driverRef, intent: "unblock" }))
-                  }
-                >
-                  Unblock driver
-                </button>
-              )}
-            </div>
-          </>
-        )}
-      </section>
-
-      <section className="stack" aria-labelledby={`${id}-tokens`}>
-        <h2 id={`${id}-tokens`}>Tokens</h2>
-        <Answer state={change.state} />
-        {!tokens.done ? (
-          <p className="muted" role="status">
-            Loading…
+          {list.length > 0 && (
+            <ul className="list" aria-busy={tokens.pending || change.pending}>
+              {list.map((t) => (
+                <TokenItem
+                  key={`${t.type}:${t.uid}`}
+                  token={t}
+                  onChange={async (values) => {
+                    await change.run(fields(values));
+                    await changed();
+                  }}
+                />
+              ))}
+            </ul>
+          )}
+          <p className="small muted">
+            A blocked token is refused from now on and the change is pushed to
+            every CPO at once.
           </p>
-        ) : tokens.state.ok === false ? (
-          <Result state={tokens.state} />
-        ) : (
-          <>
-            <p className="muted" role="status">
-              {tokens.state.message}
-            </p>
-            {list.length > 0 && (
-              <ul className="list" aria-busy={tokens.pending || change.pending}>
-                {list.map((t) => (
-                  <TokenItem
-                    key={`${t.type}:${t.uid}`}
-                    token={t}
-                    onChange={async (values) => {
-                      await change.run(fields(values));
-                      await readTokens();
-                    }}
-                  />
-                ))}
-              </ul>
-            )}
-            <p className="small muted">
-              A blocked token is refused from now on and the change is pushed to
-              every CPO at once.
-            </p>
-          </>
-        )}
+        </>
+      )}
 
-        <div className="card stack">
-          <details
-            className="fold"
-            open={tokens.done && !hasApp ? true : undefined}
+      <div className="card stack">
+        <details
+          className="fold"
+          open={tokens.done && !hasApp ? true : undefined}
+        >
+          <summary>Create an app token</summary>
+          <ActionForm
+            aria-label="Create an app token"
+            onSend={async (fd) => {
+              const r = await create.run(fd);
+              if (r.ok) await changed();
+            }}
           >
-            <summary>Create an app token</summary>
-            <ActionForm
-              aria-label="Create an app token"
-              onSend={async (fd) => {
-                const r = await create.run(fd);
-                if (r.ok) await readTokens();
-              }}
-            >
-              <p className="muted">
-                Gives a driver a new contract ID and the token the app charges
-                with. One per driver. Drivers get their app token at their first
-                sign-in in the app; use this for support.
-              </p>
-              <input type="hidden" name="driverRef" value={driverRef} />
-              <div className="fields">
-                <WhitelistField />
-                <div className="field">
-                  <label htmlFor={`${id}-lang`}>Language (optional)</label>
-                  <input
-                    id={`${id}-lang`}
-                    name="language"
-                    maxLength={2}
-                    placeholder="en"
-                  />
-                </div>
+            <p className="muted">
+              Gives a driver a new contract ID and the token the app charges
+              with. One per driver. Drivers get their app token at their first
+              sign-in in the app; use this for support.
+            </p>
+            <input type="hidden" name="driverRef" value={driverRef} />
+            <div className="fields">
+              <WhitelistField />
+              <div className="field">
+                <label htmlFor={`${id}-lang`}>Language (optional)</label>
+                <input
+                  id={`${id}-lang`}
+                  name="language"
+                  maxLength={2}
+                  placeholder="en"
+                />
               </div>
-              <div>
-                <button type="submit" className="btn ghost sm">
-                  Create app token
-                </button>
-              </div>
-            </ActionForm>
-          </details>
-          <Answer state={create.state} />
-        </div>
+            </div>
+            <div>
+              <button type="submit" className="btn ghost sm">
+                Create app token
+              </button>
+            </div>
+          </ActionForm>
+        </details>
+        <Answer state={create.state} />
+      </div>
 
-        <div className="card stack">
-          <details className="fold">
-            <summary>Add an RFID card</summary>
-            <ActionForm
-              aria-label="Add an RFID card"
-              onSend={async (fd) => {
-                const r = await rfid.run(fd);
-                if (r.ok) await readTokens();
-              }}
-            >
-              <p className="muted">
-                The card joins the driver&apos;s contract. The driver needs an
-                app token first. Until RFID billing is available, cards are
-                pushed as NEVER and refused at authorization: they cannot start
-                charging yet.
-              </p>
-              <input type="hidden" name="driverRef" value={driverRef} />
-              <div className="fields">
-                <div className="field">
-                  <label htmlFor={`${id}-uid`}>Card UID</label>
-                  <input
-                    id={`${id}-uid`}
-                    name="uid"
-                    required
-                    maxLength={64}
-                    autoComplete="off"
-                    placeholder="04A1B2C3D4E5F6"
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor={`${id}-visual`}>
-                    Printed number (optional)
-                  </label>
-                  <input
-                    id={`${id}-visual`}
-                    name="visualNumber"
-                    maxLength={64}
-                    autoComplete="off"
-                  />
-                </div>
-                <div className="field">
-                  <label htmlFor={`${id}-exp`}>Expires (optional)</label>
-                  <input id={`${id}-exp`} name="expiresAt" type="date" />
-                </div>
+      <div className="card stack">
+        <details className="fold">
+          <summary>Add an RFID card</summary>
+          <ActionForm
+            aria-label="Add an RFID card"
+            onSend={async (fd) => {
+              const r = await rfid.run(fd);
+              if (r.ok) await changed();
+            }}
+          >
+            <p className="muted">
+              The card joins the driver&apos;s contract. The driver needs an app
+              token first. Until RFID billing is available, cards are pushed as
+              NEVER and refused at authorization: they cannot start charging
+              yet.
+            </p>
+            <input type="hidden" name="driverRef" value={driverRef} />
+            <div className="fields">
+              <div className="field">
+                <label htmlFor={`${id}-uid`}>Card UID</label>
+                <input
+                  id={`${id}-uid`}
+                  name="uid"
+                  required
+                  maxLength={64}
+                  autoComplete="off"
+                  placeholder="04A1B2C3D4E5F6"
+                />
               </div>
-              <div>
-                <button type="submit" className="btn ghost sm">
-                  Add card
-                </button>
+              <div className="field">
+                <label htmlFor={`${id}-visual`}>
+                  Printed number (optional)
+                </label>
+                <input
+                  id={`${id}-visual`}
+                  name="visualNumber"
+                  maxLength={64}
+                  autoComplete="off"
+                />
               </div>
-            </ActionForm>
-          </details>
-          <Answer state={rfid.state} />
-        </div>
-      </section>
-    </div>
+              <div className="field">
+                <label htmlFor={`${id}-exp`}>Expires (optional)</label>
+                <input id={`${id}-exp`} name="expiresAt" type="date" />
+              </div>
+            </div>
+            <div>
+              <button type="submit" className="btn ghost sm">
+                Add card
+              </button>
+            </div>
+          </ActionForm>
+        </details>
+        <Answer state={rfid.state} />
+      </div>
+    </section>
   );
 }
 
 export function TokenAdmin({
   tokensUrl,
-  sampleDriver,
 }: {
   /** Where CPOs pull every token from: null unless an admin is signed in by email. */
   tokensUrl: string | null;
-  /** Demo mode: the sample driver's reference. */
-  sampleDriver: string | null;
 }) {
-  const [driverRef, setDriverRef] = useState<string | null>(null);
-  // A new search of the same driver reads it again.
-  const [round, setRound] = useState(0);
   const retry = useAction(retryPushesAction);
   const id = useId();
   return (
     <div className="stack">
-      <section className="card stack" aria-labelledby={`${id}-find`}>
-        <h2 id={`${id}-find`}>Find a driver</h2>
-        <ActionForm
-          onSend={async (fd) => {
-            const ref = String(fd.get("driverRef") ?? "").trim();
-            if (!ref) return;
-            setDriverRef(ref);
-            setRound((n) => n + 1);
-          }}
-        >
-          <div className="field">
-            <label htmlFor={`${id}-ref`}>Driver reference</label>
-            <input
-              id={`${id}-ref`}
-              name="driverRef"
-              required
-              maxLength={64}
-              autoComplete="off"
-              defaultValue={sampleDriver ?? undefined}
-              aria-describedby={`${id}-ref-h`}
-            />
-            <span className="hint" id={`${id}-ref-h`}>
-              The exact reference, as Sessions and Payments show it. There is no
-              search by name or email.
-              {sampleDriver && (
-                <>
-                  {" "}
-                  Demo mode: tokens are kept in memory only and nothing is
-                  pushed to a CPO. The sample driver is{" "}
-                  <code>{sampleDriver}</code>.
-                </>
-              )}
-            </span>
-          </div>
-          <div>
-            <button type="submit" className="btn">
-              Find driver
-            </button>
-          </div>
-        </ActionForm>
+      <section className="card stack" aria-labelledby={`${id}-driver`}>
+        <h2 id={`${id}-driver`} className="h3">
+          One driver&apos;s tokens
+        </h2>
+        <p className="small muted">
+          A driver&apos;s tokens, a new app token and a new RFID card are on the
+          driver&apos;s page.
+        </p>
+        <div>
+          <Link className="btn ghost sm" href="/admin/drivers">
+            Find a driver <Icon name="arrow" />
+          </Link>
+        </div>
       </section>
-
-      {driverRef && (
-        <Driver key={`${driverRef}:${round}`} driverRef={driverRef} />
-      )}
 
       <TokenByUid />
 

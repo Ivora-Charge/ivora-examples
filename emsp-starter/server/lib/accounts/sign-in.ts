@@ -298,7 +298,16 @@ export async function verify(
 ): Promise<{ session: AuthSession; driver: Driver }> {
   const session = await verifyProof(input, client, deps);
   const driver = await ensureAccount(session.user, deps);
-  return { session, driver };
+  const now = (deps.now?.() ?? new Date()).toISOString();
+  try {
+    await deps.accounts.recordSignIn(driver.id, now);
+  } catch (e) {
+    // For the admin's list only (and a database may not have the column yet): the
+    // code is used up, so the driver is signed in whether or not this was written.
+    console.error(`Recording a sign-in failed: ${logText(e)}`);
+    return { session, driver };
+  }
+  return { session, driver: { ...driver, lastSignInAt: now } };
 }
 
 /** A new session for a refresh token. */

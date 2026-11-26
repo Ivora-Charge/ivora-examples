@@ -8,6 +8,7 @@ import { ActionForm, ConfirmButton } from "../ui/parts";
 import { fields, useAction, useList } from "../ui/use-action";
 import {
   decideAction,
+  driverPaymentsAction,
   lookupPaymentAction,
   paymentAuditAction,
   refundAction,
@@ -394,10 +395,118 @@ function FindPayment({ find }: { find?: string }) {
   );
 }
 
+/** One driver's payments, by their exact reference; each opens with its actions. */
+function DriverPayments({ driver }: { driver?: string }) {
+  const { signedIn } = useAdmin();
+  const list = useAction(driverPaymentsAction);
+  const [open, setOpen] = useState<string | null>(null);
+  const { run } = list;
+  useEffect(() => {
+    if (signedIn && driver) void run(fields({ driverRef: driver }));
+  }, [signedIn, driver, run]);
+  const payments = list.state.ok ? (list.state.payments ?? []) : [];
+  const opened = payments.find((p) => p.id === open);
+  return (
+    <section className="stack" aria-labelledby="driver-h">
+      <h2 id="driver-h">A driver&apos;s payments</h2>
+      <ActionForm
+        className="card form"
+        onSend={async (form) => {
+          setOpen(null);
+          await run(form);
+        }}
+      >
+        <div className="field">
+          <label htmlFor="driver-ref">Driver reference</label>
+          <input
+            id="driver-ref"
+            name="driverRef"
+            required
+            maxLength={64}
+            autoComplete="off"
+            defaultValue={driver}
+            aria-describedby="driver-hint"
+          />
+          <span className="hint" id="driver-hint">
+            The whole reference, exactly, as the driver&apos;s page shows it.
+          </span>
+        </div>
+        <div>
+          <button className="btn" type="submit">
+            List payments
+          </button>
+        </div>
+      </ActionForm>
+      {list.state.ok === false && <Result state={list.state} />}
+      {list.state.ok && (
+        <p className="muted small" role="status">
+          {list.state.message}
+          {payments.length > 0 && " Newest first."}
+        </p>
+      )}
+      {payments.length > 0 && (
+        <div className="card tablecard">
+          <table className="data">
+            <caption className="sr">The driver&apos;s payments</caption>
+            <thead>
+              <tr>
+                <th scope="col">Payment</th>
+                <th scope="col">Since</th>
+                <th scope="col" className="num">
+                  Captured
+                </th>
+                <th scope="col">State</th>
+                <th scope="col">
+                  <span className="sr">Open</span>
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {payments.map((p) => (
+                <tr key={p.id}>
+                  <th scope="row" className="c-main">
+                    <span className="mono">{p.id}</span>
+                  </th>
+                  <td className="c-kv" data-l="Since">
+                    {utc(p.createdAt)}
+                  </td>
+                  <td className="c-big num">
+                    {formatMinorAmount(p.capturedAmount, p.currency)}
+                  </td>
+                  <td className="c-state">
+                    {p.review && !p.reviewedAt ? (
+                      <State kind="todo">Needs review</State>
+                    ) : (
+                      <State kind="done">{p.status}</State>
+                    )}
+                  </td>
+                  <td className="c-wide">
+                    <button
+                      className="btn ghost sm"
+                      type="button"
+                      aria-expanded={open === p.id}
+                      onClick={() => setOpen(open === p.id ? null : p.id)}
+                    >
+                      {open === p.id ? "Close" : "Open"}
+                      <span className="sr"> payment {p.id}</span>
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {opened && <PaymentPanel key={opened.id} payment={opened} />}
+    </section>
+  );
+}
+
 export function PaymentAdmin({
   demo,
   stripeSet,
   find,
+  driver,
 }: {
   demo: boolean;
   /**
@@ -407,6 +516,8 @@ export function PaymentAdmin({
   stripeSet: boolean | null;
   /** A payment or charge ID to look up at once (from a link). */
   find?: string;
+  /** A driver reference whose payments are listed at once (from a link). */
+  driver?: string;
 }) {
   return (
     <div className="stack">
@@ -434,8 +545,11 @@ export function PaymentAdmin({
           </div>
         )
       )}
+      {/* A driver named in the address is what was asked for: first. */}
+      {driver && <DriverPayments key={driver} driver={driver} />}
       <ReviewList />
       <FindPayment find={find} />
+      {!driver && <DriverPayments />}
     </div>
   );
 }

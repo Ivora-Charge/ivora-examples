@@ -41,7 +41,8 @@ export type TokenSummary = {
 /** A driver's account as the admin web shows it: no card details, no Stripe IDs. */
 export type DriverSummary = {
   id: string;
-  email: string;
+  /** Null for an admin-secret session: emails go to an admin signed in by email. */
+  email: string | null;
   status: Driver["status"];
   hasCard: boolean;
   createdAt: string;
@@ -57,9 +58,9 @@ export type TokenActionState = {
   driver?: DriverSummary;
 };
 
-const driverSummary = (d: Driver): DriverSummary => ({
+const driverSummary = (d: Driver, actor: string): DriverSummary => ({
   id: d.id,
-  email: d.email,
+  email: actor === "admin:secret" ? null : d.email,
   status: d.status,
   hasCard: d.defaultPaymentMethodId !== null,
   createdAt: d.createdAt,
@@ -232,7 +233,9 @@ export async function driverAccountAction(
     if (!ref || ref.length > 64)
       return { ok: false, message: "Enter a driver reference." };
     const accounts = accountStore();
-    const held = await accounts.getDriver(ref);
+    // The exact reference: one that cannot be an account ID is "no account" too.
+    const [held] = (await accounts.listDrivers({ reference: ref, limit: 1 }))
+      .drivers;
     if (!held)
       return {
         ok: false,
@@ -257,7 +260,7 @@ export async function driverAccountAction(
           to === null
             ? "Driver found."
             : `The driver is already ${to === "active" ? "unblocked" : "blocked"}.`,
-        driver: driverSummary(held),
+        driver: driverSummary(held, actor),
       };
     const driver = await accounts.updateDriver(
       ref,
@@ -277,7 +280,7 @@ export async function driverAccountAction(
         to === "restricted"
           ? "Driver blocked: they may not charge until unblocked."
           : "Driver unblocked. Tokens blocked one by one stay blocked.",
-      driver: driverSummary(driver),
+      driver: driverSummary(driver, actor),
     };
   });
 }

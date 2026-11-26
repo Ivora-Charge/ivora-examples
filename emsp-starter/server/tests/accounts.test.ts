@@ -187,6 +187,46 @@ describe("passwordless sign-in (demo mode)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 
+  it("records the time of each sign-in, and only of a sign-in", async () => {
+    const first = await signIn("seen@example.com");
+    const held = async () =>
+      (await accounts.getDriver(first.driver.id))!.lastSignInAt;
+    const at = await held();
+    expect(at).not.toBeNull();
+    // A request or a refreshed session is not a sign-in.
+    await accounts.recordSignIn(first.driver.id, "2026-01-01T00:00:00.000Z");
+    await meGET(req("/api/v1/me", { token: first.session.accessToken }));
+    await refreshPOST(
+      post("/api/v1/auth/refresh", {
+        refreshToken: first.session.refreshToken,
+      }),
+    );
+    expect(await held()).toBe("2026-01-01T00:00:00.000Z");
+    // Nor is a wrong code.
+    const wrong = await verifyPOST(
+      post("/api/v1/auth/verify", {
+        email: "seen@example.com",
+        code: "999999",
+      }),
+    );
+    expect(wrong.status).toBe(401);
+    expect(await held()).toBe("2026-01-01T00:00:00.000Z");
+    await signIn("seen@example.com");
+    expect(Date.parse((await held())!)).toBeGreaterThanOrEqual(Date.parse(at!));
+  });
+
+  it("signs the driver in when the time cannot be recorded", async () => {
+    vi.spyOn(accounts, "recordSignIn").mockRejectedValue(
+      new Error("no such column: seen@example.com"),
+    );
+    const { driver, session } = await signIn("seen@example.com");
+    expect(driver.email).toBe("seen@example.com");
+    expect(session.accessToken).toBeTruthy();
+    expect(console.error).toHaveBeenCalledWith(
+      "Recording a sign-in failed: Error",
+    );
+  });
+
   it("refuses a wrong code, a bad email and a missing token", async () => {
     await codePOST(post("/api/v1/auth/code", { email: "a@example.com" }));
     const wrong = await verifyPOST(

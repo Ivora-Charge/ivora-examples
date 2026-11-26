@@ -99,12 +99,25 @@ const PAGES: [string, Show][] = [
   ],
   [
     "drivers",
-    at("Drivers and tokens", async (page) => {
-      await page.getByLabel("Driver reference").fill("demo-driver");
-      await page.getByRole("button", { name: "Find driver" }).click();
+    at("Drivers", async (page) => {
+      await expect(
+        page.getByRole("table", { name: "Drivers, newest first" }),
+      ).toContainText("demo-driver");
+    }),
+  ],
+  [
+    "driver",
+    at("Drivers", async (page) => {
+      await page
+        .getByRole("table", { name: "Drivers, newest first" })
+        .getByRole("link", { name: "demo-driver" })
+        .click();
       await expect(page.getByRole("region", { name: "Tokens" })).toContainText(
         "token(s)",
       );
+      await expect(
+        page.getByRole("region", { name: "Last payments" }),
+      ).toBeVisible();
     }),
   ],
 ];

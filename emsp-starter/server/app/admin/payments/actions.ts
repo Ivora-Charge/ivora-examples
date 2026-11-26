@@ -11,6 +11,7 @@ import {
 import type { Payment, Refund } from "@/lib/payments/store";
 import { formatMinorAmount } from "@/lib/locations/pricing";
 import { asAdmin as gate, field } from "@/lib/server/admin-action";
+import { isDriverReference } from "../drivers/reference";
 
 /** A payment as the admin web shows it. Amounts in minor units; never card data. */
 export type PaymentSummary = Pick<
@@ -137,6 +138,31 @@ export async function lookupPaymentAction(
       ok: true,
       message: "Payment found.",
       payments: [summary(p, await d.payments.listRefunds(p.id))],
+    };
+  });
+}
+
+/** Payments shown for one driver. */
+const DRIVER_LIMIT = 50;
+
+/** One driver's payments, newest first, by the exact driver reference. */
+export async function driverPaymentsAction(
+  _prev: PaymentActionState,
+  form: FormData,
+): Promise<PaymentActionState> {
+  return asAdmin(form, async () => {
+    const ref = field(form, "driverRef").trim();
+    if (!isDriverReference(ref))
+      return { ok: false, message: "Enter a driver reference." };
+    const payments = (
+      await paymentDeps("admin").payments.listByDriver(ref, DRIVER_LIMIT)
+    ).map((p) => summary(p));
+    return {
+      ok: true,
+      message: payments.length
+        ? `${payments.length} payment(s)${payments.length === DRIVER_LIMIT ? `, the newest ${DRIVER_LIMIT}` : ""}.`
+        : "No payments for this driver.",
+      payments,
     };
   });
 }

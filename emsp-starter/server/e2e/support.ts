@@ -27,7 +27,8 @@ export type Place =
   | "Problems"
   | "Payments"
   | "Reconciliation"
-  | "Drivers and tokens"
+  | "Drivers"
+  | "Tokens"
   | "Account";
 
 const isPhone = (page: Page) => (page.viewportSize()?.width ?? 1280) < 960;

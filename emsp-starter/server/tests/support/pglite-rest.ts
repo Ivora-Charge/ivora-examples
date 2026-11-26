@@ -2,8 +2,9 @@ import type { PGlite, Transaction } from "@electric-sql/pglite";
 
 /**
  * Just enough of Supabase's Data API (PostgREST) over PGlite for the stores' requests:
- * GET, PATCH and DELETE with eq/lt/gte/lte/in/is filters, an `or=(...)` of ilike
- * filters (on a column or a `column->>key` of a json one) and `select` (GET also with
+ * GET, PATCH and DELETE with eq/lt/gte/lte/ilike/in/is/not.is filters, an `or=(...)`
+ * of ilike filters (on a column or a `column->>key` of a json one) or of a keyset
+ * cursor (`a.lt."x",and(a.eq."x",b.lt.y)`), and `select` (GET also with
  * `order`, `limit` and `offset`); HEAD with `Prefer: count=exact`, answered in
  * Content-Range with no body; POST inserts with `on_conflict` and
  * `resolution=ignore-duplicates`; and POST rpc/<function> with named arguments. Each request runs in its own transaction as service_role, like PostgREST,
@@ -76,6 +77,18 @@ function orFilter(value: string, args: unknown[]): string {
     .join(" or ")})`;
 }
 
+/** `(a.lt."x",and(a.eq."x",b.lt.y))`: what comes after (x, y), newest first. */
+function keysetFilter(value: string, args: unknown[]): string | null {
+  const m =
+    /^\(([a-z_]+)\.lt\."([^"]*)",and\(([a-z_]+)\.eq\."([^"]*)",([a-z_]+)\.lt\.([^",()]+)\)\)$/.exec(
+      value,
+    );
+  if (!m) return null;
+  const [, a, x, same, sameX, b, y] = m;
+  const arg = (v: string) => `$${args.push(v)}`;
+  return `(${ident(a)} < ${arg(x)} or (${ident(same)} = ${arg(sameX)} and ${ident(b)} < ${arg(y)}))`;
+}
+
 /** `order=a.asc,b.desc`, `limit` and `offset` of a GET. */
 function paging(params: URLSearchParams): string {
   let sql = "";
@@ -102,7 +115,7 @@ function where(params: URLSearchParams, args: unknown[]): string {
   const out: string[] = [];
   for (const [column, filter] of params) {
     if (column === "or") {
-      out.push(orFilter(filter, args));
+      out.push(keysetFilter(filter, args) ?? orFilter(filter, args));
       continue;
     }
     if (RESERVED.has(column)) continue;
@@ -115,6 +128,10 @@ function where(params: URLSearchParams, args: unknown[]): string {
     else if (op === "lt") out.push(`${col} < ${arg()}`);
     else if (op === "gte") out.push(`${col} >= ${arg()}`);
     else if (op === "lte") out.push(`${col} <= ${arg()}`);
+    // PostgREST reads `*` as `%`; a backslash escapes in ILIKE, as in Postgres.
+    else if (op === "ilike")
+      out.push(`${col} ilike $${args.push(value.replaceAll("*", "%"))}`);
+    else if (filter === "not.is.null") out.push(`${col} is not null`);
     else if (op === "is") {
       if (!["null", "true", "false"].includes(value))
         throw new Error(`Bad is.${value}`);
