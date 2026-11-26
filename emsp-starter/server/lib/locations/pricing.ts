@@ -41,6 +41,12 @@ export type DisplayComponent = {
   text: string;
   /** When it applies, for example ["Mon–Fri", "08:00–20:00"]. Empty: always. */
   conditions: string[];
+  /**
+   * Only in `now.others`: this rate comes later in a session and is added to what
+   * applies now, instead of being an alternative to it. Says from when, for example
+   * ["after 45 min"].
+   */
+  later?: string[];
 };
 
 /** What a driver who starts a session at a given moment is told. */
@@ -57,7 +63,10 @@ export type PriceNow = {
    * Each keeps its condition. Shown beside what applies now, never as a later rate.
    */
   tiers: DisplayComponent[];
-  /** The other rates, each with when it applies in `conditions`. */
+  /**
+   * The other rates, each with when it applies in `conditions`. One that starts later
+   * in a session and adds to what applies now also has `later`.
+   */
   others: DisplayComponent[];
   /**
    * A dimension has several different rates without conditions. Only the first
@@ -560,13 +569,112 @@ function holdsAtStart(r: TariffRestrictions = {}, start: Moment): boolean {
   return restrictionsMatch(known, start);
 }
 
+type Rate = { c: DisplayComponent; e: TariffElement };
+
+/** Whether a rate waits for time or energy to be used up before it can apply. */
+const startsLater = (r: TariffRestrictions = {}) =>
+  (r.min_duration ?? 0) > 0 || (r.min_kwh ?? 0) > 0;
+
+/** Whether two rates can never hold at the same point of a session. */
+function apart(a: TariffRestrictions = {}, b: TariffRestrictions = {}) {
+  const endsBefore = (max: number | undefined, min: number | undefined) =>
+    max !== undefined && min !== undefined && max <= min;
+  return (
+    endsBefore(a.max_duration, b.min_duration) ||
+    endsBefore(b.max_duration, a.min_duration) ||
+    endsBefore(a.max_kwh, b.min_kwh) ||
+    endsBefore(b.max_kwh, a.min_kwh)
+  );
+}
+
+/**
+ * The rates of one dimension that are added to the price later in a session, each with
+ * the words for when. `rates` are the dimension's, in tariff order, that can apply on
+ * this day at this connector; `pick` is the one that applies as the session starts.
+ *
+ * Only a dimension that costs nothing at the start has them: beside a paid rate, a
+ * later one replaces it (first match) and is no extra fee. They are named only when
+ * every other paid rate of the dimension is one, and no rate before it in the tariff
+ * could price the same part of the session, so that "plus" never counts twice or names
+ * a rate that cannot apply. Two shapes qualify:
+ * - rates with a minimum duration or energy ("after 45 min");
+ * - the rate for any time that follows a free first period ("free for the first
+ *   30 min, then ...").
+ */
+function laterRates(
+  rates: Rate[],
+  pick: Rate | undefined,
+): Map<Rate, string[]> {
+  const none = new Map<Rate, string[]>();
+  if (pick && pick.c.priceE4 > 0) return none;
+  const paid = rates.filter((x) => x !== pick && x.c.priceE4 > 0);
+  if (!paid.length) return none;
+
+  if (pick && paid.length === 1 && rates.indexOf(pick) === 0) {
+    const [next] = paid;
+    const { max_duration, max_kwh, ...rest } = pick.e.restrictions ?? {};
+    const oneLimit = (max_duration === undefined) !== (max_kwh === undefined);
+    if (
+      rates[1] === next &&
+      !restricted(next.e) &&
+      oneLimit &&
+      !Object.keys(rest).length
+    )
+      return new Map([
+        [
+          next,
+          describeRestrictions({
+            min_duration: max_duration,
+            min_kwh: max_kwh,
+          }),
+        ],
+      ]);
+  }
+
+  const clear = paid.every(
+    (x) =>
+      startsLater(x.e.restrictions) &&
+      rates
+        .slice(0, rates.indexOf(x))
+        .every((y) => apart(x.e.restrictions, y.e.restrictions)),
+  );
+  return clear
+    ? new Map(paid.map((x) => [x, describeRestrictions(x.e.restrictions)]))
+    : none;
+}
+
+/**
+ * Whether a rate can apply at some point of a session that starts now: its day, time
+ * and date hold, it is not for a reservation, and the connector can meet its power and
+ * current. How long the session has run and what it has used are not judged.
+ */
+function canApply(
+  r: TariffRestrictions = {},
+  start: Moment,
+  maxPowerKw?: number,
+  maxCurrentA?: number,
+): boolean {
+  const {
+    min_duration: _minDuration,
+    max_duration: _maxDuration,
+    min_kwh: _minKwh,
+    max_kwh: _maxKwh,
+    ...clock
+  } = r;
+  return (
+    holdsAtStart(clock, start) &&
+    atConnector(r, maxPowerKw, maxCurrentA) !== "never"
+  );
+}
+
 /**
  * The rates of a display price at a moment. `elements[i]` is the element of
  * `components[i]`. Per dimension, in tariff order (OCPI first match): a rate that
  * holds at the start whatever the car does is what applies now; a rate before it that
  * holds at the start but depends on the car's power or current is a tier beside it.
  * When no rate holds whatever the car does, the first tier is what applies now, with
- * its condition.
+ * its condition. Of the other rates, those that are added later in the session are
+ * marked (see `laterRates`), provided there is a price now for them to add to.
  */
 function priceNow(
   components: DisplayComponent[],
@@ -589,6 +697,8 @@ function priceNow(
     ...x.c,
     conditions: describeRestrictions(x.e.restrictions),
   });
+  /** The other rates that are added later in the session, by their `components`. */
+  const later = new Map<DisplayComponent, string[]>();
   for (const type of SHOWN) {
     const rates = components
       .map((c, i) => ({ c, e: elements[i] }))
@@ -608,6 +718,15 @@ function priceNow(
     pick ??= tiers.shift();
     if (pick) value.components.push(withConditions(pick));
     value.tiers.push(...tiers.map(withConditions));
+    // A session fee is charged once, as the session starts: none comes later.
+    if (type !== "FLAT")
+      for (const [x, words] of laterRates(
+        rates.filter((x) =>
+          canApply(x.e.restrictions, start, maxPowerKw, maxCurrentA),
+        ),
+        pick,
+      ))
+        later.set(x.c, words);
     const always = rates.filter((x) => !restricted(x.e));
     if (
       always.some(
@@ -629,6 +748,15 @@ function priceNow(
         .map((x) => x.c),
     );
   }
+  // A kind that costs nothing at any time is not shown, so it is no price to add to.
+  const priced = value.components.some((now) =>
+    components.some((c) => c.type === now.type && c.priceE4 > 0),
+  );
+  if (priced)
+    value.others = value.others.map((c) => {
+      const words = later.get(c);
+      return words ? { ...c, later: words } : c;
+    });
   return value;
 }
 

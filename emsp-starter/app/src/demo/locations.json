@@ -107,6 +107,9 @@
                       "text": "€7.26 per hour",
                       "conditions": [
                         "after 45 min"
+                      ],
+                      "later": [
+                        "after 45 min"
                       ]
                     }
                   ],
@@ -167,6 +170,9 @@
                       "vatIncluded": true,
                       "text": "€7.26 per hour",
                       "conditions": [
+                        "after 45 min"
+                      ],
+                      "later": [
                         "after 45 min"
                       ]
                     }
@@ -241,6 +247,9 @@
                       "vatIncluded": true,
                       "text": "€7.26 per hour",
                       "conditions": [
+                        "after 45 min"
+                      ],
+                      "later": [
                         "after 45 min"
                       ]
                     }
@@ -364,6 +373,9 @@
                       "text": "CA$7.26 per hour",
                       "conditions": [
                         "after 45 min"
+                      ],
+                      "later": [
+                        "after 45 min"
                       ]
                     }
                   ],
@@ -424,6 +436,9 @@
                       "vatIncluded": true,
                       "text": "CA$7.26 per hour",
                       "conditions": [
+                        "after 45 min"
+                      ],
+                      "later": [
                         "after 45 min"
                       ]
                     }
@@ -498,6 +513,9 @@
                       "vatIncluded": true,
                       "text": "CA$7.26 per hour",
                       "conditions": [
+                        "after 45 min"
+                      ],
+                      "later": [
                         "after 45 min"
                       ]
                     }
@@ -2420,6 +2438,9 @@
                       "text": "€7.26 per hour",
                       "conditions": [
                         "after 45 min"
+                      ],
+                      "later": [
+                        "after 45 min"
                       ]
                     }
                   ],
@@ -2480,6 +2501,9 @@
                       "vatIncluded": true,
                       "text": "€7.26 per hour",
                       "conditions": [
+                        "after 45 min"
+                      ],
+                      "later": [
                         "after 45 min"
                       ]
                     }
@@ -2554,6 +2578,9 @@
                       "vatIncluded": true,
                       "text": "€7.26 per hour",
                       "conditions": [
+                        "after 45 min"
+                      ],
+                      "later": [
                         "after 45 min"
                       ]
                     }

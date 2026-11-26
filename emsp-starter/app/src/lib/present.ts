@@ -41,6 +41,26 @@ export function present(i: I18n) {
       ? t("price.per.parking")
       : t(`price.per.${p.unit}`);
 
+  /**
+   * A rate's price: a price per unit keeps the tariff's decimals, a fee per session is
+   * an amount, rounded to the minor unit.
+   */
+  const priceOf = (c: Pick<LeadPrice, "type" | "priceE4">, currency: string) =>
+    c.type === "FLAT"
+      ? i.money(c.priceE4, currency)
+      : i.unitPrice(c.priceE4, currency);
+
+  /**
+   * A rate's conditions as one phrase: "Mon–Fri 07:00–21:00, after 2 h". The server
+   * sends the days first and the time of day next, which read as one.
+   */
+  const phrase = (conditions: string[]) =>
+    conditions.reduce((all, c) =>
+      /^(\d\d:\d\d–\d\d:\d\d|(from|until) \d\d:\d\d)$/.test(c)
+        ? `${all} ${c}`
+        : `${all}, ${c}`,
+    );
+
   /** The list's price: big amount and its unit, "No fee", or "Price not shared". */
   const lead = (
     price: LocationSummary["price"],
@@ -49,7 +69,7 @@ export function present(i: I18n) {
     if (price.free) return { amount: t("price.noFee"), unit: "" };
     if (price.lead && price.currency)
       return {
-        amount: i.money(price.lead.priceE4, price.currency),
+        amount: priceOf(price.lead, price.currency),
         unit: unit(price.lead),
       };
     // An older server without `lead`: its own one-line summary.
@@ -95,9 +115,11 @@ export function present(i: I18n) {
   /**
    * The price of a connector, for its detail and for the confirm screen. `amount` is
    * what applies now, every kind with equal weight ("€0.11 per kWh + €0.66 per hour"),
-   * and `session` the fee on top of it. `tiers` are rates that apply instead at some
-   * charging power or current ("€0.60 per kWh instead, at 50 kW or more"), shown beside
-   * `amount` with the same weight. The CPO's own free text (OCPI
+   * and `session` the fee on top of it; a rate that holds only at some times says so
+   * there ("€0.11 per kWh, Mon–Fri 07:00–21:00"). `tiers` are rates that apply instead
+   * at some charging power or current ("€0.60 per kWh instead, at 50 kW or more"),
+   * shown beside `amount` with the same weight. `later` are fees added to it later in
+   * the session ("After 45 min: plus €7.26 per hour"). The CPO's own free text (OCPI
    * `tariff_alt_text`) is often without VAT or in another language, so it is shown only
    * when the structured prices do not tell the whole story, and then as the CPO's note.
    */
@@ -112,14 +134,16 @@ export function present(i: I18n) {
     const shown = (c: DisplayComponent) => !paid.size || paid.has(c.type);
     const current = p.free ? [] : now.components.filter(shown);
     const tiers = p.free ? [] : (now.tiers ?? []).filter(shown);
-    const others = p.free ? [] : now.others.filter(shown);
-    const all = [...current, ...tiers, ...others];
+    const rest = p.free ? [] : now.others.filter(shown);
+    const later = rest.filter((c) => c.later?.length);
+    const others = rest.filter((c) => !c.later?.length);
+    const all = [...current, ...tiers, ...rest];
     const included = all.filter((c) => c.vatIncluded).length;
     const mixed = included > 0 && included < all.length;
     /** "€0.11 per kWh", saying its own VAT state when the rates differ in it. */
     const rate = (c: DisplayComponent) => {
       const text = t("price.line", {
-        price: i.money(c.priceE4, p.currency),
+        price: priceOf(c, p.currency),
         unit: unit(c),
       });
       return mixed
@@ -135,16 +159,30 @@ export function present(i: I18n) {
             conditions: c.conditions.join(", "),
           })
         : rate(c);
+    /** A price that applies now, followed by when it does, if it has a condition. */
+    const timed = (price: string, conditions: string[]) =>
+      conditions.length
+        ? t("price.timed", { price, conditions: phrase(conditions) })
+        : price;
+    const headline = (c: DisplayComponent) => timed(rate(c), c.conditions);
     const used = current.filter((c) => c.type !== "FLAT");
     const fee = current.find((c) => c.type === "FLAT");
+    /** The rates used, saying a condition they all share once, after the last. */
+    const usedNow = () => {
+      const shared =
+        new Set(used.map((c) => c.conditions.join("\n"))).size === 1;
+      return shared
+        ? timed(used.map(rate).join(" + "), used[0].conditions)
+        : used.map(headline).join(" + ");
+    };
     const amount = !structured
       ? t("price.unknown")
       : p.free
         ? t("price.noFee")
         : used.length
-          ? used.map(rate).join(" + ")
+          ? usedNow()
           : fee
-            ? rate(fee)
+            ? headline(fee)
             : t("price.varies");
     const unexplained = !p.free && now.unexplained;
     const price = {
@@ -156,16 +194,20 @@ export function present(i: I18n) {
         }),
       ),
       session:
-        used.length && fee ? t("price.plus", { price: rate(fee) }) : undefined,
-      /** When the rates that apply now do so, for those that have a condition. */
-      conditions: current
-        .filter((c) => c.conditions.length)
-        .map((c) =>
-          t("price.applies", {
-            unit: unit(c),
-            conditions: c.conditions.join(", "),
+        used.length && fee
+          ? t("price.plus", { price: headline(fee) })
+          : undefined,
+      later: [
+        ...new Set(
+          later.map((c) => {
+            const from = phrase(c.later!);
+            return t("price.later", {
+              from: from.charAt(0).toUpperCase() + from.slice(1),
+              price: rate(c),
+            });
           }),
         ),
+      ],
       others: [...new Set(others.map(when))],
       min: p.minPrice ? t("price.min", { amount: p.minPrice }) : undefined,
       max: p.maxPrice ? t("price.max", { amount: p.maxPrice }) : undefined,
@@ -182,15 +224,15 @@ export function present(i: I18n) {
           : undefined,
     };
     /**
-     * The confirm screen's lines: the same price as the page's. The other rates follow
-     * under their own label there, as on the page, so that a rate that starts later in
-     * the session ("after 2 h") is seen before starting.
+     * The confirm screen's lines: the same price as the page's, with the fees added
+     * later in the session. The other rates follow under their own label there, as on
+     * the page, so that they are seen before starting.
      */
     const lines = [
       price.amount,
       ...price.tiers,
       price.session,
-      ...price.conditions,
+      ...price.later,
       price.min,
       price.max,
       price.vat,

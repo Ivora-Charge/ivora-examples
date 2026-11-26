@@ -162,6 +162,13 @@ describe("the price that applies now", () => {
       // Only when there are any, so that the other cases read shorter.
       ...(now.tiers.length ? { tiers: read(now.tiers) } : {}),
       others: read(now.others),
+      ...(now.others.some((c) => c.later)
+        ? {
+            later: now.others
+              .filter((c) => c.later)
+              .map((c) => [c.type, c.priceE4, c.later!.join(", ")]),
+          }
+        : {}),
       unexplained: now.unexplained,
     };
   };
@@ -237,6 +244,7 @@ describe("the price that applies now", () => {
         ["FLAT", 5000, ""],
       ],
       others: [["TIME", 30000, "after 2 h"]],
+      later: [["TIME", 30000, "after 2 h"]],
       unexplained: false,
     });
   });
@@ -281,7 +289,196 @@ describe("the price that applies now", () => {
         ["ENERGY", 5000, "otherwise"],
         ["TIME", 20000, "otherwise"],
       ],
+      // The time costs nothing at first: its rate afterwards is added to the price.
+      // The energy's later rate replaces a paid one.
+      later: [["TIME", 20000, "after 30 min"]],
       unexplained: false,
+    });
+  });
+
+  describe("fees added later in the session", () => {
+    const energy = rate("ENERGY", 0.4);
+    const laterOf = (
+      elements: Element[],
+      limits: { maxPowerKw?: number } = {},
+      at = NOON,
+    ) => nowOf(tariff(elements), at, AMSTERDAM, limits).later;
+
+    it("marks an idle fee that starts after 45 min, and keeps it listed", () => {
+      const now = displayPrice(SAMPLE.DC_FAST, {
+        at: NOON,
+        timeZone: AMSTERDAM,
+      }).now!;
+      expect(now.components.map((c) => c.type)).toEqual(["ENERGY"]);
+      // Still in `others`, so an app that does not read `later` shows it as before.
+      expect(now.others).toMatchObject([
+        {
+          type: "TIME",
+          priceE4: 72600,
+          conditions: ["after 45 min"],
+          later: ["after 45 min"],
+        },
+      ]);
+      // The price's own components are not marked.
+      expect(
+        displayPrice(SAMPLE.DC_FAST, { at: NOON, timeZone: AMSTERDAM })
+          .components,
+      ).not.toContainEqual(
+        expect.objectContaining({ later: expect.anything() }),
+      );
+    });
+
+    it("marks a parking fee, and one that starts after some energy", () => {
+      expect(
+        laterOf([energy, rate("PARKING_TIME", 2.42, { min_duration: 3600 })]),
+      ).toEqual([["PARKING_TIME", 24200, "after 1 h"]]);
+      expect(
+        laterOf([rate("FLAT", 0.5), rate("ENERGY", 0.3, { min_kwh: 10 })]),
+      ).toEqual([["ENERGY", 3000, "from 10 kWh"]]);
+      expect(
+        laterOf([rate("ENERGY", 0, { max_kwh: 5 }), rate("ENERGY", 0.3)]),
+      ).toEqual([["ENERGY", 3000, "from 5 kWh"]]);
+    });
+
+    it("marks a fee after a free period, whichever way the tariff puts it", () => {
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 0, { max_duration: 1800 }),
+          rate("TIME", 2),
+        ]),
+      ).toEqual([["TIME", 20000, "after 30 min"]]);
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 0, { max_duration: 1800 }),
+          rate("TIME", 2, { min_duration: 1800 }),
+        ]),
+      ).toEqual([["TIME", 20000, "after 30 min"]]);
+      // The fee first, then free for the rest: first match prices it after 45 min.
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 3, { min_duration: 2700 }),
+          rate("TIME", 0),
+        ]),
+      ).toEqual([["TIME", 30000, "after 45 min"]]);
+    });
+
+    it("marks steps that follow one another, each with its own stretch", () => {
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 3, { min_duration: 2700, max_duration: 7200 }),
+          rate("TIME", 6, { min_duration: 7200 }),
+        ]),
+      ).toEqual([
+        ["TIME", 30000, "45 min to 2 h"],
+        ["TIME", 60000, "after 2 h"],
+      ]);
+    });
+
+    it("marks none of several that overlap: plus would count them twice", () => {
+      // After 2 h the first replaces the second.
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 6, { min_duration: 7200 }),
+          rate("TIME", 3, { min_duration: 2700 }),
+        ]),
+      ).toBeUndefined();
+      // The first covers all the second would.
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 3, { min_duration: 2700 }),
+          rate("TIME", 6, { min_duration: 7200 }),
+        ]),
+      ).toBeUndefined();
+    });
+
+    it("marks none that first match never reaches, or replaces a paid rate", () => {
+      // A rate for any time comes first.
+      for (const price of [0, 1])
+        expect(
+          laterOf([
+            energy,
+            rate("TIME", price),
+            rate("TIME", 3, { min_duration: 7200 }),
+          ]),
+        ).toBeUndefined();
+      // Free for an hour comes first: the fee cannot start at 45 min.
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 0, { max_duration: 3600 }),
+          rate("TIME", 3, { min_duration: 2700 }),
+        ]),
+      ).toBeUndefined();
+      // €1 until 45 min, then €3 instead.
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 1, { max_duration: 2700 }),
+          rate("TIME", 3, { min_duration: 2700 }),
+        ]),
+      ).toBeUndefined();
+      // A free period, then two steps: not told as one addition.
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 0, { max_duration: 1800 }),
+          rate("TIME", 3, { max_duration: 7200 }),
+          rate("TIME", 6),
+        ]),
+      ).toBeUndefined();
+      // Free only on some days or up to a power: no plain "after".
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 0, { max_duration: 1800, day_of_week: ["THURSDAY"] }),
+          rate("TIME", 2),
+        ]),
+      ).toBeUndefined();
+    });
+
+    it("marks only a fee of today, at this connector, never a session fee", () => {
+      const weekend = rate("TIME", 3, {
+        min_duration: 2700,
+        day_of_week: ["SATURDAY", "SUNDAY"],
+      });
+      const weekdays = rate("TIME", 5, {
+        min_duration: 2700,
+        day_of_week: ["THURSDAY", "FRIDAY"],
+      });
+      expect(laterOf([energy, weekend, weekdays])).toEqual([
+        ["TIME", 50000, "Thu, Fri, after 45 min"],
+      ]);
+      const fast = rate("TIME", 3, { min_duration: 2700, min_power: 50 });
+      expect(laterOf([energy, fast], { maxPowerKw: 22 })).toBeUndefined();
+      expect(laterOf([energy, fast], { maxPowerKw: 150 })).toEqual([
+        ["TIME", 30000, "after 45 min, at 50 kW or more"],
+      ]);
+      expect(
+        laterOf([
+          energy,
+          rate("TIME", 3, { min_duration: 2700, reservation: "RESERVATION" }),
+        ]),
+      ).toBeUndefined();
+      expect(
+        laterOf([energy, rate("FLAT", 3, { min_duration: 2700 })]),
+      ).toBeUndefined();
+    });
+
+    it("marks nothing without a price now to add to", () => {
+      const fee = rate("TIME", 3, { min_duration: 2700 });
+      expect(laterOf([fee])).toBeUndefined();
+      // A kind that is free at all times is not shown.
+      expect(laterOf([rate("PARKING_TIME", 0), fee])).toBeUndefined();
+      // A fee of nothing is no fee.
+      expect(
+        laterOf([energy, rate("TIME", 0, { min_duration: 2700 })]),
+      ).toBeUndefined();
     });
   });
 

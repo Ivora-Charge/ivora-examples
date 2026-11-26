@@ -52,15 +52,16 @@ async function startAt(page: Page, code: string) {
   await expect(page.getByTestId("confirm-screen")).toBeVisible();
 }
 
-test("the confirm screen lists a rate that starts later in the session", async ({
+test("the confirm screen shows a fee that starts later in the session", async ({
   page,
 }) => {
   await signedIn(page);
   await startAt(page, "zz-mck-e71");
   await expect(page.getByTestId("confirm-place")).toHaveText("Harbour Front");
-  await expect(page.getByTestId("confirm-price-others")).toContainText(
-    "€7.26 per hour (after 45 min)",
+  await expect(page.getByTestId("confirm-price")).toContainText(
+    "After 45 min: plus €7.26 per hour",
   );
+  await expect(page.getByTestId("confirm-price-others")).toHaveCount(0);
 });
 
 test("enter a charger's ID, confirm, charge, stop and read the receipt, sending nothing", async ({
@@ -73,7 +74,7 @@ test("enter a charger's ID, confirm, charge, stop and read the receipt, sending 
   await expect(
     page.getByRole("radio", { checked: true }).first(),
   ).toContainText("ZZ*MCK*E11");
-  await expect(page.getByTestId("confirm-price")).toContainText("€0.71");
+  await expect(page.getByTestId("confirm-price")).toContainText("€0.7139");
   await expect(page.getByTestId("confirm-hold")).toContainText("€25.00");
   await expect(page.getByTestId("confirm-card")).toContainText(
     "Visa •••• 4242",
