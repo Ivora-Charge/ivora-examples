@@ -20,6 +20,7 @@ import {
   FALLBACK_CENTER,
   MapBoundary,
   PlaceMarker,
+  usePhoneFrame,
   YouMarker,
   type MapProps,
 } from "./MapParts";
@@ -43,12 +44,14 @@ function WebMap({
   const level = Math.floor(zoom * 2) / 2;
   const groups = useMemo(() => cluster(items, level), [items, level]);
   const { open, chooser } = useClusterChooser({ items, selectedId, onSelect });
-  // Room around framed places. Phones have less map to spare above and below.
-  const margin = useWide() ? 40 : 24;
+  // Room around framed places. Phones keep just enough to show a cluster whole clear
+  // of the brand pill and the credit: they have little map to spare.
+  const wide = useWide();
+  const phone = usePhoneFrame();
   const padding = {
-    top: insets.top + margin,
+    top: insets.top + (wide ? 40 : phone.top),
     right: insets.right + 40,
-    bottom: insets.bottom + margin,
+    bottom: insets.bottom + (wide ? 40 : phone.bottom),
     left: insets.left + 40,
   };
 
@@ -136,8 +139,10 @@ function WebMap({
               longitude={g.at.lng}
               latitude={g.at.lat}
               anchor="bottom"
-              // Above the clusters and your position.
-              style={{ zIndex: g.item.id === selectedId ? 3 : 2 }}
+              // Phones: above the clusters, your position and the credit's tap target.
+              style={{
+                zIndex: (g.item.id === selectedId ? 2 : 1) + (wide ? 0 : 1),
+              }}
             >
               <PlaceMarker
                 place={g.item}

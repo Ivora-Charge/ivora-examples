@@ -230,3 +230,75 @@ test("a chip's keyboard focus ring stays inside its tap target", async ({
   await expect(chip).toHaveCSS("outline-offset", "-3px");
   await expect(chip).toHaveCSS("outline-style", "solid");
 });
+
+/**
+ * Markers and clusters drawn whole on the map, between its top edge and the sheet, that
+ * something else covers: the brand pill, the locate button, the demo strip or the
+ * credit. Each is probed at its middle and a quarter of the way in from its top and
+ * bottom.
+ */
+const coveredMarkers = (page: Page) =>
+  page.evaluate(() => {
+    const map = document
+      .querySelector(".maplibregl-map")!
+      .getBoundingClientRect();
+    const sheet = document
+      .querySelector('[data-testid="sheet"]')!
+      .getBoundingClientRect();
+    const found: string[] = [];
+    let shown = 0;
+    for (const m of document.querySelectorAll(
+      '[data-testid="cluster"], [data-testid^="marker-"][role="button"]',
+    )) {
+      const r = m.getBoundingClientRect();
+      if (r.top < map.top || r.bottom > sheet.top) continue;
+      if (r.left < map.left || r.right > map.right) continue;
+      shown++;
+      const x = r.left + r.width / 2;
+      for (const y of [0.25, 0.5, 0.75].map((f) => r.top + r.height * f)) {
+        const hit = document.elementFromPoint(x, y);
+        if (hit && m.contains(hit)) continue;
+        const by =
+          hit?.closest("[data-testid]")?.getAttribute("data-testid") ??
+          hit?.closest("[role]")?.getAttribute("aria-label") ??
+          hit?.tagName;
+        found.push(`${m.getAttribute("aria-label")} under ${by}`);
+        break;
+      }
+    }
+    return { shown, found };
+  });
+
+for (const height of [664, 844])
+  for (const percent of [100, 130])
+    test(`no marker on the map is hidden by its controls at 390×${height} and ${percent}% text`, async ({
+      page,
+    }) => {
+      await page.setViewportSize({ width: 390, height });
+      await open(page, percent);
+      // The opening view frames you and the nearest places again for the larger text.
+      await page.getByTestId("search-input").fill("a");
+      await page.getByTestId("search-input").fill("");
+      await expect(page.getByTestId("cluster").first()).toBeVisible();
+      // Let the camera settle: the markers stay where they are for a moment.
+      const spots = () =>
+        page.evaluate(() =>
+          [...document.querySelectorAll('[data-testid="cluster"]')]
+            .map((m) => Math.round(m.getBoundingClientRect().top))
+            .join(),
+        );
+      let last = "";
+      await expect
+        .poll(
+          async () => {
+            const now = await spots();
+            const still = now === last;
+            last = now;
+            return still;
+          },
+          { intervals: [300] },
+        )
+        .toBe(true);
+      expect((await coveredMarkers(page)).found).toEqual([]);
+      expect((await coveredMarkers(page)).shown).toBeGreaterThan(0);
+    });

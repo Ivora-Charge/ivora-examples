@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { i18n } from "../i18n";
-import { useTheme } from "../theme";
+import { useTheme, WIDE_MIN } from "../theme";
 
 /**
  * Page-wide rules for the web build, from the brand tokens: the focus ring (3 px
@@ -29,9 +29,9 @@ export function WebStyles() {
       `[data-on-primary] :focus-visible{outline-color:${c.focusOnPrimary} !important;}`,
       `input::placeholder{color:${c.muted};opacity:1;}`,
       `.maplibregl-canvas:focus-visible{outline-offset:-3px;}`,
-      // Above the empty part of the map credit's tap target (see Attribution); a
-      // charger's marker sets a higher level of its own.
-      `.maplibregl-marker{z-index:1;}`,
+      // Phones: above the empty part of the map credit's tap target (see Attribution);
+      // a charger's marker sets a higher level of its own. Desktop is as before.
+      `@media (max-width:${WIDE_MIN - 0.02}px){.maplibregl-marker{z-index:1;}}`,
       `.maplibregl-marker:has(:focus-visible){z-index:3;}`,
       `@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important;}}`,
     ].join("\n");

@@ -40,15 +40,18 @@ test("a closed site's marker has the clock badge and says so, like its list card
       .getByTestId("place-closed-now")
       .first(),
   ).toHaveText("Closed now");
-  // The badge sits inside the marker's own box, clear of the power reading.
-  const [box, badge] = await Promise.all([
-    closed.boundingBox(),
-    closed.getByTestId("marker-closed").boundingBox(),
-  ]);
-  expect(badge!.x + badge!.width).toBeLessThanOrEqual(
-    box!.x + box!.width + 0.5,
-  );
-  expect(badge!.y).toBeGreaterThanOrEqual(box!.y - 0.5);
+  // The badge sits inside the marker's own box, clear of the power reading. Both are
+  // measured in the same frame: the map may still be easing to the search result, and
+  // two separate reads could catch the marker at two different places.
+  const { box, badge } = await closed.evaluate((el) => {
+    const b = el.querySelector('[data-testid="marker-closed"]')!;
+    return {
+      box: el.getBoundingClientRect().toJSON() as DOMRect,
+      badge: b.getBoundingClientRect().toJSON() as DOMRect,
+    };
+  });
+  expect(badge.x + badge.width).toBeLessThanOrEqual(box.x + box.width + 0.5);
+  expect(badge.y).toBeGreaterThanOrEqual(box.y - 0.5);
 
   const always = await find(page, "Market Hall");
   await expect(always.getByTestId("marker-closed")).toHaveCount(0);
