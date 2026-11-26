@@ -34,6 +34,7 @@ import {
   elevation,
   fontSize,
   radius,
+  SHEET_PADDING,
   space,
   type,
   useScale,
@@ -49,6 +50,14 @@ const DEMO_POSITION: LatLng = {
   lat: FALLBACK_CENTER.lat - 0.0012,
   lng: FALLBACK_CENTER.lng + 0.0015,
 };
+
+/**
+ * The sheet's default height, as a share of the screen: room for the search, the chips
+ * and two and a half charger cards under the map, in a phone browser with its bars. It
+ * leaves the map at least `MAP_MIN`, and a short window keeps half the screen.
+ */
+const HALF = 0.62;
+const MAP_MIN = 200;
 
 type Sheet = "peek" | "half" | "full";
 const SHEETS: Sheet[] = ["peek", "half", "full"];
@@ -184,11 +193,12 @@ export default function MapScreen() {
   const sheetHeight = useMemo(() => {
     if (!height) return 0;
     const peek = Math.min(220, height * 0.4);
-    return sheet === "peek"
-      ? peek
-      : sheet === "half"
-        ? Math.max(peek, height * 0.5)
-        : height;
+    const half = Math.max(
+      peek,
+      height * 0.5,
+      Math.min(height * HALF, height - MAP_MIN),
+    );
+    return sheet === "peek" ? peek : sheet === "half" ? half : height;
   }, [sheet, height]);
 
   // Frame the results again once the sheet's height is known (the map's padding).
@@ -290,7 +300,7 @@ export default function MapScreen() {
         onSelect={select}
         you={you}
         target={target}
-        insets={{ top: 64, right: 0, bottom: sheetHeight, left: 0 }}
+        insets={{ top: 56, right: 0, bottom: sheetHeight, left: 0 }}
       />
       <View style={styles.topBar} pointerEvents="box-none">
         <View
@@ -300,7 +310,7 @@ export default function MapScreen() {
             elevation(c),
           ]}
         >
-          <Logo size={28} />
+          <Logo compact />
         </View>
         <IconButton
           icon="locate"
@@ -381,8 +391,8 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
   },
   logoPill: {
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
+    paddingHorizontal: space.sm + space.xs,
+    paddingVertical: space.xs + 2,
     borderRadius: radius.pill,
   },
   sheet: {
@@ -396,9 +406,10 @@ const styles = StyleSheet.create({
   },
   handleHit: { alignItems: "center", justifyContent: "center", minHeight: 44 },
   handle: { width: 48, height: 5, borderRadius: radius.pill },
+  // The chips' tap targets add space.xs above and below their pills.
   sheetContent: {
-    paddingHorizontal: space.md,
+    paddingHorizontal: SHEET_PADDING,
     paddingBottom: space.lg,
-    gap: space.md,
+    gap: space.xs,
   },
 });

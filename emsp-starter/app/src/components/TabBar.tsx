@@ -50,7 +50,7 @@ export function TabBar({
         {
           backgroundColor: c.surface,
           borderColor: c.border,
-          paddingBottom: rail ? space.md : Math.max(insets.bottom, space.sm),
+          paddingBottom: rail ? space.md : Math.max(insets.bottom, space.xs),
         },
       ]}
     >
@@ -75,7 +75,13 @@ export function TabBar({
               testID={`tab-${route.name}`}
               style={rail ? styles.railItem : styles.item}
             >
-              <View style={[styles.pill, on && { backgroundColor: c.tint }]}>
+              <View
+                style={[
+                  styles.pill,
+                  !rail && styles.barPill,
+                  on && { backgroundColor: c.tint },
+                ]}
+              >
                 <Icon name={tab.icon} color={on ? c.primary : fg} />
               </View>
               <Text
@@ -96,7 +102,7 @@ export function TabBar({
 }
 
 const styles = StyleSheet.create({
-  bar: { paddingTop: space.sm, borderTopWidth: 1 },
+  bar: { paddingTop: space.xs, borderTopWidth: 1 },
   barTabs: { flexDirection: "row", justifyContent: "space-around" },
   // The side padding leaves room for a tab's focus ring.
   railTabs: {
@@ -111,9 +117,10 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
   },
   mark: { paddingBottom: space.md },
-  item: { flex: 1, alignItems: "center", gap: 2, minHeight: 56 },
+  item: { flex: 1, alignItems: "center", gap: 2, minHeight: 48 },
   railItem: { alignItems: "center", gap: 2, minHeight: 64 },
   railLabel: { textAlign: "center" },
+  barPill: { height: 28 },
   pill: {
     width: 60,
     height: 34,

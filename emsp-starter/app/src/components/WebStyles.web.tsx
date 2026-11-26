@@ -25,9 +25,13 @@ export function WebStyles() {
       `*:focus{outline:none;}`,
       `*:focus-visible{outline:3px solid ${c.focus} !important;outline-offset:2px;}`,
       `input:focus-visible{outline-offset:6px;}`,
+      `[data-chip]:focus-visible{outline-offset:-3px;}`,
       `[data-on-primary] :focus-visible{outline-color:${c.focusOnPrimary} !important;}`,
       `input::placeholder{color:${c.muted};opacity:1;}`,
       `.maplibregl-canvas:focus-visible{outline-offset:-3px;}`,
+      // Above the empty part of the map credit's tap target (see Attribution); a
+      // charger's marker sets a higher level of its own.
+      `.maplibregl-marker{z-index:1;}`,
       `.maplibregl-marker:has(:focus-visible){z-index:3;}`,
       `@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important;}}`,
     ].join("\n");

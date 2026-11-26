@@ -1,11 +1,19 @@
 import { Component, type ReactNode } from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Linking,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { i18n, t, tn } from "../i18n";
 import type { Bounds, LatLng } from "../lib/geo";
 import { present } from "../lib/present";
 import { placeKind } from "../lib/status";
 import type { LocationSummary } from "../lib/types";
 import {
+  brand,
   elevation,
   fontSize,
   radius,
@@ -13,6 +21,7 @@ import {
   type,
   useScale,
   useTheme,
+  useWide,
 } from "../theme";
 import { Icon } from "./Icon";
 import { PowerTile } from "./PowerTile";
@@ -154,7 +163,19 @@ export function YouMarker() {
   );
 }
 
-/** The map data credit, always readable, above the sheet and the tab bar. */
+/**
+ * Web: React Native Web gives every view a stacking level of its own. The credit's box
+ * takes none ("auto"), so its strip is drawn over the markers while the empty part of
+ * the link's tap target stays under them, and a marker there can still be pressed.
+ * React Native's types allow numbers only.
+ */
+const NO_LAYER = Platform.OS === "web" ? ({ zIndex: "auto" } as object) : null;
+
+/**
+ * The map data credit, always readable, above the markers, the sheet and the tab bar.
+ * On phones it is a tighter strip, on one line where the text fits, and its link keeps
+ * a full-height tap target that reaches up from it.
+ */
 export function Attribution({
   text,
   url,
@@ -167,19 +188,30 @@ export function Attribution({
 }) {
   const { c } = useTheme();
   const { fs } = useScale();
+  const compact = !useWide();
   if (!text) return null;
-  const style = [
+  const place = [
     styles.attribution,
-    { bottom: bottom + space.xs, backgroundColor: c.surface },
+    compact && styles.attributionCompact,
+    { bottom: bottom + space.xs },
+    NO_LAYER,
   ];
   const label = (
-    <Text style={[type.body, { color: c.muted, fontSize: fs(fontSize.xs) }]}>
-      {text}
-    </Text>
+    <View
+      style={[
+        styles.credit,
+        compact && styles.creditCompact,
+        { backgroundColor: c.surface },
+      ]}
+    >
+      <Text style={[type.body, { color: c.muted, fontSize: fs(fontSize.xs) }]}>
+        {text}
+      </Text>
+    </View>
   );
   if (!url)
     return (
-      <View style={style} testID="map-attribution">
+      <View style={place} testID="map-attribution">
         {label}
       </View>
     );
@@ -188,7 +220,7 @@ export function Attribution({
       role="link"
       aria-label={`${t("map.attribution")}: ${text}`}
       onPress={() => void Linking.openURL(url)}
-      style={style}
+      style={[place, compact && styles.attributionTarget]}
       testID="map-attribution"
     >
       {label}
@@ -261,14 +293,20 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   youDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3 },
-  attribution: {
-    position: "absolute",
-    right: space.sm,
+  attribution: { position: "absolute", right: space.sm, maxWidth: "90%" },
+  attributionCompact: { right: space.xs, maxWidth: "98%" },
+  attributionTarget: {
+    minHeight: brand.minTapTarget,
+    justifyContent: "flex-end",
+  },
+  // Over the markers (up to 3, see WebStyles): the tile licence wants it seen.
+  credit: {
+    zIndex: 4,
     paddingHorizontal: space.sm,
     paddingVertical: 2,
     borderRadius: radius.sm,
-    maxWidth: "90%",
   },
+  creditCompact: { paddingHorizontal: space.xs + 2, paddingVertical: 1 },
   unavailable: {
     flex: 1,
     alignItems: "center",

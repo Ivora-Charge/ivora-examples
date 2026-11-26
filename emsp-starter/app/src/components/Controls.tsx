@@ -17,6 +17,7 @@ import {
   type,
   useScale,
   useTheme,
+  useWide,
 } from "../theme";
 import { Icon, type IconName } from "./Icon";
 
@@ -83,7 +84,10 @@ export function Button({
   );
 }
 
-/** A round icon button floating on the map, or a quiet one in a header. */
+/**
+ * A round icon button floating on the map (the smallest tap target on phones), or a
+ * quiet one in a header.
+ */
 export function IconButton({
   icon,
   label,
@@ -98,6 +102,7 @@ export function IconButton({
   testID?: string;
 }) {
   const { c } = useTheme();
+  const compact = !useWide() && floating;
   return (
     <Pressable
       role="button"
@@ -107,6 +112,7 @@ export function IconButton({
       hitSlop={4}
       style={({ pressed }) => [
         styles.iconButton,
+        compact && styles.iconButtonCompact,
         { backgroundColor: floating ? c.surface : c.tint },
         floating && elevation(c),
         pressed && styles.pressed,
@@ -117,7 +123,10 @@ export function IconButton({
   );
 }
 
-/** A filter chip: on (violet) or off (outlined). Read out as a checkbox. */
+/**
+ * A filter chip: on (violet) or off (outlined). Read out as a checkbox. On phones the
+ * pill is smaller than the tap target around it.
+ */
 export function Chip({
   label,
   on,
@@ -131,29 +140,43 @@ export function Chip({
 }) {
   const { c } = useTheme();
   const { fs } = useScale();
+  const compact = !useWide();
   return (
     <Pressable
       role="checkbox"
       aria-checked={on}
       aria-label={label}
       onPress={onPress}
-      style={({ pressed }) => [
-        styles.chip,
-        on
-          ? { backgroundColor: c.primary, borderColor: c.primary }
-          : { backgroundColor: c.surface, borderColor: c.border },
-        pressed && styles.pressed,
-      ]}
+      // Web: the focus ring goes inside the phone's tap target (see WebStyles), where
+      // the scrolling row cannot clip it. React Native's types lack `dataSet`.
+      {...((compact ? { dataSet: { chip: "true" } } : {}) as object)}
+      style={[styles.chipTarget, compact && styles.chipTargetCompact]}
     >
-      {leading}
-      <Text
-        style={[
-          type.strong,
-          { color: on ? c.onPrimary : c.text, fontSize: fs(fontSize.sm + 1) },
-        ]}
-      >
-        {label}
-      </Text>
+      {({ pressed }) => (
+        <View
+          style={[
+            styles.chip,
+            compact && styles.chipCompact,
+            on
+              ? { backgroundColor: c.primary, borderColor: c.primary }
+              : { backgroundColor: c.surface, borderColor: c.border },
+            pressed && styles.pressed,
+          ]}
+        >
+          {leading}
+          <Text
+            style={[
+              compact ? type.medium : type.strong,
+              {
+                color: on ? c.onPrimary : c.text,
+                fontSize: fs(compact ? fontSize.sm : fontSize.smd),
+              },
+            ]}
+          >
+            {label}
+          </Text>
+        </View>
+      )}
     </Pressable>
   );
 }
@@ -223,6 +246,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  iconButtonCompact: {
+    width: brand.minTapTarget,
+    height: brand.minTapTarget,
+  },
+  chipTarget: { borderRadius: radius.pill },
+  // The padding is the space between chips: the row itself adds none.
+  chipTargetCompact: {
+    minHeight: brand.minTapTarget,
+    minWidth: brand.minTapTarget,
+    padding: space.xs,
+    justifyContent: "center",
+  },
   chip: {
     flexDirection: "row",
     alignItems: "center",
@@ -231,6 +266,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.md,
     borderRadius: radius.pill,
     borderWidth: 1.5,
+  },
+  chipCompact: {
+    justifyContent: "center",
+    minHeight: brand.minTapTarget - space.sm,
+    paddingHorizontal: space.sm + space.xs,
   },
   section: {
     gap: space.sm,

@@ -54,7 +54,8 @@ The offline demo's prices are those of the moment its sample data was made for (
 - Status is never colour alone: free is a filled tile and dot, in use an outlined tile and half dot, out of order a hatched tile and a cross, unknown a dashed outline, and the word is always printed.
 - Text follows the driver's text size: Dynamic Type and font scale on phones, rem on the web (browser font size and zoom). Status tiles grow with it, and the wide layout's left rail widens to its longest word (labels wrap between words), checked by `e2e/text-size.spec.ts`. The charger's buttons stack, and stop being pinned where they would crowd the details, checked by `e2e/detail-actions.spec.ts`. No text is under 12 px.
 - Text pairs meet WCAG AA (4.5:1) in both modes, and the focus ring is at least 3:1 against everything it touches (ink in light mode, flare in dark; on the violet charger header it is `focusOnPrimary`, white in light mode and ink in dark). The selected charger's ring (`selected`) differs from the focus ring in both modes. `tests/brand.test.ts` checks every pair.
-- Tap targets are 44 px or more; the search field and the primary button are 56 to 60 px. No sideways scroll at 390 px (only the chip row scrolls, inside itself).
+- Phones (and any window under 900 px) get a denser map screen: smaller type and chips, a lower search field, tighter cards, demo strip and tab bar, and a sheet that takes up to 62% of the screen by default. At 390 × 664 and 430 × 740 (a phone browser with its bars) two and a half charger cards or more show under the map at the default text size, and at least one and a half at 130%, checked by `e2e/density.spec.ts`.
+- Tap targets are 44 px or more, also where a control looks smaller (the phone's filter chips and map credit). The search field is 48 px high on phones and 60 px on wide screens, its text 16 px or more at the default text size, and the primary button 56 px. No sideways scroll at 390 px (only the chip row scrolls, inside itself).
 
 ## Languages and formats
 
@@ -97,7 +98,7 @@ Copy `.env.example` to `.env.local`.
 
 MapLibre everywhere: [MapLibre GL JS](https://maplibre.org/) on the web (through `react-map-gl`) and [MapLibre Native](https://github.com/maplibre/maplibre-react-native) on iOS and Android. One style JSON works on all three, and the chargers, clusters and your position are the app's own markers.
 
-**Demo and default: no key, no account, no cost.** The app draws its own style (`src/lib/map-style.ts`), coloured from the `map*` brand tokens in light and dark, on [OpenFreeMap](https://openfreemap.org/)'s vector tiles of OpenStreetMap data. The attribution "OpenFreeMap © OpenMapTiles © OpenStreetMap contributors" stays visible on the map, above the sheet and the tab bar. OpenFreeMap is free and asks for no key, but it is a volunteer-run service with no uptime guarantee; read its terms before you rely on it in production.
+**Demo and default: no key, no account, no cost.** The app draws its own style (`src/lib/map-style.ts`), coloured from the `map*` brand tokens in light and dark, on [OpenFreeMap](https://openfreemap.org/)'s vector tiles of OpenStreetMap data. The attribution "OpenFreeMap © OpenMapTiles © OpenStreetMap contributors" stays visible on the map, above the markers, the sheet and the tab bar (one line at 390 px at the default text size). OpenFreeMap is free and asks for no key, but it is a volunteer-run service with no uptime guarantee; read its terms before you rely on it in production.
 
 **Production.** For an SLA, use a commercial provider (for example MapTiler, Stadia Maps or Protomaps on your own hosting) and set `EXPO_PUBLIC_MAP_STYLE_URL` to its style JSON. The key then sits in the app, where anyone can read it, so restrict it at the provider:
 

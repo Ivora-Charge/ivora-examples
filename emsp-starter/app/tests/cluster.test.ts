@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   cluster,
   CLUSTER_MAX_ZOOM,
+  splitZoom,
   tapOpensChooser,
   type Clustered,
 } from "../src/lib/cluster";
@@ -69,6 +70,18 @@ describe("a tap on a cluster", () => {
     const [g] = cluster(apart, 12);
     expect(g.kind === "cluster" && tapOpensChooser(g, 12)).toBe(false);
     expect(shape(cluster(apart, 17))).toEqual(["a", "b"]);
+  });
+
+  it("zooms at least to where the cluster comes apart", () => {
+    const far = [at("a"), at("b", 400)];
+    const zoom = splitZoom(far, 10);
+    expect(zoom).toBeLessThan(CLUSTER_MAX_ZOOM);
+    expect(shape(cluster(far, zoom))).toEqual(["a", "b"]);
+    expect(cluster(far, zoom - 0.5)).toHaveLength(1);
+    // Always a step further in, and never past the maximum.
+    expect(splitZoom(far, zoom)).toBe(zoom + 0.5);
+    expect(splitZoom(stack, 12)).toBe(CLUSTER_MAX_ZOOM);
+    expect(splitZoom(far, CLUSTER_MAX_ZOOM - 0.5)).toBe(CLUSTER_MAX_ZOOM);
   });
 
   it("opens the chooser for one coordinate, at any zoom", () => {

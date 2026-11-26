@@ -33,18 +33,21 @@ export function Mark({
   );
 }
 
-/** Mark and wordmark, read out as the network's name. */
-export function Logo({ size = 30 }: { size?: number }) {
+/**
+ * Mark and wordmark, read out as the network's name; `compact` for the pill over the
+ * phone's map.
+ */
+export function Logo({ compact = false }: { compact?: boolean }) {
   const { c } = useTheme();
   const { fs } = useScale();
   return (
     <View style={styles.row} role="img" aria-label={brand.name}>
-      <Mark size={size} />
+      <Mark size={compact ? 24 : 30} />
       <Text
         style={[
           type.heading,
           styles.word,
-          { color: c.text, fontSize: fs(fontSize.lg) },
+          { color: c.text, fontSize: fs(compact ? fontSize.ml : fontSize.lg) },
         ]}
         aria-hidden
       >
