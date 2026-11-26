@@ -1,6 +1,14 @@
 import { StyleSheet, Text, View } from "react-native";
 import { t } from "../i18n";
-import { fontSize, radius, space, type, useScale, useTheme } from "../theme";
+import {
+  fontSize,
+  radius,
+  space,
+  type,
+  useScale,
+  useTheme,
+  useWide,
+} from "../theme";
 
 /**
  * The flare strip on every screen while the app or its server is in demo mode. It
@@ -9,9 +17,14 @@ import { fontSize, radius, space, type, useScale, useTheme } from "../theme";
 export function DemoBanner({ offline }: { offline: boolean }) {
   const { c } = useTheme();
   const { fs } = useScale();
+  const compact = !useWide();
   return (
     <View
-      style={[styles.banner, { backgroundColor: c.demoBackground }]}
+      style={[
+        styles.banner,
+        compact && styles.bannerCompact,
+        { backgroundColor: c.demoBackground },
+      ]}
       role="region"
       aria-label={t("demo.label")}
       aria-live="polite"
@@ -32,9 +45,12 @@ export function DemoBanner({ offline }: { offline: boolean }) {
       </Text>
       <Text
         style={[
-          type.strong,
+          compact ? type.body : type.strong,
           styles.text,
-          { color: c.demoText, fontSize: fs(fontSize.sm) },
+          {
+            color: c.demoText,
+            fontSize: fs(compact ? fontSize.xs : fontSize.sm),
+          },
         ]}
       >
         {offline ? t("demo.offline") : t("demo.server")}
@@ -50,6 +66,11 @@ const styles = StyleSheet.create({
     gap: space.sm + space.xs,
     paddingHorizontal: space.md,
     paddingVertical: space.sm,
+  },
+  bannerCompact: {
+    gap: space.sm,
+    paddingHorizontal: space.sm + space.xs,
+    paddingVertical: space.xs,
   },
   badge: {
     paddingHorizontal: space.sm,

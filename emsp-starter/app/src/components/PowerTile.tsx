@@ -31,7 +31,8 @@ export function tileColors(kind: StatusKind, c: Palette) {
  * the status as well as its colour: filled (free), outlined (in use), hatched (out of
  * order) or dashed (unknown). It grows with the driver's text size. The row or marker
  * that holds it says the status in words. A place that is closed now gets a plain grey
- * outline, so a free charger there does not look ready to start.
+ * outline, so a free charger there does not look ready to start. The phone's list
+ * card has a `compact` one: smaller type and no room for the map's selection ring.
  */
 export function PowerTile({
   kw,
@@ -41,6 +42,7 @@ export function PowerTile({
   pin = false,
   announce = false,
   closed = false,
+  compact = false,
 }: {
   kw: number;
   kind: StatusKind;
@@ -52,6 +54,8 @@ export function PowerTile({
   announce?: boolean;
   /** The place is closed now: grey outline whatever the status. */
   closed?: boolean;
+  /** Smaller type and no selection ring (the row shows its own selection). */
+  compact?: boolean;
 }) {
   const { c } = useTheme();
   const { fs, dim } = useScale();
@@ -63,17 +67,22 @@ export function PowerTile({
   return (
     <View style={styles.wrap} aria-hidden={!announce}>
       <View
-        style={[
-          styles.ring,
-          {
-            borderColor: selected ? c.selected : "transparent",
-            borderRadius: radius.md + 4,
-          },
-        ]}
+        style={
+          compact
+            ? undefined
+            : [
+                styles.ring,
+                {
+                  borderColor: selected ? c.selected : "transparent",
+                  borderRadius: radius.md + 4,
+                },
+              ]
+        }
       >
         <View
           style={[
             styles.tile,
+            compact && styles.tileCompact,
             {
               minWidth: dim(size),
               minHeight: dim(size),
@@ -114,7 +123,9 @@ export function PowerTile({
               styles.kw,
               {
                 color: col.text,
-                fontSize: fs(big ? fontSize.lg : fontSize.md),
+                fontSize: fs(
+                  compact ? fontSize.smd : big ? fontSize.lg : fontSize.md,
+                ),
               },
             ]}
           >
@@ -158,6 +169,7 @@ const styles = StyleSheet.create({
     paddingVertical: space.xs,
     overflow: "hidden",
   },
+  tileCompact: { borderWidth: 2, paddingVertical: 2 },
   kw: { letterSpacing: -0.5, textAlign: "center" },
   unit: { letterSpacing: 0.6 },
   pointer: {

@@ -17,10 +17,27 @@ for (const scheme of ["light", "dark"] as const)
     // Phones: one step closer, so the clusters open into tiles of every status.
     else {
       await page.waitForTimeout(1500);
-      await page
-        .getByRole("button", { name: /^2 places/ })
-        .first()
-        .click();
+      // The largest cluster drawn whole on the map, above the sheet.
+      const pick = await page.evaluate(() => {
+        const sheet = document
+          .querySelector('[data-testid="sheet"]')!
+          .getBoundingClientRect();
+        const map = document
+          .querySelector(".maplibregl-map")!
+          .getBoundingClientRect();
+        let best = -1;
+        let most = 0;
+        document
+          .querySelectorAll('[data-testid="cluster"]')
+          .forEach((el, i) => {
+            const r = el.getBoundingClientRect();
+            const n = Number(el.textContent);
+            if (r.top >= map.top && r.bottom <= sheet.top && n > most)
+              [best, most] = [i, n];
+          });
+        return best;
+      });
+      await page.getByTestId("cluster").nth(pick).click();
     }
     await page.waitForTimeout(4000);
     await page.screenshot({

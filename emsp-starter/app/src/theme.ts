@@ -5,7 +5,7 @@ import {
   useWindowDimensions,
   type TextStyle,
 } from "react-native";
-import { brand, palette, type Palette, type Scheme } from "../brand";
+import { brand, palette, space, type Palette, type Scheme } from "../brand";
 
 export { brand, fontSize, radius, space } from "../brand";
 export type { Palette, Scheme };
@@ -19,6 +19,7 @@ const web = Platform.OS === "web";
 export const FONT = {
   heading: brand.font.heading,
   body: brand.font.body,
+  bodyMedium: `${brand.font.body} Medium`,
   bodyStrong: `${brand.font.body} SemiBold`,
   mono: brand.font.mono,
 };
@@ -29,7 +30,10 @@ const SANS = 'system-ui, -apple-system, "Segoe UI", Roboto, sans-serif';
 const MONO = 'ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace';
 
 /** Text styles by role: family, and weight on the web (native families carry their weight). */
-export const type: Record<"heading" | "body" | "strong" | "mono", TextStyle> = {
+export const type: Record<
+  "heading" | "body" | "medium" | "strong" | "mono",
+  TextStyle
+> = {
   heading: {
     fontFamily: stack(FONT.heading, SANS),
     ...(web
@@ -37,6 +41,12 @@ export const type: Record<"heading" | "body" | "strong" | "mono", TextStyle> = {
       : {}),
   },
   body: { fontFamily: stack(FONT.body, SANS) },
+  medium: {
+    fontFamily: stack(FONT.bodyMedium, SANS),
+    ...(web
+      ? { fontWeight: brand.fontWeight.medium as TextStyle["fontWeight"] }
+      : {}),
+  },
   strong: {
     fontFamily: stack(FONT.bodyStrong, SANS),
     ...(web
@@ -74,11 +84,17 @@ export function useTheme(): { scheme: Scheme; c: Palette } {
   return useMemo(() => ({ scheme, c: palette(scheme) }), [scheme]);
 }
 
-/** Wide screens get the desktop layout: a list panel beside the map. */
+/**
+ * Wide screens get the desktop layout: a list panel beside the map. Narrower ones get
+ * the phone layout, with its denser type and spacing.
+ */
 export const WIDE_MIN = 900;
 export function useWide(): boolean {
   return useWindowDimensions().width >= WIDE_MIN;
 }
+
+/** The side padding of the phone's sheet, which the chip row scrolls across. */
+export const SHEET_PADDING = space.sm + space.xs;
 
 /** The soft two-layer shadow of floating things: markers, the sheet, the detail card. */
 export const elevation = (c: Palette, strong = false) => ({

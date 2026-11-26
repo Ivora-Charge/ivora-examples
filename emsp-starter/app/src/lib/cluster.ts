@@ -89,6 +89,21 @@ export function cluster<T extends { id: string; coordinates: LatLng }>(
 }
 
 /**
+ * The first half-step above `zoom` at which a cluster's places are no longer all one
+ * cluster, `CLUSTER_MAX_ZOOM` at most. A press zooms in at least this far: where the
+ * map has little room (a phone's, above its sheet), fitting the places in it could
+ * leave the cluster as it was.
+ */
+export function splitZoom<T extends { id: string; coordinates: LatLng }>(
+  items: T[],
+  zoom: number,
+): number {
+  for (let z = zoom + 0.5; z < CLUSTER_MAX_ZOOM; z += 0.5)
+    if (cluster(items, z).length > 1) return z;
+  return CLUSTER_MAX_ZOOM;
+}
+
+/**
  * Whether a tap on a cluster lists its places instead of zooming in: zooming cannot
  * separate places at one coordinate, and past `CLUSTER_MAX_ZOOM` nothing is left to
  * zoom for.

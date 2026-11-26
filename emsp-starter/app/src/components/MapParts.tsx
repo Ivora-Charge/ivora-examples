@@ -1,11 +1,20 @@
 import { Component, type ReactNode } from "react";
-import { Linking, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Linking,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from "react-native";
 import { i18n, t, tn } from "../i18n";
 import type { Bounds, LatLng } from "../lib/geo";
 import { present } from "../lib/present";
 import { placeKind } from "../lib/status";
 import type { LocationSummary } from "../lib/types";
 import {
+  brand,
   elevation,
   fontSize,
   radius,
@@ -13,6 +22,7 @@ import {
   type,
   useScale,
   useTheme,
+  useWide,
 } from "../theme";
 import { Icon } from "./Icon";
 import { PowerTile } from "./PowerTile";
@@ -87,6 +97,31 @@ export function PlaceMarker({
   );
 }
 
+/** A cluster's disc and the halo around it, before the driver's text size. */
+const CLUSTER_DISC = 52;
+const CLUSTER_HALO = 7;
+/** The phone's map credit strip and its gap above the sheet, before text size. */
+const CREDIT_STRIP = 24;
+
+/**
+ * Phones: the room, in pixels, to keep between framed places and the map's covered
+ * edges (the brand pill above, the credit strip below), so a cluster at the edge of
+ * the frame shows whole: half a cluster and a gap, and the credit at the bottom. It
+ * grows with the driver's text size, as the markers do.
+ */
+export function usePhoneFrame(): { top: number; bottom: number } {
+  const { fontScale } = useWindowDimensions();
+  const scale =
+    Platform.OS === "web"
+      ? typeof document === "undefined"
+        ? 1
+        : parseFloat(getComputedStyle(document.documentElement).fontSize) /
+            16 || 1
+      : Math.max(1, fontScale);
+  const clear = (CLUSTER_DISC / 2) * scale + CLUSTER_HALO + space.sm;
+  return { top: clear, bottom: clear + CREDIT_STRIP * scale };
+}
+
 /**
  * Several places too close to tell apart: a violet disc with the count. A press zooms
  * in, or opens the list of them when zooming cannot separate them (`chooses`).
@@ -114,12 +149,19 @@ export function ClusterMarker({
       {...((chooses ? { "aria-haspopup": "dialog" } : {}) as object)}
       onPress={onPress}
       testID="cluster"
-      style={[styles.halo, { backgroundColor: `${c.primary}33`, padding: 7 }]}
+      style={[
+        styles.halo,
+        { backgroundColor: `${c.primary}33`, padding: CLUSTER_HALO },
+      ]}
     >
       <View
         style={[
           styles.disc,
-          { backgroundColor: c.primary, minWidth: dim(52), minHeight: dim(52) },
+          {
+            backgroundColor: c.primary,
+            minWidth: dim(CLUSTER_DISC),
+            minHeight: dim(CLUSTER_DISC),
+          },
           elevation(c),
         ]}
       >
@@ -154,7 +196,20 @@ export function YouMarker() {
   );
 }
 
-/** The map data credit, always readable, above the sheet and the tab bar. */
+/**
+ * Web: React Native Web gives every view a stacking level of its own. On phones the
+ * credit's box takes none ("auto"), so its strip is drawn over the markers while the
+ * empty part of the link's tap target stays under them, and a marker there can still
+ * be pressed. React Native's types allow numbers only.
+ */
+const NO_LAYER = Platform.OS === "web" ? ({ zIndex: "auto" } as object) : null;
+
+/**
+ * The map data credit, always readable, above the sheet and the tab bar. On phones it
+ * is a tighter strip drawn above the markers too, on one line where the text fits,
+ * and its link keeps a full-height tap target that reaches up from it. The desktop
+ * credit is a single box, as before.
+ */
 export function Attribution({
   text,
   url,
@@ -167,19 +222,41 @@ export function Attribution({
 }) {
   const { c } = useTheme();
   const { fs } = useScale();
+  const compact = !useWide();
   if (!text) return null;
-  const style = [
-    styles.attribution,
-    { bottom: bottom + space.xs, backgroundColor: c.surface },
-  ];
-  const label = (
+  const words = (
     <Text style={[type.body, { color: c.muted, fontSize: fs(fontSize.xs) }]}>
       {text}
     </Text>
   );
+  const place = compact
+    ? [
+        styles.attribution,
+        styles.attributionCompact,
+        { bottom: bottom + space.xs },
+        NO_LAYER,
+      ]
+    : [
+        styles.attribution,
+        styles.creditBox,
+        { bottom: bottom + space.xs, backgroundColor: c.surface },
+      ];
+  const label = compact ? (
+    <View
+      style={[
+        styles.creditBox,
+        styles.creditCompact,
+        { backgroundColor: c.surface },
+      ]}
+    >
+      {words}
+    </View>
+  ) : (
+    words
+  );
   if (!url)
     return (
-      <View style={style} testID="map-attribution">
+      <View style={place} testID="map-attribution">
         {label}
       </View>
     );
@@ -188,7 +265,7 @@ export function Attribution({
       role="link"
       aria-label={`${t("map.attribution")}: ${text}`}
       onPress={() => void Linking.openURL(url)}
-      style={style}
+      style={[place, compact && styles.attributionTarget]}
       testID="map-attribution"
     >
       {label}
@@ -261,13 +338,22 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   youDot: { width: 18, height: 18, borderRadius: 9, borderWidth: 3 },
-  attribution: {
-    position: "absolute",
-    right: space.sm,
+  attribution: { position: "absolute", right: space.sm, maxWidth: "90%" },
+  attributionCompact: { right: space.xs, maxWidth: "98%" },
+  attributionTarget: {
+    minHeight: brand.minTapTarget,
+    justifyContent: "flex-end",
+  },
+  creditBox: {
     paddingHorizontal: space.sm,
     paddingVertical: 2,
     borderRadius: radius.sm,
-    maxWidth: "90%",
+  },
+  // Phones: over the markers (up to 3, see WebStyles), as the tile licence wants it seen.
+  creditCompact: {
+    zIndex: 4,
+    paddingHorizontal: space.xs + 2,
+    paddingVertical: 1,
   },
   unavailable: {
     flex: 1,

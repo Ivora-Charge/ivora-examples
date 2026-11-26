@@ -1,7 +1,7 @@
 import { ScrollView, StyleSheet, View } from "react-native";
 import { i18n, t } from "../i18n";
 import type { Filters } from "../lib/search";
-import { space, useTheme } from "../theme";
+import { SHEET_PADDING, space, useTheme } from "../theme";
 import { Chip } from "./Controls";
 import { Icon, StatusGlyph } from "./Icon";
 
@@ -97,9 +97,9 @@ export function FilterBar({
               size={11}
             />
           ) : chip.leading === "bolt" ? (
-            <Icon name="bolt" color={fg} size={16} />
+            <Icon name="bolt" color={fg} size={wrap ? 16 : 14} />
           ) : chip.leading === "step" ? (
-            <Icon name="stepFree" color={fg} size={16} />
+            <Icon name="stepFree" color={fg} size={wrap ? 16 : 14} />
           ) : undefined
         }
       />
@@ -127,6 +127,7 @@ export function FilterBar({
 
 const styles = StyleSheet.create({
   wrap: { flexDirection: "row", flexWrap: "wrap", gap: space.sm },
-  scroller: { flexGrow: 0, marginHorizontal: -space.md },
-  row: { gap: space.sm, paddingHorizontal: space.md },
+  scroller: { flexGrow: 0, marginHorizontal: -SHEET_PADDING },
+  // Each phone chip pads its own tap target (space.xs), which spaces the pills.
+  row: { paddingHorizontal: SHEET_PADDING - space.xs },
 });

@@ -2,7 +2,15 @@ import { Pressable, StyleSheet, Text, View } from "react-native";
 import { i18n, t, tn } from "../i18n";
 import { present } from "../lib/present";
 import type { LocationSummary } from "../lib/types";
-import { fontSize, radius, space, type, useScale, useTheme } from "../theme";
+import {
+  fontSize,
+  radius,
+  space,
+  type,
+  useScale,
+  useTheme,
+  useWide,
+} from "../theme";
 import { Button } from "./Controls";
 import { Icon, StatusGlyph } from "./Icon";
 import { PowerTile } from "./PowerTile";
@@ -24,6 +32,7 @@ export function PlaceRow({
 }) {
   const { c, scheme } = useTheme();
   const { fs } = useScale();
+  const compact = !useWide();
   const avail = p.availability(place);
   const closed = p.closedNote(place);
   const price = p.lead(place.price);
@@ -50,6 +59,7 @@ export function PlaceRow({
       testID={`place-${place.name}`}
       style={({ pressed }) => [
         styles.row,
+        compact && styles.rowCompact,
         {
           backgroundColor: c.surface,
           borderColor: selected
@@ -67,12 +77,17 @@ export function PlaceRow({
         kind={avail.kind}
         closed={closed !== undefined}
         announce
+        compact={compact}
+        size={compact ? 46 : undefined}
       />
-      <View style={styles.middle}>
+      <View style={[styles.middle, compact && styles.middleCompact]}>
         <Text
           style={[
             type.strong,
-            { color: c.text, fontSize: fs(fontSize.md + 1) },
+            {
+              color: c.text,
+              fontSize: fs(compact ? fontSize.md : fontSize.md + 1),
+            },
           ]}
           numberOfLines={2}
         >
@@ -87,11 +102,11 @@ export function PlaceRow({
             {[place.address, place.city].join(", ")}
           </Text>
         ) : null}
-        <View style={styles.meta}>
+        <View style={[styles.meta, compact && styles.metaCompact]}>
           <StatusGlyph kind={avail.kind} color={statusColor} />
           <Text
             style={[
-              type.strong,
+              compact ? type.body : type.strong,
               { color: statusColor, fontSize: fs(fontSize.sm) },
             ]}
           >
@@ -123,7 +138,10 @@ export function PlaceRow({
         <Text
           style={[
             type.heading,
-            { color: c.text, fontSize: fs(fontSize.md + 1) },
+            {
+              color: c.text,
+              fontSize: fs(compact ? fontSize.md : fontSize.md + 1),
+            },
           ]}
           numberOfLines={2}
         >
@@ -162,6 +180,8 @@ export function PlaceList({
 }) {
   const { c } = useTheme();
   const { fs } = useScale();
+  const compact = !useWide();
+  const headSize = fs(compact ? fontSize.sm : fontSize.smd);
   if (list.state === "loading")
     return (
       <Text
@@ -192,11 +212,11 @@ export function PlaceList({
     );
   const { items, nearRadiusM } = list;
   return (
-    <View style={styles.list}>
+    <View style={[styles.list, compact && styles.listCompact]}>
       <View style={styles.head}>
         <Text
           role="status"
-          style={[type.body, { color: c.muted, fontSize: fs(fontSize.sm + 1) }]}
+          style={[type.body, { color: c.muted, fontSize: headSize }]}
           testID="result-count"
         >
           <Text style={[type.strong, { color: c.text }]}>
@@ -206,9 +226,7 @@ export function PlaceList({
             ? ` ${t("results.within", { distance: i18n.distance(nearRadiusM) })}`
             : ""}
         </Text>
-        <Text
-          style={[type.body, { color: c.muted, fontSize: fs(fontSize.sm + 1) }]}
-        >
+        <Text style={[type.body, { color: c.muted, fontSize: headSize }]}>
           {nearRadiusM ? t("results.nearest") : t("results.byName")}
         </Text>
       </View>
@@ -248,6 +266,7 @@ export function PlaceList({
 
 const styles = StyleSheet.create({
   list: { gap: space.sm + 2 },
+  listCompact: { gap: space.xs + 2 },
   head: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -264,14 +283,21 @@ const styles = StyleSheet.create({
     borderRadius: radius.lg - 4,
     borderWidth: 1.5,
   },
+  rowCompact: {
+    gap: space.sm + 2,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.sm + 2,
+  },
   pressed: { opacity: 0.9 },
   middle: { flex: 1, minWidth: 0, gap: space.xs },
+  middleCompact: { gap: 2 },
   meta: {
     flexDirection: "row",
     alignItems: "center",
     flexWrap: "wrap",
     gap: space.xs + 2,
   },
+  metaCompact: { rowGap: 0 },
   closed: { flexDirection: "row", alignItems: "center", gap: space.xs + 2 },
   price: { alignItems: "flex-end", maxWidth: "38%" },
   note: { padding: space.md },

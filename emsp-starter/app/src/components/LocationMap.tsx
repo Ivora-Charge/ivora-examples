@@ -13,9 +13,9 @@ import {
 } from "react";
 import { StyleSheet, View } from "react-native";
 import { t } from "../i18n";
-import { cluster, tapOpensChooser } from "../lib/cluster";
+import { cluster, splitZoom, tapOpensChooser } from "../lib/cluster";
 import { mapStyle } from "../lib/map-style";
-import { useTheme } from "../theme";
+import { useTheme, useWide } from "../theme";
 import { useClusterChooser } from "./ClusterChooser";
 import {
   Attribution,
@@ -23,6 +23,7 @@ import {
   FALLBACK_CENTER,
   MapBoundary,
   PlaceMarker,
+  usePhoneFrame,
   YouMarker,
   type MapProps,
 } from "./MapParts";
@@ -46,10 +47,14 @@ function NativeMap({
   const level = Math.floor(zoom * 2) / 2;
   const groups = useMemo(() => cluster(items, level), [items, level]);
   const { open, chooser } = useClusterChooser({ items, selectedId, onSelect });
+  // Room around framed places. Phones keep just enough to show a cluster whole clear
+  // of the brand pill and the credit: they have little map to spare.
+  const wide = useWide();
+  const phone = usePhoneFrame();
   const padding = {
-    top: insets.top + 48,
+    top: insets.top + (wide ? 48 : phone.top),
     right: insets.right + 48,
-    bottom: insets.bottom + 48,
+    bottom: insets.bottom + (wide ? 48 : phone.bottom),
     left: insets.left + 48,
   };
 
@@ -120,6 +125,18 @@ function NativeMap({
                 chooses={tapOpensChooser(g, level)}
                 onPress={() => {
                   if (tapOpensChooser(g, level)) open(g.items);
+                  else if (!wide)
+                    // Little room above the sheet: fitting the places in it could
+                    // leave the cluster as it was, so zoom until it comes apart.
+                    camera.current?.flyTo({
+                      center: [
+                        (g.bounds.west + g.bounds.east) / 2,
+                        (g.bounds.south + g.bounds.north) / 2,
+                      ],
+                      zoom: splitZoom(g.items, level),
+                      padding,
+                      duration: 500,
+                    });
                   else
                     camera.current?.fitBounds(
                       [

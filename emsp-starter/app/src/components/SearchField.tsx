@@ -1,9 +1,22 @@
 import { Pressable, StyleSheet, TextInput, View } from "react-native";
 import { t } from "../i18n";
-import { fontSize, radius, space, type, useScale, useTheme } from "../theme";
+import {
+  brand,
+  fontSize,
+  radius,
+  space,
+  type,
+  useScale,
+  useTheme,
+  useWide,
+} from "../theme";
 import { Icon } from "./Icon";
 
-/** The search box: place, charger or EVSE ID. 60 px, in thumb reach on phones. */
+/**
+ * The search box: place, charger or EVSE ID. In thumb reach on phones, where it is
+ * 48 px high; 60 px on wide screens. Its text stays at 16 px or more: iOS Safari
+ * zooms the page when a smaller input takes focus.
+ */
 export function SearchField({
   value,
   onChange,
@@ -15,10 +28,12 @@ export function SearchField({
 }) {
   const { c } = useTheme();
   const { fs } = useScale();
+  const compact = !useWide();
   return (
     <View
       style={[
         styles.field,
+        compact && styles.fieldCompact,
         { borderColor: c.text, backgroundColor: c.surface },
       ]}
     >
@@ -39,7 +54,11 @@ export function SearchField({
         style={[
           type.body,
           styles.input,
-          { color: c.text, fontSize: fs(fontSize.md + 1) },
+          compact && styles.inputCompact,
+          {
+            color: c.text,
+            fontSize: fs(compact ? fontSize.md : fontSize.md + 1),
+          },
         ]}
       />
       {value.length > 0 && (
@@ -68,6 +87,13 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderRadius: radius.lg - 4,
   },
+  // The border and the 44 px clear button.
+  fieldCompact: {
+    minHeight: brand.minTapTarget + space.xs,
+    paddingLeft: space.sm + space.xs,
+    paddingRight: 0,
+    borderRadius: radius.md,
+  },
   input: {
     flex: 1,
     minWidth: 0,
@@ -75,6 +101,7 @@ const styles = StyleSheet.create({
     paddingVertical: space.sm,
     borderWidth: 0,
   },
+  inputCompact: { paddingVertical: space.xs },
   clear: {
     width: 44,
     height: 44,
