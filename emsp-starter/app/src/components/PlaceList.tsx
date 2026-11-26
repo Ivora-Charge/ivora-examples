@@ -36,6 +36,8 @@ export function PlaceRow({
   const avail = p.availability(place);
   const closed = p.closedNote(place);
   const price = p.lead(place.price);
+  // Phones: words that stand in for a missing price are quieter than a real one.
+  const unshared = compact && price.amount === t("price.unknown");
   const distance =
     place.distance_m !== undefined ? i18n.distance(place.distance_m) : "";
   // A closed place keeps its free count, but not in the green that invites a driver.
@@ -136,14 +138,23 @@ export function PlaceRow({
       </View>
       <View style={styles.price}>
         <Text
-          style={[
-            type.heading,
-            {
-              color: c.text,
-              fontSize: fs(compact ? fontSize.md : fontSize.md + 1),
-            },
-          ]}
+          style={
+            unshared
+              ? [
+                  type.body,
+                  styles.unshared,
+                  { color: c.muted, fontSize: fs(fontSize.sm) },
+                ]
+              : [
+                  type.heading,
+                  {
+                    color: c.text,
+                    fontSize: fs(compact ? fontSize.md : fontSize.md + 1),
+                  },
+                ]
+          }
           numberOfLines={2}
+          testID="place-price"
         >
           {price.amount}
         </Text>
@@ -300,6 +311,8 @@ const styles = StyleSheet.create({
   metaCompact: { rowGap: 0 },
   closed: { flexDirection: "row", alignItems: "center", gap: space.xs + 2 },
   price: { alignItems: "flex-end", maxWidth: "38%" },
+  // Wrapped, the words stay against the card's right edge, as the price does.
+  unshared: { textAlign: "right" },
   note: { padding: space.md },
   empty: {
     gap: space.sm + 4,

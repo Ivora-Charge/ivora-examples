@@ -1,5 +1,12 @@
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentRef,
+} from "react";
 import { StyleSheet, View } from "react-native";
 import { getVersion, setWorkerUrl } from "maplibre-gl";
 import Map, { Marker, type MapRef } from "react-map-gl/maplibre";
@@ -10,6 +17,7 @@ import {
   tapOpensChooser,
   type Clustered,
 } from "../lib/cluster";
+import { clearOfCredit } from "../lib/credit";
 import { mapStyle } from "../lib/map-style";
 import type { LocationSummary } from "../lib/types";
 import { useTheme, useWide } from "../theme";
@@ -28,6 +36,32 @@ import {
 // The map's worker file, copied into public/ by scripts/copy-map-worker.mjs.
 setWorkerUrl(`/maplibre-gl-worker.mjs?v=${getVersion()}`);
 
+/**
+ * Phones: keeps every marker out from under the map credit's strip, lifting it clear
+ * or not drawing it (see `clearOfCredit`) until the map or the sheet moves it away.
+ * Framing keeps the framed points clear (see `usePhoneFrame`); this is for the other
+ * markers, and for a cluster centred away from them. Desktop has no strip.
+ */
+function keepClearOfCredit(map: HTMLElement) {
+  const credit = map
+    .querySelector('[data-testid="map-credit"]')
+    ?.getBoundingClientRect();
+  // Nothing to measure while another screen covers this one.
+  if (credit && !credit.width) return;
+  map.querySelectorAll<HTMLElement>(".maplibregl-marker").forEach((marker) => {
+    const lifted = Number(marker.dataset.lift ?? 0);
+    const { left, right, top, bottom } = marker.getBoundingClientRect();
+    // Judged where the map put it, without an earlier lift.
+    const placed = { left, right, top: top + lifted, bottom: bottom + lifted };
+    const clear = credit ? clearOfCredit(placed, credit) : 0;
+    const lift = clear === "hide" ? 0 : clear;
+    marker.style.visibility = clear === "hide" ? "hidden" : "";
+    // `translate` adds to the `transform` that MapLibre places the marker with.
+    marker.style.translate = lift ? `0 ${-lift}px` : "";
+    marker.dataset.lift = String(lift);
+  });
+}
+
 /** The map on the web: MapLibre GL JS. Same style, markers and clusters as on phones. */
 function WebMap({
   items,
@@ -39,6 +73,7 @@ function WebMap({
 }: MapProps) {
   const { c, scheme } = useTheme();
   const ref = useRef<MapRef>(null);
+  const root = useRef<ComponentRef<typeof View>>(null);
   const [zoom, setZoom] = useState(13);
   const map = useMemo(() => mapStyle(c, scheme), [c, scheme]);
   const level = Math.floor(zoom * 2) / 2;
@@ -54,6 +89,25 @@ function WebMap({
     bottom: insets.bottom + (wide ? 40 : phone.bottom),
     left: insets.left + 40,
   };
+
+  // On the web a view's ref is its element.
+  const clearCredit = useCallback(() => {
+    const el = root.current as unknown as HTMLElement | null;
+    if (el) keepClearOfCredit(el);
+  }, []);
+  // After every render (new markers, or the credit moved with the sheet), and on
+  // every frame the map draws (below).
+  useEffect(clearCredit);
+  // The strip grows with the text size and the loaded font, without either.
+  useEffect(() => {
+    const strip = (
+      root.current as unknown as HTMLElement | null
+    )?.querySelector('[data-testid="map-credit"]');
+    if (!strip) return;
+    const watch = new ResizeObserver(clearCredit);
+    watch.observe(strip);
+    return () => watch.disconnect();
+  }, [wide, clearCredit]);
 
   useEffect(() => {
     const m = ref.current;
@@ -113,6 +167,7 @@ function WebMap({
 
   return (
     <View
+      ref={root}
       style={StyleSheet.absoluteFill}
       role="region"
       aria-label={t("map.region")}
@@ -127,6 +182,7 @@ function WebMap({
           zoom: 13,
         }}
         onMove={(e) => setZoom(e.viewState.zoom)}
+        onRender={clearCredit}
         attributionControl={false}
         dragRotate={false}
         touchPitch={false}
