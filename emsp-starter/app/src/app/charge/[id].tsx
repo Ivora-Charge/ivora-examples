@@ -397,19 +397,29 @@ export default function ConfirmCharge() {
               })}
             </Text>
             <PhoneAppLinks />
-            {checked ? (
-              <Text
-                style={[
-                  type.strong,
-                  { color: c.text, fontSize: fs(fontSize.sm + 1) },
-                ]}
-                testID="confirm-card-check"
-              >
-                {checked === "stillNone"
-                  ? t("phoneApp.stillNone")
-                  : t("phoneApp.checkFailed")}
-              </Text>
-            ) : null}
+            {/* Always on the page, even empty: screen readers announce what
+                changes in a live region, not a region that arrives with its words.
+                A View, because React Native maps aria-live on View (to
+                accessibilityLiveRegion), not on Text. */}
+            <View
+              aria-live="polite"
+              style={checked ? undefined : styles.empty}
+              testID="confirm-card-check-live"
+            >
+              {checked ? (
+                <Text
+                  style={[
+                    type.strong,
+                    { color: c.text, fontSize: fs(fontSize.sm + 1) },
+                  ]}
+                  testID="confirm-card-check"
+                >
+                  {checked === "stillNone"
+                    ? t("phoneApp.stillNone")
+                    : t("phoneApp.checkFailed")}
+                </Text>
+              ) : null}
+            </View>
           </Notice>
           <Button
             label={t("phoneApp.check")}
@@ -441,4 +451,6 @@ export default function ConfirmCharge() {
 
 const styles = StyleSheet.create({
   gap: { gap: space.xs + 2 },
+  // Out of the flow, so the empty region adds no gap under the notice's words.
+  empty: { position: "absolute" },
 });
