@@ -152,16 +152,34 @@ export async function addCharger(raw: unknown): Promise<AddChargerResult> {
   }
 }
 
+/**
+ * Refusals of a password change that leave the current password in place.
+ * Only a rotation of a connected OCPP 1.6 charger (a live push) can hit them.
+ */
+const PASSWORD_REFUSED = new Set([
+  "stations_admin_required",
+  "password_not_hex",
+  "password_push_unproven_vendor",
+]);
+
 /** Set a fresh password on the station. Returned once, never stored in plain text. */
 async function newPassword(c: Charger): Promise<string> {
   c.seq.credentials += 1;
   const password = generatePassword();
+  const before = c.passwordSet;
   c.passwordSet = false;
-  await backend().setPassword(
-    c.stationId,
-    password,
-    `${c.id}:credentials:${c.seq.credentials}`,
-  );
+  try {
+    await backend().setPassword(
+      c.stationId,
+      password,
+      `${c.id}:credentials:${c.seq.credentials}`,
+    );
+  } catch (e) {
+    // Ivora refused the change outright: the charger keeps its old password.
+    if (e instanceof IvoraError && PASSWORD_REFUSED.has(e.code))
+      c.passwordSet = before;
+    throw e;
+  }
   c.passwordSet = true;
   c.passwordMasked = firstDisplay(password).masked;
   return password;
