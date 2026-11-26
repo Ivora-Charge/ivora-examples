@@ -248,6 +248,7 @@ export function Attribution({
         styles.creditCompact,
         { backgroundColor: c.surface },
       ]}
+      testID="map-credit"
     >
       {words}
     </View>
