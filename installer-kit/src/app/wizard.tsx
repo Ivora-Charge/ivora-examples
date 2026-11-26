@@ -17,6 +17,7 @@ import {
   type Site,
 } from "@/lib/types";
 import { formatKwh } from "@/lib/units";
+import { nextStep } from "@/lib/next-step";
 
 const GENERIC_NOTES = `- Open the charger's installer app or web UI and find the OCPP / backend settings.
 - Set the protocol to OCPP 1.6J (JSON over WebSocket).
@@ -64,17 +65,6 @@ async function api<T>(url: string, body?: unknown): Promise<T> {
       request_id: json.request_id,
     });
   return json as T;
-}
-
-/** What the operator can do about an error, by kind (see docs/conventions.md). */
-function nextStep(e: ApiError): string {
-  if (e.error === "network_error")
-    return "Check your connection, then try again.";
-  if (/^(unauthorized|http_401|http_403)/.test(e.error))
-    return "Sign in again, then retry.";
-  if (/^(http_5|operator_password_missing|configuration)/.test(e.error))
-    return "This is not something you can fix on site. Tell the site operator and try again later.";
-  return "Check the value you entered, then try again.";
 }
 
 function ErrorNote({ e }: { e: ApiError }) {
