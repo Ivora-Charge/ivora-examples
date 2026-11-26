@@ -87,24 +87,43 @@ export function createI18n(
   };
 
   /**
-   * A price in ten-thousandths of the currency's major unit (4235 is €0.4235), as the
-   * server sends it, rounded to the currency's minor unit (€0.42), as drivers read
-   * prices. The server keeps the exact figure for billing.
+   * Ten-thousandths of the currency's major unit (4235 is €0.4235) as money, with the
+   * currency's usual decimals, and more up to `maxDigits` when the figure has them.
    */
-  const money = (priceE4: number, currency: string) => {
+  const formatE4 = (priceE4: number, currency: string, maxDigits: number) => {
     const digits = currencyDigits(currency);
+    const max = Math.max(digits, maxDigits);
     const value = priceE4 / 10_000;
     try {
       return new Intl.NumberFormat(locale, {
         style: "currency",
         currency,
         minimumFractionDigits: digits,
-        maximumFractionDigits: digits,
+        maximumFractionDigits: max,
       }).format(value);
     } catch {
-      return `${value.toFixed(digits)} ${currency}`;
+      let s = value.toFixed(max);
+      while (s.includes(".") && s.length - s.indexOf(".") - 1 > digits)
+        if (s.endsWith("0")) s = s.slice(0, -1);
+        else break;
+      return `${s.replace(/\.$/, "")} ${currency}`;
     }
   };
+
+  /**
+   * An amount rounded to the currency's minor unit (€0.42), as totals, holds and
+   * receipts are read. In ten-thousandths of the major unit.
+   */
+  const money = (priceE4: number, currency: string) =>
+    formatE4(priceE4, currency, 0);
+
+  /**
+   * A price per unit (per kWh, per hour, per minute) as the server sends it, with the
+   * tariff's own precision: up to 4 decimals, trailing zeros trimmed to the currency's
+   * minor unit (€0.4641, €0.275, €0.50).
+   */
+  const unitPrice = (priceE4: number, currency: string) =>
+    formatE4(priceE4, currency, 4);
 
   /**
    * An amount in minor units (cents), as the server's payments give it: 2500 EUR is
@@ -241,6 +260,7 @@ export function createI18n(
     kwh,
     distance,
     money,
+    unitPrice,
     minor,
     duration,
     dateTime,

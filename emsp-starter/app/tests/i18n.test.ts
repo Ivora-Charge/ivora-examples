@@ -89,6 +89,46 @@ describe("formats by locale", () => {
     expect(createI18n("ja-JP").money(150000, "JPY")).toBe("￥15");
   });
 
+  it("keeps a price per unit's decimals, trimmed to the currency's minor unit", () => {
+    const gb = createI18n("en-GB");
+    expect(
+      [4641, 9350, 10450, 2750, 1100, 5000, 20000, 0].map((e4) =>
+        gb.unitPrice(e4, "EUR"),
+      ),
+    ).toEqual([
+      "€0.4641",
+      "€0.935",
+      "€1.045",
+      "€0.275",
+      "€0.11",
+      "€0.50",
+      "€2.00",
+      "€0.00",
+    ]);
+    expect(plain(createI18n("de-DE").unitPrice(4641, "EUR"))).toBe("0,4641 €");
+    expect(createI18n("en-US").unitPrice(3509, "CAD")).toBe("CA$0.3509");
+    // No minor unit, and a minor unit of three decimals.
+    expect(createI18n("ja-JP").unitPrice(150000, "JPY")).toBe("￥15");
+    expect(createI18n("ja-JP").unitPrice(152500, "JPY")).toBe("￥15.25");
+    expect(plain(createI18n("en-US").unitPrice(5000, "KWD"))).toBe("KWD 0.500");
+    expect(plain(createI18n("en-US").unitPrice(1235, "KWD"))).toBe(
+      "KWD 0.1235",
+    );
+    // A code Intl refuses.
+    expect(gb.unitPrice(4641, "??")).toBe("0.4641 ??");
+    expect(gb.unitPrice(5000, "??")).toBe("0.50 ??");
+    expect(gb.unitPrice(20000, "??")).toBe("2.00 ??");
+    expect(gb.money(4641, "??")).toBe("0.46 ??");
+  });
+
+  it("rounds totals, holds and receipts to cents", () => {
+    const gb = createI18n("en-GB");
+    expect(gb.money(4641, "EUR")).toBe("€0.46");
+    expect(gb.money(2750, "EUR")).toBe("€0.28");
+    expect(gb.minor(2500, "EUR")).toBe("€25.00");
+    expect(gb.minor(1235, "EUR")).toBe("€12.35");
+  });
+
   it("formats power, distance and numbers", () => {
     const en = createI18n("en-US");
     const de = createI18n("de-DE");
@@ -124,7 +164,22 @@ describe("presenting places", () => {
   } as unknown as LocationSummary;
 
   it("leads with the energy price, or says no fee", () => {
-    expect(p.lead(place.price)).toEqual({ amount: "€0.47", unit: "per kWh" });
+    expect(p.lead(place.price)).toEqual({
+      amount: "€0.4719",
+      unit: "per kWh",
+    });
+    // A session fee is an amount, not a price per unit: rounded to cents.
+    expect(
+      p.lead({
+        ...place.price!,
+        lead: {
+          type: "FLAT",
+          unit: "session",
+          priceE4: 6050,
+          vatIncluded: true,
+        },
+      }),
+    ).toEqual({ amount: "€0.61", unit: "per session" });
     expect(p.lead({ free: true, summary: "Free" })).toEqual({
       amount: "No fee",
       unit: "",
@@ -154,7 +209,7 @@ describe("presenting places", () => {
       summary: "",
     };
     const shown = p.detailPrice(priced);
-    expect(shown.amount).toBe("€0.71 per kWh");
+    expect(shown.amount).toBe("€0.7139 per kWh");
     expect(shown.vat).toBe("VAT included");
     expect(shown.operatorNote).toBeUndefined();
     const unstructured = p.detailPrice({ ...priced, components: [] });
@@ -212,7 +267,7 @@ describe("presenting places", () => {
         amount: "€0.11 per kWh + €0.66 per hour",
         tiers: [],
         session: "plus €0.50 per session",
-        conditions: [],
+        later: [],
         others: ["€0.09 per kWh (22:00–06:00)"],
         min: "Minimum €0.50",
         max: "At most €30.00",
@@ -265,7 +320,60 @@ describe("presenting places", () => {
       });
     });
 
-    it("lists a fee that starts after 2 h apart from what applies now", () => {
+    it("gives a fee that starts later its own line, added to the price", () => {
+      const energy = rate("ENERGY", 4000);
+      const idle: DisplayComponent = {
+        ...rate("TIME", 72600, ["after 45 min"]),
+        later: ["after 45 min"],
+      };
+      const night = rate("ENERGY", 3509, ["22:00–06:00"]);
+      const shown = p.detailPrice(
+        priced([energy, idle, night], {
+          components: [energy],
+          others: [night, idle],
+          unexplained: false,
+        }),
+      );
+      expect(shown.amount).toBe("€0.40 per kWh");
+      expect(shown.later).toEqual(["After 45 min: plus €7.26 per hour"]);
+      // Not an alternative: it is not listed with the other rates.
+      expect(shown.others).toEqual(["€0.3509 per kWh (22:00–06:00)"]);
+      // The confirm screen has the page's lines.
+      expect(shown.lines).toEqual([
+        "€0.40 per kWh",
+        "After 45 min: plus €7.26 per hour",
+        "VAT included",
+      ]);
+    });
+
+    it("words a later fee's days, times, parking and VAT", () => {
+      const energy = rate("ENERGY", 4000);
+      const fee = rate("FLAT", 5000);
+      const parking: DisplayComponent = {
+        ...rate(
+          "PARKING_TIME",
+          24200,
+          ["Mon–Fri", "07:00–21:00", "after 1 h"],
+          false,
+        ),
+        later: ["Mon–Fri", "07:00–21:00", "after 1 h"],
+      };
+      const shown = p.detailPrice(
+        priced([energy, fee, parking], {
+          components: [energy, fee],
+          others: [parking],
+          unexplained: false,
+        }),
+      );
+      expect(shown.others).toEqual([]);
+      expect(shown.lines).toEqual([
+        "€0.40 per kWh incl. VAT",
+        "plus €0.50 per session incl. VAT",
+        "Mon–Fri 07:00–21:00, after 1 h: plus €2.42 per hour parked excl. VAT",
+      ]);
+    });
+
+    it("from a server that marks no later fees, lists them with the other rates", () => {
       const energy = rate("ENERGY", 4000);
       const later = rate("TIME", 30000, ["after 2 h"]);
       const shown = p.detailPrice(
@@ -275,10 +383,85 @@ describe("presenting places", () => {
           unexplained: false,
         }),
       );
-      expect(shown.amount).toBe("€0.40 per kWh");
-      // The page and the confirm screen both list it.
+      expect(shown.later).toEqual([]);
       expect(shown.others).toEqual(["€3.00 per hour (after 2 h)"]);
       expect(shown.lines).toEqual(["€0.40 per kWh", "VAT included"]);
+    });
+
+    it("says in the headline when a time-limited rate applies", () => {
+      const day = rate("ENERGY", 1100, ["Mon–Fri", "07:00–21:00"]);
+      const other = rate("ENERGY", 900, ["otherwise"]);
+      const shown = p.detailPrice(
+        priced([day, other], {
+          components: [day],
+          others: [other],
+          unexplained: false,
+        }),
+      );
+      expect(shown.amount).toBe("€0.11 per kWh, Mon–Fri 07:00–21:00");
+      expect(shown.lines).toEqual([
+        "€0.11 per kWh, Mon–Fri 07:00–21:00",
+        "VAT included",
+      ]);
+      expect(shown.others).toEqual(["€0.09 per kWh (otherwise)"]);
+      const amountOf = (...components: DisplayComponent[]) =>
+        p.detailPrice(
+          priced(components, { components, others: [], unexplained: false }),
+        ).amount;
+      expect(amountOf(rate("ENERGY", 1100, ["from 07:00"]))).toBe(
+        "€0.11 per kWh, from 07:00",
+      );
+      expect(
+        amountOf(
+          rate("ENERGY", 1100, [
+            "Sat, Sun",
+            "until 06:00",
+            "before 2027-01-01",
+          ]),
+        ),
+      ).toBe("€0.11 per kWh, Sat, Sun until 06:00, before 2027-01-01");
+      // Only one of two has a condition: it stays beside its own rate.
+      expect(amountOf(day, rate("TIME", 6600))).toBe(
+        "€0.11 per kWh, Mon–Fri 07:00–21:00 + €0.66 per hour",
+      );
+      // The same condition for both is said once.
+      expect(amountOf(day, rate("TIME", 6600, day.conditions))).toBe(
+        "€0.11 per kWh + €0.66 per hour, Mon–Fri 07:00–21:00",
+      );
+      // A session fee says its own, beside the price or leading it.
+      const fee = rate("FLAT", 5000, ["07:00–21:00"]);
+      expect(
+        p.detailPrice(
+          priced([day, fee], {
+            components: [day, fee],
+            others: [],
+            unexplained: false,
+          }),
+        ).session,
+      ).toBe("plus €0.50 per session, 07:00–21:00");
+      expect(amountOf(fee)).toBe("€0.50 per session, 07:00–21:00");
+    });
+
+    it("keeps the decimals of every price per unit, and rounds a session fee", () => {
+      const energy = rate("ENERGY", 4641);
+      const time = rate("TIME", 9350);
+      const fee = rate("FLAT", 6050);
+      const fast = rate("ENERGY", 10450, ["at 50 kW or more"]);
+      const night = rate("ENERGY", 2750, ["22:00–06:00"]);
+      const shown = p.detailPrice(
+        priced([fast, energy, time, fee, night], {
+          components: [energy, time, fee],
+          tiers: [fast],
+          others: [night],
+          unexplained: false,
+        }),
+      );
+      expect(shown).toMatchObject({
+        amount: "€0.4641 per kWh + €0.935 per hour",
+        tiers: ["€1.045 per kWh instead, at 50 kW or more"],
+        session: "plus €0.61 per session",
+        others: ["€0.275 per kWh (22:00–06:00)"],
+      });
     });
 
     it("shows a power tier beside what applies now, on the page and confirm screen", () => {
@@ -340,7 +523,10 @@ describe("presenting places", () => {
     it("says when the rates that apply now do, and shows a free first period", () => {
       const free = rate("TIME", 0, ["first 30 min"]);
       const parking = rate("PARKING_TIME", 0);
-      const later = rate("TIME", 20000, ["otherwise"]);
+      const later: DisplayComponent = {
+        ...rate("TIME", 20000, ["otherwise"]),
+        later: ["after 30 min"],
+      };
       const shown = p.detailPrice(
         priced([free, parking, later], {
           components: [free, parking],
@@ -349,9 +535,9 @@ describe("presenting places", () => {
         }),
       );
       // Parking costs nothing at any time: it is not mentioned.
-      expect(shown.amount).toBe("€0.00 per hour");
-      expect(shown.conditions).toEqual(["per hour: first 30 min"]);
-      expect(shown.others).toEqual(["€2.00 per hour (otherwise)"]);
+      expect(shown.amount).toBe("€0.00 per hour, first 30 min");
+      expect(shown.later).toEqual(["After 30 min: plus €2.00 per hour"]);
+      expect(shown.others).toEqual([]);
     });
 
     it("leads with the fee when nothing else applies, or says it depends", () => {
@@ -435,7 +621,7 @@ describe("presenting places", () => {
         ),
       ).toMatchObject({
         amount: "Depends on time and use",
-        others: ["€0.71 per kWh", "€7.26 per hour (after 45 min)"],
+        others: ["€0.7139 per kWh", "€7.26 per hour (after 45 min)"],
         unexplained: undefined,
       });
     });

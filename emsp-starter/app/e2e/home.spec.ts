@@ -40,7 +40,9 @@ test("offline demo: the map screen is labelled demo, lists the sample chargers a
   ).toBeVisible();
   await expect(page.getByTestId("result-count")).toContainText("places");
   await expect(page.getByTestId("place-Station Square")).toBeVisible();
-  await expect(page.getByTestId("place-Station Square")).toContainText("€0.71");
+  await expect(page.getByTestId("place-Station Square")).toContainText(
+    "€0.7139",
+  );
   await expect(page.getByTestId("map-attribution")).toContainText(
     "OpenStreetMap contributors",
   );
@@ -87,7 +89,7 @@ test("a charger's page: price from the tariff, connectors, hours and directions"
   await expect(
     page.getByText("3 Garden Lane, 1000 AC Sample City, Netherlands"),
   ).toBeVisible();
-  await expect(page.getByTestId("detail-price")).toContainText("€0.42");
+  await expect(page.getByTestId("detail-price")).toContainText("€0.4235");
   await expect(page.getByTestId("detail-price")).toContainText("per kWh");
   await expect(page.getByTestId("connector")).toHaveCount(2);
   await expect(page.getByTestId("connector").first()).toContainText(
@@ -193,15 +195,14 @@ test("the charger header's close or back button has a ring that shows on violet"
     .toBe("rgb(255, 255, 255)");
 });
 
-test("the charger's price is ours, rounded to cents; the CPO's free text is not shown over it", async ({
+test("the charger's price is ours, with the tariff's decimals; the CPO's free text is not shown over it", async ({
   page,
 }) => {
   await open(page);
   await page.getByTestId("place-Station Square").click();
   const price = page.getByTestId("detail-price");
-  await expect(price).toContainText("€0.71");
+  await expect(price).toContainText("€0.7139 per kWh");
   await expect(price).toContainText("VAT included");
-  await expect(price).not.toContainText("€0.7139");
   await expect(price).not.toContainText("0.59 per kWh");
 });
 
@@ -213,13 +214,26 @@ test("the price that applies now stands apart from the rates for other times", a
   const price = page.getByTestId("detail-price");
   // The sample data is of a weekday noon: the day rate and the session fee.
   await expect(page.getByTestId("detail-price-now")).toHaveText(
-    "€0.47 per kWh",
+    "€0.4719 per kWh, Mon–Fri 07:00–21:00",
   );
   await expect(price).toContainText("plus €0.61 per session");
-  await expect(price).toContainText("per kWh: Mon–Fri, 07:00–21:00");
   await expect(page.getByTestId("detail-price-others")).toContainText(
-    "€0.35 per kWh (otherwise)",
+    "€0.3509 per kWh (otherwise)",
   );
+});
+
+test("a fee that starts later has its own line, added to the price", async ({
+  page,
+}) => {
+  await open(page);
+  await page.getByTestId("place-Harbour Front").click();
+  await expect(page.getByTestId("detail-price-now")).toHaveText(
+    "€0.7139 per kWh",
+  );
+  await expect(page.getByTestId("detail-price-later")).toHaveText(
+    "After 45 min: plus €7.26 per hour",
+  );
+  await expect(page.getByTestId("detail-price-others")).toHaveCount(0);
 });
 
 test("the web build carries a strict Content-Security-Policy, and the app runs under it", async ({

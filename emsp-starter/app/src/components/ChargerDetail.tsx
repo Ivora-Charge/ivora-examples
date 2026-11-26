@@ -281,19 +281,30 @@ export function ChargerDetail({
                   {price.session}
                 </Text>
               ) : null}
-              {[...price.conditions, price.min, price.max, price.vat]
-                .filter(Boolean)
-                .map((s) => (
-                  <Text
-                    key={s}
-                    style={[
-                      type.body,
-                      { color: c.muted, fontSize: fs(fontSize.sm) },
-                    ]}
-                  >
-                    {s}
-                  </Text>
-                ))}
+              {price.later.map((line) => (
+                // A fee added later in the session: part of the price, not an alternative.
+                <Text
+                  key={line}
+                  style={[
+                    type.strong,
+                    { color: c.text, fontSize: fs(fontSize.md) },
+                  ]}
+                  testID="detail-price-later"
+                >
+                  {line}
+                </Text>
+              ))}
+              {[price.min, price.max, price.vat].filter(Boolean).map((s) => (
+                <Text
+                  key={s}
+                  style={[
+                    type.body,
+                    { color: c.muted, fontSize: fs(fontSize.sm) },
+                  ]}
+                >
+                  {s}
+                </Text>
+              ))}
               {price.others.length > 0 && (
                 <View style={styles.otherPrices} testID="detail-price-others">
                   <Text

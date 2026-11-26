@@ -50,6 +50,12 @@ export type DisplayComponent = LeadPrice & {
   text: string;
   /** When it applies, in English, for example ["Mon–Fri", "08:00–20:00"]. */
   conditions: string[];
+  /**
+   * Only on a rate in `now.others` that is added to what applies now later in the
+   * session: from when, in English, for example ["after 45 min"]. Older servers do not
+   * send it.
+   */
+  later?: string[];
 };
 
 /** What a driver who starts a session at the moment of the request is told. */
@@ -62,7 +68,7 @@ export type PriceNow = {
    * do not send it.
    */
   tiers?: DisplayComponent[];
-  /** The other rates, each with when it applies. */
+  /** The other rates, each with when it applies; those with `later` are added later. */
   others: DisplayComponent[];
   /** The operator lists several rates of one kind without saying when each applies. */
   unexplained: boolean;

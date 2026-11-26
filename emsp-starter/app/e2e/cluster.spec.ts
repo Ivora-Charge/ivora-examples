@@ -84,8 +84,8 @@ test("a cluster at one coordinate opens a chooser of its places", async ({
   const listed = page.getByTestId("place-Station Square").first();
   await expect(row.getByTestId("place-address")).toHaveText(/\S, \S/);
   await expect(row).toContainText(/\d of 2 free|In use|Out of order/);
-  await expect(row).toContainText("€0.71");
-  await expect(listed).toContainText("€0.71");
+  await expect(row).toContainText("€0.7139");
+  await expect(listed).toContainText("€0.7139");
   const [scroll, width] = await page.evaluate(() => [
     document.documentElement.scrollWidth,
     window.innerWidth,
