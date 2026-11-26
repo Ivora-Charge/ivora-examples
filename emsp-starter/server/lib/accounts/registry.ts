@@ -33,6 +33,7 @@ export function demoAccountStore(): MemoryAccountStore {
     defaultPaymentMethodId: DEMO_CARD_ID,
     createdAt: now,
     updatedAt: now,
+    lastSignInAt: now,
   });
   return store;
 }

@@ -22,7 +22,7 @@ export const OCPI_NEXT_STEP: Record<number, string> = {
   2001: "The CPO found a field invalid or missing (its message says which). Fix it and try again.",
   2002: "The CPO needs more information than we sent. Check the request is complete, then try again.",
   2003: "The CPO does not know that location. Pull its locations again (CPO peers), then retry.",
-  2004: "The CPO does not know that token. Retry missed pushes (Drivers and tokens), then try again.",
+  2004: "The CPO does not know that token. Retry missed pushes (Tokens), then try again.",
   3000: "The CPO failed on a valid request. Try again later; if it repeats, send the CPO the time and request.",
   3001: "The CPO could not use our OCPI API. Check our versions URL is public over HTTPS, then rotate tokens.",
   3002: "No OCPI version in common: this server speaks 2.2.1 only. Ask the CPO to offer 2.2.1.",

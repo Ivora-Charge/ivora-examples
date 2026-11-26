@@ -40,10 +40,11 @@ const RECON: Place = {
   icon: "scale",
 };
 const DRIVERS: Place = {
-  href: "/admin/tokens",
-  label: "Drivers and tokens",
+  href: "/admin/drivers",
+  label: "Drivers",
   icon: "user",
 };
+const TOKENS: Place = { href: "/admin/tokens", label: "Tokens", icon: "card" };
 const ACCOUNT: Place = {
   href: "/admin/sign-in",
   label: "Account",
@@ -60,12 +61,13 @@ const RAIL: (Place | { group: string })[] = [
   { group: "Money" },
   PAYMENTS,
   RECON,
-  { group: "Drivers" },
+  { group: "People" },
   DRIVERS,
+  TOKENS,
   { group: "Account" },
   ACCOUNT,
 ];
-const MORE = [PROBLEMS, RECON, DRIVERS, ACCOUNT];
+const MORE = [PROBLEMS, RECON, DRIVERS, TOKENS, ACCOUNT];
 
 const isAt = (path: string, href: string) =>
   href === HOME ? path === HOME : path === href || path.startsWith(`${href}/`);

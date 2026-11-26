@@ -362,6 +362,15 @@ main:focus {
     padding: 2.5rem 2.5rem 4rem;
   }
 }
+/* A short window (a laptop's): the rail closes up, so that all of it shows. */
+@media (min-width: 60rem) and (max-height: 52rem) {
+  .rail {
+    gap: 0.75rem;
+  }
+  .rail .group {
+    margin: 0.5rem 0 0.125rem;
+  }
+}
 
 /* --- Page head ------------------------------------------------------------------ */
 .crumb {

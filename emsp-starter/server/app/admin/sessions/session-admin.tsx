@@ -28,14 +28,17 @@ const CHIPS: [Status, string][] = [
   ["COMPLETED", "Finished"],
 ];
 
-const STATE: Record<string, ["ok" | "todo" | "bad" | "done" | "off", string]> =
-  {
-    ACTIVE: ["ok", "Charging"],
-    PENDING: ["todo", "Starting"],
-    RESERVATION: ["todo", "Reserved"],
-    COMPLETED: ["done", "Finished"],
-    INVALID: ["bad", "Needs a look"],
-  };
+/** Each status as a mark and a word, also on a driver's page. */
+export const SESSION_STATE: Record<
+  string,
+  ["ok" | "todo" | "bad" | "done" | "off", string]
+> = {
+  ACTIVE: ["ok", "Charging"],
+  PENDING: ["todo", "Starting"],
+  RESERVATION: ["todo", "Reserved"],
+  COMPLETED: ["done", "Finished"],
+  INVALID: ["bad", "Needs a look"],
+};
 
 /** A UTC time that breaks only between its day and its time. */
 function When({ iso }: { iso: string }) {
@@ -49,7 +52,7 @@ function When({ iso }: { iso: string }) {
 }
 
 function Row({ s }: { s: SessionRow }) {
-  const [kind, word] = STATE[s.status] ?? ["off", s.status];
+  const [kind, word] = SESSION_STATE[s.status] ?? ["off", s.status];
   // "12.50 EUR excl. VAT, 15.00 incl.", as the CPO gave it: one amount per line.
   const [cost, inclVat] = s.cost ? s.cost.split(/, (?=[^,]*$)/) : [null];
   return (
@@ -120,10 +123,15 @@ function chipCount(value: Status, c: SessionsState["counts"]): string | null {
   return `${n}${more ? "+" : ""}`;
 }
 
-export function Sessions() {
+export function Sessions({
+  prefill,
+}: {
+  /** Filters named in the page's address, applied from the start. */
+  prefill?: Pick<Filters, "driverRef" | "search">;
+}) {
   const { signedIn, demo } = useAdmin();
   const id = useId();
-  const [filters, setFilters] = useState<Filters>(NONE);
+  const [filters, setFilters] = useState<Filters>({ ...NONE, ...prefill });
   // Bumped by "Clear all filters": remounts the fields so none keeps its old text
   // (a form reset only restores each field's default, which is the last applied value).
   const [cleared, setCleared] = useState(0);
@@ -193,7 +201,11 @@ export function Sessions() {
               </button>
             ))}
           </div>
-          <details className="fold">
+          {/* Open when the address set a filter, so the admin sees it. */}
+          <details
+            className="fold"
+            open={prefill?.driverRef || prefill?.search ? true : undefined}
+          >
             <summary>More filters</summary>
             <ActionForm
               onSend={async (form) =>

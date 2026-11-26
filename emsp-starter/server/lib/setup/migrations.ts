@@ -92,4 +92,8 @@ export const MIGRATIONS: readonly ShippedMigration[] = [
     file: "202611250001_hub_push_switch.sql",
     probe: { table: "emsp_token_pushes", column: "push_gen" },
   },
+  {
+    file: "202611260001_driver_last_sign_in.sql",
+    probe: { table: "emsp_drivers", column: "last_sign_in_at" },
+  },
 ];

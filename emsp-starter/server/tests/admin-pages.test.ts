@@ -33,6 +33,9 @@ import { TokenByUid } from "@/app/admin/tokens/token-admin";
 import { AdminProvider, type Who } from "@/app/admin/ui/admin-context";
 import { oneAtATime } from "@/app/admin/ui/use-action";
 import PaymentsPage from "@/app/admin/payments/page";
+import DriversPage from "@/app/admin/drivers/page";
+import DriverPage from "@/app/admin/drivers/[id]/page";
+import SessionsPage from "@/app/admin/sessions/page";
 import ConnectPage from "@/app/admin/peers/connect/page";
 import PeersPage from "@/app/admin/peers/page";
 import TokensPage from "@/app/admin/tokens/page";
@@ -1439,6 +1442,15 @@ describe("setup: nothing for a visitor who is not signed in", () => {
     ["peers", () => PeersPage()],
     ["connect", () => ConnectPage()],
     ["tokens", () => TokensPage()],
+    ["drivers", async () => DriversPage()],
+    [
+      "driver",
+      () => DriverPage({ params: Promise.resolve({ id: "demo-driver" }) }),
+    ],
+    [
+      "sessions",
+      () => SessionsPage({ searchParams: Promise.resolve({ driver: "x" }) }),
+    ],
     [
       "payments",
       () => PaymentsPage({ searchParams: Promise.resolve({ find: "x" }) }),

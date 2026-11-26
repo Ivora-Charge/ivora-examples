@@ -357,8 +357,8 @@ export function ProblemAdmin({ demo }: { demo: boolean }) {
         <p>
           Pass charger faults on to the CPO. Look up payments on{" "}
           <Link href="/admin/payments">Payments</Link> and the driver on{" "}
-          <Link href="/admin/tokens">Drivers and tokens</Link>. Marking a report
-          resolved records who did it, in the report and the audit log.
+          <Link href="/admin/drivers">Drivers</Link>. Marking a report resolved
+          records who did it, in the report and the audit log.
         </p>
         {demo && (
           <p>

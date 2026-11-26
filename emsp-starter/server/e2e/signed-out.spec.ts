@@ -61,8 +61,10 @@ const SIGN_IN = "/admin/sign-in";
 const SETUP = "/admin";
 const ROUTES = [
   ...routes().sort(),
-  // A query the page reads.
+  // Queries the pages read.
   "/admin/payments?find=22222222-2222-4222-8222-222222222222",
+  "/admin/payments?driver=22222222-2222-4222-8222-222222222222",
+  "/admin/sessions?driver=22222222-2222-4222-8222-222222222222",
 ];
 
 type Wire = { html: string; data: string };
@@ -195,6 +197,8 @@ test("every signed-out page is the same whatever the deployment's configuration"
       "/admin/peers",
       "/admin/peers/connect",
       "/admin/tokens",
+      "/admin/drivers",
+      "/admin/drivers/00000000-0000-4000-8000-000000000000",
       SIGN_IN,
     ]),
   );

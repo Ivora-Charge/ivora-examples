@@ -113,7 +113,8 @@ test("the menu reaches every place: a rail on desktop, a tab bar and More on a p
     ["Problems", "Problems"],
     ["Payments", "Payments"],
     ["Reconciliation", "Reconciliation"],
-    ["Drivers and tokens", "Drivers and tokens"],
+    ["Drivers", "Drivers"],
+    ["Tokens", "Tokens"],
     ["Account", "Sign in"],
     ["Setup", "Get this network live"],
   ];
